@@ -38,7 +38,7 @@ const baileys = (await import(
 	"@whiskeysockets/baileys"
 )) as unknown as typeof import("@whiskeysockets/baileys") & {
 	makeWASocket: ReturnType<typeof vi.fn>;
-	useSingleFileAuthState: ReturnType<typeof vi.fn>;
+	useMultiFileAuthState: ReturnType<typeof vi.fn>;
 	fetchLatestBaileysVersion: ReturnType<typeof vi.fn>;
 	makeCacheableSignalKeyStore: ReturnType<typeof vi.fn>;
 };
@@ -51,8 +51,8 @@ describe("provider-web", () => {
 			Symbol.for("warelay:lastSocket")
 		] = recreated.lastSocket;
 		baileys.makeWASocket.mockImplementation(recreated.mod.makeWASocket);
-		baileys.useSingleFileAuthState.mockImplementation(
-			recreated.mod.useSingleFileAuthState,
+		baileys.useMultiFileAuthState.mockImplementation(
+			recreated.mod.useMultiFileAuthState,
 		);
 		baileys.fetchLatestBaileysVersion.mockImplementation(
 			recreated.mod.fetchLatestBaileysVersion,
@@ -69,17 +69,17 @@ describe("provider-web", () => {
 	it("creates WA socket with QR handler", async () => {
 		await createWaSocket(true, false);
 		const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
-		expect(makeWASocket).toHaveBeenCalledWith(
-			expect.objectContaining({ printQRInTerminal: false }),
-		);
-		const sock = getLastSocket();
-		const saveCreds = (
-			await baileys.useSingleFileAuthState.mock.results[0].value
-		).saveState;
-		// trigger creds.update listener
-		sock.ev.emit("creds.update", {});
-		expect(saveCreds).toHaveBeenCalled();
-	});
+	expect(makeWASocket).toHaveBeenCalledWith(
+		expect.objectContaining({ printQRInTerminal: false }),
+	);
+	const sock = getLastSocket();
+	const saveCreds = (
+		await baileys.useMultiFileAuthState.mock.results[0].value
+	).saveCreds;
+	// trigger creds.update listener
+	sock.ev.emit("creds.update", {});
+	expect(saveCreds).toHaveBeenCalled();
+});
 
 	it("waits for connection open", async () => {
 		const ev = new EventEmitter();

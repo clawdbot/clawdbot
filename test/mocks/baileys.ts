@@ -13,7 +13,7 @@ export type MockBaileysModule = {
 	fetchLatestBaileysVersion: ReturnType<typeof vi.fn>;
 	makeCacheableSignalKeyStore: ReturnType<typeof vi.fn>;
 	makeWASocket: ReturnType<typeof vi.fn>;
-	useSingleFileAuthState: ReturnType<typeof vi.fn>;
+	useMultiFileAuthState: ReturnType<typeof vi.fn>;
 	jidToE164?: (jid: string) => string | null;
 	proto?: unknown;
 };
@@ -39,9 +39,9 @@ export function createMockBaileys(): { mod: MockBaileysModule; lastSocket: () =>
 		fetchLatestBaileysVersion: vi.fn().mockResolvedValue({ version: [1, 2, 3] }),
 		makeCacheableSignalKeyStore: vi.fn((keys: unknown) => keys),
 		makeWASocket,
-		useSingleFileAuthState: vi.fn(async () => ({
+		useMultiFileAuthState: vi.fn(async () => ({
 			state: { creds: {}, keys: {} },
-			saveState: vi.fn(),
+			saveCreds: vi.fn(),
 		})),
 		jidToE164: (jid: string) => jid.replace(/@.*$/, "").replace(/^/, "+"),
 	};
