@@ -1109,11 +1109,10 @@ program
 		);
 		await updateWebhook(client, senderSid, publicUrl, "POST");
 
-		console.log(
-			"\nSetup complete. Leave this process running to keep the webhook online. Ctrl+C to stop.",
-		);
-		await waitForever();
-	})
-	.alias("setup");
+	console.log(
+		"\nSetup complete. Leave this process running to keep the webhook online. Ctrl+C to stop.",
+	);
+	await waitForever();
+});
 
 program.parseAsync(process.argv);

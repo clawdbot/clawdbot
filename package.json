@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "bin": {
     "warelay": "dist/index.js",
-    "warely": "dist/index.js"
+    "warely": "dist/index.js",
+    "wa": "dist/index.js"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -14,6 +15,7 @@
     "start": "tsx src/index.ts",
     "warelay": "tsx src/index.ts",
     "warely": "tsx src/index.ts",
+    "wa": "tsx src/index.ts",
     "lint": "biome check src",
     "lint:fix": "biome check --write src",
     "format": "biome format src",
