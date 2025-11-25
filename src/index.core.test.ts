@@ -237,6 +237,51 @@ describe("config and templating", () => {
 
 		expect(result).toBe("Sure! What's up?");
 	});
+
+	it("serializes command auto-replies via the queue", async () => {
+		let active = 0;
+		let maxActive = 0;
+		const runSpy = vi.fn(async () => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			active -= 1;
+			return {
+				stdout: "ok",
+				stderr: "",
+				code: 0,
+				signal: null,
+				killed: false,
+			};
+		});
+
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+				},
+			},
+		};
+
+		await Promise.all([
+			index.getReplyFromConfig(
+				{ Body: "first", From: "+1", To: "+2" },
+				undefined,
+				cfg,
+				runSpy,
+			),
+			index.getReplyFromConfig(
+				{ Body: "second", From: "+3", To: "+4" },
+				undefined,
+				cfg,
+				runSpy,
+			),
+		]);
+
+		expect(runSpy).toHaveBeenCalledTimes(2);
+		expect(maxActive).toBe(1);
+	});
 });
 
 describe("twilio interactions", () => {
@@ -267,10 +312,10 @@ describe("twilio interactions", () => {
 
 	it("sendTypingIndicator skips missing messageSid and sends when present", async () => {
 		const client = twilioFactory._createClient();
-		await index.sendTypingIndicator(client, undefined);
+		await index.sendTypingIndicator(client, index.defaultRuntime, undefined);
 		expect(client.request).not.toHaveBeenCalled();
 
-		await index.sendTypingIndicator(client, "SM123");
+		await index.sendTypingIndicator(client, index.defaultRuntime, "SM123");
 		expect(client.request).toHaveBeenCalledWith(
 			expect.objectContaining({ method: "post" }),
 		);

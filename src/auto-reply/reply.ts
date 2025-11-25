@@ -18,9 +18,12 @@ import {
 } from "../config/sessions.js";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
 import { info, isVerbose, logVerbose } from "../globals.js";
+import { enqueueCommand } from "../process/command-queue.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { sendTypingIndicator } from "../twilio/typing.js";
+import type { TwilioRequester } from "../twilio/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { logError } from "../logger.js";
 
 type GetReplyOptions = {
 	onReplyStart?: () => Promise<void> | void;
@@ -46,17 +49,20 @@ function summarizeClaudeMetadata(payload: unknown): string | undefined {
 
 	const usage = obj.usage;
 	if (usage && typeof usage === "object") {
-		const serverToolUse = (
-			usage as { server_tool_use?: Record<string, unknown> }
-		).server_tool_use;
-		if (serverToolUse && typeof serverToolUse === "object") {
-			const toolCalls = Object.values(serverToolUse).reduce((sum, val) => {
-				if (typeof val === "number") return sum + val;
-				return sum;
-			}, 0);
-			if (toolCalls > 0) parts.push(`tool_calls=${toolCalls}`);
+			const serverToolUse = (
+				usage as { server_tool_use?: Record<string, unknown> }
+			).server_tool_use;
+			if (serverToolUse && typeof serverToolUse === "object") {
+				const toolCalls = Object.values(serverToolUse).reduce<number>(
+					(sum, val) => {
+						if (typeof val === "number") return sum + val;
+						return sum;
+					},
+					0,
+				);
+				if (toolCalls > 0) parts.push(`tool_calls=${toolCalls}`);
+			}
 		}
-	}
 
 	const modelUsage = obj.modelUsage;
 	if (modelUsage && typeof modelUsage === "object") {
@@ -248,9 +254,17 @@ export async function getReplyFromConfig(
 		logVerbose(`Running command auto-reply: ${finalArgv.join(" ")}`);
 		const started = Date.now();
 		try {
-			const { stdout, stderr, code, signal, killed } = await commandRunner(
-				finalArgv,
-				timeoutMs,
+			const { stdout, stderr, code, signal, killed } = await enqueueCommand(
+				() => commandRunner(finalArgv, timeoutMs),
+				{
+					onWait: (waitMs, queuedAhead) => {
+						if (isVerbose()) {
+							logVerbose(
+								`Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`,
+							);
+						}
+					},
+				},
 			);
 			const rawStdout = stdout.trim();
 			let trimmed = rawStdout;
@@ -309,7 +323,7 @@ export async function getReplyFromConfig(
 					`Command auto-reply timed out after ${elapsed}ms (limit ${timeoutMs}ms)`,
 				);
 			} else {
-				logError("Command auto-reply failed after ms: " . String(err), runtime);
+				logError(`Command auto-reply failed after ${elapsed}ms: ${String(err)}`);
 			}
 			return undefined;
 		}
@@ -318,7 +332,7 @@ export async function getReplyFromConfig(
 	return undefined;
 }
 
-type TwilioLikeClient = {
+type TwilioLikeClient = TwilioRequester & {
 	messages: {
 		create: (opts: {
 			from?: string;
@@ -345,7 +359,7 @@ export async function autoReplyIfConfigured(
 	const replyText = await getReplyFromConfig(
 		ctx,
 		{
-			onReplyStart: () => sendTypingIndicator(client, message.sid, runtime),
+			onReplyStart: () => sendTypingIndicator(client, runtime, message.sid),
 		},
 		configOverride,
 	);
