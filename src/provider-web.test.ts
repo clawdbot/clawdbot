@@ -236,6 +236,23 @@ describe("provider-web", () => {
 		await listener.close();
 	});
 
+	it("monitorWebInbox resolves onClose when the socket closes", async () => {
+		const listener = await monitorWebInbox({
+			verbose: false,
+			onMessage: vi.fn(),
+		});
+		const sock = getLastSocket();
+		const reasonPromise = listener.onClose;
+		sock.ev.emit("connection.update", {
+			connection: "close",
+			lastDisconnect: { error: { output: { statusCode: 500 } } },
+		});
+		await expect(reasonPromise).resolves.toEqual(
+			expect.objectContaining({ status: 500, isLoggedOut: false }),
+		);
+		await listener.close();
+	});
+
 	it("monitorWebInbox logs inbound bodies to file", async () => {
 		const logPath = path.join(
 			os.tmpdir(),
@@ -298,6 +315,49 @@ describe("provider-web", () => {
 			},
 		]);
 		await listener.close();
+	});
+
+	it("monitorWebProvider reconnects after a connection close", async () => {
+		vi.useFakeTimers();
+		const closeResolvers: Array<() => void> = [];
+		const listenerFactory = vi.fn(async () => {
+			let resolve!: () => void;
+			const onClose = new Promise<void>((res) => {
+				resolve = res;
+				closeResolvers.push(res);
+			});
+			return { close: vi.fn(), onClose };
+		});
+		const runtime = {
+			log: vi.fn(),
+			error: vi.fn(),
+			exit: vi.fn(),
+		};
+		const controller = new AbortController();
+		const run = monitorWebProvider(
+			false,
+			listenerFactory,
+			true,
+			async () => ({ text: "ok" }),
+			runtime as never,
+			controller.signal,
+		);
+
+		await Promise.resolve();
+		expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+		closeResolvers[0]?.();
+		await Promise.resolve();
+		await vi.runOnlyPendingTimersAsync();
+		expect(listenerFactory).toHaveBeenCalledTimes(2);
+		expect(runtime.error).toHaveBeenCalledWith(
+			expect.stringContaining("Reconnecting"),
+		);
+
+		controller.abort();
+		closeResolvers[1]?.();
+		await vi.runAllTimersAsync();
+		await run;
 	});
 
 	it("monitorWebProvider falls back to text when media send fails", async () => {
