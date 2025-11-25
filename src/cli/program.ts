@@ -59,12 +59,14 @@ export function buildProgram() {
 		.option("-w, --wait <seconds>", "Wait for delivery status (0 to skip)", "20")
 		.option("-p, --poll <seconds>", "Polling interval while waiting", "2")
 		.option("--provider <provider>", "Provider: twilio | web", "twilio")
+		.option("--dry-run", "Print payload and skip sending", false)
 		.addHelpText(
 			"after",
 			`
 Examples:
   warelay send --to +15551234567 --message "Hi"                # wait 20s for delivery (default)
   warelay send --to +15551234567 --message "Hi" --wait 0       # fire-and-forget
+  warelay send --to +15551234567 --message "Hi" --dry-run      # print payload only
   warelay send --to +15551234567 --message "Hi" --wait 60 --poll 3`,
 		)
 		.action(async (opts) => {

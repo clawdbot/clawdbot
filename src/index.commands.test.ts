@@ -62,6 +62,26 @@ describe("CLI commands", () => {
 		expect(wait).not.toHaveBeenCalled();
 	});
 
+	it("send command supports dry-run and skips sending", async () => {
+		const twilio = (await import("twilio")).default;
+		const wait = vi.spyOn(index, "waitForFinalStatus").mockResolvedValue();
+		await index.program.parseAsync(
+			[
+				"send",
+				"--to",
+				"+1555",
+				"--message",
+				"hi",
+				"--wait",
+				"0",
+				"--dry-run",
+			],
+			{ from: "user" },
+		);
+		expect(twilio._client.messages.create).not.toHaveBeenCalled();
+		expect(wait).not.toHaveBeenCalled();
+	});
+
 	it("login alias calls web login", async () => {
 		const spy = vi.spyOn(providerWeb, "loginWeb").mockResolvedValue();
 		await index.program.parseAsync(["login"], { from: "user" });

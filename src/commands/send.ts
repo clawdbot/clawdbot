@@ -10,6 +10,7 @@ export async function sendCommand(
 		wait: string;
 		poll: string;
 		provider: Provider;
+		dryRun?: boolean;
 	},
 	deps: CliDeps,
 	runtime: RuntimeEnv,
@@ -26,10 +27,23 @@ export async function sendCommand(
 	}
 
 	if (opts.provider === "web") {
+		if (opts.dryRun) {
+			runtime.log(
+				`[dry-run] would send via web -> ${opts.to}: ${opts.message}`,
+			);
+			return;
+		}
 		if (waitSeconds !== 0) {
 			runtime.log(info("Wait/poll are Twilio-only; ignored for provider=web."));
 		}
 		await deps.sendMessageWeb(opts.to, opts.message, { verbose: false });
+		return;
+	}
+
+	if (opts.dryRun) {
+		runtime.log(
+			`[dry-run] would send via twilio -> ${opts.to}: ${opts.message}`,
+		);
 		return;
 	}
 
