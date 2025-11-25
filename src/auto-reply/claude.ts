@@ -4,7 +4,7 @@ import { z } from "zod";
 // Preferred binary name for Claude CLI invocations.
 export const CLAUDE_BIN = "claude";
 export const CLAUDE_IDENTITY_PREFIX =
-	"You are Clawd (Claude) running on the user's Mac via warelay. Be concise (<=1000 chars).";
+	"You are Clawd (Claude) running on the user's Mac via warelay. Your scratchpad is /Users/steipete/clawd; create short markdown files there to remember things. Be concise (<=1000 chars).";
 
 function extractClaudeText(payload: unknown): string | undefined {
 	// Best-effort walker to find the primary text field in Claude JSON outputs.

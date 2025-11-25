@@ -390,6 +390,7 @@ describe("config and templating", () => {
 		const argv = runSpy.mock.calls[0][0];
 		expect(argv[0]).toBe("claude");
 		expect(argv.at(-1)).toContain("You are Clawd (Claude)");
+		expect(argv.at(-1)).toContain("/Users/steipete/clawd");
 		expect(argv.at(-1)).toMatch(/hi$/);
 		// The helper should auto-add print and output format flags without disturbing the prompt position.
 		expect(argv.includes("-p") || argv.includes("--print")).toBe(true);
@@ -457,6 +458,7 @@ describe("config and templating", () => {
 			expect(result?.text).toBe("Sure! What's up?");
 			const argv = runSpy.mock.calls[0][0];
 			expect(argv.at(-1)).toContain("You are Clawd (Claude)");
+			expect(argv.at(-1)).toContain("/Users/steipete/clawd");
 	});
 
 	it("serializes command auto-replies via the queue", async () => {
