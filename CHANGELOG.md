@@ -3,7 +3,8 @@
 ## [Unreleased] 0.1.4
 
 ### Pending
-- (add entries here)
+- Auto-replies now send a WhatsApp fallback message when a command/Claude run hits the timeout, including up to 800 chars of partial stdout so the user still sees progress.
+- Added tests covering the new timeout fallback behavior and partial-output truncation.
 
 ## 0.1.3 — 2025-11-25
 

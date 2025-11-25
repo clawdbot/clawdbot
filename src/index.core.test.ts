@@ -300,6 +300,66 @@ describe("config and templating", () => {
 		expect(result?.mediaUrl).toBeUndefined();
 	});
 
+	it("returns timeout reply with partial stdout snippet", async () => {
+		const partial = "x".repeat(900);
+		const runSpy = vi.fn().mockRejectedValue({
+			killed: true,
+			signal: "SIGKILL",
+			stdout: partial,
+			stderr: "",
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					timeoutSeconds: 42,
+				},
+			},
+		};
+
+		const result = await index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+
+		expect(result?.text).toContain("Command timed out after 42s");
+		expect(result?.text).toContain("Partial output before timeout");
+		expect(result?.text).toContain(`${partial.slice(0, 800)}...`);
+		expect(result?.text).not.toContain(partial);
+	});
+
+	it("returns timeout reply without partial output when none is available", async () => {
+		const runSpy = vi.fn().mockRejectedValue({
+			killed: true,
+			signal: "SIGKILL",
+			stdout: "",
+			stderr: "",
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					timeoutSeconds: 5,
+				},
+			},
+		};
+
+		const result = await index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+
+		expect(result?.text).toBe(
+			"Command timed out after 5s. Try a shorter prompt or split the request.",
+		);
+	});
+
 	it("splitMediaFromOutput strips media token and preserves text", () => {
 		const { text, mediaUrl } = splitMediaFromOutput(
 			"line1\nMEDIA:https://x/y.png\nline2",
