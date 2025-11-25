@@ -15,6 +15,7 @@ import { startWebhook } from "../webhook/server.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { info } from "../globals.js";
 import { autoReplyIfConfigured } from "../auto-reply/reply.js";
+import { ensureMediaHosted } from "../media/host.js";
 
 export type CliDeps = {
 	sendMessage: typeof sendMessage;
@@ -35,6 +36,10 @@ export type CliDeps = {
 	updateWebhook: typeof updateWebhook;
 	handlePortError: typeof handlePortError;
 	monitorWebProvider: typeof monitorWebProvider;
+	resolveTwilioMediaUrl: (
+		source: string,
+		opts: { serveMedia: boolean; runtime: RuntimeEnv },
+	) => Promise<string>;
 };
 
 export async function monitorTwilio(
@@ -79,6 +84,14 @@ export function createDefaultDeps(): CliDeps {
 		updateWebhook,
 		handlePortError,
 		monitorWebProvider,
+		resolveTwilioMediaUrl: async (source, { serveMedia, runtime }) => {
+			if (/^https?:\/\//i.test(source)) return source;
+			const hosted = await ensureMediaHosted(source, {
+				startServer: serveMedia,
+				runtime,
+			});
+			return hosted.url;
+		},
 	};
 }
 

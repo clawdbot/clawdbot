@@ -9,6 +9,7 @@ import {
 	makeCacheableSignalKeyStore,
 	makeWASocket,
 	useMultiFileAuthState,
+	type AnyMessageContent,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
@@ -101,7 +102,7 @@ export async function waitForWaConnection(
 export async function sendMessageWeb(
 	to: string,
 	body: string,
-	options: { verbose: boolean },
+	options: { verbose: boolean; mediaUrl?: string },
 ): Promise<{ messageId: string; toJid: string }> {
 	const sock = await createWaSocket(false, options.verbose);
 	try {
@@ -112,9 +113,20 @@ export async function sendMessageWeb(
 		} catch (err) {
 			logVerbose(`Presence update skipped: ${String(err)}`);
 		}
-		const result = await sock.sendMessage(jid, { text: body });
+		let payload: AnyMessageContent = { text: body };
+		if (options.mediaUrl) {
+			const media = await loadWebMedia(options.mediaUrl);
+			payload = {
+				image: media.buffer,
+				caption: body || undefined,
+				mimetype: media.contentType,
+			};
+		}
+		const result = await sock.sendMessage(jid, payload);
 		const messageId = result?.key?.id ?? "unknown";
-		logInfo(`✅ Sent via web session. Message ID: ${messageId} -> ${jid}`);
+		logInfo(
+			`✅ Sent via web session. Message ID: ${messageId} -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
+		);
 		return { messageId, toJid: jid };
 	} finally {
 		try {
@@ -209,6 +221,7 @@ export type WebInboundMessage = {
 	timestamp?: number;
 	sendComposing: () => Promise<void>;
 	reply: (text: string) => Promise<void>;
+	sendMedia: (payload: { image: Buffer; caption?: string; mimetype?: string }) => Promise<void>;
 };
 
 export async function monitorWebInbox(options: {
@@ -249,6 +262,13 @@ export async function monitorWebInbox(options: {
 			const reply = async (text: string) => {
 				await sock.sendMessage(chatJid, { text });
 			};
+			const sendMedia = async (payload: {
+				image: Buffer;
+				caption?: string;
+				mimetype?: string;
+			}) => {
+				await sock.sendMessage(chatJid, payload);
+			};
 			const timestamp = msg.messageTimestamp
 				? Number(msg.messageTimestamp) * 1000
 				: undefined;
@@ -262,6 +282,7 @@ export async function monitorWebInbox(options: {
 					timestamp,
 					sendComposing,
 					reply,
+					sendMedia,
 				});
 			} catch (err) {
 				console.error(
@@ -299,7 +320,7 @@ export async function monitorWebProvider(
 			console.log(`\n[${ts}] ${msg.from} -> ${msg.to}: ${msg.body}`);
 
 			const replyStarted = Date.now();
-			const replyText = await replyResolver(
+			const replyResult = await replyResolver(
 				{
 					Body: msg.body,
 					From: msg.from,
@@ -310,18 +331,31 @@ export async function monitorWebProvider(
 					onReplyStart: msg.sendComposing,
 				},
 			);
-			if (!replyText) return;
+			if (!replyResult || (!replyResult.text && !replyResult.mediaUrl)) return;
 			try {
-				await msg.reply(replyText);
+				if (replyResult.mediaUrl) {
+					const media = await loadWebMedia(replyResult.mediaUrl);
+					await msg.sendMedia({
+						image: media.buffer,
+						caption: replyResult.text || undefined,
+						mimetype: media.contentType,
+					});
+				} else {
+					await msg.reply(replyResult.text ?? "");
+				}
 				const durationMs = Date.now() - replyStarted;
 				if (isVerbose()) {
 					console.log(
 						success(
-							`↩️  Auto-replied to ${msg.from} (web, ${replyText.length} chars, ${durationMs}ms)`,
+							`↩️  Auto-replied to ${msg.from} (web, ${replyResult.text?.length ?? 0} chars${replyResult.mediaUrl ? ", media" : ""}, ${durationMs}ms)`,
 						),
 					);
 				} else {
-					console.log(success(`↩️  ${replyText}`));
+					console.log(
+						success(
+							`↩️  ${replyResult.text ?? "<media>"}${replyResult.mediaUrl ? " (media)" : ""}`,
+						),
+					);
 				}
 			} catch (err) {
 				console.error(
@@ -401,6 +435,27 @@ function extractText(message: proto.IMessage | undefined): string | undefined {
 		message.imageMessage?.caption ?? message.videoMessage?.caption;
 	if (caption?.trim()) return caption.trim();
 	return undefined;
+}
+
+async function loadWebMedia(
+	mediaUrl: string,
+): Promise<{ buffer: Buffer; contentType?: string }> {
+	if (/^https?:\/\//i.test(mediaUrl)) {
+		const res = await fetch(mediaUrl);
+		if (!res.ok || !res.body) {
+			throw new Error(`Failed to fetch media: HTTP ${res.status}`);
+		}
+		const array = Buffer.from(await res.arrayBuffer());
+		if (array.length > 5 * 1024 * 1024) {
+			throw new Error("Media exceeds 5MB limit");
+		}
+		return { buffer: array, contentType: res.headers.get("content-type") ?? undefined };
+	}
+	const data = await fs.readFile(mediaUrl);
+	if (data.length > 5 * 1024 * 1024) {
+		throw new Error("Media exceeds 5MB limit");
+	}
+	return { buffer: data };
 }
 
 function getStatusCode(err: unknown) {

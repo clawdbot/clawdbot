@@ -56,6 +56,8 @@ export function buildProgram() {
 		"Recipient number in E.164 (e.g. +15551234567)",
 	)
 	.requiredOption("-m, --message <text>", "Message body")
+	.option("--media <path-or-url>", "Attach image (<=5MB). Web: path or URL. Twilio: https URL or local path hosted via webhook/funnel.")
+	.option("--serve-media", "For Twilio: start a temporary media server if webhook is not running", false)
 	.option("-w, --wait <seconds>", "Wait for delivery status (0 to skip)", "20")
 	.option("-p, --poll <seconds>", "Polling interval while waiting", "2")
 	.option("--provider <provider>", "Provider: twilio | web", "twilio")

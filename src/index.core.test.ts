@@ -86,9 +86,9 @@ describe("config and templating", () => {
 			{ onReplyStart },
 			cfg,
 		);
-		expect(result).toBe("Hello whatsapp:+1555 [pfx] hi");
-		expect(onReplyStart).toHaveBeenCalled();
-	});
+			expect(result?.text).toBe("Hello whatsapp:+1555 [pfx] hi");
+			expect(onReplyStart).toHaveBeenCalled();
+		});
 
 	it("getReplyFromConfig runs command and manages session store", async () => {
 		const tmpStore = path.join(os.tmpdir(), `warelay-store-${Date.now()}.json`);
@@ -123,7 +123,7 @@ describe("config and templating", () => {
 			cfg,
 			runSpy,
 		);
-		expect(first).toBe("cmd output");
+			expect(first?.text).toBe("cmd output");
 		const argvFirst = runSpy.mock.calls[0][0];
 		expect(argvFirst).toEqual([
 			"echo",
@@ -139,7 +139,7 @@ describe("config and templating", () => {
 			cfg,
 			runSpy,
 		);
-		expect(second).toBe("cmd output");
+			expect(second?.text).toBe("cmd output");
 		const argvSecond = runSpy.mock.calls[1][0];
 		expect(argvSecond[2]).toBe("--resume");
 	});
@@ -200,15 +200,15 @@ describe("config and templating", () => {
 			},
 		};
 
-		const result = await index.getReplyFromConfig(
-			{ Body: "hi", From: "+1", To: "+2" },
-			undefined,
-			cfg,
-			runSpy,
-		);
+			const result = await index.getReplyFromConfig(
+				{ Body: "hi", From: "+1", To: "+2" },
+				undefined,
+				cfg,
+				runSpy,
+			);
 
-		expect(result).toBe("hello world");
-	});
+			expect(result?.text).toBe("hello world");
+		});
 
 	it("parses Claude JSON output even without explicit claudeOutputFormat when using claude bin", async () => {
 		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
@@ -228,15 +228,15 @@ describe("config and templating", () => {
 			},
 		};
 
-		const result = await index.getReplyFromConfig(
-			{ Body: "hi", From: "+1", To: "+2" },
-			undefined,
-			cfg,
-			runSpy,
-		);
+			const result = await index.getReplyFromConfig(
+				{ Body: "hi", From: "+1", To: "+2" },
+				undefined,
+				cfg,
+				runSpy,
+			);
 
-		expect(result).toBe("Sure! What's up?");
-	});
+			expect(result?.text).toBe("Sure! What's up?");
+		});
 
 	it("serializes command auto-replies via the queue", async () => {
 		let active = 0;
@@ -376,11 +376,11 @@ describe("twilio interactions", () => {
 });
 
 describe("webhook and messaging", () => {
-	it("startWebhook responds and auto-replies", async () => {
-		const client = twilioFactory._createClient();
-		client.messages.create.mockResolvedValue({});
-		twilioFactory.mockReturnValue(client);
-		vi.spyOn(index, "getReplyFromConfig").mockResolvedValue("Auto");
+		it("startWebhook responds and auto-replies", async () => {
+			const client = twilioFactory._createClient();
+			client.messages.create.mockResolvedValue({});
+			twilioFactory.mockReturnValue(client);
+			vi.spyOn(index, "getReplyFromConfig").mockResolvedValue({ text: "Auto" });
 
 		const server = await index.startWebhook(0, "/hook", undefined, false);
 		const address = server.address() as net.AddressInfo;
@@ -667,27 +667,29 @@ describe("monitoring", () => {
 		expect(runtime.exit).toHaveBeenCalledWith(1);
 	});
 
-	it("monitorWebProvider triggers replies and stops when asked", async () => {
-		const replySpy = vi.fn();
-		const listenerFactory = vi.fn(
-			async (
-				opts: Parameters<typeof index.monitorWebProvider>[1] extends undefined
-					? never
-					: NonNullable<Parameters<typeof index.monitorWebProvider>[1]>,
-			) => {
-				await opts.onMessage({
-					body: "hello",
-					from: "+1",
-					to: "+2",
-					id: "id1",
-					sendComposing: vi.fn(),
-					reply: replySpy,
-				});
-				return { close: vi.fn() };
-			},
-		);
-		const resolver = vi.fn().mockResolvedValue("auto");
-		await index.monitorWebProvider(false, listenerFactory, false, resolver);
-		expect(replySpy).toHaveBeenCalledWith("auto");
+		it("monitorWebProvider triggers replies and stops when asked", async () => {
+			const replySpy = vi.fn();
+			const sendMediaSpy = vi.fn();
+			const listenerFactory = vi.fn(
+				async (
+					opts: Parameters<typeof index.monitorWebProvider>[1] extends undefined
+						? never
+						: NonNullable<Parameters<typeof index.monitorWebProvider>[1]>,
+				) => {
+					await opts.onMessage({
+						body: "hello",
+						from: "+1",
+						to: "+2",
+						id: "id1",
+						sendComposing: vi.fn(),
+						reply: replySpy,
+						sendMedia: sendMediaSpy,
+					});
+					return { close: vi.fn() };
+				},
+			);
+			const resolver = vi.fn().mockResolvedValue({ text: "auto" });
+			await index.monitorWebProvider(false, listenerFactory, false, resolver);
+			expect(replySpy).toHaveBeenCalledWith("auto");
+		});
 	});
-});

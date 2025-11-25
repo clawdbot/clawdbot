@@ -29,6 +29,7 @@ export type WarelayConfig = {
 			template?: string; // prepend template string when building command/prompt
 			timeoutSeconds?: number; // optional command timeout; defaults to 600s
 			bodyPrefix?: string; // optional string prepended to Body before templating
+			mediaUrl?: string; // optional media attachment (path or URL)
 			session?: SessionConfig;
 			claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
 		};
@@ -45,6 +46,7 @@ const ReplySchema = z
 		template: z.string().optional(),
 		timeoutSeconds: z.number().int().positive().optional(),
 		bodyPrefix: z.string().optional(),
+		mediaUrl: z.string().optional(),
 		session: z
 			.object({
 				scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),

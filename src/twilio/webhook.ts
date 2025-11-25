@@ -7,10 +7,11 @@ import { success, logVerbose, danger } from "../globals.js";
 import { readEnv } from "../env.js";
 import { createClient } from "./client.js";
 import { normalizePath } from "../utils.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { getReplyFromConfig, type ReplyPayload } from "../auto-reply/reply.js";
 import { sendTypingIndicator } from "./typing.js";
 import { logTwilioSendError } from "./utils.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { attachMediaRoutes } from "../media/server.js";
 
 /** Start the inbound webhook HTTP server and wire optional auto-replies. */
 export async function startWebhook(
@@ -24,6 +25,7 @@ export async function startWebhook(
   const env = readEnv(runtime);
   const app = express();
 
+  attachMediaRoutes(app, undefined, runtime);
   // Twilio sends application/x-www-form-urlencoded payloads.
   app.use(bodyParser.urlencoded({ extended: false }));
   app.use((req, _res, next) => {
@@ -38,9 +40,10 @@ export async function startWebhook(
     if (verbose) runtime.log(chalk.gray(`Body: ${Body ?? ""}`));
 
     const client = createClient(env);
-    let replyText = autoReply;
-    if (!replyText) {
-      replyText = await getReplyFromConfig(
+    let replyResult: ReplyPayload | undefined =
+      autoReply !== undefined ? { text: autoReply } : undefined;
+    if (!replyResult) {
+      replyResult = await getReplyFromConfig(
         { Body, From, To, MessageSid },
         {
           onReplyStart: () => sendTypingIndicator(client, runtime, MessageSid),
@@ -48,10 +51,20 @@ export async function startWebhook(
       );
     }
 
-    if (replyText) {
+    if (replyResult && (replyResult.text || replyResult.mediaUrl)) {
       try {
-        await client.messages.create({ from: To, to: From, body: replyText });
-        if (verbose) runtime.log(success(`↩️  Auto-replied to ${From}`));
+        await client.messages.create({
+          from: To,
+          to: From,
+          body: replyResult.text ?? "",
+          ...(replyResult.mediaUrl ? { mediaUrl: [replyResult.mediaUrl] } : {}),
+        });
+        if (verbose)
+          runtime.log(
+            success(
+              `↩️  Auto-replied to ${From}${replyResult.mediaUrl ? " (media)" : ""}`,
+            ),
+          );
       } catch (err) {
         logTwilioSendError(err, From ?? undefined, runtime);
       }

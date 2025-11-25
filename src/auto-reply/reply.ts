@@ -79,12 +79,17 @@ function summarizeClaudeMetadata(payload: unknown): string | undefined {
 	return parts.length ? parts.join(", ") : undefined;
 }
 
+export type ReplyPayload = {
+	text?: string;
+	mediaUrl?: string;
+};
+
 export async function getReplyFromConfig(
 	ctx: MsgContext,
 	opts?: GetReplyOptions,
 	configOverride?: WarelayConfig,
 	commandRunner: typeof runCommandWithTimeout = runCommandWithTimeout,
-): Promise<string | undefined> {
+): Promise<ReplyPayload | undefined> {
 	// Choose reply from config: static text or external command stdout.
 	const cfg = configOverride ?? loadConfig();
 	const reply = cfg.inbound?.reply;
@@ -186,7 +191,7 @@ export async function getReplyFromConfig(
 	if (reply.mode === "text" && reply.text) {
 		await onReplyStart();
 		logVerbose("Using text auto-reply from config");
-		return applyTemplate(reply.text, templatingCtx);
+		return { text: applyTemplate(reply.text, templatingCtx), mediaUrl: reply.mediaUrl };
 	}
 
 	if (reply.mode === "command" && reply.command?.length) {
@@ -306,7 +311,7 @@ export async function getReplyFromConfig(
 				);
 				return undefined;
 			}
-			return trimmed || undefined;
+			return trimmed ? { text: trimmed, mediaUrl: reply.mediaUrl } : undefined;
 		} catch (err) {
 			const elapsed = Date.now() - started;
 			const anyErr = err as { killed?: boolean; signal?: string };
@@ -356,14 +361,14 @@ export async function autoReplyIfConfigured(
 		MessageSid: message.sid,
 	};
 
-	const replyText = await getReplyFromConfig(
+	const replyResult = await getReplyFromConfig(
 		ctx,
 		{
 			onReplyStart: () => sendTypingIndicator(client, runtime, message.sid),
 		},
 		configOverride,
 	);
-	if (!replyText) return;
+	if (!replyResult || (!replyResult.text && !replyResult.mediaUrl)) return;
 
 	const replyFrom = message.to;
 	const replyTo = message.from;
@@ -376,19 +381,26 @@ export async function autoReplyIfConfigured(
 		return;
 	}
 
-	logVerbose(
-		`Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyText.length}`,
-	);
+	if (replyResult.text) {
+		logVerbose(
+			`Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyResult.text.length}`,
+		);
+	} else {
+		logVerbose(`Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media)`);
+	}
 
 	try {
 		await client.messages.create({
 			from: replyFrom,
 			to: replyTo,
-			body: replyText,
+			body: replyResult.text ?? "",
+			...(replyResult.mediaUrl ? { mediaUrl: [replyResult.mediaUrl] } : {}),
 		});
 		if (isVerbose()) {
 			console.log(
-				info(`↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"})`),
+				info(
+					`↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${replyResult.mediaUrl ? ", media" : ""})`,
+				),
 			);
 		}
 	} catch (err) {

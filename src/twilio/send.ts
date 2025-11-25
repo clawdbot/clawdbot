@@ -13,6 +13,7 @@ const failureTerminalStatuses = new Set(["failed", "undelivered", "canceled"]);
 export async function sendMessage(
 	to: string,
 	body: string,
+	opts?: { mediaUrl?: string },
 	runtime: RuntimeEnv = defaultRuntime,
 ) {
 	const env = readEnv(runtime);
@@ -25,6 +26,7 @@ export async function sendMessage(
 			from,
 			to: toNumber,
 			body,
+			mediaUrl: opts?.mediaUrl ? [opts.mediaUrl] : undefined,
 		});
 
 		logInfo(`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`, runtime);
