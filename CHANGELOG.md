@@ -8,7 +8,6 @@ _Add notes here for the next release._
 
 ### CI/build fix
 - Fixed commander help configuration (`subcommandTerm`) so TypeScript builds pass in CI.
-- Bumped version and web UA to 0.1.2; retains the tagline/help polish from 0.1.1.
 
 ## 0.1.1 — 2025-11-25
 
