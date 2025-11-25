@@ -253,11 +253,17 @@ With Tailscale:
 
 	program
 		.command("relay:tmux")
-		.description("Run relay --verbose inside tmux (session warelay-relay), restarting if already running")
+		.description(
+			"Run relay --verbose inside tmux (session warelay-relay), restarting if already running, then attach",
+		)
 		.action(async () => {
 			try {
-				const session = await spawnRelayTmux();
-				defaultRuntime.log(info(`tmux session started: ${session} (pane running "pnpm warelay relay --verbose")`));
+				const session = await spawnRelayTmux("pnpm warelay relay --verbose", true);
+				defaultRuntime.log(
+					info(
+						`tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose")`,
+					),
+				);
 			} catch (err) {
 				defaultRuntime.error(danger(`Failed to start relay tmux session: ${String(err)}`));
 				defaultRuntime.exit(1);
