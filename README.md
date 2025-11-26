@@ -153,7 +153,7 @@ Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business a
 | `inbound.reply.session.store` | `string` (default: `~/.warelay/sessions.json`) | Custom session store path. |
 | `inbound.reply.session.sendSystemOnce` | `boolean` (default: `false`) | If `true`, only include the system prompt/template on the first turn of a session. |
 | `inbound.reply.session.sessionIntro` | `string` | Optional intro text sent once per new session (prepended before the body when `sendSystemOnce` is used). |
-| `inbound.reply.typingIntervalSeconds` | `number` (default: `30` for command replies) | How often to refresh typing indicators while the command/Claude run is in flight. |
+| `inbound.reply.typingIntervalSeconds` | `number` (default: `8` for command replies) | How often to refresh typing indicators while the command/Claude run is in flight. |
 | `inbound.reply.session.sessionArgNew` | `string[]` (default: `["--session-id","{{SessionId}}"]`) | Args injected for a new session run. |
 | `inbound.reply.session.sessionArgResume` | `string[]` (default: `["--resume","{{SessionId}}"]`) | Args for resumed sessions. |
 | `inbound.reply.session.sessionArgBeforeBody` | `boolean` (default: `true`) | Place session args before final body arg. |

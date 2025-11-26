@@ -62,7 +62,7 @@ Notes on this configuration:
 - Outbound media from Claude (via `MEDIA:`) follows provider caps: Web resizes images to the configured target (`inbound.reply.mediaMaxMb`, default 5 MB) within hard limits of 6 MB (image), 16 MB (audio/video voice notes), and 100 MB (documents); Twilio still uses the Funnel host with a 5 MB guard.
 - Voice notes: set `inbound.transcribeAudio.command` to run a CLI that emits the transcript to stdout (e.g., OpenAI Whisper: `openai api audio.transcriptions.create -m whisper-1 -f {{MediaPath}} --response-format text`). If it succeeds, warelay replaces `Body` with the transcript and adds the original media path plus a `Transcript:` block into the prompt before invoking Claude.
 - To avoid re-sending long system prompts every turn, set `inbound.reply.session.sendSystemOnce: true` and keep your prompt in `bodyPrefix` or `sessionIntro`; they are sent only on the first message of each session (resets on `/new` or idle expiry).
-- Typing indicators: for long-running Claude/command replies, `inbound.reply.typingIntervalSeconds` (or the session-level equivalent) refreshes the “composing” indicator periodically (default 30 s for command replies).
+- Typing indicators: for long-running Claude/command replies, `inbound.reply.typingIntervalSeconds` (or the session-level equivalent) refreshes the “composing” indicator periodically (default 8 s for command replies).
 
 ## Testing the setup
 1. Start a relay (auto-selects Web when logged in, otherwise Twilio polling):

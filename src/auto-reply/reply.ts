@@ -119,7 +119,7 @@ export async function getReplyFromConfig(
     reply?.mode === "command"
       ? (reply.typingIntervalSeconds ??
           reply?.session?.typingIntervalSeconds ??
-          30) * 1000
+          8) * 1000
       : 0;
   const cleanupTyping = () => {
     if (typingTimer) {
