@@ -5,6 +5,7 @@
   - Audio transcription helpers live in `src/auto-reply/transcription.ts`.
   - Shared reply types live in `src/auto-reply/types.ts` (re-exported from `reply.ts`).
 - `runCommandReply` now returns `{ payload, meta }`, supports injected enqueue runners for tests, logs structured metadata, and respects `mediaMaxMb` for local media paths.
+- Timeout messaging now includes `cwd` when provided to speed up debugging slow commands.
 - Added focused tests:
   - `src/auto-reply/command-reply.test.ts` exercises Claude flag injection, session args, timeout messaging, media token handling, and Claude metadata reporting.
   - `src/auto-reply/transcription.test.ts` covers media download + transcription command invocation.
