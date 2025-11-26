@@ -2,10 +2,12 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
 import { sendMessageWeb } from "./outbound.js";
@@ -139,6 +141,23 @@ export async function runWebHeartbeatOnce(opts: {
     console.log(danger(`heartbeat: failed - ${String(err)}`));
     throw err;
   }
+}
+
+function getFallbackRecipient(cfg: ReturnType<typeof loadConfig>) {
+  const sessionCfg = cfg.inbound?.reply?.session;
+  const storePath = resolveStorePath(sessionCfg?.store);
+  const store = loadSessionStore(storePath);
+  const candidates = Object.entries(store).filter(([key]) => key !== "global");
+  if (candidates.length === 0) {
+    return (
+      (Array.isArray(cfg.inbound?.allowFrom) && cfg.inbound.allowFrom[0]) ||
+      null
+    );
+  }
+  const mostRecent = candidates.sort(
+    (a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0),
+  )[0];
+  return mostRecent ? normalizeE164(mostRecent[0]) : null;
 }
 
 async function deliverWebReply(params: {
@@ -437,15 +456,31 @@ export async function monitorWebProvider(
       if (!replyHeartbeatMinutes) return;
       const tickStart = Date.now();
       if (!lastInboundMsg) {
-        heartbeatLogger.info(
-          {
-            connectionId,
-            reason: "no-recent-inbound",
-            durationMs: Date.now() - tickStart,
-          },
-          "reply heartbeat skipped",
-        );
-        console.log(success("heartbeat: skipped (no recent inbound)"));
+        const fallbackTo = getFallbackRecipient(cfg);
+        if (!fallbackTo) {
+          heartbeatLogger.info(
+            {
+              connectionId,
+              reason: "no-recent-inbound",
+              durationMs: Date.now() - tickStart,
+            },
+            "reply heartbeat skipped",
+          );
+          console.log(success("heartbeat: skipped (no recent inbound)"));
+          return;
+        }
+        if (isVerbose()) {
+          heartbeatLogger.info(
+            { connectionId, to: fallbackTo, reason: "fallback-session" },
+            "reply heartbeat start",
+          );
+        }
+        await runWebHeartbeatOnce({
+          to: fallbackTo,
+          verbose,
+          replyResolver,
+          runtime,
+        });
         return;
       }
 

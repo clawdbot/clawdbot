@@ -105,6 +105,37 @@ describe("runWebHeartbeatOnce", () => {
     });
     expect(sender).toHaveBeenCalledWith("+1555", "ALERT", { verbose: false });
   });
+
+  it("falls back to most recent session when no to is provided", async () => {
+    const sender: typeof sendMessageWeb = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    const resolver = vi.fn(async () => ({ text: "ALERT" }));
+    // Seed session store
+    const now = Date.now();
+    const store = {
+      "+1222": { sessionId: "s1", updatedAt: now - 1000 },
+      "+1333": { sessionId: "s2", updatedAt: now },
+    };
+    const storePath = resolveStorePath();
+    await fs.mkdir(resolveStorePath().replace("sessions.json", ""), {
+      recursive: true,
+    });
+    await fs.writeFile(storePath, JSON.stringify(store));
+    setLoadConfigMock({
+      inbound: {
+        allowFrom: ["+1999"],
+        reply: { mode: "command", session: {} },
+      },
+    });
+    await runWebHeartbeatOnce({
+      to: "+1999",
+      verbose: false,
+      sender,
+      replyResolver: resolver,
+    });
+    expect(sender).toHaveBeenCalledWith("+1333", "ALERT", { verbose: false });
+  });
 });
 
 describe("web auto-reply", () => {
