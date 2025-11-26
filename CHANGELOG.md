@@ -8,6 +8,8 @@
 - Sessions can now send the system prompt only once: set `inbound.reply.session.sendSystemOnce` (optional `sessionIntro` for the first turn) to avoid re-sending large prompts every message.
 - While commands run, typing indicators refresh every 30s by default (tune with `inbound.reply.typingIntervalSeconds`); helps keep WhatsApp “composing” visible during longer Claude runs.
 - Optional voice-note transcription: set `inbound.transcribeAudio.command` (e.g., OpenAI Whisper CLI) to turn inbound audio into text before templating/Claude; verbose logs surface when transcription runs. Prompts now include the original media path plus a `Transcript:` block so models see both.
+- Auto-reply command engine was split into focused helpers; now returns structured `{ payload, meta }`, supports injected queues for tests, respects `mediaMaxMb` for local media, and logs Claude metadata. Timeout messages include the command `cwd` when set.
+- Added unit coverage for command helper edge cases (Claude flags, session args, media tokens, timeouts) and transcription download/command invocation.
 
 ## 1.0.4 — 2025-11-25
 
