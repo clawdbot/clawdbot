@@ -9,14 +9,16 @@ import {
   resolveStorePath,
   saveSessionStore,
 } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose, success } from "../globals.js";
+import { danger, info, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
+import { sendViaIpc, startIpcServer, stopIpcServer } from "./ipc.js";
 import { loadWebMedia } from "./media.js";
 import { sendMessageWeb } from "./outbound.js";
+import { getQueueSize } from "../process/command-queue.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -26,6 +28,26 @@ import {
   sleepWithAbort,
 } from "./reconnect.js";
 import { getWebAuthAgeMs } from "./session.js";
+
+/**
+ * Send a message via IPC if relay is running, otherwise fall back to direct.
+ * This avoids Signal session corruption from multiple Baileys connections.
+ */
+async function sendWithIpcFallback(
+  to: string,
+  message: string,
+  opts: { verbose: boolean; mediaUrl?: string },
+): Promise<{ messageId: string; toJid: string }> {
+  const ipcResult = await sendViaIpc(to, message, opts.mediaUrl);
+  if (ipcResult?.success && ipcResult.messageId) {
+    if (opts.verbose) {
+      console.log(info(`Sent via relay IPC (avoiding session corruption)`));
+    }
+    return { messageId: ipcResult.messageId, toJid: `${to}@s.whatsapp.net` };
+  }
+  // Fall back to direct send
+  return sendMessageWeb(to, message, opts);
+}
 
 const DEFAULT_WEB_MEDIA_BYTES = 5 * 1024 * 1024;
 type WebInboundMsg = Parameters<
@@ -94,7 +116,7 @@ export async function runWebHeartbeatOnce(opts: {
   } = opts;
   const _runtime = opts.runtime ?? defaultRuntime;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
-  const sender = opts.sender ?? sendMessageWeb;
+  const sender = opts.sender ?? sendWithIpcFallback;
   const runId = newConnectionId();
   const heartbeatLogger = getChildLogger({
     module: "web-heartbeat",
@@ -493,6 +515,13 @@ export async function monitorWebProvider(
       }),
     );
 
+  // Avoid noisy MaxListenersExceeded warnings in test environments where
+  // multiple relay instances may be constructed.
+  const currentMaxListeners = process.getMaxListeners?.() ?? 10;
+  if (process.setMaxListeners && currentMaxListeners < 50) {
+    process.setMaxListeners(50);
+  }
+
   let sigintStop = false;
   const handleSigint = () => {
     sigintStop = true;
@@ -501,6 +530,10 @@ export async function monitorWebProvider(
 
   let reconnectAttempts = 0;
 
+  // Track recently sent messages to prevent echo loops
+  const recentlySent = new Set<string>();
+  const MAX_RECENT_MESSAGES = 100;
+
   while (true) {
     if (stopRequested()) break;
 
@@ -508,96 +541,242 @@ export async function monitorWebProvider(
     const startedAt = Date.now();
     let heartbeat: NodeJS.Timeout | null = null;
     let replyHeartbeatTimer: NodeJS.Timeout | null = null;
+    let watchdogTimer: NodeJS.Timeout | null = null;
     let lastMessageAt: number | null = null;
     let handledMessages = 0;
     let lastInboundMsg: WebInboundMsg | null = null;
+
+    // Watchdog to detect stuck message processing (e.g., event emitter died)
+    // Should be significantly longer than heartbeatMinutes to avoid false positives
+    const MESSAGE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes without any messages
+    const WATCHDOG_CHECK_MS = 60 * 1000; // Check every minute
+
+    // Batch inbound messages while command queue is busy, then send one
+    // combined prompt with per-message timestamps (inbound-only behavior).
+    type PendingBatch = { messages: WebInboundMsg[]; timer?: NodeJS.Timeout };
+    const pendingBatches = new Map<string, PendingBatch>();
+
+    const formatTimestamp = (ts?: number) => {
+      const tsCfg = cfg.inbound?.timestampPrefix;
+      const tsEnabled = tsCfg !== false; // default true
+      if (!tsEnabled) return "";
+      const tz = typeof tsCfg === "string" ? tsCfg : "UTC";
+      const date = ts ? new Date(ts) : new Date();
+      try {
+        return `[${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: tz })} ${date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: tz })}] `;
+      } catch {
+        return `[${date.toISOString().slice(5, 16).replace("T", " ")}] `;
+      }
+    };
+
+    const buildLine = (msg: WebInboundMsg) => {
+      // Build message prefix: explicit config > default based on allowFrom
+      let messagePrefix = cfg.inbound?.messagePrefix;
+      if (messagePrefix === undefined) {
+        const hasAllowFrom = (cfg.inbound?.allowFrom?.length ?? 0) > 0;
+        messagePrefix = hasAllowFrom ? "" : "[warelay]";
+      }
+      const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
+      return `${formatTimestamp(msg.timestamp)}${prefixStr}${msg.body}`;
+    };
+
+    const processBatch = async (from: string) => {
+      const batch = pendingBatches.get(from);
+      if (!batch || batch.messages.length === 0) return;
+      if (getQueueSize() > 0) {
+        // Wait until command queue is free to run the combined prompt.
+        batch.timer = setTimeout(() => void processBatch(from), 150);
+        return;
+      }
+      pendingBatches.delete(from);
+
+      const messages = batch.messages;
+      const latest = messages[messages.length - 1];
+      const combinedBody = messages.map(buildLine).join("\n");
+
+      // Echo detection uses combined body so we don't respond twice.
+      if (recentlySent.has(combinedBody)) {
+        logVerbose(`Skipping auto-reply: detected echo for combined batch`);
+        recentlySent.delete(combinedBody);
+        return;
+      }
+
+      const correlationId = latest.id ?? newConnectionId();
+      replyLogger.info(
+        {
+          connectionId,
+          correlationId,
+          from,
+          to: latest.to,
+          body: combinedBody,
+          mediaType: latest.mediaType ?? null,
+          mediaPath: latest.mediaPath ?? null,
+          batchSize: messages.length,
+        },
+        "inbound web message (batched)",
+      );
+
+      const tsDisplay = latest.timestamp
+        ? new Date(latest.timestamp).toISOString()
+        : new Date().toISOString();
+      console.log(`\n[${tsDisplay}] ${from} -> ${latest.to}: ${combinedBody}`);
+
+      const replyResult = await (replyResolver ?? getReplyFromConfig)(
+        {
+          Body: combinedBody,
+          From: latest.from,
+          To: latest.to,
+          MessageSid: latest.id,
+          MediaPath: latest.mediaPath,
+          MediaUrl: latest.mediaUrl,
+          MediaType: latest.mediaType,
+        },
+        {
+          onReplyStart: latest.sendComposing,
+        },
+      );
+
+      if (
+        !replyResult ||
+        (!replyResult.text &&
+          !replyResult.mediaUrl &&
+          !replyResult.mediaUrls?.length)
+      ) {
+        logVerbose("Skipping auto-reply: no text/media returned from resolver");
+        return;
+      }
+
+      // Apply response prefix if configured (skip for HEARTBEAT_OK to preserve exact match)
+      const responsePrefix = cfg.inbound?.responsePrefix;
+      if (
+        responsePrefix &&
+        replyResult.text &&
+        replyResult.text.trim() !== HEARTBEAT_TOKEN
+      ) {
+        if (!replyResult.text.startsWith(responsePrefix)) {
+          replyResult.text = `${responsePrefix} ${replyResult.text}`;
+        }
+      }
+
+      try {
+        await deliverWebReply({
+          replyResult,
+          msg: latest,
+          maxMediaBytes,
+          replyLogger,
+          runtime,
+          connectionId,
+        });
+
+        if (replyResult.text) {
+          recentlySent.add(replyResult.text);
+          recentlySent.add(combinedBody); // Prevent echo on the batch text itself
+          logVerbose(
+            `Added to echo detection set (size now: ${recentlySent.size}): ${replyResult.text.substring(0, 50)}...`,
+          );
+          if (recentlySent.size > MAX_RECENT_MESSAGES) {
+            const firstKey = recentlySent.values().next().value;
+            if (firstKey) recentlySent.delete(firstKey);
+          }
+        }
+
+        if (isVerbose()) {
+          console.log(
+            success(
+              `↩️  Auto-replied to ${from} (web${replyResult.mediaUrl || replyResult.mediaUrls?.length ? ", media" : ""}; batched ${messages.length})`,
+            ),
+          );
+        } else {
+          console.log(
+            success(
+              `↩️  ${replyResult.text ?? "<media>"}${replyResult.mediaUrl || replyResult.mediaUrls?.length ? " (media)" : ""}`,
+            ),
+          );
+        }
+      } catch (err) {
+        console.error(
+          danger(
+            `Failed sending web auto-reply to ${from}: ${String(err)}`,
+          ),
+        );
+      }
+    };
+
+    const enqueueBatch = async (msg: WebInboundMsg) => {
+      const bucket = pendingBatches.get(msg.from) ?? { messages: [] };
+      bucket.messages.push(msg);
+      pendingBatches.set(msg.from, bucket);
+
+      // Process immediately when queue is free; otherwise wait until it drains.
+      if (getQueueSize() === 0) {
+        await processBatch(msg.from);
+      } else {
+        bucket.timer = bucket.timer ?? setTimeout(() => void processBatch(msg.from), 150);
+      }
+    };
 
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
       onMessage: async (msg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
-        const ts = msg.timestamp
-          ? new Date(msg.timestamp).toISOString()
-          : new Date().toISOString();
-        const correlationId = msg.id ?? newConnectionId();
-        replyLogger.info(
-          {
-            connectionId,
-            correlationId,
-            from: msg.from,
-            to: msg.to,
-            body: msg.body,
-            mediaType: msg.mediaType ?? null,
-            mediaPath: msg.mediaPath ?? null,
-          },
-          "inbound web message",
-        );
-
-        console.log(`\n[${ts}] ${msg.from} -> ${msg.to}: ${msg.body}`);
-
         lastInboundMsg = msg;
 
-        const replyResult = await (replyResolver ?? getReplyFromConfig)(
-          {
-            Body: msg.body,
-            From: msg.from,
-            To: msg.to,
-            MessageSid: msg.id,
-            MediaPath: msg.mediaPath,
-            MediaUrl: msg.mediaUrl,
-            MediaType: msg.mediaType,
-          },
-          {
-            onReplyStart: msg.sendComposing,
-          },
-        );
-        if (
-          !replyResult ||
-          (!replyResult.text &&
-            !replyResult.mediaUrl &&
-            !replyResult.mediaUrls?.length)
-        ) {
+        // Same-phone mode logging retained
+        if (msg.from === msg.to) {
+          logVerbose(`📱 Same-phone mode detected (from === to: ${msg.from})`);
+        }
+
+        // Skip if this is a message we just sent (echo detection)
+        if (recentlySent.has(msg.body)) {
+          console.log(`⏭️  Skipping echo: detected recently sent message`);
           logVerbose(
-            "Skipping auto-reply: no text/media returned from resolver",
+            `Skipping auto-reply: detected echo (message matches recently sent text)`,
           );
+          recentlySent.delete(msg.body);
           return;
         }
-        try {
-          await deliverWebReply({
-            replyResult,
-            msg,
-            maxMediaBytes,
-            replyLogger,
-            runtime,
-            connectionId,
-          });
-          if (isVerbose()) {
-            console.log(
-              success(
-                `↩️  Auto-replied to ${msg.from} (web${replyResult.mediaUrl || replyResult.mediaUrls?.length ? ", media" : ""})`,
-              ),
-            );
-          } else {
-            console.log(
-              success(
-                `↩️  ${replyResult.text ?? "<media>"}${replyResult.mediaUrl || replyResult.mediaUrls?.length ? " (media)" : ""}`,
-              ),
-            );
-          }
-        } catch (err) {
-          console.error(
-            danger(
-              `Failed sending web auto-reply to ${msg.from}: ${String(err)}`,
-            ),
-          );
-        }
+
+        return enqueueBatch(msg);
       },
     });
 
+    // Start IPC server so `warelay send` can use this connection
+    // instead of creating a new one (which would corrupt Signal session)
+    if ("sendMessage" in listener && "sendComposingTo" in listener) {
+      startIpcServer(async (to, message, mediaUrl) => {
+        let mediaBuffer: Buffer | undefined;
+        let mediaType: string | undefined;
+        if (mediaUrl) {
+          const media = await loadWebMedia(mediaUrl);
+          mediaBuffer = media.buffer;
+          mediaType = media.contentType;
+        }
+        const result = await listener.sendMessage(to, message, mediaBuffer, mediaType);
+        // Add to echo detection so we don't process our own message
+        if (message) {
+          recentlySent.add(message);
+          if (recentlySent.size > MAX_RECENT_MESSAGES) {
+            const firstKey = recentlySent.values().next().value;
+            if (firstKey) recentlySent.delete(firstKey);
+          }
+        }
+        logInfo(`📤 IPC send to ${to}: ${message.substring(0, 50)}...`, runtime);
+        // Show typing indicator after send so user knows more may be coming
+        try {
+          await listener.sendComposingTo(to);
+        } catch {
+          // Ignore typing indicator errors - not critical
+        }
+        return result;
+      });
+    }
+
     const closeListener = async () => {
+      stopIpcServer();
       if (heartbeat) clearInterval(heartbeat);
       if (replyHeartbeatTimer) clearInterval(replyHeartbeatTimer);
+      if (watchdogTimer) clearInterval(watchdogTimer);
       try {
         await listener.close();
       } catch (err) {
@@ -608,21 +787,64 @@ export async function monitorWebProvider(
     if (keepAlive) {
       heartbeat = setInterval(() => {
         const authAgeMs = getWebAuthAgeMs();
-        heartbeatLogger.info(
-          {
-            connectionId,
-            reconnectAttempts,
-            messagesHandled: handledMessages,
-            lastMessageAt,
-            authAgeMs,
-            uptimeMs: Date.now() - startedAt,
-          },
-          "web relay heartbeat",
-        );
+        const minutesSinceLastMessage = lastMessageAt
+          ? Math.floor((Date.now() - lastMessageAt) / 60000)
+          : null;
+
+        const logData = {
+          connectionId,
+          reconnectAttempts,
+          messagesHandled: handledMessages,
+          lastMessageAt,
+          authAgeMs,
+          uptimeMs: Date.now() - startedAt,
+          ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
+            ? { minutesSinceLastMessage }
+            : {}),
+        };
+
+        // Warn if no messages in 30+ minutes
+        if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
+          heartbeatLogger.warn(logData, "⚠️ web relay heartbeat - no messages in 30+ minutes");
+        } else {
+          heartbeatLogger.info(logData, "web relay heartbeat");
+        }
       }, heartbeatSeconds * 1000);
+
+      // Watchdog: Auto-restart if no messages received for MESSAGE_TIMEOUT_MS
+      watchdogTimer = setInterval(() => {
+        if (lastMessageAt) {
+          const timeSinceLastMessage = Date.now() - lastMessageAt;
+          if (timeSinceLastMessage > MESSAGE_TIMEOUT_MS) {
+            const minutesSinceLastMessage = Math.floor(timeSinceLastMessage / 60000);
+            heartbeatLogger.warn(
+              {
+                connectionId,
+                minutesSinceLastMessage,
+                lastMessageAt: new Date(lastMessageAt),
+                messagesHandled: handledMessages,
+              },
+              "Message timeout detected - forcing reconnect",
+            );
+            console.error(
+              `⚠️  No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+            );
+            closeListener(); // Trigger reconnect
+          }
+        }
+      }, WATCHDOG_CHECK_MS);
     }
 
     const runReplyHeartbeat = async () => {
+      const queued = getQueueSize();
+      if (queued > 0) {
+        heartbeatLogger.info(
+          { connectionId, reason: "requests-in-flight", queued },
+          "reply heartbeat skipped",
+        );
+        console.log(success("heartbeat: skipped (requests in flight)"));
+        return;
+      }
       if (!replyHeartbeatMinutes) return;
       const tickStart = Date.now();
       if (!lastInboundMsg) {
@@ -746,9 +968,16 @@ export async function monitorWebProvider(
           return;
         }
 
+        // Apply response prefix if configured (same as regular messages)
+        let finalText = stripped.text;
+        const responsePrefix = cfg.inbound?.responsePrefix;
+        if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
+          finalText = `${responsePrefix} ${finalText}`;
+        }
+
         const cleanedReply: ReplyPayload = {
           ...replyResult,
-          text: stripped.text,
+          text: finalText,
         };
 
         await deliverWebReply({

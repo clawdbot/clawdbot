@@ -292,4 +292,79 @@ describe("runCommandReply", () => {
     expect(meta.queuedMs).toBe(25);
     expect(meta.queuedAhead).toBe(2);
   });
+
+  it("handles empty result string without dumping raw JSON", async () => {
+    // Bug fix: Claude CLI returning {"result": ""} should not send raw JSON to WhatsApp
+    // The fix changed from truthy check to explicit typeof check
+    const runner = makeRunner({
+      stdout: '{"result":"","duration_ms":50,"total_cost_usd":0.001}',
+    });
+    const { payload } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["claude", "{{Body}}"],
+        claudeOutputFormat: "json",
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: runner,
+      enqueue: enqueueImmediate,
+    });
+    // Should NOT contain raw JSON - empty result should produce fallback message
+    expect(payload?.text).not.toContain('{"result"');
+    expect(payload?.text).toContain("command produced no output");
+  });
+
+  it("handles empty text string in Claude JSON", async () => {
+    const runner = makeRunner({
+      stdout: '{"text":"","duration_ms":50}',
+    });
+    const { payload } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["claude", "{{Body}}"],
+        claudeOutputFormat: "json",
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: runner,
+      enqueue: enqueueImmediate,
+    });
+    // Empty text should produce fallback message, not raw JSON
+    expect(payload?.text).not.toContain('{"text"');
+    expect(payload?.text).toContain("command produced no output");
+  });
+
+  it("returns actual text when result is non-empty", async () => {
+    const runner = makeRunner({
+      stdout: '{"result":"hello world","duration_ms":50}',
+    });
+    const { payload } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["claude", "{{Body}}"],
+        claudeOutputFormat: "json",
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: runner,
+      enqueue: enqueueImmediate,
+    });
+    expect(payload?.text).toBe("hello world");
+  });
 });

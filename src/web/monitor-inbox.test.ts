@@ -9,6 +9,19 @@ vi.mock("../media/store.js", () => ({
   }),
 }));
 
+const mockLoadConfig = vi.fn().mockReturnValue({
+  inbound: {
+    allowFrom: ["*"], // Allow all in tests
+    messagePrefix: undefined,
+    responsePrefix: undefined,
+    timestampPrefix: false,
+  },
+});
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => mockLoadConfig(),
+}));
+
 vi.mock("./session.js", () => {
   const { EventEmitter } = require("node:events");
   const ev = new EventEmitter();
@@ -214,6 +227,148 @@ describe("web monitor inbox", () => {
         fromMe: false,
       },
     ]);
+    await listener.close();
+  });
+
+  it("blocks messages from unauthorized senders not in allowFrom", async () => {
+    // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
+    // from unauthorized senders corrupting sessions
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["+111"], // Only allow +111
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    // Message from unauthorized sender +999 (not in allowFrom)
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "unauth1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "unauthorized message" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Should NOT call onMessage for unauthorized senders
+    expect(onMessage).not.toHaveBeenCalled();
+
+    // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    await listener.close();
+  });
+
+  it("allows messages from senders in allowFrom list", async () => {
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["+111", "+999"], // Allow +999
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "auth1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "authorized message" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Should call onMessage for authorized senders
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "authorized message", from: "+999" }),
+    );
+
+    // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    await listener.close();
+  });
+
+  it("allows same-phone messages even if not in allowFrom", async () => {
+    // Same-phone mode: when from === selfJid, should always be allowed
+    // This allows users to message themselves even with restrictive allowFrom
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["+111"], // Only allow +111, but self is +123
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    // Message from self (sock.user.id is "123@s.whatsapp.net" in mock)
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "self1", fromMe: false, remoteJid: "123@s.whatsapp.net" },
+          message: { conversation: "self message" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Should allow self-messages even if not in allowFrom
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "self message", from: "+123" }),
+    );
+
+    // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
     await listener.close();
   });
 });

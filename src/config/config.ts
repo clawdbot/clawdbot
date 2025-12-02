@@ -46,6 +46,9 @@ export type WarelayConfig = {
   logging?: LoggingConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
+    messagePrefix?: string; // Prefix added to all inbound messages (default: "[warelay]" if no allowFrom, else "")
+    responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
+    timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
     transcribeAudio?: {
       // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
       command: string[];
@@ -139,6 +142,9 @@ const WarelaySchema = z.object({
   inbound: z
     .object({
       allowFrom: z.array(z.string()).optional(),
+      messagePrefix: z.string().optional(),
+      responsePrefix: z.string().optional(),
+      timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
       transcribeAudio: z
         .object({
           command: z.array(z.string()),

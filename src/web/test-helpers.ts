@@ -3,18 +3,37 @@ import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 
-let loadConfigMock: () => unknown = () => ({});
+// Use globalThis to store the mock config so it survives vi.mock hoisting
+const CONFIG_KEY = Symbol.for("warelay:testConfigMock");
+const DEFAULT_CONFIG = {
+  inbound: {
+    allowFrom: ["*"], // Allow all in tests by default
+    messagePrefix: undefined, // No message prefix in tests
+    responsePrefix: undefined, // No response prefix in tests
+    timestampPrefix: false, // No timestamp in tests
+  },
+};
 
-export function setLoadConfigMock(fn: () => unknown) {
-  loadConfigMock = fn;
+// Initialize default if not set
+if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
+  (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
+}
+
+export function setLoadConfigMock(fn: (() => unknown) | unknown) {
+  (globalThis as Record<symbol, unknown>)[CONFIG_KEY] =
+    typeof fn === "function" ? fn : () => fn;
 }
 
 export function resetLoadConfigMock() {
-  loadConfigMock = () => ({});
+  (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
 }
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
+  loadConfig: () => {
+    const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
+    if (typeof getter === "function") return getter();
+    return DEFAULT_CONFIG;
+  },
 }));
 
 vi.mock("../media/store.js", () => ({

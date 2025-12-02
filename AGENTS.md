@@ -36,3 +36,19 @@
 ## Agent-Specific Notes
 - If the relay is running in tmux (`warelay-relay`), restart it after code changes: kill pane/session and run `pnpm warelay relay --verbose` inside tmux. Check tmux before editing; keep the watcher healthy if you start it.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
+
+## Exclamation Mark Escaping Workaround
+The Claude Code Bash tool escapes `!` to `\!` in command arguments. When using `warelay send` with messages containing exclamation marks, use heredoc syntax:
+
+```bash
+# WRONG - will send "Hello\!" with backslash
+warelay send --provider web --to "+1234" --message 'Hello!'
+
+# CORRECT - use heredoc to avoid escaping
+warelay send --provider web --to "+1234" --message "$(cat <<'EOF'
+Hello!
+EOF
+)"
+```
+
+This is a Claude Code quirk, not a warelay bug.

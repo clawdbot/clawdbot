@@ -146,8 +146,14 @@ export async function getReplyFromConfig(
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)
   const allowFrom = cfg.inbound?.allowFrom;
-  if (Array.isArray(allowFrom) && allowFrom.length > 0) {
-    const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
+  const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
+  const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
+  const isSamePhone = from && to && from === to;
+
+  // Same-phone mode (self-messaging) is always allowed
+  if (isSamePhone) {
+    logVerbose(`Allowing same-phone mode: from === to (${from})`);
+  } else if (Array.isArray(allowFrom) && allowFrom.length > 0) {
     // Support "*" as wildcard to allow all senders
     if (!allowFrom.includes("*") && !allowFrom.includes(from)) {
       logVerbose(

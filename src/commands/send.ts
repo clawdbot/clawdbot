@@ -1,7 +1,8 @@
 import type { CliDeps } from "../cli/deps.js";
-import { info } from "../globals.js";
+import { info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { Provider } from "../utils.js";
+import { sendViaIpc } from "../web/ipc.js";
 
 export async function sendCommand(
   opts: {
@@ -39,6 +40,34 @@ export async function sendCommand(
     if (waitSeconds !== 0) {
       runtime.log(info("Wait/poll are Twilio-only; ignored for provider=web."));
     }
+
+    // Try to send via IPC to running relay first (avoids Signal session corruption)
+    const ipcResult = await sendViaIpc(opts.to, opts.message, opts.media);
+    if (ipcResult) {
+      if (ipcResult.success) {
+        runtime.log(success(`✅ Sent via relay IPC. Message ID: ${ipcResult.messageId}`));
+        if (opts.json) {
+          runtime.log(
+            JSON.stringify(
+              {
+                provider: "web",
+                via: "ipc",
+                to: opts.to,
+                messageId: ipcResult.messageId,
+                mediaUrl: opts.media ?? null,
+              },
+              null,
+              2,
+            ),
+          );
+        }
+        return;
+      }
+      // IPC failed but relay is running - warn and fall back
+      runtime.log(info(`IPC send failed (${ipcResult.error}), falling back to direct connection`));
+    }
+
+    // Fall back to direct connection (creates new Baileys socket)
     const res = await deps
       .sendMessageWeb(opts.to, opts.message, {
         verbose: false,
@@ -53,6 +82,7 @@ export async function sendCommand(
         JSON.stringify(
           {
             provider: "web",
+            via: "direct",
             to: opts.to,
             messageId: res.messageId,
             mediaUrl: opts.media ?? null,

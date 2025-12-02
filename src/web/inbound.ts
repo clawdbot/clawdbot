@@ -8,10 +8,11 @@ import {
   downloadMediaMessage,
 } from "@whiskeysockets/baileys";
 
+import { loadConfig } from "../config/config.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
-import { jidToE164 } from "../utils.js";
+import { jidToE164, normalizeE164 } from "../utils.js";
 import {
   createWaSocket,
   getStatusCode,
@@ -70,7 +71,7 @@ export async function monitorWebInbox(options: {
       // De-dupe on message id; Baileys can emit retries.
       if (id && seen.has(id)) continue;
       if (id) seen.add(id);
-      if (msg.key?.fromMe) continue;
+      // Note: not filtering fromMe here - echo detection happens in auto-reply layer
       const remoteJid = msg.key?.remoteJid;
       if (!remoteJid) continue;
       // Ignore status/broadcast traffic; we only care about direct chats.
@@ -94,6 +95,20 @@ export async function monitorWebInbox(options: {
       }
       const from = jidToE164(remoteJid);
       if (!from) continue;
+
+      // Filter unauthorized senders early to prevent wasted processing
+      // and potential session corruption from Bad MAC errors
+      const cfg = loadConfig();
+      const allowFrom = cfg.inbound?.allowFrom;
+      const isSamePhone = from === selfE164;
+
+      if (!isSamePhone && Array.isArray(allowFrom) && allowFrom.length > 0) {
+        if (!allowFrom.includes("*") && !allowFrom.map(normalizeE164).includes(from)) {
+          logVerbose(`Blocked unauthorized sender ${from} (not in allowFrom list)`);
+          continue; // Skip processing entirely
+        }
+      }
+
       let body = extractText(msg.message ?? undefined);
       if (!body) {
         body = extractMediaPlaceholder(msg.message ?? undefined);
@@ -197,6 +212,59 @@ export async function monitorWebInbox(options: {
       }
     },
     onClose,
+    /**
+     * Send a message through this connection's socket.
+     * Used by IPC to avoid creating new connections.
+     */
+    sendMessage: async (
+      to: string,
+      text: string,
+      mediaBuffer?: Buffer,
+      mediaType?: string,
+    ): Promise<{ messageId: string }> => {
+      const jid = `${to.replace(/^\+/, "")}@s.whatsapp.net`;
+      let payload: AnyMessageContent;
+      if (mediaBuffer && mediaType) {
+        if (mediaType.startsWith("image/")) {
+          payload = {
+            image: mediaBuffer,
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        } else if (mediaType.startsWith("audio/")) {
+          payload = {
+            audio: mediaBuffer,
+            ptt: true,
+            mimetype: mediaType,
+          };
+        } else if (mediaType.startsWith("video/")) {
+          payload = {
+            video: mediaBuffer,
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        } else {
+          payload = {
+            document: mediaBuffer,
+            fileName: "file",
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        }
+      } else {
+        payload = { text };
+      }
+      const result = await sock.sendMessage(jid, payload);
+      return { messageId: result?.key?.id ?? "unknown" };
+    },
+    /**
+     * Send typing indicator ("composing") to a chat.
+     * Used after IPC send to show more messages are coming.
+     */
+    sendComposingTo: async (to: string): Promise<void> => {
+      const jid = `${to.replace(/^\+/, "")}@s.whatsapp.net`;
+      await sock.sendPresenceUpdate("composing", jid);
+    },
   } as const;
 }
 
