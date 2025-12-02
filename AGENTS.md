@@ -283,3 +283,19 @@ JSON5 format with Zod validation:
 - Web relay health logs show heartbeat intervals and reconnect policy
 - Use `warelay status --json` to inspect recent Twilio traffic
 - Session state in `~/.warelay/sessions.json` for Claude session debugging
+
+## Exclamation Mark Escaping Workaround
+The Claude Code Bash tool escapes `!` to `\!` in command arguments. When using `warelay send` with messages containing exclamation marks, use heredoc syntax:
+
+```bash
+# WRONG - will send "Hello\!" with backslash
+warelay send --provider web --to "+1234" --message 'Hello!'
+
+# CORRECT - use heredoc to avoid escaping
+warelay send --provider web --to "+1234" --message "$(cat <<'EOF'
+Hello!
+EOF
+)"
+```
+
+This is a Claude Code quirk, not a warelay bug.

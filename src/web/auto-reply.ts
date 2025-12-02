@@ -702,7 +702,7 @@ export async function monitorWebProvider(
 
     // Start IPC server so `warelay send` can use this connection
     // instead of creating a new one (which would corrupt Signal session)
-    if ("sendMessage" in listener) {
+    if ("sendMessage" in listener && "sendComposingTo" in listener) {
       startIpcServer(async (to, message, mediaUrl) => {
         let mediaBuffer: Buffer | undefined;
         let mediaType: string | undefined;
@@ -721,6 +721,12 @@ export async function monitorWebProvider(
           }
         }
         logInfo(`📤 IPC send to ${to}: ${message.substring(0, 50)}...`, runtime);
+        // Show typing indicator after send so user knows more may be coming
+        try {
+          await listener.sendComposingTo(to);
+        } catch {
+          // Ignore typing indicator errors - not critical
+        }
         return result;
       });
     }

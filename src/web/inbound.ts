@@ -257,6 +257,14 @@ export async function monitorWebInbox(options: {
       const result = await sock.sendMessage(jid, payload);
       return { messageId: result?.key?.id ?? "unknown" };
     },
+    /**
+     * Send typing indicator ("composing") to a chat.
+     * Used after IPC send to show more messages are coming.
+     */
+    sendComposingTo: async (to: string): Promise<void> => {
+      const jid = `${to.replace(/^\+/, "")}@s.whatsapp.net`;
+      await sock.sendPresenceUpdate("composing", jid);
+    },
   } as const;
 }
 
