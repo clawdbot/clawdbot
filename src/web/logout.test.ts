@@ -35,6 +35,8 @@ describe("web logout", () => {
     const credsDir = path.join(tmpDir, ".warelay", "credentials");
     fs.mkdirSync(credsDir, { recursive: true });
     fs.writeFileSync(path.join(credsDir, "creds.json"), "{}");
+    const sessionsPath = path.join(tmpDir, ".warelay", "sessions.json");
+    fs.writeFileSync(sessionsPath, "{}");
     const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
 
     expect(WA_WEB_AUTH_DIR.startsWith(tmpDir)).toBe(true);
@@ -42,6 +44,7 @@ describe("web logout", () => {
 
     expect(result).toBe(true);
     expect(fs.existsSync(credsDir)).toBe(false);
+    expect(fs.existsSync(sessionsPath)).toBe(false);
   });
 
   it("no-ops when nothing to delete", async () => {

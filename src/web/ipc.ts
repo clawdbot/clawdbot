@@ -15,7 +15,8 @@ import path from "node:path";
 
 import { getChildLogger } from "../logging.js";
 
-const SOCKET_PATH = path.join(os.homedir(), ".warelay", "relay.sock");
+const SOCKET_DIR = path.join(os.homedir(), ".warelay", "ipc");
+const SOCKET_PATH = path.join(SOCKET_DIR, "relay.sock");
 
 export interface IpcSendRequest {
   type: "send";
@@ -44,11 +45,21 @@ let server: net.Server | null = null;
 export function startIpcServer(sendHandler: SendHandler): void {
   const logger = getChildLogger({ module: "ipc-server" });
 
-  // Clean up stale socket file
+  ensureSocketDir();
+  try {
+    assertSafeSocketPath(SOCKET_PATH);
+  } catch (err) {
+    logger.error({ error: String(err) }, "Refusing to start IPC server");
+    throw err;
+  }
+
+  // Clean up stale socket file (only if safe to do so)
   try {
     fs.unlinkSync(SOCKET_PATH);
-  } catch {
-    // Ignore if doesn't exist
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
   }
 
   server = net.createServer((conn) => {
@@ -134,6 +145,7 @@ export function stopIpcServer(): void {
  */
 export function isRelayRunning(): boolean {
   try {
+    assertSafeSocketPath(SOCKET_PATH);
     fs.accessSync(SOCKET_PATH);
     return true;
   } catch {
@@ -222,4 +234,44 @@ export async function sendViaIpc(
  */
 export function getSocketPath(): string {
   return SOCKET_PATH;
+}
+
+function ensureSocketDir(): void {
+  try {
+    const stat = fs.lstatSync(SOCKET_DIR);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`IPC dir is a symlink: ${SOCKET_DIR}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`IPC dir is not a directory: ${SOCKET_DIR}`);
+    }
+    // Enforce private permissions
+    fs.chmodSync(SOCKET_DIR, 0o700);
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw new Error(`IPC dir owned by different user: ${SOCKET_DIR}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 });
+      return;
+    }
+    throw err;
+  }
+}
+
+function assertSafeSocketPath(socketPath: string): void {
+  try {
+    const stat = fs.lstatSync(socketPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing IPC socket symlink: ${socketPath}`);
+    }
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw new Error(`IPC socket owned by different user: ${socketPath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return; // Missing is fine; creation will happen next.
+    }
+    throw err;
+  }
 }

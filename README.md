@@ -137,6 +137,16 @@ warelay supports running on the same phone number you message from—you chat wi
 }
 ```
 
+#### Abort trigger words
+- If an inbound body is exactly `stop`, `esc`, `abort`, `wait`, or `exit`, the command/agent run is skipped and the user immediately gets `Agent was aborted.`.
+- The session is tagged so the *next* prompt sent to the agent is prefixed with a short reminder that the previous run was aborted; the hint clears after that turn.
+
+#### Agent choices
+- `inbound.reply.agent.kind` can be `claude`, `opencode`, `pi`, `codex`, or `gemini`.
+- Gemini CLI supports `--output-format text|json|stream-json`; warelay auto-adds it when you set `agent.format`.
+- Session defaults: Claude uses `--session-id/--resume`, Codex/Opencode/Pi use `--session`, and Gemini defaults to `--resume` for session resumes (new sessions need no flag). Override via `sessionArgNew/sessionArgResume` if you prefer custom flags.
+- Reliability note: only Claude reliably returns a `session_id` that warelay can persist and reuse. Other harnesses currently don’t emit a stable session identifier, so multi-turn continuity may reset between runs for those agents (Pi does not auto-compact, but still doesn’t expose a session id).
+
 #### Heartbeat pings (command mode)
 - When `heartbeatMinutes` is set (default 10 for `mode: "command"`), the relay periodically runs your command/Claude session with a heartbeat prompt.
 - Heartbeat body is `HEARTBEAT ultrathink` (so the model can recognize the probe); if Claude replies exactly `HEARTBEAT_OK`, the message is suppressed; otherwise the reply (or media) is forwarded. Suppressions are still logged so you know the heartbeat ran.
@@ -145,7 +155,7 @@ warelay supports running on the same phone number you message from—you chat wi
 - When multiple active sessions exist, `warelay heartbeat` requires `--to <E.164>` or `--all`; if `allowFrom` is just `"*"`, you must choose a target with one of those flags.
 
 ### Logging (optional)
-- File logs are written to `/tmp/warelay/warelay.log` by default. Levels: `silent | fatal | error | warn | info | debug | trace` (CLI `--verbose` forces `debug`). Web-provider inbound/outbound entries include message bodies and auto-reply text for easier auditing.
+- File logs are written to `/tmp/warelay/warelay-YYYY-MM-DD.log` by default (rotated daily; files older than 24h are pruned). Levels: `silent | fatal | error | warn | info | debug | trace` (CLI `--verbose` forces `debug`). Web-provider inbound/outbound entries include message bodies and auto-reply text for easier auditing.
 - Override in `~/.warelay/warelay.json`:
 
 ```json5
@@ -208,7 +218,7 @@ Templating tokens: `{{Body}}`, `{{BodyStripped}}`, `{{From}}`, `{{To}}`, `{{Mess
 
 ## FAQ & Safety
 - Twilio errors: **63016 “permission to send an SMS has not been enabled”** → ensure your number is WhatsApp-enabled; **63007 template not approved** → send a free-form session message within 24h or use an approved template; **63112 policy violation** → adjust content, shorten to <1600 chars, avoid links that trigger spam filters. Re-run `pnpm warelay status` to see the exact Twilio response body.
-- Does this store my messages? warelay only writes `~/.warelay/warelay.json` (config), `~/.warelay/credentials/` (WhatsApp Web auth), and `~/.warelay/sessions.json` (session IDs + timestamps). It does **not** persist message bodies beyond the session store. Logs stream to stdout/stderr and also `/tmp/warelay/warelay.log` (configurable via `logging.file`).
+- Does this store my messages? warelay only writes `~/.warelay/warelay.json` (config), `~/.warelay/credentials/` (WhatsApp Web auth), and `~/.warelay/sessions.json` (session IDs + timestamps). It does **not** persist message bodies beyond the session store. Logs stream to stdout/stderr and also `/tmp/warelay/warelay-YYYY-MM-DD.log` (configurable via `logging.file`).
 - Personal WhatsApp safety: Automation on personal accounts can be rate-limited or logged out by WhatsApp. Use `--provider web` sparingly, keep messages human-like, and re-run `login` if the session is dropped.
 - Limits to remember: WhatsApp text limit ~1600 chars; avoid rapid bursts—space sends by a few seconds; keep webhook replies under a couple seconds for good UX; command auto-replies time out after 600s by default.
 - Deploy / keep running: Use `tmux` or `screen` for ad-hoc (`tmux new -s warelay -- pnpm warelay relay --provider twilio`). For long-running hosts, wrap `pnpm warelay relay ...` or `pnpm warelay webhook --ingress tailscale ...` in a systemd service or macOS LaunchAgent; ensure environment variables are loaded in that context.

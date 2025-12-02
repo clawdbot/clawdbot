@@ -6,8 +6,12 @@ import pino, { type Bindings, type LevelWithSilent, type Logger } from "pino";
 import { loadConfig, type WarelayConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
 
-const DEFAULT_LOG_DIR = path.join(os.tmpdir(), "warelay");
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "warelay.log");
+export const DEFAULT_LOG_DIR = path.join(os.tmpdir(), "warelay");
+export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "warelay.log"); // legacy single-file path
+
+const LOG_PREFIX = "warelay";
+const LOG_SUFFIX = ".log";
+const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
 const ALLOWED_LEVELS: readonly LevelWithSilent[] = [
   "silent",
@@ -46,7 +50,7 @@ function resolveSettings(): ResolvedSettings {
   const cfg: WarelayConfig["logging"] | undefined =
     overrideSettings ?? loadConfig().logging;
   const level = normalizeLevel(cfg?.level);
-  const file = cfg?.file ?? DEFAULT_LOG_FILE;
+  const file = cfg?.file ?? defaultRollingPathForToday();
   return { level, file };
 }
 
@@ -57,6 +61,10 @@ function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
 
 function buildLogger(settings: ResolvedSettings): Logger {
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
+  // Clean up stale rolling logs when using a dated log filename.
+  if (isRollingPath(settings.file)) {
+    pruneOldRollingLogs(path.dirname(settings.file));
+  }
   const destination = pino.destination({
     dest: settings.file,
     mkdir: true,
@@ -103,4 +111,40 @@ export function resetLogger() {
   cachedLogger = null;
   cachedSettings = null;
   overrideSettings = null;
+}
+
+function defaultRollingPathForToday(): string {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+}
+
+function isRollingPath(file: string): boolean {
+  const base = path.basename(file);
+  return (
+    base.startsWith(`${LOG_PREFIX}-`) &&
+    base.endsWith(LOG_SUFFIX) &&
+    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
+  );
+}
+
+function pruneOldRollingLogs(dir: string): void {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const cutoff = Date.now() - MAX_LOG_AGE_MS;
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) continue;
+      const fullPath = path.join(dir, entry.name);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.mtimeMs < cutoff) {
+          fs.rmSync(fullPath, { force: true });
+        }
+      } catch {
+        // ignore errors during pruning
+      }
+    }
+  } catch {
+    // ignore missing dir or read errors
+  }
 }

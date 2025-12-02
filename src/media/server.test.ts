@@ -49,4 +49,27 @@ describe("media server", () => {
     await expect(fs.stat(file)).rejects.toThrow();
     await new Promise((r) => server.close(r));
   });
+
+  it("blocks path traversal attempts", async () => {
+    const server = await startMediaServer(0, 5_000);
+    const port = (server.address() as AddressInfo).port;
+    // URL-encoded "../" to bypass client-side path normalization
+    const res = await fetch(`http://localhost:${port}/media/%2e%2e%2fpackage.json`);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
+    await new Promise((r) => server.close(r));
+  });
+
+  it("blocks symlink escaping outside media dir", async () => {
+    const target = path.join(process.cwd(), "package.json"); // outside MEDIA_DIR
+    const link = path.join(MEDIA_DIR, "link-out");
+    await fs.symlink(target, link);
+
+    const server = await startMediaServer(0, 5_000);
+    const port = (server.address() as AddressInfo).port;
+    const res = await fetch(`http://localhost:${port}/media/link-out`);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
+    await new Promise((r) => server.close(r));
+  });
 });
