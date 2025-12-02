@@ -4,6 +4,7 @@ import { CLAUDE_IDENTITY_PREFIX } from "../auto-reply/claude.js";
 import { OPENCODE_IDENTITY_PREFIX } from "../auto-reply/opencode.js";
 import { claudeSpec } from "./claude.js";
 import { codexSpec } from "./codex.js";
+import { GEMINI_IDENTITY_PREFIX, geminiSpec } from "./gemini.js";
 import { opencodeSpec } from "./opencode.js";
 import { piSpec } from "./pi.js";
 
@@ -114,5 +115,34 @@ describe("agent buildArgs + parseOutput helpers", () => {
     expect(built).toContain("--json");
     expect(built).toContain("--skip-git-repo-check");
     expect(built).toContain("read-only");
+  });
+
+  it("geminiSpec prepends identity unless already sent", () => {
+    const argv = ["gemini", "hi"];
+    const built = geminiSpec.buildArgs({
+      argv,
+      bodyIndex: 1,
+      isNewSession: true,
+      sessionId: "sess",
+      sendSystemOnce: false,
+      systemSent: false,
+      identityPrefix: undefined,
+      format: "json",
+    });
+    expect(built.at(-1)).toContain(GEMINI_IDENTITY_PREFIX);
+
+    const builtOnce = geminiSpec.buildArgs({
+      argv,
+      bodyIndex: 1,
+      isNewSession: false,
+      sessionId: "sess",
+      sendSystemOnce: true,
+      systemSent: true,
+      identityPrefix: undefined,
+      format: "json",
+    });
+    expect(builtOnce.at(-1)).toBe("hi");
+    expect(builtOnce).toContain("--output-format");
+    expect(builtOnce).toContain("json");
   });
 });

@@ -671,6 +671,124 @@ describe("config and templating", () => {
     expect(secondArgv[secondArgv.length - 1]).toBe("[sys] next");
   });
 
+  it("stores session id returned by agent meta when it differs", async () => {
+    const tmpStore = path.join(
+      os.tmpdir(),
+      `warelay-store-${Date.now()}-sessionid.json`,
+    );
+    vi.spyOn(crypto, "randomUUID").mockReturnValue("initial-sid");
+    const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+      stdout: '{"text":"hi","session_id":"agent-sid-123"}\n',
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["claude", "{{Body}}"],
+          agent: { kind: "claude", format: "json" as const },
+          session: { store: tmpStore },
+        },
+      },
+    };
+
+    await index.getReplyFromConfig(
+      { Body: "/new hi", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    const persisted = JSON.parse(fs.readFileSync(tmpStore, "utf-8"));
+    const entry = Object.values(persisted)[0] as { sessionId?: string };
+    expect(entry.sessionId).toBe("agent-sid-123");
+  });
+
+  it("aborts command when stop word is received and skips command runner", async () => {
+    const tmpStore = path.join(
+      os.tmpdir(),
+      `warelay-store-${Date.now()}-abort.json`,
+    );
+    const runSpy = vi.fn().mockResolvedValue({
+      stdout: "should-not-run",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["echo", "{{Body}}"],
+          session: { store: tmpStore },
+        },
+      },
+    };
+
+    const result = await index.getReplyFromConfig(
+      { Body: "stop", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    expect(result?.text).toMatch(/aborted/i);
+    expect(runSpy).not.toHaveBeenCalled();
+    const persisted = JSON.parse(fs.readFileSync(tmpStore, "utf-8"));
+    const entry = Object.values(persisted)[0] as { abortedLastRun?: boolean };
+    expect(entry.abortedLastRun).toBe(true);
+  });
+
+  it("adds an abort hint to the next prompt and then clears the flag", async () => {
+    const tmpStore = path.join(
+      os.tmpdir(),
+      `warelay-store-${Date.now()}-aborthint.json`,
+    );
+    const runSpy = vi.fn().mockResolvedValue({
+      stdout: "ok\n",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["echo", "{{Body}}"],
+          session: { store: tmpStore },
+        },
+      },
+    };
+
+    await index.getReplyFromConfig(
+      { Body: "abort", From: "+1555", To: "+2666" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    const result = await index.getReplyFromConfig(
+      { Body: "continue", From: "+1555", To: "+2666" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    const argv = runSpy.mock.calls[0][0];
+    const prompt = argv.at(-1) as string;
+    expect(prompt).toMatch(/previous agent run was aborted/i);
+    expect(prompt).toMatch(/continue/);
+    const persisted = JSON.parse(fs.readFileSync(tmpStore, "utf-8"));
+    const entry = Object.values(persisted)[0] as { abortedLastRun?: boolean };
+    expect(entry.abortedLastRun).toBe(false);
+    expect(result?.text).toBe("ok");
+  });
+
   it("refreshes typing indicator while command runs", async () => {
     const onReplyStart = vi.fn();
     const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockImplementation(

@@ -9,6 +9,7 @@ import { logError } from "../logger.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { enqueueCommand } from "../process/command-queue.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
+import { runPiRpc } from "../process/tau-rpc.js";
 import { applyTemplate, type TemplateContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
 
@@ -133,14 +134,25 @@ export async function runCommandReply(
 
   // Session args prepared (templated) and injected generically
   if (reply.session) {
-    const defaultNew =
-      agentCfg.kind === "claude"
-        ? ["--session-id", "{{SessionId}}"]
-        : ["--session", "{{SessionId}}"];
-    const defaultResume =
-      agentCfg.kind === "claude"
-        ? ["--resume", "{{SessionId}}"]
-        : ["--session", "{{SessionId}}"];
+    const defaultSessionArgs = (() => {
+      switch (agentCfg.kind) {
+        case "claude":
+          return {
+            newArgs: ["--session-id", "{{SessionId}}"],
+            resumeArgs: ["--resume", "{{SessionId}}"],
+          };
+        case "gemini":
+          // Gemini CLI supports --resume <id>; starting a new session needs no flag.
+          return { newArgs: [], resumeArgs: ["--resume", "{{SessionId}}"] };
+        default:
+          return {
+            newArgs: ["--session", "{{SessionId}}"],
+            resumeArgs: ["--session", "{{SessionId}}"],
+          };
+      }
+    })();
+    const defaultNew = defaultSessionArgs.newArgs;
+    const defaultResume = defaultSessionArgs.resumeArgs;
     const sessionArgList = (
       isNewSession
         ? (reply.session.sessionArgNew ?? defaultNew)
@@ -170,7 +182,7 @@ export async function runCommandReply(
         systemSent,
         identityPrefix: agentCfg.identityPrefix,
         format: agentCfg.format,
-      })
+    })
     : argv;
 
   logVerbose(
@@ -181,20 +193,41 @@ export async function runCommandReply(
   let queuedMs: number | undefined;
   let queuedAhead: number | undefined;
   try {
-    const { stdout, stderr, code, signal, killed } = await enqueue(
-      () => commandRunner(finalArgv, { timeoutMs, cwd: reply.cwd }),
-      {
-        onWait: (waitMs, ahead) => {
-          queuedMs = waitMs;
-          queuedAhead = ahead;
-          if (isVerbose()) {
-            logVerbose(
-              `Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`,
-            );
+    const run = async () => {
+      // Prefer long-lived tau RPC for pi agent to avoid cold starts.
+      if (agentKind === "pi") {
+        const body = finalArgv[bodyIndex] ?? "";
+        // Build rpc args without the prompt body; force --mode rpc.
+        const rpcArgv = (() => {
+          const copy = [...finalArgv];
+          copy.splice(bodyIndex, 1);
+          const modeIdx = copy.findIndex((a) => a === "--mode");
+          if (modeIdx >= 0 && copy[modeIdx + 1]) {
+            copy.splice(modeIdx, 2, "--mode", "rpc");
+          } else if (!copy.includes("--mode")) {
+            copy.splice(copy.length - 1, 0, "--mode", "rpc");
           }
-        },
+          return copy;
+        })();
+        return await runPiRpc({
+          argv: rpcArgv,
+          cwd: reply.cwd,
+          prompt: body,
+          timeoutMs,
+        });
+      }
+      return await commandRunner(finalArgv, { timeoutMs, cwd: reply.cwd });
+    };
+
+    const { stdout, stderr, code, signal, killed } = await enqueue(run, {
+      onWait: (waitMs, ahead) => {
+        queuedMs = waitMs;
+        queuedAhead = ahead;
+        if (isVerbose()) {
+          logVerbose(`Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`);
+        }
       },
-    );
+    });
     const rawStdout = stdout.trim();
     let mediaFromCommand: string[] | undefined;
     let trimmed = rawStdout;

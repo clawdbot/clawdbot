@@ -1,9 +1,10 @@
-export type AgentKind = "claude" | "opencode" | "pi" | "codex";
+export type AgentKind = "claude" | "opencode" | "pi" | "codex" | "gemini";
 
 export type AgentMeta = {
   model?: string;
   provider?: string;
   stopReason?: string;
+  sessionId?: string;
   usage?: {
     input?: number;
     output?: number;

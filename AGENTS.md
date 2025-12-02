@@ -34,7 +34,7 @@
 - Media hosting relies on Tailscale Funnel when using Twilio; use `warelay webhook --ingress tailscale` or `--serve-media` for local hosting.
 
 ## Agent-Specific Notes
-- If the relay is running in tmux (`warelay-relay`), restart it after code changes: kill pane/session and run `pnpm warelay relay --verbose` inside tmux. Check tmux before editing; keep the watcher healthy if you start it.
+- Relay is managed by launchctl (label `com.steipete.warelay`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.warelay` and verify via `launchctl list | grep warelay`. Use tmux only if you spin up a temporary relay yourself and clean it up afterward.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
 
 ## Exclamation Mark Escaping Workaround

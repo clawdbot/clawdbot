@@ -117,6 +117,7 @@ const ReplySchema = z
           z.literal("opencode"),
           z.literal("pi"),
           z.literal("codex"),
+          z.literal("gemini"),
         ]),
         format: z.union([z.literal("text"), z.literal("json")]).optional(),
         identityPrefix: z.string().optional(),

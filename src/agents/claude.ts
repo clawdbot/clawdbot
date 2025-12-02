@@ -12,7 +12,16 @@ import type { AgentMeta, AgentSpec } from "./types.js";
 function toMeta(parsed?: ClaudeJsonParseResult): AgentMeta | undefined {
   if (!parsed?.parsed) return undefined;
   const summary = summarizeClaudeMetadata(parsed.parsed);
-  return summary ? { extra: { summary } } : undefined;
+  const sessionId =
+    parsed.parsed &&
+    typeof parsed.parsed === "object" &&
+    typeof (parsed.parsed as { session_id?: unknown }).session_id === "string"
+      ? (parsed.parsed as { session_id: string }).session_id
+      : undefined;
+  const meta: AgentMeta = {};
+  if (sessionId) meta.sessionId = sessionId;
+  if (summary) meta.extra = { summary };
+  return Object.keys(meta).length ? meta : undefined;
 }
 
 export const claudeSpec: AgentSpec = {

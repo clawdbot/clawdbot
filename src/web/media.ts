@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
 
 import { isVerbose, logVerbose } from "../globals.js";
@@ -12,7 +13,12 @@ import { detectMime } from "../media/mime.js";
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytes?: number,
-): Promise<{ buffer: Buffer; contentType?: string; kind: MediaKind }> {
+): Promise<{
+  buffer: Buffer;
+  contentType?: string;
+  kind: MediaKind;
+  fileName?: string;
+}> {
   if (mediaUrl.startsWith("file://")) {
     mediaUrl = mediaUrl.replace("file://", "");
   }
@@ -40,6 +46,14 @@ export async function loadWebMedia(
   };
 
   if (/^https?:\/\//i.test(mediaUrl)) {
+    let fileName: string | undefined;
+    try {
+      const url = new URL(mediaUrl);
+      const base = path.basename(url.pathname);
+      fileName = base || undefined;
+    } catch {
+      // ignore parse errors; leave undefined
+    }
     const res = await fetch(mediaUrl);
     if (!res.ok || !res.body) {
       throw new Error(`Failed to fetch media: HTTP ${res.status}`);
@@ -56,7 +70,7 @@ export async function loadWebMedia(
       maxBytesForKind(kind),
     );
     if (kind === "image") {
-      return optimizeAndClampImage(array, cap);
+      return { ...(await optimizeAndClampImage(array, cap)), fileName };
     }
     if (array.length > cap) {
       throw new Error(
@@ -65,19 +79,25 @@ export async function loadWebMedia(
         ).toFixed(2)}MB)`,
       );
     }
-    return { buffer: array, contentType: contentType ?? undefined, kind };
+    return {
+      buffer: array,
+      contentType: contentType ?? undefined,
+      kind,
+      fileName,
+    };
   }
 
   // Local path
   const data = await fs.readFile(mediaUrl);
   const mime = detectMime({ buffer: data, filePath: mediaUrl });
   const kind = mediaKindFromMime(mime);
+  const fileName = path.basename(mediaUrl) || undefined;
   const cap = Math.min(
     maxBytes ?? maxBytesForKind(kind),
     maxBytesForKind(kind),
   );
   if (kind === "image") {
-    return optimizeAndClampImage(data, cap);
+    return { ...(await optimizeAndClampImage(data, cap)), fileName };
   }
   if (data.length > cap) {
     throw new Error(
@@ -86,7 +106,7 @@ export async function loadWebMedia(
       ).toFixed(2)}MB)`,
     );
   }
-  return { buffer: data, contentType: mime, kind };
+  return { buffer: data, contentType: mime, kind, fileName };
 }
 
 export async function optimizeImageToJpeg(

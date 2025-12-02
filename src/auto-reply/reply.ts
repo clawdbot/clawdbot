@@ -8,6 +8,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveStorePath,
+  type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
 import { info, isVerbose, logVerbose } from "../globals.js";
@@ -26,6 +27,15 @@ import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
+
+const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
+const ABORT_MEMORY = new Map<string, boolean>();
+
+function isAbortTrigger(text?: string): boolean {
+  if (!text) return false;
+  const normalized = text.trim().toLowerCase();
+  return ABORT_TRIGGERS.has(normalized);
+}
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
@@ -95,11 +105,13 @@ export async function getReplyFromConfig(
   const storePath = resolveStorePath(sessionCfg?.store);
   let sessionStore: ReturnType<typeof loadSessionStore> | undefined;
   let sessionKey: string | undefined;
+  let sessionEntry: SessionEntry | undefined;
 
   let sessionId: string | undefined;
   let isNewSession = false;
   let bodyStripped: string | undefined;
   let systemSent = false;
+  let abortedLastRun = false;
 
   if (sessionCfg) {
     const trimmedBody = (ctx.Body ?? "").trim();
@@ -127,13 +139,21 @@ export async function getReplyFromConfig(
     if (!isNewSession && freshEntry) {
       sessionId = entry.sessionId;
       systemSent = entry.systemSent ?? false;
+      abortedLastRun = entry.abortedLastRun ?? false;
     } else {
       sessionId = crypto.randomUUID();
       isNewSession = true;
       systemSent = false;
+      abortedLastRun = false;
     }
 
-    sessionStore[sessionKey] = { sessionId, updatedAt: Date.now(), systemSent };
+    sessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      systemSent,
+      abortedLastRun,
+    };
+    sessionStore[sessionKey] = sessionEntry;
     await saveSessionStore(storePath, sessionStore);
   }
 
@@ -149,6 +169,11 @@ export async function getReplyFromConfig(
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const isSamePhone = from && to && from === to;
+  const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
+
+  if (!sessionEntry && abortKey) {
+    abortedLastRun = ABORT_MEMORY.get(abortKey) ?? false;
+  }
 
   // Same-phone mode (self-messaging) is always allowed
   if (isSamePhone) {
@@ -164,6 +189,23 @@ export async function getReplyFromConfig(
     }
   }
 
+  const abortRequested =
+    reply?.mode === "command" &&
+    isAbortTrigger((sessionCtx.BodyStripped ?? sessionCtx.Body ?? "").trim());
+
+  if (abortRequested) {
+    if (sessionEntry && sessionStore && sessionKey) {
+      sessionEntry.abortedLastRun = true;
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    } else if (abortKey) {
+      ABORT_MEMORY.set(abortKey, true);
+    }
+    cleanupTyping();
+    return { text: "Agent was aborted." };
+  }
+
   await startTypingLoop();
 
   // Optional prefix injected before Body for templating/command prompts.
@@ -177,16 +219,30 @@ export async function getReplyFromConfig(
     ? applyTemplate(reply.bodyPrefix, sessionCtx)
     : "";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const prefixedBodyBase = (() => {
-    let body = baseBody;
-    if (!sendSystemOnce || isFirstTurnInSession) {
-      body = bodyPrefix ? `${bodyPrefix}${body}` : body;
+  const abortedHint =
+    reply?.mode === "command" && abortedLastRun
+      ? "Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification."
+      : "";
+  let prefixedBodyBase = baseBody;
+  if (!sendSystemOnce || isFirstTurnInSession) {
+    prefixedBodyBase = bodyPrefix
+      ? `${bodyPrefix}${prefixedBodyBase}`
+      : prefixedBodyBase;
+  }
+  if (sessionIntro) {
+    prefixedBodyBase = `${sessionIntro}\n\n${prefixedBodyBase}`;
+  }
+  if (abortedHint) {
+    prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
+    if (sessionEntry && sessionStore && sessionKey) {
+      sessionEntry.abortedLastRun = false;
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    } else if (abortKey) {
+      ABORT_MEMORY.set(abortKey, false);
     }
-    if (sessionIntro) {
-      body = `${sessionIntro}\n\n${body}`;
-    }
-    return body;
-  })();
+  }
   if (
     sessionCfg &&
     sendSystemOnce &&
@@ -194,12 +250,18 @@ export async function getReplyFromConfig(
     sessionStore &&
     sessionKey
   ) {
-    sessionStore[sessionKey] = {
-      ...(sessionStore[sessionKey] ?? {}),
-      sessionId: sessionId ?? crypto.randomUUID(),
+    const current = sessionEntry ??
+      sessionStore[sessionKey] ?? {
+        sessionId: sessionId ?? crypto.randomUUID(),
+        updatedAt: Date.now(),
+      };
+    sessionEntry = {
+      ...current,
+      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
       updatedAt: Date.now(),
       systemSent: true,
     };
+    sessionStore[sessionKey] = sessionEntry;
     await saveSessionStore(storePath, sessionStore);
     systemSent = true;
   }
@@ -265,6 +327,31 @@ export async function getReplyFromConfig(
         timeoutSeconds,
         commandRunner,
       });
+      if (sessionCfg && sessionStore && sessionKey) {
+        const returnedSessionId = meta.agentMeta?.sessionId;
+        if (returnedSessionId && returnedSessionId !== sessionId) {
+          const entry = sessionEntry ??
+            sessionStore[sessionKey] ?? {
+              sessionId: returnedSessionId,
+              updatedAt: Date.now(),
+              systemSent,
+              abortedLastRun,
+            };
+          sessionEntry = {
+            ...entry,
+            sessionId: returnedSessionId,
+            updatedAt: Date.now(),
+          };
+          sessionStore[sessionKey] = sessionEntry;
+          await saveSessionStore(storePath, sessionStore);
+          sessionId = returnedSessionId;
+          if (isVerbose()) {
+            logVerbose(
+              `Session id updated from agent meta: ${returnedSessionId} (store: ${storePath})`,
+            );
+          }
+        }
+      }
       if (meta.agentMeta && isVerbose()) {
         logVerbose(`Agent meta: ${JSON.stringify(meta.agentMeta)}`);
       }

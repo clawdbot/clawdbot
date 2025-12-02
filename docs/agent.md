@@ -1,6 +1,6 @@
 # Agent Abstraction Refactor Plan
 
-Goal: support multiple agent CLIs (Claude, Codex, Pi, Opencode) cleanly, without legacy flags, and make parsing/injection per-agent. Keep WhatsApp/Twilio plumbing intact.
+Goal: support multiple agent CLIs (Claude, Codex, Pi, Opencode, Gemini) cleanly, without legacy flags, and make parsing/injection per-agent. Keep WhatsApp/Twilio plumbing intact.
 
 ## Overview
 - Introduce a pluggable agent layer (`src/agents/*`), selected by config.
@@ -15,7 +15,7 @@ Goal: support multiple agent CLIs (Claude, Codex, Pi, Opencode) cleanly, without
     reply: {
       mode: "command",
       agent: {
-        kind: "claude" | "opencode" | "pi" | "codex",
+        kind: "claude" | "opencode" | "pi" | "codex" | "gemini",
         format?: "text" | "json",
         identityPrefix?: string
       },
@@ -42,6 +42,7 @@ Goal: support multiple agent CLIs (Claude, Codex, Pi, Opencode) cleanly, without
 - `src/agents/opencode.ts` – reuse `parseOpencodeJson` (from PR #5), inject `--format json`, session flag `--session` defaults, identity prefix.
 - `src/agents/pi.ts` – parse NDJSON `AssistantMessageEvent` (final `message_end.message.content[text]`), inject `--mode json`/`-p` defaults, session flags.
 - `src/agents/codex.ts` – parse Codex JSONL (last `item` with `type:"agent_message"`; usage from `turn.completed`), inject `codex exec --json --skip-git-repo-check`, sandbox default read-only.
+- `src/agents/gemini.ts` – minimal parsing (plain text), identity prepend, honors `--output-format` when `format` is set, and defaults to `--resume {{SessionId}}` for session resume (new sessions need no flag). Override `sessionArgNew/sessionArgResume` if you use a different session strategy.
 - Shared MEDIA extraction stays in `media/parse.ts`.
 
 ## Command runner changes

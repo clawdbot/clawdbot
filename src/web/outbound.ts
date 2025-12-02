@@ -35,11 +35,39 @@ export async function sendMessageWeb(
     let payload: AnyMessageContent = { text: body };
     if (options.mediaUrl) {
       const media = await loadWebMedia(options.mediaUrl);
-      payload = {
-        image: media.buffer,
-        caption: body || undefined,
-        mimetype: media.contentType,
-      };
+      const caption = body || undefined;
+      if (media.kind === "audio") {
+        // WhatsApp expects explicit opus codec for PTT voice notes.
+        const mimetype =
+          media.contentType === "audio/ogg"
+            ? "audio/ogg; codecs=opus"
+            : media.contentType ?? "application/octet-stream";
+        payload = { audio: media.buffer, ptt: true, mimetype };
+      } else if (media.kind === "video") {
+        const mimetype = media.contentType ?? "application/octet-stream";
+        payload = {
+          video: media.buffer,
+          caption,
+          mimetype,
+        };
+      } else if (media.kind === "image") {
+        const mimetype = media.contentType ?? "application/octet-stream";
+        payload = {
+          image: media.buffer,
+          caption,
+          mimetype,
+        };
+      } else {
+        // Fallback to document for anything else (pdf, etc.).
+        const fileName = media.fileName ?? "file";
+        const mimetype = media.contentType ?? "application/octet-stream";
+        payload = {
+          document: media.buffer,
+          fileName,
+          caption,
+          mimetype,
+        };
+      }
     }
     logInfo(
       `📤 Sending via web session -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
