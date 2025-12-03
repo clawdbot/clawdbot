@@ -1,9 +1,4 @@
-import {
-  buildHeartbeatPrompt,
-  runHeartbeatPreHook,
-} from "../auto-reply/heartbeat-prehook.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import { loadConfig, type WarelayConfig } from "../config/config.js";
 import { danger, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -19,8 +14,6 @@ export async function runTwilioHeartbeatOnce(opts: {
   replyResolver?: ReplyResolver;
   overrideBody?: string;
   dryRun?: boolean;
-  skipPreHook?: boolean;
-  cfg?: WarelayConfig;
 }) {
   const {
     to,
@@ -28,10 +21,8 @@ export async function runTwilioHeartbeatOnce(opts: {
     runtime = defaultRuntime,
     overrideBody,
     dryRun = false,
-    skipPreHook = false,
   } = opts;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
-  const cfg = opts.cfg ?? loadConfig();
 
   if (overrideBody && overrideBody.trim().length === 0) {
     throw new Error("Override body must be non-empty when provided.");
@@ -51,52 +42,40 @@ export async function runTwilioHeartbeatOnce(opts: {
       return;
     }
 
-    // Run pre-hook unless skipped
-    let heartbeatPrompt = HEARTBEAT_PROMPT;
-    if (!skipPreHook) {
-      const preHookResult = await runHeartbeatPreHook(cfg);
-      if (preHookResult.error) {
-        logInfo(
-          `Pre-hook failed: ${preHookResult.error} (continuing)`,
-          runtime,
-        );
-      }
-      heartbeatPrompt = buildHeartbeatPrompt(
-        HEARTBEAT_PROMPT,
-        preHookResult.context,
-      );
-    }
-
     const replyResult = await replyResolver(
       {
-        Body: heartbeatPrompt,
+        Body: HEARTBEAT_PROMPT,
         From: to,
         To: to,
         MessageSid: undefined,
       },
-      undefined,
+      { isHeartbeat: true },
     );
 
+    const replyPayload = Array.isArray(replyResult)
+      ? replyResult[0]
+      : replyResult;
+
     if (
-      !replyResult ||
-      (!replyResult.text &&
-        !replyResult.mediaUrl &&
-        !replyResult.mediaUrls?.length)
+      !replyPayload ||
+      (!replyPayload.text &&
+        !replyPayload.mediaUrl &&
+        !replyPayload.mediaUrls?.length)
     ) {
       logInfo("heartbeat skipped: empty reply", runtime);
       return;
     }
 
     const hasMedia = Boolean(
-      replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+      replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
     );
-    const stripped = stripHeartbeatToken(replyResult.text);
+    const stripped = stripHeartbeatToken(replyPayload.text);
     if (stripped.shouldSkip && !hasMedia) {
       logInfo(success("heartbeat: ok (HEARTBEAT_OK)"), runtime);
       return;
     }
 
-    const finalText = stripped.text || replyResult.text || "";
+    const finalText = stripped.text || replyPayload.text || "";
     if (dryRun) {
       logInfo(
         `[dry-run] heartbeat -> ${to}: ${finalText.slice(0, 200)}`,

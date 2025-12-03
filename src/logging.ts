@@ -133,7 +133,11 @@ function pruneOldRollingLogs(dir: string): void {
     const cutoff = Date.now() - MAX_LOG_AGE_MS;
     for (const entry of entries) {
       if (!entry.isFile()) continue;
-      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) continue;
+      if (
+        !entry.name.startsWith(`${LOG_PREFIX}-`) ||
+        !entry.name.endsWith(LOG_SUFFIX)
+      )
+        continue;
       const fullPath = path.join(dir, entry.name);
       try {
         const stat = fs.statSync(fullPath);

@@ -55,7 +55,7 @@ export const opencodeSpec: AgentSpec = {
     const parsed = parseOpencodeJson(rawStdout);
     const text = parsed.text ?? rawStdout.trim();
     return {
-      text: text?.trim(),
+      texts: text ? [text.trim()] : undefined,
       meta: toMeta(parsed),
     };
   },

@@ -66,7 +66,7 @@ describe("runCommandReply", () => {
   it("injects claude flags and identity prefix", async () => {
     const captures: ReplyPayload[] = [];
     const runner = makeRunner({ stdout: "ok" }, captures);
-    const { payload } = await runCommandReply({
+    const { payloads } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["claude", "{{Body}}"],
@@ -83,6 +83,7 @@ describe("runCommandReply", () => {
       enqueue: enqueueImmediate,
     });
 
+    const payload = payloads?.[0];
     expect(payload?.text).toBe("ok");
     const finalArgv = captures[0].argv as string[];
     expect(finalArgv).toContain("--output-format");
@@ -192,7 +193,7 @@ describe("runCommandReply", () => {
     const runner = vi.fn(async () => {
       throw { stdout: "partial output here", killed: true, signal: "SIGKILL" };
     });
-    const { payload, meta } = await runCommandReply({
+    const { payloads, meta } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["echo", "hi"],
@@ -208,6 +209,7 @@ describe("runCommandReply", () => {
       commandRunner: runner,
       enqueue: enqueueImmediate,
     });
+    const payload = payloads?.[0];
     expect(payload?.text).toContain("Command timed out after 1s");
     expect(payload?.text).toContain("partial output");
     expect(meta.killed).toBe(true);
@@ -217,7 +219,7 @@ describe("runCommandReply", () => {
     const runner = vi.fn(async () => {
       throw { stdout: "", killed: true, signal: "SIGKILL" };
     });
-    const { payload } = await runCommandReply({
+    const { payloads } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["echo", "hi"],
@@ -234,6 +236,7 @@ describe("runCommandReply", () => {
       commandRunner: runner,
       enqueue: enqueueImmediate,
     });
+    const payload = payloads?.[0];
     expect(payload?.text).toContain("(cwd: /tmp/work)");
   });
 
@@ -244,7 +247,7 @@ describe("runCommandReply", () => {
     const runner = makeRunner({
       stdout: `hi\nMEDIA:${tmp}\nMEDIA:https://example.com/img.jpg`,
     });
-    const { payload } = await runCommandReply({
+    const { payloads } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["echo", "hi"],
@@ -261,6 +264,7 @@ describe("runCommandReply", () => {
       commandRunner: runner,
       enqueue: enqueueImmediate,
     });
+    const payload = payloads?.[0];
     expect(payload?.mediaUrls).toEqual(["https://example.com/img.jpg"]);
     await fs.unlink(tmp);
   });
@@ -318,7 +322,7 @@ describe("runCommandReply", () => {
     const runner = makeRunner({
       stdout: '{"result":"","duration_ms":50,"total_cost_usd":0.001}',
     });
-    const { payload } = await runCommandReply({
+    const { payloads } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["claude", "{{Body}}"],
@@ -335,6 +339,7 @@ describe("runCommandReply", () => {
       enqueue: enqueueImmediate,
     });
     // Should NOT contain raw JSON - empty result should produce fallback message
+    const payload = payloads?.[0];
     expect(payload?.text).not.toContain('{"result"');
     expect(payload?.text).toContain("command produced no output");
   });
@@ -343,7 +348,7 @@ describe("runCommandReply", () => {
     const runner = makeRunner({
       stdout: '{"text":"","duration_ms":50}',
     });
-    const { payload } = await runCommandReply({
+    const { payloads } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["claude", "{{Body}}"],
@@ -360,6 +365,7 @@ describe("runCommandReply", () => {
       enqueue: enqueueImmediate,
     });
     // Empty text should produce fallback message, not raw JSON
+    const payload = payloads?.[0];
     expect(payload?.text).not.toContain('{"text"');
     expect(payload?.text).toContain("command produced no output");
   });
@@ -368,7 +374,7 @@ describe("runCommandReply", () => {
     const runner = makeRunner({
       stdout: '{"result":"hello world","duration_ms":50}',
     });
-    const { payload } = await runCommandReply({
+    const { payloads } = await runCommandReply({
       reply: {
         mode: "command",
         command: ["claude", "{{Body}}"],
@@ -384,6 +390,7 @@ describe("runCommandReply", () => {
       commandRunner: runner,
       enqueue: enqueueImmediate,
     });
+    const payload = payloads?.[0];
     expect(payload?.text).toBe("hello world");
   });
 });

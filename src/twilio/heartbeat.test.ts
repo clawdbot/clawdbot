@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { HEARTBEAT_PROMPT, HEARTBEAT_TOKEN } from "../web/auto-reply.js";
+import { HEARTBEAT_TOKEN } from "../web/auto-reply.js";
 import { runTwilioHeartbeatOnce } from "./heartbeat.js";
 
 vi.mock("./send.js", () => ({
@@ -11,34 +11,15 @@ vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: vi.fn(),
 }));
 
-vi.mock("../auto-reply/heartbeat-prehook.js", () => ({
-  runHeartbeatPreHook: vi.fn(),
-  buildHeartbeatPrompt: vi.fn((base: string, ctx?: string) =>
-    ctx ? `${base}\n\n---\nContext from pre-hook:\n${ctx}` : base,
-  ),
-}));
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
-}));
-
-// eslint-disable-next-line import/first
-import { runHeartbeatPreHook } from "../auto-reply/heartbeat-prehook.js";
 // eslint-disable-next-line import/first
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 // eslint-disable-next-line import/first
 import { sendMessage } from "./send.js";
 
-const sendMessageMock = sendMessage as unknown as Mock;
-const replyResolverMock = getReplyFromConfig as unknown as Mock;
-const runHeartbeatPreHookMock = runHeartbeatPreHook as unknown as Mock;
+const sendMessageMock = sendMessage as unknown as vi.Mock;
+const replyResolverMock = getReplyFromConfig as unknown as vi.Mock;
 
 describe("runTwilioHeartbeatOnce", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    runHeartbeatPreHookMock.mockResolvedValue({ durationMs: 0 });
-  });
-
   it("sends manual override body and skips resolver", async () => {
     sendMessageMock.mockResolvedValue({});
     await runTwilioHeartbeatOnce({
@@ -90,81 +71,5 @@ describe("runTwilioHeartbeatOnce", () => {
       undefined,
       expect.anything(),
     );
-  });
-
-  describe("pre-hook integration", () => {
-    it("runs pre-hook and includes context in prompt", async () => {
-      runHeartbeatPreHookMock.mockResolvedValue({
-        context: "You have 3 unread emails",
-        durationMs: 100,
-      });
-      replyResolverMock.mockResolvedValue({ text: "ALERT!" });
-      sendMessageMock.mockResolvedValue({});
-
-      await runTwilioHeartbeatOnce({ to: "+1555" });
-
-      expect(runHeartbeatPreHookMock).toHaveBeenCalled();
-      expect(replyResolverMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          Body: expect.stringContaining("Context from pre-hook"),
-        }),
-        undefined,
-      );
-    });
-
-    it("skips pre-hook when skipPreHook is true", async () => {
-      replyResolverMock.mockResolvedValue({ text: "ALERT!" });
-      sendMessageMock.mockResolvedValue({});
-
-      await runTwilioHeartbeatOnce({ to: "+1555", skipPreHook: true });
-
-      expect(runHeartbeatPreHookMock).not.toHaveBeenCalled();
-      expect(replyResolverMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          Body: HEARTBEAT_PROMPT,
-        }),
-        undefined,
-      );
-    });
-
-    it("continues with basic heartbeat on pre-hook failure", async () => {
-      runHeartbeatPreHookMock.mockResolvedValue({
-        error: "Pre-hook failed",
-        durationMs: 50,
-      });
-      replyResolverMock.mockResolvedValue({ text: "ALERT!" });
-      sendMessageMock.mockResolvedValue({});
-
-      await runTwilioHeartbeatOnce({ to: "+1555" });
-
-      expect(replyResolverMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          Body: HEARTBEAT_PROMPT,
-        }),
-        undefined,
-      );
-      expect(sendMessage).toHaveBeenCalled();
-    });
-
-    it("uses injected config to avoid loading real config in tests", async () => {
-      const testConfig = {
-        inbound: {
-          reply: {
-            mode: "command" as const,
-            command: ["echo"],
-            session: {
-              heartbeatPreHook: ["test-script"],
-            },
-          },
-        },
-      };
-      runHeartbeatPreHookMock.mockResolvedValue({ durationMs: 0 });
-      replyResolverMock.mockResolvedValue({ text: "OK" });
-      sendMessageMock.mockResolvedValue({});
-
-      await runTwilioHeartbeatOnce({ to: "+1555", cfg: testConfig });
-
-      expect(runHeartbeatPreHookMock).toHaveBeenCalledWith(testConfig);
-    });
   });
 });

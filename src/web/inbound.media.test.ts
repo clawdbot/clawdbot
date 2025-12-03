@@ -100,7 +100,12 @@ describe("web inbound media saves with extension", () => {
     };
 
     realSock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Allow a brief window for the async handler to fire on slower runners.
+    for (let i = 0; i < 10; i++) {
+      if (onMessage.mock.calls.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     const msg = onMessage.mock.calls[0][0];

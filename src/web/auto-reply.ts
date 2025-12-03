@@ -1,7 +1,4 @@
-import {
-  buildHeartbeatPrompt,
-  runHeartbeatPreHook,
-} from "../auto-reply/heartbeat-prehook.js";
+import { chunkText } from "../auto-reply/chunk.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
@@ -16,7 +13,7 @@ import {
 import { danger, info, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
-import { enqueueCommand, getQueueSize } from "../process/command-queue.js";
+import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
@@ -32,6 +29,8 @@ import {
   sleepWithAbort,
 } from "./reconnect.js";
 import { getWebAuthAgeMs } from "./session.js";
+
+const WEB_TEXT_LIMIT = 4000;
 
 /**
  * Send a message via IPC if relay is running, otherwise fall back to direct.
@@ -73,7 +72,7 @@ const formatDuration = (ms: number) =>
 
 const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
-export const HEARTBEAT_PROMPT = "HEARTBEAT ultrathink";
+export const HEARTBEAT_PROMPT = "HEARTBEAT /think:high";
 
 export function resolveReplyHeartbeatMinutes(
   cfg: ReturnType<typeof loadConfig>,
@@ -109,7 +108,6 @@ export async function runWebHeartbeatOnce(opts: {
   sessionId?: string;
   overrideBody?: string;
   dryRun?: boolean;
-  skipPreHook?: boolean;
 }) {
   const {
     cfg: cfgOverride,
@@ -118,7 +116,6 @@ export async function runWebHeartbeatOnce(opts: {
     sessionId,
     overrideBody,
     dryRun = false,
-    skipPreHook = false,
   } = opts;
   const _runtime = opts.runtime ?? defaultRuntime;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
@@ -187,51 +184,25 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    // Run pre-hook unless skipped or overrideBody provided
-    let heartbeatPrompt = HEARTBEAT_PROMPT;
-    if (!skipPreHook) {
-      const preHookResult = await runHeartbeatPreHook(cfg);
-      if (preHookResult.error) {
-        heartbeatLogger.warn(
-          {
-            to,
-            error: preHookResult.error,
-            durationMs: preHookResult.durationMs,
-            timedOut: preHookResult.timedOut,
-          },
-          "heartbeat pre-hook failed (continuing with basic heartbeat)",
-        );
-      } else if (preHookResult.context) {
-        heartbeatLogger.info(
-          {
-            to,
-            contextLength: preHookResult.context.length,
-            durationMs: preHookResult.durationMs,
-          },
-          "heartbeat pre-hook succeeded",
-        );
-      }
-      heartbeatPrompt = buildHeartbeatPrompt(
-        HEARTBEAT_PROMPT,
-        preHookResult.context,
-      );
-    }
-
     const replyResult = await replyResolver(
       {
-        Body: heartbeatPrompt,
+        Body: HEARTBEAT_PROMPT,
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
       },
-      undefined,
+      { isHeartbeat: true },
       cfg,
     );
+    const replyPayload = Array.isArray(replyResult)
+      ? replyResult[0]
+      : replyResult;
+
     if (
-      !replyResult ||
-      (!replyResult.text &&
-        !replyResult.mediaUrl &&
-        !replyResult.mediaUrls?.length)
+      !replyPayload ||
+      (!replyPayload.text &&
+        !replyPayload.mediaUrl &&
+        !replyPayload.mediaUrls?.length)
     ) {
       heartbeatLogger.info(
         {
@@ -246,9 +217,9 @@ export async function runWebHeartbeatOnce(opts: {
     }
 
     const hasMedia = Boolean(
-      replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+      replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
     );
-    const stripped = stripHeartbeatToken(replyResult.text);
+    const stripped = stripHeartbeatToken(replyPayload.text);
     if (stripped.shouldSkip && !hasMedia) {
       // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.
       const sessionCfg = cfg.inbound?.reply?.session;
@@ -260,7 +231,7 @@ export async function runWebHeartbeatOnce(opts: {
       }
 
       heartbeatLogger.info(
-        { to, reason: "heartbeat-token", rawLength: replyResult.text?.length },
+        { to, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
         "heartbeat skipped",
       );
       console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
@@ -274,7 +245,7 @@ export async function runWebHeartbeatOnce(opts: {
       );
     }
 
-    const finalText = stripped.text || replyResult.text || "";
+    const finalText = stripped.text || replyPayload.text || "";
     if (dryRun) {
       heartbeatLogger.info(
         { to, reason: "dry-run", chars: finalText.length },
@@ -407,14 +378,18 @@ async function deliverWebReply(params: {
     skipLog,
   } = params;
   const replyStarted = Date.now();
+  const textChunks = chunkText(replyResult.text || "", WEB_TEXT_LIMIT);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl
       ? [replyResult.mediaUrl]
       : [];
 
-  if (mediaList.length === 0 && replyResult.text) {
-    await msg.reply(replyResult.text || "");
+  // Text-only replies
+  if (mediaList.length === 0 && textChunks.length) {
+    for (const chunk of textChunks) {
+      await msg.reply(chunk);
+    }
     if (!skipLog) {
       logInfo(
         `✅ Sent web reply to ${msg.from} (${(Date.now() - replyStarted).toFixed(0)}ms)`,
@@ -438,8 +413,12 @@ async function deliverWebReply(params: {
     return;
   }
 
-  const cleanText = replyResult.text ?? undefined;
+  const remainingText = [...textChunks];
+
+  // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
+    const caption =
+      index === 0 ? remainingText.shift() || undefined : undefined;
     try {
       const media = await loadWebMedia(mediaUrl, maxMediaBytes);
       if (isVerbose()) {
@@ -450,7 +429,6 @@ async function deliverWebReply(params: {
           `Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`,
         );
       }
-      const caption = index === 0 ? cleanText || undefined : undefined;
       if (media.kind === "image") {
         await msg.sendMedia({
           image: media.buffer,
@@ -490,7 +468,7 @@ async function deliverWebReply(params: {
           connectionId: connectionId ?? null,
           to: msg.from,
           from: msg.to,
-          text: index === 0 ? (cleanText ?? null) : null,
+          text: caption ?? null,
           mediaUrl,
           mediaSizeBytes: media.buffer.length,
           mediaKind: media.kind,
@@ -502,11 +480,20 @@ async function deliverWebReply(params: {
       console.error(
         danger(`Failed sending web media to ${msg.from}: ${String(err)}`),
       );
-      if (index === 0 && cleanText) {
-        console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
-        await msg.reply(cleanText || "");
+      replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
+      if (index === 0) {
+        const fallbackText = remainingText.shift() ?? caption ?? "";
+        if (fallbackText) {
+          console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
+          await msg.reply(fallbackText);
+        }
       }
     }
+  }
+
+  // Remaining text chunks after media
+  for (const chunk of remainingText) {
+    await msg.reply(chunk);
   }
 }
 
@@ -657,84 +644,85 @@ export async function monitorWebProvider(
         : new Date().toISOString();
       console.log(`\n[${tsDisplay}] ${from} -> ${latest.to}: ${combinedBody}`);
 
-      const replyResult = await enqueueCommand(() =>
-        (replyResolver ?? getReplyFromConfig)(
-          {
-            Body: combinedBody,
-            From: latest.from,
-            To: latest.to,
-            MessageSid: latest.id,
-            MediaPath: latest.mediaPath,
-            MediaUrl: latest.mediaUrl,
-            MediaType: latest.mediaType,
-          },
-          {
-            onReplyStart: latest.sendComposing,
-          },
-        ),
+      const replyResult = await (replyResolver ?? getReplyFromConfig)(
+        {
+          Body: combinedBody,
+          From: latest.from,
+          To: latest.to,
+          MessageSid: latest.id,
+          MediaPath: latest.mediaPath,
+          MediaUrl: latest.mediaUrl,
+          MediaType: latest.mediaType,
+        },
+        {
+          onReplyStart: latest.sendComposing,
+        },
       );
 
-      if (
-        !replyResult ||
-        (!replyResult.text &&
-          !replyResult.mediaUrl &&
-          !replyResult.mediaUrls?.length)
-      ) {
+      const replyList = replyResult
+        ? Array.isArray(replyResult)
+          ? replyResult
+          : [replyResult]
+        : [];
+
+      if (replyList.length === 0) {
         logVerbose("Skipping auto-reply: no text/media returned from resolver");
         return;
       }
 
       // Apply response prefix if configured (skip for HEARTBEAT_OK to preserve exact match)
       const responsePrefix = cfg.inbound?.responsePrefix;
-      if (
-        responsePrefix &&
-        replyResult.text &&
-        replyResult.text.trim() !== HEARTBEAT_TOKEN
-      ) {
-        if (!replyResult.text.startsWith(responsePrefix)) {
-          replyResult.text = `${responsePrefix} ${replyResult.text}`;
+
+      for (const replyPayload of replyList) {
+        if (
+          responsePrefix &&
+          replyPayload.text &&
+          replyPayload.text.trim() !== HEARTBEAT_TOKEN &&
+          !replyPayload.text.startsWith(responsePrefix)
+        ) {
+          replyPayload.text = `${responsePrefix} ${replyPayload.text}`;
         }
-      }
 
-      try {
-        await deliverWebReply({
-          replyResult,
-          msg: latest,
-          maxMediaBytes,
-          replyLogger,
-          runtime,
-          connectionId,
-        });
+        try {
+          await deliverWebReply({
+            replyResult: replyPayload,
+            msg: latest,
+            maxMediaBytes,
+            replyLogger,
+            runtime,
+            connectionId,
+          });
 
-        if (replyResult.text) {
-          recentlySent.add(replyResult.text);
-          recentlySent.add(combinedBody); // Prevent echo on the batch text itself
-          logVerbose(
-            `Added to echo detection set (size now: ${recentlySent.size}): ${replyResult.text.substring(0, 50)}...`,
-          );
-          if (recentlySent.size > MAX_RECENT_MESSAGES) {
-            const firstKey = recentlySent.values().next().value;
-            if (firstKey) recentlySent.delete(firstKey);
+          if (replyPayload.text) {
+            recentlySent.add(replyPayload.text);
+            recentlySent.add(combinedBody); // Prevent echo on the batch text itself
+            logVerbose(
+              `Added to echo detection set (size now: ${recentlySent.size}): ${replyPayload.text.substring(0, 50)}...`,
+            );
+            if (recentlySent.size > MAX_RECENT_MESSAGES) {
+              const firstKey = recentlySent.values().next().value;
+              if (firstKey) recentlySent.delete(firstKey);
+            }
           }
-        }
 
-        if (isVerbose()) {
-          console.log(
-            success(
-              `↩️  Auto-replied to ${from} (web${replyResult.mediaUrl || replyResult.mediaUrls?.length ? ", media" : ""}; batched ${messages.length})`,
-            ),
-          );
-        } else {
-          console.log(
-            success(
-              `↩️  ${replyResult.text ?? "<media>"}${replyResult.mediaUrl || replyResult.mediaUrls?.length ? " (media)" : ""}`,
-            ),
+          if (isVerbose()) {
+            console.log(
+              success(
+                `↩️  Auto-replied to ${from} (web${replyPayload.mediaUrl || replyPayload.mediaUrls?.length ? ", media" : ""}; batched ${messages.length})`,
+              ),
+            );
+          } else {
+            console.log(
+              success(
+                `↩️  ${replyPayload.text ?? "<media>"}${replyPayload.mediaUrl || replyPayload.mediaUrls?.length ? " (media)" : ""}`,
+              ),
+            );
+          }
+        } catch (err) {
+          console.error(
+            danger(`Failed sending web auto-reply to ${from}: ${String(err)}`),
           );
         }
-      } catch (err) {
-        console.error(
-          danger(`Failed sending web auto-reply to ${from}: ${String(err)}`),
-        );
       }
     };
 
@@ -967,59 +955,31 @@ export async function monitorWebProvider(
             "reply heartbeat start",
           );
         }
-
-        // Run pre-hook to gather context
-        const preHookResult = await runHeartbeatPreHook(cfg);
-        if (preHookResult.error) {
-          heartbeatLogger.warn(
-            {
-              connectionId,
-              error: preHookResult.error,
-              durationMs: preHookResult.durationMs,
-              timedOut: preHookResult.timedOut,
-            },
-            "heartbeat pre-hook failed (continuing with basic heartbeat)",
-          );
-        } else if (preHookResult.context) {
-          heartbeatLogger.info(
-            {
-              connectionId,
-              contextLength: preHookResult.context.length,
-              durationMs: preHookResult.durationMs,
-            },
-            "heartbeat pre-hook succeeded",
-          );
-        }
-        const heartbeatPrompt = buildHeartbeatPrompt(
-          HEARTBEAT_PROMPT,
-          preHookResult.context,
+        const replyResult = await (replyResolver ?? getReplyFromConfig)(
+          {
+            Body: HEARTBEAT_PROMPT,
+            From: lastInboundMsg.from,
+            To: lastInboundMsg.to,
+            MessageSid: snapshot.entry?.sessionId,
+            MediaPath: undefined,
+            MediaUrl: undefined,
+            MediaType: undefined,
+          },
+          {
+            onReplyStart: lastInboundMsg.sendComposing,
+            isHeartbeat: true,
+          },
         );
 
-        const hbFrom = lastInboundMsg.from;
-        const hbTo = lastInboundMsg.to;
-        const hbComposing = lastInboundMsg.sendComposing;
-        const replyResult = await enqueueCommand(() =>
-          (replyResolver ?? getReplyFromConfig)(
-            {
-              Body: heartbeatPrompt,
-              From: hbFrom,
-              To: hbTo,
-              MessageSid: snapshot.entry?.sessionId,
-              MediaPath: undefined,
-              MediaUrl: undefined,
-              MediaType: undefined,
-            },
-            {
-              onReplyStart: hbComposing,
-            },
-          ),
-        );
+        const replyPayload = Array.isArray(replyResult)
+          ? replyResult[0]
+          : replyResult;
 
         if (
-          !replyResult ||
-          (!replyResult.text &&
-            !replyResult.mediaUrl &&
-            !replyResult.mediaUrls?.length)
+          !replyPayload ||
+          (!replyPayload.text &&
+            !replyPayload.mediaUrl &&
+            !replyPayload.mediaUrls?.length)
         ) {
           heartbeatLogger.info(
             {
@@ -1033,9 +993,9 @@ export async function monitorWebProvider(
           return;
         }
 
-        const stripped = stripHeartbeatToken(replyResult.text);
+        const stripped = stripHeartbeatToken(replyPayload.text);
         const hasMedia = Boolean(
-          replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+          replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
         );
         if (stripped.shouldSkip && !hasMedia) {
           heartbeatLogger.info(
@@ -1043,7 +1003,7 @@ export async function monitorWebProvider(
               connectionId,
               durationMs: Date.now() - tickStart,
               reason: "heartbeat-token",
-              rawLength: replyResult.text?.length ?? 0,
+              rawLength: replyPayload.text?.length ?? 0,
             },
             "reply heartbeat skipped",
           );
@@ -1063,7 +1023,7 @@ export async function monitorWebProvider(
         }
 
         const cleanedReply: ReplyPayload = {
-          ...replyResult,
+          ...replyPayload,
           text: finalText,
         };
 

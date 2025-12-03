@@ -4,7 +4,7 @@ import type { AgentMeta, AgentParseResult, AgentSpec } from "./types.js";
 
 function parseCodexJson(raw: string): AgentParseResult {
   const lines = raw.split(/\n+/).filter((l) => l.trim().startsWith("{"));
-  let text: string | undefined;
+  const texts: string[] = [];
   let meta: AgentMeta | undefined;
 
   for (const line of lines) {
@@ -21,7 +21,7 @@ function parseCodexJson(raw: string): AgentParseResult {
         ev.item?.type === "agent_message" &&
         typeof ev.item.text === "string"
       ) {
-        text = ev.item.text;
+        texts.push(ev.item.text);
       }
       if (
         ev.type === "turn.completed" &&
@@ -50,7 +50,8 @@ function parseCodexJson(raw: string): AgentParseResult {
     }
   }
 
-  return { text: text?.trim(), meta };
+  const finalTexts = texts.length ? texts.map((t) => t.trim()) : undefined;
+  return { texts: finalTexts, meta };
 }
 
 export const codexSpec: AgentSpec = {

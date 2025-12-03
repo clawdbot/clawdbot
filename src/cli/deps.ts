@@ -1,12 +1,10 @@
 import { autoReplyIfConfigured } from "../auto-reply/reply.js";
-import { loadConfig } from "../config/config.js";
 import { readEnv } from "../env.js";
 import { info } from "../globals.js";
 import { ensureBinary } from "../infra/binaries.js";
 import { ensurePortAvailable, handlePortError } from "../infra/ports.js";
 import { ensureFunnel, getTailnetHostname } from "../infra/tailscale.js";
 import { ensureMediaHosted } from "../media/host.js";
-import { getQueueSize } from "../process/command-queue.js";
 import {
   logWebSelfId,
   monitorWebProvider,
@@ -14,7 +12,6 @@ import {
 } from "../providers/web/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createClient } from "../twilio/client.js";
-import { runTwilioHeartbeatOnce } from "../twilio/heartbeat.js";
 import { listRecentMessages } from "../twilio/messages.js";
 import { monitorTwilio as monitorTwilioImpl } from "../twilio/monitor.js";
 import { sendMessage, waitForFinalStatus } from "../twilio/send.js";
@@ -54,7 +51,6 @@ export async function monitorTwilio(
   lookbackMinutes: number,
   clientOverride?: ReturnType<typeof createClient>,
   maxIterations = Infinity,
-  opts?: { heartbeatNow?: boolean; heartbeatMinutes?: number },
 ) {
   // Adapter that wires default deps/runtime for the Twilio monitor loop.
   return monitorTwilioImpl(intervalSeconds, lookbackMinutes, {
@@ -66,13 +62,8 @@ export async function monitorTwilio(
       readEnv,
       createClient,
       sleep,
-      loadConfig,
-      runTwilioHeartbeatOnce,
-      getQueueSize,
     },
     runtime: defaultRuntime,
-    heartbeatNow: opts?.heartbeatNow,
-    heartbeatMinutes: opts?.heartbeatMinutes,
   });
 }
 

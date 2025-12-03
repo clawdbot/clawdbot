@@ -1,12 +1,34 @@
 # Changelog
 
-## Unreleased
+## 1.3.2 — 2025-12-03
+
+### Bug Fixes
+- Tau/Pi RPC replies are now buffered until the assistant turn finishes and only completed assistant `message_end` events are emitted, preventing duplicate or partial WhatsApp messages.
+- Command auto-replies return the parsed assistant texts array only (no deprecated `text` field), while preserving single-payload callers and keeping multi-message replies intact.
+- WhatsApp Web auto-replies now fall back to sending the caption text if media delivery fails, so users still see a reply instead of silence.
+- Outbound chunking now prefers newlines and word boundaries and only splits when exceeding platform limits, keeping multi-paragraph replies in a single message unless necessary.
+- Heartbeat replies now normalize array payloads for both web and Twilio paths and safely handle optional `heartbeatCommand`, preventing TS build failures and runtime crashes when agents return multiple messages.
+
+### Testing
+- Updated agent and auto-reply parsers plus web media send fallbacks; test suite adjusted and now passing after the RPC/message handling refactors.
+
+## 1.3.1 — 2025-12-02
 
 ### Security
 - Hardened the relay IPC socket: now lives under `~/.warelay/ipc`, enforces 0700 dir / 0600 socket perms, rejects symlink or foreign-owned paths, and includes unit tests to lock in the behavior.
 - `warelay logout` now also prunes the shared session store (`~/.warelay/sessions.json`) alongside WhatsApp Web credentials, reducing leftover state after unlinking.
 - Logging now rolls daily to `/tmp/warelay/warelay-YYYY-MM-DD.log` (or custom dir) and prunes files older than 24h to reduce data retention.
 - Media server now rejects symlinked files and ensures resolved paths stay inside the media directory, closing traversal via symlinks; added regression test. (Thanks @joaohlisboa)
+
+### Performance
+- Web auto-replies using the Pi agent now keep a single long-lived `tau` process in RPC mode instead of spawning per message, eliminating cold-start latency while preserving session/cwd handling.
+
+### Bug Fixes
+- Media downloads now follow up to 5 redirects and still derive MIME/extension from sniffed content or headers; added regression test for redirected downloads.
+- Hosted media responses set `Content-Type` from sniffed MIME (not the file name) and still clean up single-use files after send.
+- Claude system prompt is guaranteed to be included on the first session turn even when `sendSystemOnce` is enabled, while later turns stay system-free.
+- Media server deletes served files right after the response finishes (instead of a fixed timeout) while keeping MIME sniffing and single-use semantics.
+- Tau RPC result typing now exposes `signal`/`killed` fields so TS builds align with runtime data.
 
 ## 1.3.0 — 2025-12-02
 
@@ -41,6 +63,11 @@
 - **Manual heartbeat sends:** `warelay heartbeat` accepts `--message/--body` with `--provider web|twilio` to push real outbound messages through the same plumbing; `--dry-run` previews payloads without sending.
 
 ## Unreleased
+
+### Fixed
+- Support multiple assistant text replies when using Tau RPC: agents now emit `texts` arrays and command auto-replies deliver each message separately without leaking raw JSON.
+- Normalized agent parsers (pi/claude/opencode/codex/gemini) to the new plural output shape.
+- Enforce outbound text size caps: WhatsApp/Twilio messages chunked at 1600 chars; web replies chunked at 4000 chars.
 
 ### Changes
 - **Heartbeat backpressure:** Web reply heartbeats now check the shared command queue and skip while any command/Claude runs are in flight, preventing concurrent prompts during long-running requests.

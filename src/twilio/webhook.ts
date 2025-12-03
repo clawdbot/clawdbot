@@ -69,7 +69,7 @@ export async function startWebhook(
     }
 
     const client = createClient(env);
-    let replyResult: ReplyPayload | undefined =
+    let replyResult: ReplyPayload | ReplyPayload[] | undefined =
       autoReply !== undefined ? { text: autoReply } : undefined;
     if (!replyResult) {
       replyResult = await getReplyFromConfig(
@@ -83,14 +83,20 @@ export async function startWebhook(
           MediaType: mediaType,
         },
         {
-          onReplyStart: () => sendTypingIndicator(client, runtime, MessageSid),
+          onReplyStart: async () => {
+            await sendTypingIndicator(client, runtime, MessageSid);
+          },
         },
       );
     }
 
-    if (replyResult && (replyResult.text || replyResult.mediaUrl)) {
+    const replyPayload = Array.isArray(replyResult)
+      ? replyResult[0]
+      : replyResult;
+
+    if (replyPayload && (replyPayload.text || replyPayload.mediaUrl)) {
       try {
-        let mediaUrl = replyResult.mediaUrl;
+        let mediaUrl = replyPayload.mediaUrl;
         if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) {
           const hosted = await mediaHost.ensureMediaHosted(mediaUrl);
           mediaUrl = hosted.url;
@@ -98,7 +104,7 @@ export async function startWebhook(
         await client.messages.create({
           from: To,
           to: From,
-          body: replyResult.text ?? "",
+          body: replyPayload.text ?? "",
           ...(mediaUrl ? { mediaUrl: [mediaUrl] } : {}),
         });
         if (verbose)

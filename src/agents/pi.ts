@@ -13,41 +13,63 @@ type PiAssistantMessage = {
 
 function parsePiJson(raw: string): AgentParseResult {
   const lines = raw.split(/\n+/).filter((l) => l.trim().startsWith("{"));
-  let lastMessage: PiAssistantMessage | undefined;
+
+  // Collect only completed assistant messages (skip streaming updates/toolcalls).
+  const texts: string[] = [];
+  let lastAssistant: PiAssistantMessage | undefined;
+  let lastPushed: string | undefined;
+
   for (const line of lines) {
     try {
       const ev = JSON.parse(line) as {
         type?: string;
         message?: PiAssistantMessage;
       };
-      // Pi emits a stream; we only care about the terminal assistant message_end.
-      if (ev.type === "message_end" && ev.message?.role === "assistant") {
-        lastMessage = ev.message;
+
+      const isAssistantMessage =
+        (ev.type === "message" || ev.type === "message_end") &&
+        ev.message?.role === "assistant" &&
+        Array.isArray(ev.message.content);
+
+      if (!isAssistantMessage) continue;
+
+      const msg = ev.message as PiAssistantMessage;
+      const msgText = msg.content
+        ?.filter((c) => c?.type === "text" && typeof c.text === "string")
+        .map((c) => c.text)
+        .join("\n")
+        .trim();
+
+      if (msgText && msgText !== lastPushed) {
+        texts.push(msgText);
+        lastPushed = msgText;
+        lastAssistant = msg;
       }
     } catch {
-      // ignore
+      // ignore malformed lines
     }
   }
-  const text =
-    lastMessage?.content
-      ?.filter((c) => c?.type === "text" && typeof c.text === "string")
-      .map((c) => c.text)
-      .join("\n")
-      ?.trim() ?? undefined;
-  const meta: AgentMeta | undefined = lastMessage
-    ? {
-        model: lastMessage.model,
-        provider: lastMessage.provider,
-        stopReason: lastMessage.stopReason,
-        usage: lastMessage.usage,
-      }
-    : undefined;
-  return { text, meta };
+
+  const meta: AgentMeta | undefined =
+    lastAssistant && texts.length
+      ? {
+          model: lastAssistant.model,
+          provider: lastAssistant.provider,
+          stopReason: lastAssistant.stopReason,
+          usage: lastAssistant.usage,
+        }
+      : undefined;
+
+  return { texts, meta };
 }
 
 export const piSpec: AgentSpec = {
   kind: "pi",
-  isInvocation: (argv) => argv.length > 0 && path.basename(argv[0]) === "pi",
+  isInvocation: (argv) => {
+    if (argv.length === 0) return false;
+    const base = path.basename(argv[0]).replace(/\.(m?js)$/i, "");
+    return base === "pi" || base === "tau";
+  },
   buildArgs: (ctx) => {
     const argv = [...ctx.argv];
     // Non-interactive print + JSON

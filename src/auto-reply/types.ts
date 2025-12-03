@@ -1,5 +1,6 @@
 export type GetReplyOptions = {
-  onReplyStart?: () => Promise<unknown> | void;
+  onReplyStart?: () => Promise<void> | void;
+  isHeartbeat?: boolean;
 };
 
 export type ReplyPayload = {

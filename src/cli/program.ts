@@ -451,15 +451,7 @@ Examples:
 
       ensureTwilioEnv();
       logTwilioFrom();
-      await monitorTwilio(
-        intervalSeconds,
-        lookbackMinutes,
-        undefined,
-        Infinity,
-        {
-          heartbeatNow,
-        },
-      );
+      await monitorTwilio(intervalSeconds, lookbackMinutes);
     });
 
   program
