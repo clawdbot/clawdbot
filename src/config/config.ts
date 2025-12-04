@@ -88,7 +88,31 @@ export type WarelayConfig = {
   web?: WebConfig;
 };
 
-export const CONFIG_PATH = path.join(os.homedir(), ".warelay", "warelay.json");
+// New branding path (preferred)
+export const CONFIG_PATH_CLAWDIS = path.join(
+  os.homedir(),
+  ".clawdis",
+  "clawdis.json",
+);
+// Legacy path (fallback for backward compatibility)
+export const CONFIG_PATH_LEGACY = path.join(
+  os.homedir(),
+  ".warelay",
+  "warelay.json",
+);
+// Deprecated: kept for backward compatibility
+export const CONFIG_PATH = CONFIG_PATH_LEGACY;
+
+/**
+ * Resolve which config path to use.
+ * Prefers new clawdis.json, falls back to warelay.json.
+ */
+function resolveConfigPath(): string {
+  if (fs.existsSync(CONFIG_PATH_CLAWDIS)) {
+    return CONFIG_PATH_CLAWDIS;
+  }
+  return CONFIG_PATH_LEGACY;
+}
 
 const ReplySchema = z
   .object({
@@ -212,15 +236,17 @@ const WarelaySchema = z.object({
 });
 
 export function loadConfig(): WarelayConfig {
-  // Read ~/.warelay/warelay.json (JSON5) if present.
+  // Read config file (JSON5) if present.
+  // Prefers ~/.clawdis/clawdis.json, falls back to ~/.warelay/warelay.json
+  const configPath = resolveConfigPath();
   try {
-    if (!fs.existsSync(CONFIG_PATH)) return {};
-    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    if (!fs.existsSync(configPath)) return {};
+    const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
     const validated = WarelaySchema.safeParse(parsed);
     if (!validated.success) {
-      console.error("Invalid warelay config:");
+      console.error("Invalid config:");
       for (const iss of validated.error.issues) {
         console.error(`- ${iss.path.join(".")}: ${iss.message}`);
       }
@@ -228,7 +254,7 @@ export function loadConfig(): WarelayConfig {
     }
     return validated.data as WarelayConfig;
   } catch (err) {
-    console.error(`Failed to read config at ${CONFIG_PATH}`, err);
+    console.error(`Failed to read config at ${configPath}`, err);
     return {};
   }
 }

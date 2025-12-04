@@ -359,7 +359,7 @@ function extractMentionedJids(
   const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
 
-  const candidates: (string[] | undefined)[] = [
+  const candidates: (string[] | null | undefined)[] = [
     message.extendedTextMessage?.contextInfo?.mentionedJid,
     message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage
       ?.contextInfo?.mentionedJid,
