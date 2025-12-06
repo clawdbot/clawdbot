@@ -57,19 +57,24 @@ export async function convertTelegramMessage(
 }
 
 /**
- * Extract sender identifier (@username or phone).
+ * Extract sender identifier with telegram: prefix to prevent session ID collisions.
+ *
+ * Returns:
+ * - telegram:@username (if username available)
+ * - telegram:+phone (if phone available)
+ * - telegram:id (numeric Telegram ID as fallback)
  */
 function extractSenderIdentifier(sender: Api.User | Api.Chat): string {
   if ("username" in sender && sender.username) {
-    return `@${sender.username}`;
+    return `telegram:@${sender.username}`;
   }
   if ("phone" in sender && sender.phone) {
-    return sender.phone;
+    return `telegram:${sender.phone}`;
   }
   if ("id" in sender && sender.id) {
-    return sender.id.toString();
+    return `telegram:${sender.id.toString()}`;
   }
-  return "unknown";
+  return "telegram:unknown";
 }
 
 /**

@@ -22,9 +22,12 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
+import { readEnv } from "../env.js";
 import { ensureTwilioEnv } from "../env.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { pickProvider } from "../provider-web.js";
+import { createInitializedProvider } from "../providers/factory.js";
+import type { TelegramProviderConfig } from "../providers/base/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { Provider } from "../utils.js";
 import { sendViaIpc } from "../web/ipc.js";
@@ -349,7 +352,9 @@ export async function agentCommand(
     provider =
       provider === "twilio"
         ? "twilio"
-        : await pickProvider((provider ?? "auto") as Provider | "auto");
+        : provider === "telegram"
+          ? "telegram"
+          : await pickProvider((provider ?? "auto") as Provider | "auto");
     if (provider === "twilio") ensureTwilioEnv();
   }
 
@@ -391,6 +396,38 @@ export async function agentCommand(
               mediaUrl: extra,
             });
           }
+        }
+      } else if (provider === "telegram") {
+        const env = readEnv(runtime);
+        if (!env.telegram?.apiId || !env.telegram?.apiHash) {
+          throw new Error(
+            "Telegram not configured. Set TELEGRAM_API_ID and TELEGRAM_API_HASH in .env",
+          );
+        }
+        const telegramConfig: TelegramProviderConfig = {
+          kind: "telegram",
+          apiId: Number.parseInt(env.telegram.apiId, 10),
+          apiHash: env.telegram.apiHash,
+          sessionDir: undefined,
+          verbose: false,
+        };
+        const telegramProvider =
+          await createInitializedProvider("telegram", telegramConfig);
+        const chunks = chunkText(text, 4096);
+        if (chunks.length > 0 || media.length > 0) {
+          const firstChunk = chunks.length > 0 ? chunks[0] : "";
+          const firstMedia = media[0];
+          await telegramProvider.send(opts.to, firstChunk, {
+            media: firstMedia ? [{ type: "image", url: firstMedia }] : undefined,
+          });
+        }
+        for (let i = 1; i < chunks.length; i++) {
+          await telegramProvider.send(opts.to, chunks[i]);
+        }
+        for (let i = 1; i < media.length; i++) {
+          await telegramProvider.send(opts.to, "", {
+            media: [{ type: "image", url: media[i] }],
+          });
         }
       } else {
         const chunks = chunkText(text, 1600);

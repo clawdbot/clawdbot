@@ -58,11 +58,22 @@ export async function saveSessionStore(
 
 /**
  * Detect provider from message context.
+ *
+ * IMPORTANT: This function is only called when the provider isn't explicitly known.
+ * For messages coming through the Provider interface, the provider should already
+ * be indicated via the message context (e.g., From field with telegram: prefix).
+ *
+ * Telegram messages should ALWAYS use "telegram:" prefix in the From field to avoid
+ * being misidentified as WhatsApp.
  */
 function detectProvider(from: string): "whatsapp" | "telegram" | "twilio" {
-  // Telegram format: "telegram:123456789" or "@username"
-  if (from.startsWith("telegram:") || from.startsWith("@")) {
+  // Telegram format: "telegram:123456789" or "telegram:@username"
+  if (from.startsWith("telegram:")) {
     return "telegram";
+  }
+  // WhatsApp username format: "@username" (but NOT telegram:@username)
+  if (from.startsWith("@")) {
+    return "whatsapp"; // WhatsApp also supports @username format
   }
   // WhatsApp/Twilio use E.164 phone numbers
   // Default to whatsapp for phone numbers

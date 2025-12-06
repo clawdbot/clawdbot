@@ -587,6 +587,11 @@ Examples:
         }
       }
 
+      if (provider === "telegram") {
+        await monitorTelegramProvider(Boolean(opts.verbose), defaultRuntime);
+        return;
+      }
+
       ensureTwilioEnv();
       logTwilioFrom();
       await monitorTwilio(intervalSeconds, lookbackMinutes);
