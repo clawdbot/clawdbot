@@ -896,8 +896,8 @@ struct PermissionsSettings: View {
                 .padding(.top, 4)
 
             PermissionStatusList(status: status, refresh: refresh)
-                .padding(14)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
+                .padding(.horizontal, 2)
+                .padding(.vertical, 6)
 
             Button("Show onboarding") { showOnboarding() }
                 .buttonStyle(.bordered)
