@@ -49,11 +49,11 @@ enum VoiceWakeForwarder {
             steps.append("CLI=\"\"")
         }
 
-        steps.append("if [ -z \"$CLI\" ]; then CLI=$(command -v clawdis-mac 2>/dev/null || true); fi")
+        steps.append("if [ -z \"${CLI:-}\" ]; then CLI=$(command -v clawdis-mac 2>/dev/null || true); fi")
         steps
             .append(
-                "if [ -z \"$CLI\" ]; then for c in \(searchList); do [ -x \"$c\" ] && CLI=\"$c\" && break; done; fi")
-        steps.append("if [ -z \"$CLI\" ]; then echo 'clawdis-mac missing'; exit 127; fi")
+                "if [ -z \"${CLI:-}\" ]; then for c in \(searchList); do [ -x \"$c\" ] && CLI=\"$c\" && break; done; fi")
+        steps.append("if [ -z \"${CLI:-}\" ]; then echo 'clawdis-mac missing'; exit 127; fi")
 
         if echoPath {
             steps.append("echo __CLI:$CLI")
@@ -138,17 +138,12 @@ enum VoiceWakeForwarder {
         }
         args.append(userHost)
 
-        let cmdTemplate: String
-        if config.commandTemplate.contains("${text}") {
-            cmdTemplate = config.commandTemplate.replacingOccurrences(of: "${text}", with: "$CLAW_TEXT")
-        } else {
-            cmdTemplate = config.commandTemplate
-        }
-
-        let b64 = transcript.data(using: .utf8)?.base64EncodedString() ?? ""
-        let pythonDecode = "PYBIN=$(command -v python3 || command -v python || true); if [ -z \\\"$PYBIN\\\" ]; then echo 'python missing'; exit 127; fi; CLAW_TEXT=$($PYBIN -c \\\"import base64; print(base64.b64decode('" + b64 + "').decode('utf-8'), end='')\\\");"
-        let shellCommand = "PATH=\(cliHelperSearchPaths.joined(separator: ":")); \(pythonDecode) \(self.commandWithCliPath(cmdTemplate, target: destination))"
-        args.append(contentsOf: ["sh", "-c", shellCommand])
+        let escaped = Self.shellEscape(transcript) // single-quoted literal, safe for sh/zsh
+        let templated: String = config.commandTemplate.contains("${text}")
+            ? config.commandTemplate.replacingOccurrences(of: "${text}", with: "$CLAW_TEXT")
+            : Self.renderedCommand(template: config.commandTemplate, transcript: transcript)
+        let script = self.commandWithCliPath("CLAW_TEXT=\(escaped); \(templated)", target: destination)
+        args.append(contentsOf: ["/bin/sh", "-c", script])
 
         let debugCmd = (["/usr/bin/ssh"] + args).joined(separator: " ")
         self.logger.info("voice wake ssh cmd=\(debugCmd, privacy: .public)")
@@ -180,7 +175,7 @@ enum VoiceWakeForwarder {
         let clipped = out.isEmpty ? "(no output)" : String(out.prefix(240))
         self.logger.error(
             "voice wake forward failed exit=\(process.terminationStatus) host=\(userHost, privacy: .public) out=\(clipped, privacy: .public) cmd=\(debugCmd, privacy: .public)")
-        if process.terminationStatus == 127 {
+        if process.terminationStatus == 126 || process.terminationStatus == 127 {
             return .failure(.cliMissingOrFailed(process.terminationStatus, out))
         }
         return .failure(.nonZeroExit(process.terminationStatus, out))
@@ -229,7 +224,7 @@ enum VoiceWakeForwarder {
         // Stage 2: ensure remote clawdis-mac is present and responsive.
         var checkArgs = baseArgs
         let statusCommand = self.commandWithCliPath("clawdis-mac status", target: destination, echoCliPath: true)
-        checkArgs.append(contentsOf: [userHost, "sh", "-c", statusCommand])
+        checkArgs.append(contentsOf: [userHost, "/bin/sh", "-c", statusCommand])
         let checkProc = Process()
         checkProc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         checkProc.arguments = checkArgs
