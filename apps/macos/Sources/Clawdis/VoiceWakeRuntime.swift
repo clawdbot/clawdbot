@@ -17,6 +17,7 @@ actor VoiceWakeRuntime {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var lastHeard: Date?
+    private var noiseFloorRMS: Double = 1e-4
     private var captureStartedAt: Date?
     private var captureTask: Task<Void, Never>?
     private var capturedTranscript: String = ""
@@ -36,6 +37,19 @@ actor VoiceWakeRuntime {
     // Maximum capture duration from trigger until we force-send, to avoid runaway sessions.
     private let captureHardStop: TimeInterval = 120.0
     private let debounceAfterSend: TimeInterval = 0.35
+    // Voice activity detection parameters (RMS-based).
+    private let minSpeechRMS: Double = 1e-3
+    private let speechBoostFactor: Double = 6.0 // how far above noise floor we require to mark speech
+
+    /// Stops the active Speech pipeline without clearing the stored config, so we can restart cleanly.
+    private func haltRecognitionPipeline() {
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest?.endAudio()
+        self.recognitionRequest = nil
+        self.audioEngine.inputNode.removeTap(onBus: 0)
+        self.audioEngine.stop()
+    }
 
     struct RuntimeConfig: Equatable {
         let triggers: [String]
@@ -94,8 +108,11 @@ actor VoiceWakeRuntime {
             let input = self.audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
             input.removeTap(onBus: 0)
-            input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
+            input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
                 request?.append(buffer)
+                if let rms = Self.rmsLevel(buffer: buffer) {
+                    Task { await self?.noteAudioLevel(rms: rms) }
+                }
             }
 
             self.audioEngine.prepare()
@@ -266,6 +283,8 @@ actor VoiceWakeRuntime {
         self.captureTask = nil
 
         let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Stop further recognition events so we don't retrigger immediately with buffered audio.
+        self.haltRecognitionPipeline()
         self.capturedTranscript = ""
         self.captureStartedAt = nil
         self.lastHeard = nil

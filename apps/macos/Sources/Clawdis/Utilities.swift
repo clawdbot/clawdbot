@@ -350,21 +350,36 @@ enum CommandResolver {
         // Run the real clawdis CLI on the remote host; do not fall back to clawdis-mac.
         let exportedPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/steipete/Library/pnpm:$PATH"
         let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
-        let userPRJ = settings.projectRoot
-        let prjInit = userPRJ.isEmpty ? "" : "PRJ=\(self.shellQuote(userPRJ));"
-        let scriptBody = """
-        PATH=\(exportedPath);
-        \(prjInit)
+        let userPRJ = settings.projectRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let projectSection: String
+        if userPRJ.isEmpty {
+            projectSection = """
         DEFAULT_PRJ="$HOME/Projects/clawdis"
-        if [ -z "${PRJ:-}" ] && [ -d "$DEFAULT_PRJ" ]; then PRJ="$DEFAULT_PRJ"; fi
-        if [ -n "${PRJ:-}" ]; then
+        if [ -d "$DEFAULT_PRJ" ]; then
+          PRJ="$DEFAULT_PRJ"
           cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
         fi
+        """
+        } else {
+            projectSection = """
+        PRJ=\(self.shellQuote(userPRJ))
+        cd \(self.shellQuote(userPRJ)) || { echo "Project root not found: \(userPRJ)"; exit 127; }
+        """
+        }
+
+        let scriptBody = """
+        PATH=\(exportedPath);
+        CLI="";
+        \(projectSection)
         if command -v clawdis >/dev/null 2>&1; then
+          CLI="$(command -v clawdis)"
           clawdis \(quotedArgs);
         elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/clawdis.js" ] && command -v node >/dev/null 2>&1; then
+          CLI="node $PRJ/bin/clawdis.js"
           node "$PRJ/bin/clawdis.js" \(quotedArgs);
         elif command -v pnpm >/dev/null 2>&1; then
+          CLI="pnpm --silent clawdis"
           pnpm --silent clawdis \(quotedArgs);
         else
           echo "clawdis CLI missing on remote host"; exit 127;

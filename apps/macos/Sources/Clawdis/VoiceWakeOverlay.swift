@@ -284,27 +284,6 @@ final class VoiceWakeOverlayController: ObservableObject {
             ])
     }
 }
-
-private struct CloseHoverButton: View {
-    var onClose: () -> Void
-
-    var body: some View {
-        Button(action: self.onClose) {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(Color.white.opacity(0.85))
-                .frame(width: 22, height: 22)
-                .background(Color.black.opacity(0.42))
-                .clipShape(Circle())
-                .shadow(color: Color.black.opacity(0.4), radius: 8, y: 2)
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .contentShape(Circle())
-        .padding(6)
-    }
-}
-
 private struct VoiceWakeOverlayView: View {
     @ObservedObject var controller: VoiceWakeOverlayController
     @FocusState private var textFocused: Bool
@@ -334,7 +313,7 @@ private struct VoiceWakeOverlayView: View {
                             self.controller.sendNow()
                         })
                         .focused(self.$textFocused)
-                        .frame(minHeight: 32, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
                         .id("editing")
                 } else {
                     VibrantLabelView(
@@ -343,7 +322,7 @@ private struct VoiceWakeOverlayView: View {
                             self.controller.userBeganEditing()
                             self.textFocused = true
                         })
-                        .frame(minHeight: 32, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
                         .id("display")
                 }
 
@@ -450,7 +429,7 @@ private struct TranscriptTextView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = self.isOverflowing
+        scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.hasHorizontalScroller = false
@@ -502,8 +481,7 @@ private struct VibrantLabelView: NSViewRepresentable {
     var onTap: () -> Void
 
     func makeNSView(context: Context) -> NSView {
-        let display = self.attributed.strippingForegroundColor()
-        let label = NSTextField(labelWithAttributedString: display)
+        let label = NSTextField(labelWithAttributedString: self.attributed)
         label.isEditable = false
         label.isBordered = false
         label.drawsBackground = false
@@ -514,7 +492,9 @@ private struct VibrantLabelView: NSViewRepresentable {
         label.cell?.isScrollable = false
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.textColor = .textColor
+        label.setContentHuggingPriority(.required, for: .vertical)
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
+        label.textColor = .labelColor
 
         let container = ClickCatcher(onTap: onTap)
         container.addSubview(label)
@@ -532,7 +512,7 @@ private struct VibrantLabelView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let container = nsView as? ClickCatcher,
               let label = container.subviews.first as? NSTextField else { return }
-        label.attributedStringValue = self.attributed.strippingForegroundColor()
+        label.attributedStringValue = self.attributed
     }
 
 }
@@ -586,15 +566,6 @@ private struct CloseButtonOverlay: View {
             }
         }
         .allowsHitTesting(isVisible)
-    }
-}
-}
-
-private extension NSAttributedString {
-    func strippingForegroundColor() -> NSAttributedString {
-        let mutable = NSMutableAttributedString(attributedString: self)
-        mutable.removeAttribute(.foregroundColor, range: NSRange(location: 0, length: mutable.length))
-        return mutable
     }
 }
 
