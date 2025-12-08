@@ -280,9 +280,9 @@ enum CommandResolver {
         return false
     }
 
-    static func clawdisCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
+    static func clawdisNodeCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
         let settings = self.connectionSettings()
-        if settings.mode == .remote, let ssh = self.sshCommand(
+        if settings.mode == .remote, let ssh = self.sshNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             settings: settings)
@@ -307,7 +307,29 @@ enum CommandResolver {
         return ["clawdis", subcommand] + extraArgs
     }
 
-    private static func sshCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
+    static func clawdisMacCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
+        let settings = self.connectionSettings()
+        if settings.mode == .remote, let ssh = self.sshMacHelperCommand(
+            subcommand: subcommand,
+            extraArgs: extraArgs,
+            settings: settings)
+        {
+            return ssh
+        }
+        if let helper = self.findExecutable(named: "clawdis-mac") {
+            return [helper, subcommand] + extraArgs
+        }
+        return ["/usr/local/bin/clawdis-mac", subcommand] + extraArgs
+    }
+
+    // Existing callers still refer to clawdisCommand; keep it as node alias.
+    static func clawdisCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
+        self.clawdisNodeCommand(subcommand: subcommand, extraArgs: extraArgs)
+    }
+
+    // MARK: - SSH helpers
+
+    private static func sshNodeCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
         guard !settings.target.isEmpty else { return nil }
         guard let parsed = VoiceWakeForwarder.parse(target: settings.target) else { return nil }
 
@@ -334,6 +356,30 @@ enum CommandResolver {
         fi;
         if [ -z "$CLI" ]; then echo "clawdis CLI missing on remote host"; exit 127; fi;
         \(cdPrefix)$CLI \(quotedArgs)
+        """
+        args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
+        return ["/usr/bin/ssh"] + args
+    }
+
+    private static func sshMacHelperCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
+        guard !settings.target.isEmpty else { return nil }
+        guard let parsed = VoiceWakeForwarder.parse(target: settings.target) else { return nil }
+
+        var args: [String] = ["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"]
+        if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
+        if !settings.identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            args.append(contentsOf: ["-i", settings.identity])
+        }
+        let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
+        args.append(userHost)
+
+        let exportedPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+        let cdPrefix = settings.projectRoot.isEmpty ? "" : "cd \(self.shellQuote(settings.projectRoot)) && "
+        let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
+        let scriptBody = """
+        PATH=\(exportedPath);
+        if ! command -v clawdis-mac >/dev/null 2>&1; then echo "clawdis-mac missing on remote host"; exit 127; fi;
+        \(cdPrefix)clawdis-mac \(quotedArgs)
         """
         args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
         return ["/usr/bin/ssh"] + args
