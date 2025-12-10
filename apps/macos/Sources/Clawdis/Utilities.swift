@@ -80,9 +80,9 @@ enum LaunchAgentManager {
             <true/>
           </dict>
           <key>StandardOutPath</key>
-          <string>\(LogLocator.legacyLogPath)</string>
+          <string>\(LogLocator.launchdLogPath)</string>
           <key>StandardErrorPath</key>
-          <string>\(LogLocator.legacyLogPath)</string>
+          <string>\(LogLocator.launchdLogPath)</string>
         </dict>
         </plist>
         """

@@ -114,7 +114,7 @@ enum DebugActions {
     }
 
     static func pinoLogPath() -> String {
-        LogLocator.bestLogFile()?.path ?? LogLocator.legacyLogPath
+        LogLocator.bestLogFile()?.path ?? LogLocator.launchdLogPath
     }
 
     @MainActor
