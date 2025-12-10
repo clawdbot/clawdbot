@@ -142,6 +142,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         MediaUrl: media?.path,
       };
 
+      if (logVerbose()) {
+        const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+        logVerbose(
+          `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
+        );
+      }
+
       const replyResult = await getReplyFromConfig(
         ctxPayload,
         { onReplyStart: sendTyping },
