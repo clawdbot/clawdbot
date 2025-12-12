@@ -893,6 +893,70 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("chat.send does not overwrite last delivery route", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { name: "test", version: "1", platform: "test", mode: "test" },
+        caps: [],
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "hello-ok");
+
+    const reqId = "chat-route";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-route",
+        },
+      }),
+    );
+
+    const res = await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === reqId,
+    );
+    expect(res.ok).toBe(true);
+
+    const stored = JSON.parse(
+      await fs.readFile(testSessionStorePath, "utf-8"),
+    ) as {
+      main?: { lastChannel?: string; lastTo?: string };
+    };
+    expect(stored.main?.lastChannel).toBe("whatsapp");
+    expect(stored.main?.lastTo).toBe("+1555");
+
+    ws.close();
+    await server.close();
+  });
+
   test("presence includes client fingerprint", async () => {
     const { server, ws } = await startServerWithClient();
     ws.send(

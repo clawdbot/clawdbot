@@ -868,9 +868,7 @@ export async function startGatewayServer(
                 break;
               }
             }
-            const { cfg, storePath, store, entry } = loadSessionEntry(
-              p.sessionKey,
-            );
+            const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
             const now = Date.now();
             const sessionId = entry?.sessionId ?? randomUUID();
             const sessionEntry: SessionEntry = {
@@ -882,12 +880,6 @@ export async function startGatewayServer(
               lastChannel: entry?.lastChannel,
               lastTo: entry?.lastTo,
             };
-            const mainKey =
-              (cfg.inbound?.reply?.session?.mainKey ?? "main").trim() || "main";
-            if (p.sessionKey === mainKey) {
-              sessionEntry.lastChannel = "webchat";
-              delete sessionEntry.lastTo;
-            }
             if (store) {
               store[p.sessionKey] = sessionEntry;
               if (storePath) {
