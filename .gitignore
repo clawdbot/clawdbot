@@ -4,6 +4,7 @@ dist
 pnpm-lock.yaml
 coverage
 .pnpm-store
+.DS_Store
 **/.DS_Store
 apps/macos/.build/
 apps/shared/ClawdisKit/.build/
