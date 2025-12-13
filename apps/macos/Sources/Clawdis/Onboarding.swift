@@ -117,17 +117,13 @@ struct OnboardingView: View {
         self.onboardingPage {
             Text("Welcome to Clawdis")
                 .font(.largeTitle.weight(.semibold))
-            Text("Your macOS menu bar companion for notifications, screenshots, and privileged agent actions.")
+            Text(
+                "Your macOS menu bar companion for notifications, screenshots, and agent automation — setup takes just a few minutes.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Quick steps with live permission checks and the helper CLI so you can finish setup in minutes.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
+                .lineLimit(2)
+                .frame(maxWidth: 560)
                 .fixedSize(horizontal: false, vertical: true)
 
             self.onboardingCard(spacing: 10, padding: 14) {
@@ -532,7 +528,7 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 28)
-        .padding(.bottom, 12)
+        .padding(.bottom, 24)
         .frame(height: 60)
     }
 
