@@ -213,7 +213,8 @@ struct OnboardingView: View {
                                 "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, " +
                                     "including running commands, reading/writing files, and capturing screenshots — " +
                                     "depending on the permissions you grant.\n\n" +
-                                    "Only enable Clawdis if you understand the risks and trust the prompts and integrations you use.")
+                                    "Only enable Clawdis if you understand the risks and trust the prompts and " +
+                                    "integrations you use.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -529,8 +530,10 @@ struct OnboardingView: View {
                 }
 
                 Text(
-                    "This writes your identity to `~/.clawdis/clawdis.json` and into `AGENTS.md` inside the workspace. " +
-                        "Treat that workspace as the agent’s “memory” and consider making it a (private) git repo.")
+                    "This writes your identity to `~/.clawdis/clawdis.json` and into `AGENTS.md` " +
+                        "inside the workspace. " +
+                        "Treat that workspace as the agent’s “memory” and consider making it a (private) git " +
+                        "repo.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

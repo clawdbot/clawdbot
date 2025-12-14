@@ -4,8 +4,8 @@ import Observation
 
 // We use “master” as the on-the-wire service name; keep the model aligned with the protocol/docs.
 @MainActor
-// swiftlint:disable:next inclusive_language
 @Observable
+// swiftlint:disable:next inclusive_language
 final class MasterDiscoveryModel {
     // swiftlint:disable:next inclusive_language
     struct DiscoveredMaster: Identifiable, Equatable {

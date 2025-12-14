@@ -6,7 +6,7 @@ struct MasterDiscoveryInlineList: View {
     var discovery: MasterDiscoveryModel
     var currentTarget: String?
     var onSelect: (MasterDiscoveryModel.DiscoveredMaster) -> Void
-    @State private var hoveredMasterID: MasterDiscoveryModel.DiscoveredMaster.ID?
+    @State private var hoveredGatewayID: MasterDiscoveryModel.DiscoveredMaster.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -25,19 +25,19 @@ struct MasterDiscoveryInlineList: View {
                     .foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(self.discovery.masters.prefix(6)) { master in
-                        let target = self.suggestedSSHTarget(master)
+                    ForEach(self.discovery.masters.prefix(6)) { gateway in
+                        let target = self.suggestedSSHTarget(gateway)
                         let selected = target != nil && self.currentTarget?
                             .trimmingCharacters(in: .whitespacesAndNewlines) == target
 
                         Button {
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                self.onSelect(master)
+                                self.onSelect(gateway)
                             }
                         } label: {
                             HStack(alignment: .center, spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(master.displayName)
+                                    Text(gateway.displayName)
                                         .font(.callout.weight(.semibold))
                                         .lineLimit(1)
                                         .truncationMode(.tail)
@@ -65,7 +65,7 @@ struct MasterDiscoveryInlineList: View {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(self.rowBackground(
                                         selected: selected,
-                                        hovered: self.hoveredMasterID == master.id)))
+                                        hovered: self.hoveredGatewayID == gateway.id)))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .strokeBorder(
@@ -75,8 +75,8 @@ struct MasterDiscoveryInlineList: View {
                         }
                         .buttonStyle(.plain)
                         .onHover { hovering in
-                            self.hoveredMasterID = hovering ? master
-                                .id : (self.hoveredMasterID == master.id ? nil : self.hoveredMasterID)
+                            self.hoveredGatewayID = hovering ? gateway
+                                .id : (self.hoveredGatewayID == gateway.id ? nil : self.hoveredGatewayID)
                         }
                     }
                 }
@@ -89,13 +89,13 @@ struct MasterDiscoveryInlineList: View {
         .help("Click a discovered master to fill the SSH target.")
     }
 
-    private func suggestedSSHTarget(_ master: MasterDiscoveryModel.DiscoveredMaster) -> String? {
-        let host = master.tailnetDns ?? master.lanHost
+    private func suggestedSSHTarget(_ gateway: MasterDiscoveryModel.DiscoveredMaster) -> String? {
+        let host = gateway.tailnetDns ?? gateway.lanHost
         guard let host else { return nil }
         let user = NSUserName()
         var target = "\(user)@\(host)"
-        if master.sshPort != 22 {
-            target += ":\(master.sshPort)"
+        if gateway.sshPort != 22 {
+            target += ":\(gateway.sshPort)"
         }
         return target
     }
@@ -118,8 +118,8 @@ struct MasterDiscoveryMenu: View {
                 Button(self.discovery.statusText) {}
                     .disabled(true)
             } else {
-                ForEach(self.discovery.masters) { master in
-                    Button(master.displayName) { self.onSelect(master) }
+                ForEach(self.discovery.masters) { gateway in
+                    Button(gateway.displayName) { self.onSelect(gateway) }
                 }
             }
         } label: {
