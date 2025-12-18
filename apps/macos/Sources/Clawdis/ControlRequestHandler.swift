@@ -14,7 +14,9 @@ enum ControlRequestHandler {
         var modelIdentifier: String?
         var remoteAddress: String?
         var connected: Bool
+        var paired: Bool
         var capabilities: [String]?
+        var commands: [String]?
     }
 
     struct NodeListResult: Codable {
@@ -34,7 +36,9 @@ enum ControlRequestHandler {
             var modelIdentifier: String?
             var remoteIp: String?
             var connected: Bool?
+            var paired: Bool?
             var caps: [String]?
+            var commands: [String]?
         }
 
         var ts: Int?
@@ -108,6 +112,9 @@ enum ControlRequestHandler {
 
         case .nodeList:
             return await self.handleNodeList()
+
+        case let .nodeDescribe(nodeId):
+            return await self.handleNodeDescribe(nodeId: nodeId)
 
         case let .nodeInvoke(nodeId, command, paramsJSON):
             return await self.handleNodeInvoke(
@@ -448,6 +455,18 @@ enum ControlRequestHandler {
         }
     }
 
+    private static func handleNodeDescribe(nodeId: String) async -> Response {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                method: "node.describe",
+                params: ["nodeId": AnyCodable(nodeId)],
+                timeoutMs: 10_000)
+            return Response(ok: true, payload: data)
+        } catch {
+            return Response(ok: false, message: error.localizedDescription)
+        }
+    }
+
     static func buildNodeListResult(payload: GatewayNodeListPayload) -> NodeListResult {
         let nodes = payload.nodes.map { n -> NodeListNode in
             NodeListNode(
@@ -459,14 +478,16 @@ enum ControlRequestHandler {
                 modelIdentifier: n.modelIdentifier,
                 remoteAddress: n.remoteIp,
                 connected: n.connected == true,
-                capabilities: n.caps)
+                paired: n.paired == true,
+                capabilities: n.caps,
+                commands: n.commands)
         }
 
         let sorted = nodes.sorted { a, b in
             (a.displayName ?? a.nodeId) < (b.displayName ?? b.nodeId)
         }
 
-        let pairedNodeIds = sorted.map(\.nodeId).sorted()
+        let pairedNodeIds = sorted.filter(\.paired).map(\.nodeId).sorted()
         let connectedNodeIds = sorted.filter(\.connected).map(\.nodeId).sorted()
 
         return NodeListResult(

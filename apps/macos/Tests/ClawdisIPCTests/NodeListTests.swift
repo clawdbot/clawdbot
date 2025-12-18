@@ -15,6 +15,7 @@ import Testing
                     modelIdentifier: "iPad14,5",
                     remoteIp: "192.168.0.88",
                     connected: true,
+                    paired: true,
                     caps: ["canvas", "camera"]),
                 ControlRequestHandler.GatewayNodeListPayload.Node(
                     nodeId: "n2",
@@ -25,6 +26,7 @@ import Testing
                     modelIdentifier: "iPhone14,2",
                     remoteIp: nil,
                     connected: false,
+                    paired: true,
                     caps: nil),
             ])
 

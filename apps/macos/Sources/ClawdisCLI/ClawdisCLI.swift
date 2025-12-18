@@ -49,6 +49,7 @@ struct ClawdisCLI {
     private struct ParsedCLIRequest {
         var request: Request
         var kind: Kind
+        var verbose: Bool = false
 
         enum Kind {
             case generic
@@ -215,7 +216,32 @@ struct ClawdisCLI {
         guard let sub = args.popFirst() else { throw CLIError.help }
         switch sub {
         case "list":
-            return ParsedCLIRequest(request: .nodeList, kind: .generic)
+            var verbose = false
+            while !args.isEmpty {
+                let arg = args.removeFirst()
+                switch arg {
+                case "--verbose":
+                    verbose = true
+                default:
+                    break
+                }
+            }
+            return ParsedCLIRequest(request: .nodeList, kind: .generic, verbose: verbose)
+
+        case "describe":
+            var nodeId: String?
+            while !args.isEmpty {
+                let arg = args.removeFirst()
+                switch arg {
+                case "--node":
+                    nodeId = args.popFirst()
+                default:
+                    if nodeId == nil { nodeId = arg }
+                }
+            }
+            guard let nodeId else { throw CLIError.help }
+            return ParsedCLIRequest(request: .nodeDescribe(nodeId: nodeId), kind: .generic)
+
         case "invoke":
             var nodeId: String?
             var command: String?
@@ -438,11 +464,15 @@ struct ClawdisCLI {
                 struct Node: Decodable {
                     var nodeId: String
                     var displayName: String?
+                    var platform: String?
+                    var version: String?
                     var deviceFamily: String?
                     var modelIdentifier: String?
                     var remoteAddress: String?
                     var connected: Bool
+                    var paired: Bool?
                     var capabilities: [String]?
+                    var commands: [String]?
                 }
 
                 var pairedNodeIds: [String]?
@@ -474,9 +504,74 @@ struct ClawdisCLI {
                     if let ip { parts.append(ip) }
                     if let family { parts.append("device: \(family)") }
                     if let model { parts.append("hw: \(model)") }
+                    let paired = n.paired ?? true
+                    parts.append(paired ? "paired" : "unpaired")
                     parts.append(n.connected ? "connected" : "disconnected")
                     parts.append("caps: \(capsText)")
                     print(parts.joined(separator: " · "))
+
+                    if parsed.verbose {
+                        let platform = (n.platform ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        let version = (n.version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !platform.isEmpty || !version.isEmpty {
+                            let pv = [platform.isEmpty ? nil : platform, version.isEmpty ? nil : version]
+                                .compactMap { $0 }
+                                .joined(separator: " ")
+                            if !pv.isEmpty { print("  platform: \(pv)") }
+                        }
+
+                        let commands = n.commands?.sorted() ?? []
+                        if !commands.isEmpty {
+                            print("  commands: \(commands.joined(separator: ", "))")
+                        }
+                    }
+                }
+                return
+            }
+        }
+
+        if case .nodeDescribe = parsed.request, let payload = response.payload {
+            struct NodeDescribeResult: Decodable {
+                var nodeId: String
+                var displayName: String?
+                var platform: String?
+                var version: String?
+                var deviceFamily: String?
+                var modelIdentifier: String?
+                var remoteIp: String?
+                var caps: [String]?
+                var commands: [String]?
+                var paired: Bool?
+                var connected: Bool?
+            }
+
+            if let decoded = try? JSONDecoder().decode(NodeDescribeResult.self, from: payload) {
+                let nameTrimmed = decoded.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let name = nameTrimmed.isEmpty ? decoded.nodeId : nameTrimmed
+
+                let ipTrimmed = decoded.remoteIp?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let ip = ipTrimmed.isEmpty ? nil : ipTrimmed
+
+                let familyTrimmed = decoded.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let family = familyTrimmed.isEmpty ? nil : familyTrimmed
+                let modelTrimmed = decoded.modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let model = modelTrimmed.isEmpty ? nil : modelTrimmed
+
+                let caps = decoded.caps?.sorted().joined(separator: ",")
+                let capsText = caps.map { "[\($0)]" } ?? "?"
+                let commands = decoded.commands?.sorted() ?? []
+
+                var parts: [String] = ["Node:", name, decoded.nodeId]
+                if let ip { parts.append(ip) }
+                if let family { parts.append("device: \(family)") }
+                if let model { parts.append("hw: \(model)") }
+                if let paired = decoded.paired { parts.append(paired ? "paired" : "unpaired") }
+                if let connected = decoded.connected { parts.append(connected ? "connected" : "disconnected") }
+                parts.append("caps: \(capsText)")
+                print(parts.joined(separator: " · "))
+                if !commands.isEmpty {
+                    print("Commands:")
+                    for c in commands { print("- \(c)") }
                 }
                 return
             }
@@ -558,7 +653,8 @@ struct ClawdisCLI {
               [--session <key>] [--deliver] [--to <E.164>]
 
           Nodes:
-            clawdis-mac node list         # paired + connected nodes (+ capabilities when available)
+            clawdis-mac node list [--verbose]         # paired + connected nodes (+ capabilities when available)
+            clawdis-mac node describe --node <id>
             clawdis-mac node invoke --node <id> --command <name> [--params-json <json>]
 
           Canvas:

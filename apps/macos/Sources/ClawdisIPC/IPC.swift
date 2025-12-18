@@ -128,6 +128,7 @@ public enum Request: Sendable {
     case canvasSnapshot(session: String, outPath: String?)
     case canvasA2UI(session: String, command: CanvasA2UICommand, jsonl: String?)
     case nodeList
+    case nodeDescribe(nodeId: String)
     case nodeInvoke(nodeId: String, command: String, paramsJSON: String?)
     case cameraSnap(facing: CameraFacing?, maxWidth: Int?, quality: Double?, outPath: String?)
     case cameraClip(facing: CameraFacing?, durationMs: Int?, includeAudio: Bool, outPath: String?)
@@ -187,6 +188,7 @@ extension Request: Codable {
         case canvasSnapshot
         case canvasA2UI
         case nodeList
+        case nodeDescribe
         case nodeInvoke
         case cameraSnap
         case cameraClip
@@ -258,6 +260,10 @@ extension Request: Codable {
 
         case .nodeList:
             try container.encode(Kind.nodeList, forKey: .type)
+
+        case let .nodeDescribe(nodeId):
+            try container.encode(Kind.nodeDescribe, forKey: .type)
+            try container.encode(nodeId, forKey: .nodeId)
 
         case let .nodeInvoke(nodeId, command, paramsJSON):
             try container.encode(Kind.nodeInvoke, forKey: .type)
@@ -348,6 +354,10 @@ extension Request: Codable {
 
         case .nodeList:
             self = .nodeList
+
+        case .nodeDescribe:
+            let nodeId = try container.decode(String.self, forKey: .nodeId)
+            self = .nodeDescribe(nodeId: nodeId)
 
         case .nodeInvoke:
             let nodeId = try container.decode(String.self, forKey: .nodeId)
