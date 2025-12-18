@@ -81,7 +81,6 @@ import {
 import { logError, logInfo, logWarn } from "../logger.js";
 import {
   getChildLogger,
-  getLogger,
   getResolvedLoggerSettings,
 } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -479,30 +478,86 @@ function logWs(
   meta?: Record<string, unknown>,
 ) {
   if (!isVerbose()) return;
-  const parts = [`gateway/ws ${direction} ${kind}`];
-  if (meta) {
-    for (const [key, raw] of Object.entries(meta)) {
-      if (raw === undefined) continue;
-      parts.push(`${key}=${formatForLog(raw)}`);
-    }
-  }
-  const raw = parts.join(" ");
-  getLogger().debug(raw);
+  const now = Date.now();
+  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
+  const id = typeof meta?.id === "string" ? meta.id : undefined;
+  const method = typeof meta?.method === "string" ? meta.method : undefined;
+  const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
+  const event = typeof meta?.event === "string" ? meta.event : undefined;
 
+  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
+  if (direction === "in" && kind === "req" && inflightKey) {
+    wsInflightSince.set(inflightKey, now);
+  }
+  const durationMs =
+    direction === "out" && kind === "res" && inflightKey
+      ? (() => {
+          const startedAt = wsInflightSince.get(inflightKey);
+          if (startedAt === undefined) return undefined;
+          wsInflightSince.delete(inflightKey);
+          return now - startedAt;
+        })()
+      : undefined;
+
+  const dirArrow = direction === "in" ? "←" : "→";
   const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
-  const prefix = `${chalk.gray("gateway/ws")} ${dirColor(direction)} ${chalk.bold(kind)}`;
-  const coloredMeta: string[] = [];
+  const prefix = `${chalk.gray("gateway/ws")} ${dirColor(dirArrow)} ${chalk.bold(kind)}`;
+
+  const headline =
+    (kind === "req" || kind === "res") && method
+      ? chalk.bold(method)
+      : kind === "event" && event
+        ? chalk.bold(event)
+        : undefined;
+
+  const statusToken =
+    kind === "res" && ok !== undefined
+      ? ok
+        ? chalk.greenBright("✓")
+        : chalk.redBright("✗")
+      : undefined;
+
+  const durationToken =
+    typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
+
+  const restMeta: string[] = [];
   if (meta) {
     for (const [key, value] of Object.entries(meta)) {
       if (value === undefined) continue;
-      coloredMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
+      if (key === "connId" || key === "id") continue;
+      if (key === "method" || key === "ok") continue;
+      if (key === "event") continue;
+      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
     }
   }
-  const line = coloredMeta.length
-    ? `${prefix} ${coloredMeta.join(" ")}`
-    : prefix;
-  console.log(line);
+
+  const trailing: string[] = [];
+  if (connId) trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
+  if (id) trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
+
+  const tokens = [
+    prefix,
+    statusToken,
+    headline,
+    durationToken,
+    ...restMeta,
+    ...trailing,
+  ].filter((t): t is string => Boolean(t));
+
+  console.log(tokens.join(" "));
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function shortId(value: string): string {
+  const s = value.trim();
+  if (UUID_RE.test(s)) return `${s.slice(0, 8)}…${s.slice(-4)}`;
+  if (s.length <= 24) return s;
+  return `${s.slice(0, 12)}…${s.slice(-4)}`;
+}
+
+const wsInflightSince = new Map<string, number>();
 
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
