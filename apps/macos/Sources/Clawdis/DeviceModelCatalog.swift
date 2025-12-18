@@ -12,9 +12,9 @@ enum DeviceModelCatalog {
         let family = (deviceFamily ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let model = (modelIdentifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let friendlyName = model.isEmpty ? nil : modelIdentifierToName[model]
-        let symbol = symbolFor(modelIdentifier: model, friendlyName: friendlyName)
-            ?? fallbackSymbol(for: family, modelIdentifier: model)
+        let friendlyName = model.isEmpty ? nil : self.modelIdentifierToName[model]
+        let symbol = self.symbolFor(modelIdentifier: model, friendlyName: friendlyName)
+            ?? self.fallbackSymbol(for: family, modelIdentifier: model)
 
         let title = if let friendlyName, !friendlyName.isEmpty {
             friendlyName
@@ -47,7 +47,9 @@ enum DeviceModelCatalog {
         if lower.hasPrefix("macbook") || lower.hasPrefix("macbookpro") || lower.hasPrefix("macbookair") {
             return "laptopcomputer"
         }
-        if lower.hasPrefix("imac") || lower.hasPrefix("macmini") || lower.hasPrefix("macpro") || lower.hasPrefix("macstudio") {
+        if lower.hasPrefix("imac") || lower.hasPrefix("macmini") || lower.hasPrefix("macpro") || lower
+            .hasPrefix("macstudio")
+        {
             return "desktopcomputer"
         }
 
@@ -84,8 +86,12 @@ enum DeviceModelCatalog {
 
     private static func loadModelIdentifierToName() -> [String: String] {
         var combined: [String: String] = [:]
-        combined.merge(loadMapping(resourceName: "ios-device-identifiers"), uniquingKeysWith: { current, _ in current })
-        combined.merge(loadMapping(resourceName: "mac-device-identifiers"), uniquingKeysWith: { current, _ in current })
+        combined.merge(
+            self.loadMapping(resourceName: "ios-device-identifiers"),
+            uniquingKeysWith: { current, _ in current })
+        combined.merge(
+            self.loadMapping(resourceName: "mac-device-identifiers"),
+            uniquingKeysWith: { current, _ in current })
         return combined
     }
 
@@ -128,10 +134,10 @@ enum DeviceModelCatalog {
 
         var normalizedName: String? {
             switch self {
-            case .string(let s):
+            case let .string(s):
                 let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : trimmed
-            case .stringArray(let arr):
+            case let .stringArray(arr):
                 let values = arr
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }

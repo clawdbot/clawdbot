@@ -31,4 +31,3 @@ struct GatewayDecodingError: LocalizedError, Sendable {
 
     var errorDescription: String? { "\(self.method): \(self.message)" }
 }
-

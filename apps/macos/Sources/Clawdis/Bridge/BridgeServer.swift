@@ -74,7 +74,7 @@ actor BridgeServer {
     }
 
     private func handle(connection: NWConnection) async {
-            let handler = BridgeConnectionHandler(connection: connection, logger: self.logger)
+        let handler = BridgeConnectionHandler(connection: connection, logger: self.logger)
         await handler.run(
             resolveAuth: { [weak self] hello in
                 await self?.authorize(hello: hello) ?? .error(code: "UNAVAILABLE", message: "bridge unavailable")

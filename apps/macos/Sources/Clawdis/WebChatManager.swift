@@ -102,4 +102,3 @@ final class WebChatManager {
         // Keep panel controller cached so reopening doesn't re-bootstrap.
     }
 }
-

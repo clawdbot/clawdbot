@@ -42,11 +42,11 @@ actor GatewayConnection {
     typealias Config = (url: URL, token: String?)
 
     enum Method: String, Sendable {
-        case agent = "agent"
-        case status = "status"
+        case agent
+        case status
         case setHeartbeats = "set-heartbeats"
         case systemEvent = "system-event"
-        case health = "health"
+        case health
         case chatHistory = "chat.history"
         case chatSend = "chat.send"
         case chatAbort = "chat.abort"

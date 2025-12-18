@@ -31,20 +31,20 @@ struct ConfigSettings: View {
 
     var body: some View {
         ScrollView { self.content }
-        .onChange(of: self.modelCatalogPath) { _, _ in
-            Task { await self.loadModels() }
-        }
-        .onChange(of: self.modelCatalogReloadBump) { _, _ in
-            Task { await self.loadModels() }
-        }
-        .task {
-            guard !self.hasLoaded else { return }
-            guard !self.isPreview else { return }
-            self.hasLoaded = true
-            self.loadConfig()
-            await self.loadModels()
-            self.allowAutosave = true
-        }
+            .onChange(of: self.modelCatalogPath) { _, _ in
+                Task { await self.loadModels() }
+            }
+            .onChange(of: self.modelCatalogReloadBump) { _, _ in
+                Task { await self.loadModels() }
+            }
+            .task {
+                guard !self.hasLoaded else { return }
+                guard !self.isPreview else { return }
+                self.hasLoaded = true
+                self.loadConfig()
+                await self.loadModels()
+                self.allowAutosave = true
+            }
     }
 
     private var content: some View {

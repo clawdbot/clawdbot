@@ -237,8 +237,13 @@ enum ControlRequestHandler {
         logger.info("canvas show start session=\(session, privacy: .public) path=\(path ?? "", privacy: .public)")
         do {
             logger.info("canvas show awaiting CanvasManager")
-            let res = try await CanvasManager.shared.showDetailed(sessionKey: session, target: path, placement: placement)
-            logger.info("canvas show done dir=\(res.directory, privacy: .public) status=\(String(describing: res.status), privacy: .public)")
+            let res = try await CanvasManager.shared.showDetailed(
+                sessionKey: session,
+                target: path,
+                placement: placement)
+            logger
+                .info(
+                    "canvas show done dir=\(res.directory, privacy: .public) status=\(String(describing: res.status), privacy: .public)")
             let payload = try? JSONEncoder().encode(res)
             return Response(ok: true, message: res.directory, payload: payload)
         } catch {
@@ -277,17 +282,21 @@ enum ControlRequestHandler {
         }
     }
 
-    private static func handleCanvasA2UI(session: String, command: CanvasA2UICommand, jsonl: String?) async -> Response {
+    private static func handleCanvasA2UI(
+        session: String,
+        command: CanvasA2UICommand,
+        jsonl: String?) async -> Response
+    {
         guard self.canvasEnabled() else { return Response(ok: false, message: "Canvas disabled by user") }
         do {
             // Ensure the Canvas is visible without forcing a navigation/reload.
             _ = try await CanvasManager.shared.show(sessionKey: session, path: nil)
 
             // Wait for the in-page A2UI bridge. If it doesn't appear, force-load the bundled A2UI shell once.
-            var ready = await Self.waitForCanvasA2UI(session: session, requireBuiltinPath: false, timeoutMs: 2_000)
+            var ready = await Self.waitForCanvasA2UI(session: session, requireBuiltinPath: false, timeoutMs: 2000)
             if !ready {
                 _ = try await CanvasManager.shared.show(sessionKey: session, path: "/__clawdis__/a2ui/")
-                ready = await Self.waitForCanvasA2UI(session: session, requireBuiltinPath: true, timeoutMs: 5_000)
+                ready = await Self.waitForCanvasA2UI(session: session, requireBuiltinPath: true, timeoutMs: 5000)
             }
 
             guard ready else { return Response(ok: false, message: "A2UI not ready") }
@@ -397,7 +406,8 @@ enum ControlRequestHandler {
                 let found = dict.keys.sorted().joined(separator: ", ")
                 throw NSError(domain: "A2UI", code: 3, userInfo: [
                     NSLocalizedDescriptionKey: """
-                    A2UI JSONL line \(item.lineNumber): expected exactly one of \(allowed.sorted().joined(separator: ", ")); found: \(found)
+                    A2UI JSONL line \(item.lineNumber): expected exactly one of \(allowed.sorted()
+                        .joined(separator: ", ")); found: \(found)
                     """,
                 ])
             }
@@ -441,7 +451,7 @@ enum ControlRequestHandler {
             let data = try await GatewayConnection.shared.request(
                 method: "node.list",
                 params: [:],
-                timeoutMs: 10_000)
+                timeoutMs: 10000)
             let payload = try JSONDecoder().decode(GatewayNodeListPayload.self, from: data)
             let result = self.buildNodeListResult(payload: payload)
 
@@ -460,7 +470,7 @@ enum ControlRequestHandler {
             let data = try await GatewayConnection.shared.request(
                 method: "node.describe",
                 params: ["nodeId": AnyCodable(nodeId)],
-                timeoutMs: 10_000)
+                timeoutMs: 10000)
             return Response(ok: true, payload: data)
         } catch {
             return Response(ok: false, message: error.localizedDescription)
@@ -526,7 +536,7 @@ enum ControlRequestHandler {
             let data = try await GatewayConnection.shared.request(
                 method: "node.invoke",
                 params: params,
-                timeoutMs: 30_000)
+                timeoutMs: 30000)
             return Response(ok: true, payload: data)
         } catch {
             logger.error("node invoke failed: \(error.localizedDescription, privacy: .public)")

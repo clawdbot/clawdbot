@@ -26,7 +26,11 @@ final class CanvasManager {
         try self.showDetailed(sessionKey: sessionKey, target: path, placement: placement).directory
     }
 
-    func showDetailed(sessionKey: String, target: String? = nil, placement: CanvasPlacement? = nil) throws -> CanvasShowResult {
+    func showDetailed(
+        sessionKey: String,
+        target: String? = nil,
+        placement: CanvasPlacement? = nil) throws -> CanvasShowResult
+    {
         Self.logger.debug(
             "showDetailed start session=\(sessionKey, privacy: .public) target=\(target ?? "", privacy: .public) placement=\(placement != nil)")
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
@@ -177,7 +181,8 @@ final class CanvasManager {
     private static func localStatus(sessionDir: URL, target: String) -> CanvasShowStatus {
         let fm = FileManager.default
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? trimmed
+        let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
+            .map(String.init) ?? trimmed
         var path = withoutQuery
         if path.hasPrefix("/") { path.removeFirst() }
         path = path.removingPercentEncoding ?? path

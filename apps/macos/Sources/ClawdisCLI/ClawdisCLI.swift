@@ -259,6 +259,7 @@ struct ClawdisCLI {
             return ParsedCLIRequest(
                 request: .nodeInvoke(nodeId: nodeId, command: command, paramsJSON: paramsJSON),
                 kind: .generic)
+
         default:
             throw CLIError.help
         }
@@ -450,10 +451,13 @@ struct ClawdisCLI {
             if let message = response.message, !message.isEmpty {
                 FileHandle.standardOutput.write(Data((message + "\n").utf8))
             }
-            if let payload = response.payload, let info = try? JSONDecoder().decode(CanvasShowResult.self, from: payload) {
-                FileHandle.standardOutput.write(Data(("STATUS:\(info.status.rawValue)\n").utf8))
+            if let payload = response.payload, let info = try? JSONDecoder().decode(
+                CanvasShowResult.self,
+                from: payload)
+            {
+                FileHandle.standardOutput.write(Data("STATUS:\(info.status.rawValue)\n".utf8))
                 if let url = info.url, !url.isEmpty {
-                    FileHandle.standardOutput.write(Data(("URL:\(url)\n").utf8))
+                    FileHandle.standardOutput.write(Data("URL:\(url)\n".utf8))
                 }
             }
             return
@@ -515,7 +519,7 @@ struct ClawdisCLI {
                         let version = (n.version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                         if !platform.isEmpty || !version.isEmpty {
                             let pv = [platform.isEmpty ? nil : platform, version.isEmpty ? nil : version]
-                                .compactMap { $0 }
+                                .compactMap(\.self)
                                 .joined(separator: " ")
                             if !pv.isEmpty { print("  platform: \(pv)") }
                         }
@@ -571,7 +575,9 @@ struct ClawdisCLI {
                 print(parts.joined(separator: " · "))
                 if !commands.isEmpty {
                     print("Commands:")
-                    for c in commands { print("- \(c)") }
+                    for c in commands {
+                        print("- \(c)")
+                    }
                 }
                 return
             }

@@ -25,7 +25,7 @@ struct MacGatewayChatTransport: ClawdisChatTransport, Sendable {
                 "sessionKey": AnyCodable(sessionKey),
                 "runId": AnyCodable(runId),
             ],
-            timeoutMs: 10_000)
+            timeoutMs: 10000)
     }
 
     func listSessions(limit: Int?) async throws -> ClawdisChatSessionsListResponse {
@@ -39,7 +39,7 @@ struct MacGatewayChatTransport: ClawdisChatTransport, Sendable {
         let data = try await GatewayConnection.shared.request(
             method: "sessions.list",
             params: params,
-            timeoutMs: 15_000)
+            timeoutMs: 15000)
         return try JSONDecoder().decode(ClawdisChatSessionsListResponse.self, from: data)
     }
 

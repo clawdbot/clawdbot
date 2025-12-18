@@ -51,6 +51,14 @@
               "minLength": 1,
               "type": "string"
             },
+            "deviceFamily": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "modelIdentifier": {
+              "minLength": 1,
+              "type": "string"
+            },
             "mode": {
               "minLength": 1,
               "type": "string"
@@ -182,6 +190,14 @@
                     "type": "string"
                   },
                   "platform": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "deviceFamily": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "modelIdentifier": {
                     "minLength": 1,
                     "type": "string"
                   },
@@ -538,6 +554,14 @@
           "minLength": 1,
           "type": "string"
         },
+        "deviceFamily": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "modelIdentifier": {
+          "minLength": 1,
+          "type": "string"
+        },
         "mode": {
           "minLength": 1,
           "type": "string"
@@ -614,6 +638,14 @@
                 "type": "string"
               },
               "platform": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "deviceFamily": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "modelIdentifier": {
                 "minLength": 1,
                 "type": "string"
               },
@@ -860,6 +892,28 @@
           "minLength": 1,
           "type": "string"
         },
+        "deviceFamily": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "modelIdentifier": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "caps": {
+          "type": "array",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
         "remoteIp": {
           "minLength": 1,
           "type": "string"
@@ -922,6 +976,19 @@
       "additionalProperties": false,
       "type": "object",
       "properties": {}
+    },
+    "NodeDescribeParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodeId"
+      ]
     },
     "NodeInvokeParams": {
       "additionalProperties": false,
@@ -1773,7 +1840,7 @@
         },
         "limit": {
           "minimum": 1,
-          "maximum": 500,
+          "maximum": 1000,
           "type": "integer"
         }
       },
@@ -1818,6 +1885,24 @@
         "idempotencyKey"
       ]
     },
+    "ChatAbortParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "sessionKey": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "runId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionKey",
+        "runId"
+      ]
+    },
     "ChatEvent": {
       "additionalProperties": false,
       "type": "object",
@@ -1842,6 +1927,10 @@
             },
             {
               "const": "final",
+              "type": "string"
+            },
+            {
+              "const": "aborted",
               "type": "string"
             },
             {

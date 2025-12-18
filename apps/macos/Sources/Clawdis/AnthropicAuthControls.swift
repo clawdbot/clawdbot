@@ -149,4 +149,3 @@ struct AnthropicAuthControls: View {
         }
     }
 }
-

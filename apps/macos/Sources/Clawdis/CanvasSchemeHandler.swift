@@ -222,11 +222,10 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             || trimmed.hasPrefix(Self.builtinPrefix + "/")
         else { return nil }
 
-        let relative: String
-        if trimmed == Self.builtinPrefix || trimmed == Self.builtinPrefix + "/" {
-            relative = "index.html"
+        let relative = if trimmed == Self.builtinPrefix || trimmed == Self.builtinPrefix + "/" {
+            "index.html"
         } else {
-            relative = String(trimmed.dropFirst((Self.builtinPrefix + "/").count))
+            String(trimmed.dropFirst((Self.builtinPrefix + "/").count))
         }
 
         if relative.isEmpty { return self.html("Not Found", title: "Canvas: 404") }

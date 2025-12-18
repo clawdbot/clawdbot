@@ -420,6 +420,10 @@ public struct NodePairRequestParams: Codable {
     public let displayname: String?
     public let platform: String?
     public let version: String?
+    public let devicefamily: String?
+    public let modelidentifier: String?
+    public let caps: [String]?
+    public let commands: [String]?
     public let remoteip: String?
 
     public init(
@@ -427,12 +431,20 @@ public struct NodePairRequestParams: Codable {
         displayname: String?,
         platform: String?,
         version: String?,
+        devicefamily: String?,
+        modelidentifier: String?,
+        caps: [String]?,
+        commands: [String]?,
         remoteip: String?
     ) {
         self.nodeid = nodeid
         self.displayname = displayname
         self.platform = platform
         self.version = version
+        self.devicefamily = devicefamily
+        self.modelidentifier = modelidentifier
+        self.caps = caps
+        self.commands = commands
         self.remoteip = remoteip
     }
     private enum CodingKeys: String, CodingKey {
@@ -440,6 +452,10 @@ public struct NodePairRequestParams: Codable {
         case displayname = "displayName"
         case platform
         case version
+        case devicefamily = "deviceFamily"
+        case modelidentifier = "modelIdentifier"
+        case caps
+        case commands
         case remoteip = "remoteIp"
     }
 }
@@ -491,6 +507,19 @@ public struct NodePairVerifyParams: Codable {
 }
 
 public struct NodeListParams: Codable {
+}
+
+public struct NodeDescribeParams: Codable {
+    public let nodeid: String
+
+    public init(
+        nodeid: String
+    ) {
+        self.nodeid = nodeid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+    }
 }
 
 public struct NodeInvokeParams: Codable {
@@ -834,6 +863,23 @@ public struct ChatSendParams: Codable {
         case attachments
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct ChatAbortParams: Codable {
+    public let sessionkey: String
+    public let runid: String
+
+    public init(
+        sessionkey: String,
+        runid: String
+    ) {
+        self.sessionkey = sessionkey
+        self.runid = runid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case runid = "runId"
     }
 }
 

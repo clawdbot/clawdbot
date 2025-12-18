@@ -2419,6 +2419,11 @@ describe("gateway server", () => {
       });
     });
 
+    const sendResP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "send-mismatch-1",
+      10_000,
+    );
     ws.send(
       JSON.stringify({
         type: "req",
@@ -2435,6 +2440,11 @@ describe("gateway server", () => {
 
     await agentStartedP;
 
+    const abortResP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "abort-mismatch-1",
+      10_000,
+    );
     ws.send(
       JSON.stringify({
         type: "req",
@@ -2444,14 +2454,15 @@ describe("gateway server", () => {
       }),
     );
 
-    const abortRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "abort-mismatch-1",
-      10_000,
-    );
+    const abortRes = await abortResP;
     expect(abortRes.ok).toBe(false);
     expect(abortRes.error?.code).toBe("INVALID_REQUEST");
 
+    const abortRes2P = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "abort-mismatch-2",
+      10_000,
+    );
     ws.send(
       JSON.stringify({
         type: "req",
@@ -2461,23 +2472,15 @@ describe("gateway server", () => {
       }),
     );
 
-    const abortRes2 = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "abort-mismatch-2",
-      10_000,
-    );
+    const abortRes2 = await abortRes2P;
     expect(abortRes2.ok).toBe(true);
 
-    const sendRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "send-mismatch-1",
-      10_000,
-    );
+    const sendRes = await sendResP;
     expect(sendRes.ok).toBe(true);
 
     ws.close();
     await server.close();
-  });
+  }, 15_000);
 
   test("chat.abort is a no-op after chat.send completes", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));

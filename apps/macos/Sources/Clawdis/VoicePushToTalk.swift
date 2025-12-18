@@ -18,8 +18,8 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
 
     init(
         beginAction: @escaping @Sendable () async -> Void = { await VoicePushToTalk.shared.begin() },
-        endAction: @escaping @Sendable () async -> Void = { await VoicePushToTalk.shared.end() }
-    ) {
+        endAction: @escaping @Sendable () async -> Void = { await VoicePushToTalk.shared.end() })
+    {
         self.beginAction = beginAction
         self.endAction = endAction
     }

@@ -160,7 +160,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                 // Only auto-reload when we are showing local canvas content.
                 guard webView.url?.scheme == CanvasScheme.scheme else { return }
 
-                // Avoid reloading the built-in A2UI shell due to filesystem noise (it does not depend on session files).
+                // Avoid reloading the built-in A2UI shell due to filesystem noise (it does not depend on session
+                // files).
                 let path = webView.url?.path ?? ""
                 if path.hasPrefix("/__clawdis__/a2ui") { return }
                 if path == "/" || path.isEmpty {
@@ -200,7 +201,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     @MainActor deinit {
-        self.webView.configuration.userContentController.removeScriptMessageHandler(forName: CanvasA2UIActionMessageHandler.messageName)
+        self.webView.configuration.userContentController
+            .removeScriptMessageHandler(forName: CanvasA2UIActionMessageHandler.messageName)
         self.watcher.stop()
     }
 
@@ -255,10 +257,10 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         if trimmed.hasPrefix("/") {
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
-            let url = URL(fileURLWithPath: trimmed)
-            canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
-            self.loadFile(url)
-            return
+                let url = URL(fileURLWithPath: trimmed)
+                canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
+                self.loadFile(url)
+                return
             }
         }
 
@@ -344,17 +346,17 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     private static func makeWindow(for presentation: CanvasPresentation, contentView: NSView) -> NSWindow {
         switch presentation {
         case .window:
-	            let window = NSWindow(
-	                contentRect: NSRect(origin: .zero, size: CanvasLayout.windowSize),
-	                styleMask: [.titled, .closable, .resizable, .miniaturizable],
-	                backing: .buffered,
-	                defer: false)
-	            window.title = "Clawdis Canvas"
-	            window.isReleasedWhenClosed = false
-	            window.contentView = contentView
-	            window.center()
-	            window.minSize = NSSize(width: 880, height: 680)
-	            return window
+            let window = NSWindow(
+                contentRect: NSRect(origin: .zero, size: CanvasLayout.windowSize),
+                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                backing: .buffered,
+                defer: false)
+            window.title = "Clawdis Canvas"
+            window.isReleasedWhenClosed = false
+            window.contentView = contentView
+            window.center()
+            window.minSize = NSSize(width: 880, height: 680)
+            return window
 
         case .panel:
             let panel = CanvasPanel(
@@ -501,7 +503,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             if self.webView.url?.scheme == CanvasScheme.scheme {
                 Task { await DeepLinkHandler.shared.handle(url: url) }
             } else {
-                canvasWindowLogger.debug("ignoring deep link from non-canvas page \(url.absoluteString, privacy: .public)")
+                canvasWindowLogger
+                    .debug("ignoring deep link from non-canvas page \(url.absoluteString, privacy: .public)")
             }
             decisionHandler(.cancel)
             return
@@ -635,12 +638,14 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
         guard let name = userAction["name"] as? String, !name.isEmpty else { return }
         let actionId =
             (userAction["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            ?? UUID().uuidString
+                ?? UUID().uuidString
 
         canvasWindowLogger.info("A2UI action \(name, privacy: .public) session=\(self.sessionKey, privacy: .public)")
 
-        let surfaceId = (userAction["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "main"
-        let sourceComponentId = (userAction["sourceComponentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "-"
+        let surfaceId = (userAction["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty ?? "main"
+        let sourceComponentId = (userAction["sourceComponentId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "-"
         let host = Self.sanitizeTagValue(InstanceIdentity.displayName)
         let instanceId = InstanceIdentity.instanceId.lowercased()
         let contextJSON = Self.compactJSON(userAction["context"])

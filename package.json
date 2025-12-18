@@ -38,6 +38,7 @@
   "dependencies": {
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
+    "@mariozechner/pi-agent-core": "^0.21.0",
     "@mariozechner/pi-ai": "^0.21.0",
     "@mariozechner/pi-coding-agent": "^0.21.0",
     "@sinclair/typebox": "^0.34.41",

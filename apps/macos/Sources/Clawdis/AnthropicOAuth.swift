@@ -183,7 +183,7 @@ enum PiOAuthStore {
     static func oauthDir() -> URL {
         if let override = ProcessInfo.processInfo.environment[self.piAgentDirEnv]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-           !override.isEmpty
+            !override.isEmpty
         {
             let expanded = NSString(string: override).expandingTildeInPath
             return URL(fileURLWithPath: expanded, isDirectory: true)
