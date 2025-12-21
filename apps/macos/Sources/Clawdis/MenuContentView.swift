@@ -42,9 +42,6 @@ struct MenuContent: View {
                 self.voiceWakeMicMenu
             }
             Divider()
-            Text("Start")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Button("Open Chat") {
                 Task { @MainActor in
                     let sessionKey = await WebChatManager.shared.preferredSessionKey()
