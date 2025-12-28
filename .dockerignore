@@ -1,0 +1,57 @@
+# Git
+.git
+.gitignore
+.github
+
+# Dependencies (will be installed fresh)
+node_modules
+
+# Build output (will be built in container)
+dist
+
+# macOS/iOS/Android apps (not needed for gateway)
+apps/
+*.xcodeproj
+*.xcworkspace
+Podfile*
+*.ipa
+*.apk
+
+# Development files
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Test artifacts
+coverage
+.nyc_output
+*.test.ts
+*.e2e.test.ts
+__tests__
+
+# Documentation (optional, comment out to include)
+docs/
+*.md
+!README.md
+
+# Scripts not needed in container
+scripts/restart-mac.sh
+scripts/clawlog.sh
+scripts/package-mac-app.sh
+
+# Temporary files
+.DS_Store
+Thumbs.db
+
+# Local config (should be mounted as volume)
+~/.clawdis
+~/clawd

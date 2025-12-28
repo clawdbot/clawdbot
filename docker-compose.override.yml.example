@@ -1,0 +1,50 @@
+# Docker Compose Override Example
+# Copy to docker-compose.override.yml and customize
+#
+# This file is automatically merged with docker-compose.yml
+
+services:
+  gateway:
+    # Custom environment variables
+    environment:
+      # Required: Anthropic API key
+      - ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+      # Optional: Gateway authentication token
+      - CLAWDIS_GATEWAY_TOKEN=your-secret-token
+
+      # Optional: Telegram bot
+      - TELEGRAM_BOT_TOKEN=123456:ABC-your-telegram-token
+
+      # Optional: Discord bot
+      - DISCORD_BOT_TOKEN=your-discord-token
+
+      # Debug logging
+      - CLAWDIS_LOG_LEVEL=debug
+
+    # Mount custom config file
+    volumes:
+      - ./my-config.json:/home/clawdis/.clawdis/clawdis.json:ro
+
+    # Open bridge port for iOS/Android nodes
+    ports:
+      - "18789:18789"
+      - "18790:18790"
+
+  # Optional: Tailscale sidecar for secure remote access
+  # tailscale:
+  #   image: tailscale/tailscale:latest
+  #   container_name: clawdis-tailscale
+  #   hostname: clawdis
+  #   environment:
+  #     - TS_AUTHKEY=${TS_AUTHKEY}
+  #     - TS_STATE_DIR=/var/lib/tailscale
+  #     - TS_USERSPACE=true
+  #   volumes:
+  #     - tailscale-state:/var/lib/tailscale
+  #   cap_add:
+  #     - NET_ADMIN
+  #   network_mode: service:gateway
+
+# volumes:
+#   tailscale-state:

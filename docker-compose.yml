@@ -1,0 +1,69 @@
+# Clawdis Docker Compose
+# Usage:
+#   docker-compose up -d          # Start gateway in background
+#   docker-compose logs -f        # Follow logs
+#   docker-compose down           # Stop and remove containers
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clawdis-gateway
+    restart: unless-stopped
+
+    # Port mapping
+    ports:
+      - "18789:18789"   # Gateway (WebSocket + HTTP)
+      # - "18790:18790" # Bridge (optional, for iOS/Android nodes)
+
+    # Volume mounts for persistence
+    volumes:
+      # WhatsApp/Telegram/Discord credentials
+      - ${HOME}/.clawdis/credentials:/home/clawdis/.clawdis/credentials
+
+      # Session storage
+      - ${HOME}/.clawdis/sessions:/home/clawdis/.clawdis/sessions
+
+      # Agent workspace (SOUL.md, AGENTS.md, etc.)
+      - ${HOME}/clawd:/home/clawdis/clawd
+
+      # Optional: config file (or use environment variables)
+      # - ${HOME}/.clawdis/clawdis.json:/home/clawdis/.clawdis/clawdis.json:ro
+
+    # Environment variables
+    environment:
+      - NODE_ENV=production
+      # Gateway token for authentication (recommended for non-loopback)
+      - CLAWDIS_GATEWAY_TOKEN=${CLAWDIS_GATEWAY_TOKEN:-}
+      # Anthropic API key (or set in config file)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Optional: Telegram bot token
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # Optional: Discord bot token
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      # Logging level
+      - CLAWDIS_LOG_LEVEL=${CLAWDIS_LOG_LEVEL:-info}
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits (optional, adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+# Optional networks (uncomment if using with other services)
+# networks:
+#   default:
+#     name: clawdis-network
