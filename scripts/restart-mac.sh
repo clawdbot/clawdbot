@@ -10,6 +10,11 @@ DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Clawdis"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Clawdis"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Clawdis"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.steipete.clawdis.plist"
+LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
+LOCK_DIR="${TMPDIR:-/tmp}/clawdis-restart-${LOCK_KEY}"
+LOCK_PID_FILE="${LOCK_DIR}/pid"
+WAIT_FOR_LOCK=0
+LOG_PATH="${CLAWDIS_RESTART_LOG:-/tmp/clawdis-restart.log}"
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -24,6 +29,60 @@ run_step() {
     fail "${label} failed"
   fi
 }
+
+cleanup() {
+  if [[ -d "${LOCK_DIR}" ]]; then
+    rm -rf "${LOCK_DIR}"
+  fi
+}
+
+acquire_lock() {
+  while true; do
+    if mkdir "${LOCK_DIR}" 2>/dev/null; then
+      echo "$$" > "${LOCK_PID_FILE}"
+      return 0
+    fi
+
+    local existing_pid=""
+    if [[ -f "${LOCK_PID_FILE}" ]]; then
+      existing_pid="$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)"
+    fi
+
+    if [[ -n "${existing_pid}" ]] && kill -0 "${existing_pid}" 2>/dev/null; then
+      if [[ "${WAIT_FOR_LOCK}" == "1" ]]; then
+        log "==> Another restart is running (pid ${existing_pid}); waiting..."
+        while kill -0 "${existing_pid}" 2>/dev/null; do
+          sleep 1
+        done
+        continue
+      fi
+      log "==> Another restart is running (pid ${existing_pid}); re-run with --wait."
+      exit 0
+    fi
+
+    rm -rf "${LOCK_DIR}"
+  done
+}
+
+trap cleanup EXIT INT TERM
+
+for arg in "$@"; do
+  case "${arg}" in
+    --wait|-w) WAIT_FOR_LOCK=1 ;;
+    --help|-h)
+      log "Usage: $(basename "$0") [--wait]"
+      exit 0
+      ;;
+    *) ;;
+  esac
+done
+
+mkdir -p "$(dirname "$LOG_PATH")"
+rm -f "$LOG_PATH"
+exec > >(tee "$LOG_PATH") 2>&1
+log "==> Log: ${LOG_PATH}"
+
+acquire_lock
 
 kill_all_clawdis() {
   for _ in {1..10}; do
@@ -102,5 +161,5 @@ sleep 1.5
 if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
   log "OK: Clawdis is running."
 else
-  fail "App exited immediately. Check /tmp/clawdis.log or Console.app (User Reports)."
+  fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."
 fi
