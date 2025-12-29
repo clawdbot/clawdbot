@@ -42,3 +42,6 @@ apps/ios/*.dSYM.zip
 
 # provisioning profiles (local)
 apps/ios/*.mobileprovision
+
+# Qoder IDE artifacts
+.qoder/
