@@ -41,6 +41,20 @@ export type UsageRateWindow = {
   estimated?: boolean;
 };
 
+export type UsageUnifiedWindow = {
+  utilization: number;
+  usedPercent: number;
+  resetAt: string | null;
+  status: string | null;
+};
+
+export type UsageUnifiedLimits = {
+  fiveHour: UsageUnifiedWindow | null;
+  sevenDay: UsageUnifiedWindow | null;
+  fallback: string | null;
+  fallbackPercentage: number | null;
+};
+
 export type UsageWarning = {
   level: "info" | "warn" | "error";
   message: string;
@@ -63,17 +77,19 @@ export type UsageSummary = {
   };
   rateLimits: {
     model: string;
+    mode: "standard" | "unified";
     perMinute: {
       source?: "estimate" | "headers";
       input: UsageRateWindow;
       output: UsageRateWindow;
-    };
+    } | null;
     daily: {
       tier: string | null;
       input: UsageRateWindow | null;
       output: UsageRateWindow | null;
       estimated: boolean;
-    };
+    } | null;
+    unified: UsageUnifiedLimits | null;
   };
   warnings: UsageWarning[];
 };
@@ -232,6 +248,9 @@ const percentOf = (used: number, limit: number | null): number | null => {
   return Math.round((used / limit) * 1000) / 10;
 };
 
+const percentFromUtilization = (utilization: number): number =>
+  Math.round(utilization * 1000) / 10;
+
 const nextMinuteReset = (now: Date) => {
   const reset = new Date(now);
   reset.setSeconds(0, 0);
@@ -291,6 +310,31 @@ const buildHeaderWindow = (params: {
     resetDescription:
       resetAtMs && resetAtMs > nowMs ? "rate limit reset" : "next minute",
     estimated: limit === null,
+  };
+};
+
+const buildUnifiedWindow = (window?: {
+  utilization?: number;
+  resetAt?: string;
+  status?: string;
+}): UsageUnifiedWindow | null => {
+  const utilization = window?.utilization;
+  if (typeof utilization !== "number" || !Number.isFinite(utilization)) {
+    return null;
+  }
+  const resetAt =
+    typeof window?.resetAt === "string" && window.resetAt.trim()
+      ? window.resetAt
+      : null;
+  const status =
+    typeof window?.status === "string" && window.status.trim()
+      ? window.status
+      : null;
+  return {
+    utilization,
+    usedPercent: percentFromUtilization(utilization),
+    resetAt,
+    status,
   };
 };
 
@@ -441,146 +485,212 @@ export async function collectUsageSummary(
   }
 
   const rateSnapshot = await readAnthropicRateLimitSnapshot();
-  const tokensLimit = asFiniteNumber(rateSnapshot?.tokens?.limit);
-  const tokensRemaining = asFiniteNumber(rateSnapshot?.tokens?.remaining);
-  const tokensResetAt =
-    typeof rateSnapshot?.tokens?.resetAt === "string"
-      ? rateSnapshot.tokens.resetAt
-      : undefined;
-  const requestsLimit = asFiniteNumber(rateSnapshot?.requests?.limit);
-  const requestsRemaining = asFiniteNumber(rateSnapshot?.requests?.remaining);
-  const requestsResetAt =
-    typeof rateSnapshot?.requests?.resetAt === "string"
-      ? rateSnapshot.requests.resetAt
-      : undefined;
-  const perMinuteSource = tokensLimit !== undefined ? "headers" : "estimate";
+  const isUnified = rateSnapshot?.type === "unified";
+  let rateLimitMode: UsageSummary["rateLimits"]["mode"] = "standard";
+  let perMinute: UsageSummary["rateLimits"]["perMinute"] = null;
+  let daily: UsageSummary["rateLimits"]["daily"] = null;
+  let unified: UsageSummary["rateLimits"]["unified"] = null;
 
-  const tierFromEnv =
-    process.env.CLAWDIS_ANTHROPIC_TIER ??
-    process.env.ANTHROPIC_TIER ??
-    "tier-4";
-  const tier = normalizeTier(options.tier ?? tierFromEnv);
-  const maxDailyInput =
-    CLAUDE_OPUS_LIMITS.inputTokensPerMinute * 60 * 24;
-  const maxDailyOutput =
-    CLAUDE_OPUS_LIMITS.outputTokensPerMinute * 60 * 24;
-  const multiplier = tier ? DAILY_TIER_MULTIPLIERS[tier] ?? null : null;
-  const dailyInputLimit =
-    options.dailyInputLimit ??
-    (multiplier ? Math.round(maxDailyInput * multiplier) : null);
-  const dailyOutputLimit =
-    options.dailyOutputLimit ??
-    (multiplier ? Math.round(maxDailyOutput * multiplier) : null);
-  const dailyInputEstimated = options.dailyInputLimit == null;
-  const dailyOutputEstimated = options.dailyOutputLimit == null;
-  const dailyEstimated = dailyInputEstimated || dailyOutputEstimated;
+  if (isUnified) {
+    rateLimitMode = "unified";
+    const fallbackValue =
+      typeof rateSnapshot?.unified?.fallback === "string"
+        ? rateSnapshot.unified?.fallback ?? null
+        : null;
+    const fallbackPercentage = asFiniteNumber(
+      rateSnapshot?.unified?.fallbackPercentage,
+    );
+    unified = {
+      fiveHour: buildUnifiedWindow(rateSnapshot?.unified?.fiveHour),
+      sevenDay: buildUnifiedWindow(rateSnapshot?.unified?.sevenDay),
+      fallback: fallbackValue,
+      fallbackPercentage: fallbackPercentage ?? null,
+    };
 
-  if (!tier) {
-    warnings.push({
-      level: "info",
-      message:
-        "Daily limits are estimated; set --tier or CLAWDIS_ANTHROPIC_TIER to improve accuracy.",
-    });
-  }
-
-  const inputMinuteWindow: UsageRateWindow =
-    perMinuteSource === "headers"
-      ? buildHeaderWindow({
-          limit: tokensLimit,
-          remaining: tokensRemaining,
-          resetAt: tokensResetAt,
-          fallbackUsed: lastMinuteTotals.totalTokens,
-          now,
-        })
-      : {
-          usedTokens: lastMinuteTotals.inputTokens,
-          limitTokens: CLAUDE_OPUS_LIMITS.inputTokensPerMinute,
-          usedPercent: percentOf(
-            lastMinuteTotals.inputTokens,
-            CLAUDE_OPUS_LIMITS.inputTokensPerMinute,
-          ),
-          windowMinutes: 1,
-          resetsAt: nextMinuteReset(now),
-          resetDescription: "next minute",
-          estimated: true,
-        };
-
-  const outputMinuteWindow: UsageRateWindow =
-    perMinuteSource === "headers"
-      ? buildHeaderWindow({
-          limit: requestsLimit,
-          remaining: requestsRemaining,
-          resetAt: requestsResetAt,
-          fallbackUsed: lastMinuteTotals.events,
-          now,
-        })
-      : {
-          usedTokens: lastMinuteTotals.outputTokens,
-          limitTokens: CLAUDE_OPUS_LIMITS.outputTokensPerMinute,
-          usedPercent: percentOf(
-            lastMinuteTotals.outputTokens,
-            CLAUDE_OPUS_LIMITS.outputTokensPerMinute,
-          ),
-          windowMinutes: 1,
-          resetsAt: nextMinuteReset(now),
-          resetDescription: "next minute",
-          estimated: true,
-        };
-
-  const dailyInputWindow: UsageRateWindow | null = dailyInputLimit
-    ? {
-        usedTokens: todayTotals.inputTokens,
-        limitTokens: dailyInputLimit,
-        usedPercent: percentOf(todayTotals.inputTokens, dailyInputLimit),
-        windowMinutes: 1440,
-        resetsAt: nextDayReset(now),
-        resetDescription: "midnight local time",
-        estimated: dailyInputEstimated,
+    const warnIfUnifiedHigh = (
+      label: string,
+      window: UsageUnifiedWindow | null,
+    ) => {
+      if (!window) return;
+      const utilization = window.utilization;
+      if (!Number.isFinite(utilization)) return;
+      const remaining = Math.max(
+        0,
+        Math.round((1 - utilization) * 1000) / 10,
+      );
+      const thresholds: Array<{ cutoff: number; level: "error" | "warn"; label: string }> = [
+        { cutoff: 0.99, level: "error", label: "critical" },
+        { cutoff: 0.95, level: "error", label: "red" },
+        { cutoff: 0.9, level: "warn", label: "orange" },
+        { cutoff: 0.75, level: "warn", label: "yellow" },
+      ];
+      for (const threshold of thresholds) {
+        if (utilization >= threshold.cutoff) {
+          warnings.push({
+            level: threshold.level,
+            message: `${label} utilization at ${window.usedPercent}% (${threshold.label} warning, ${remaining}% remaining).`,
+          });
+          break;
+        }
       }
-    : null;
+    };
 
-  const dailyOutputWindow: UsageRateWindow | null = dailyOutputLimit
-    ? {
-        usedTokens: todayTotals.outputTokens,
-        limitTokens: dailyOutputLimit,
-        usedPercent: percentOf(todayTotals.outputTokens, dailyOutputLimit),
-        windowMinutes: 1440,
-        resetsAt: nextDayReset(now),
-        resetDescription: "midnight local time",
-        estimated: dailyOutputEstimated,
-      }
-    : null;
+    warnIfUnifiedHigh("5h window", unified.fiveHour);
+    warnIfUnifiedHigh("7d window", unified.sevenDay);
+  } else {
+    const tokensLimit = asFiniteNumber(rateSnapshot?.tokens?.limit);
+    const tokensRemaining = asFiniteNumber(rateSnapshot?.tokens?.remaining);
+    const tokensResetAt =
+      typeof rateSnapshot?.tokens?.resetAt === "string"
+        ? rateSnapshot.tokens.resetAt
+        : undefined;
+    const requestsLimit = asFiniteNumber(rateSnapshot?.requests?.limit);
+    const requestsRemaining = asFiniteNumber(rateSnapshot?.requests?.remaining);
+    const requestsResetAt =
+      typeof rateSnapshot?.requests?.resetAt === "string"
+        ? rateSnapshot.requests.resetAt
+        : undefined;
+    const perMinuteSource = tokensLimit !== undefined ? "headers" : "estimate";
 
-  const warnIfHigh = (
-    label: string,
-    window: UsageRateWindow | null,
-  ) => {
-    if (window?.usedPercent == null) return;
-    if (window.usedPercent >= 100) {
+    const tierFromEnv =
+      process.env.CLAWDIS_ANTHROPIC_TIER ??
+      process.env.ANTHROPIC_TIER ??
+      "tier-4";
+    const tier = normalizeTier(options.tier ?? tierFromEnv);
+    const maxDailyInput =
+      CLAUDE_OPUS_LIMITS.inputTokensPerMinute * 60 * 24;
+    const maxDailyOutput =
+      CLAUDE_OPUS_LIMITS.outputTokensPerMinute * 60 * 24;
+    const multiplier = tier ? DAILY_TIER_MULTIPLIERS[tier] ?? null : null;
+    const dailyInputLimit =
+      options.dailyInputLimit ??
+      (multiplier ? Math.round(maxDailyInput * multiplier) : null);
+    const dailyOutputLimit =
+      options.dailyOutputLimit ??
+      (multiplier ? Math.round(maxDailyOutput * multiplier) : null);
+    const dailyInputEstimated = options.dailyInputLimit == null;
+    const dailyOutputEstimated = options.dailyOutputLimit == null;
+    const dailyEstimated = dailyInputEstimated || dailyOutputEstimated;
+
+    if (!tier) {
       warnings.push({
-        level: "error",
-        message: `${label} exceeded (${window.usedPercent}%).`,
-      });
-    } else if (window.usedPercent >= 80) {
-      warnings.push({
-        level: "warn",
-        message: `${label} at ${window.usedPercent}%.`,
+        level: "info",
+        message:
+          "Daily limits are estimated; set --tier or CLAWDIS_ANTHROPIC_TIER to improve accuracy.",
       });
     }
-  };
 
-  const perMinuteInputLabel =
-    perMinuteSource === "headers"
-      ? "Tokens per minute"
-      : "Input tokens per minute";
-  const perMinuteOutputLabel =
-    perMinuteSource === "headers"
-      ? "Requests per minute"
-      : "Output tokens per minute";
-  warnIfHigh(perMinuteInputLabel, inputMinuteWindow);
-  warnIfHigh(perMinuteOutputLabel, outputMinuteWindow);
-  warnIfHigh("Daily input tokens", dailyInputWindow);
-  warnIfHigh("Daily output tokens", dailyOutputWindow);
+    const inputMinuteWindow: UsageRateWindow =
+      perMinuteSource === "headers"
+        ? buildHeaderWindow({
+            limit: tokensLimit,
+            remaining: tokensRemaining,
+            resetAt: tokensResetAt,
+            fallbackUsed: lastMinuteTotals.totalTokens,
+            now,
+          })
+        : {
+            usedTokens: lastMinuteTotals.inputTokens,
+            limitTokens: CLAUDE_OPUS_LIMITS.inputTokensPerMinute,
+            usedPercent: percentOf(
+              lastMinuteTotals.inputTokens,
+              CLAUDE_OPUS_LIMITS.inputTokensPerMinute,
+            ),
+            windowMinutes: 1,
+            resetsAt: nextMinuteReset(now),
+            resetDescription: "next minute",
+            estimated: true,
+          };
+
+    const outputMinuteWindow: UsageRateWindow =
+      perMinuteSource === "headers"
+        ? buildHeaderWindow({
+            limit: requestsLimit,
+            remaining: requestsRemaining,
+            resetAt: requestsResetAt,
+            fallbackUsed: lastMinuteTotals.events,
+            now,
+          })
+        : {
+            usedTokens: lastMinuteTotals.outputTokens,
+            limitTokens: CLAUDE_OPUS_LIMITS.outputTokensPerMinute,
+            usedPercent: percentOf(
+              lastMinuteTotals.outputTokens,
+              CLAUDE_OPUS_LIMITS.outputTokensPerMinute,
+            ),
+            windowMinutes: 1,
+            resetsAt: nextMinuteReset(now),
+            resetDescription: "next minute",
+            estimated: true,
+          };
+
+    const dailyInputWindow: UsageRateWindow | null = dailyInputLimit
+      ? {
+          usedTokens: todayTotals.inputTokens,
+          limitTokens: dailyInputLimit,
+          usedPercent: percentOf(todayTotals.inputTokens, dailyInputLimit),
+          windowMinutes: 1440,
+          resetsAt: nextDayReset(now),
+          resetDescription: "midnight local time",
+          estimated: dailyInputEstimated,
+        }
+      : null;
+
+    const dailyOutputWindow: UsageRateWindow | null = dailyOutputLimit
+      ? {
+          usedTokens: todayTotals.outputTokens,
+          limitTokens: dailyOutputLimit,
+          usedPercent: percentOf(todayTotals.outputTokens, dailyOutputLimit),
+          windowMinutes: 1440,
+          resetsAt: nextDayReset(now),
+          resetDescription: "midnight local time",
+          estimated: dailyOutputEstimated,
+        }
+      : null;
+
+    const warnIfHigh = (
+      label: string,
+      window: UsageRateWindow | null,
+    ) => {
+      if (window?.usedPercent == null) return;
+      if (window.usedPercent >= 100) {
+        warnings.push({
+          level: "error",
+          message: `${label} exceeded (${window.usedPercent}%).`,
+        });
+      } else if (window.usedPercent >= 80) {
+        warnings.push({
+          level: "warn",
+          message: `${label} at ${window.usedPercent}%.`,
+        });
+      }
+    };
+
+    const perMinuteInputLabel =
+      perMinuteSource === "headers"
+        ? "Tokens per minute"
+        : "Input tokens per minute";
+    const perMinuteOutputLabel =
+      perMinuteSource === "headers"
+        ? "Requests per minute"
+        : "Output tokens per minute";
+    warnIfHigh(perMinuteInputLabel, inputMinuteWindow);
+    warnIfHigh(perMinuteOutputLabel, outputMinuteWindow);
+    warnIfHigh("Daily input tokens", dailyInputWindow);
+    warnIfHigh("Daily output tokens", dailyOutputWindow);
+
+    perMinute = {
+      source: perMinuteSource,
+      input: inputMinuteWindow,
+      output: outputMinuteWindow,
+    };
+    daily = {
+      tier,
+      input: dailyInputWindow,
+      output: dailyOutputWindow,
+      estimated: dailyEstimated,
+    };
+  }
 
   return {
     asOf: now.toISOString(),
@@ -594,17 +704,10 @@ export async function collectUsageSummary(
     },
     rateLimits: {
       model: CLAUDE_OPUS_MODEL,
-      perMinute: {
-        source: perMinuteSource,
-        input: inputMinuteWindow,
-        output: outputMinuteWindow,
-      },
-      daily: {
-        tier,
-        input: dailyInputWindow,
-        output: dailyOutputWindow,
-        estimated: dailyEstimated,
-      },
+      mode: rateLimitMode,
+      perMinute,
+      daily,
+      unified,
     },
     warnings,
   };

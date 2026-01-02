@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { CONFIG_DIR } from "../utils.js";
+import type {
+  RateLimitSnapshot,
+  StandardWindow,
+} from "./fetch-intercept-bootstrap.js";
 
 const SNAPSHOT_PATH = path.join(CONFIG_DIR, "rate-limits.json");
 const FETCH_WRAPPED = Symbol.for("clawdis.anthropicRateLimitFetch");
@@ -13,21 +17,8 @@ const HEADER_REMAINING_TOKENS = "x-ratelimit-remaining-tokens";
 const HEADER_RESET_REQUESTS = "x-ratelimit-reset-requests";
 const HEADER_RESET_TOKENS = "x-ratelimit-reset-tokens";
 
-export type AnthropicRateLimitWindow = {
-  limit?: number;
-  remaining?: number;
-  resetAt?: string;
-};
-
-export type AnthropicRateLimitSnapshot = {
-  provider: "anthropic";
-  capturedAt: string;
-  source?: {
-    url?: string;
-  };
-  requests?: AnthropicRateLimitWindow;
-  tokens?: AnthropicRateLimitWindow;
-};
+export type AnthropicRateLimitWindow = StandardWindow;
+export type AnthropicRateLimitSnapshot = RateLimitSnapshot;
 
 const parseHeaderNumber = (value: string | null): number | undefined => {
   if (!value) return undefined;
@@ -56,7 +47,7 @@ const buildSnapshot = (
   headers: Headers,
   url?: string,
   now = new Date(),
-): AnthropicRateLimitSnapshot | null => {
+): RateLimitSnapshot | null => {
   const limitRequests = parseHeaderNumber(headers.get(HEADER_LIMIT_REQUESTS));
   const limitTokens = parseHeaderNumber(headers.get(HEADER_LIMIT_TOKENS));
   const remainingRequests = parseHeaderNumber(
@@ -77,9 +68,10 @@ const buildSnapshot = (
     resetTokens !== undefined;
   if (!hasAny) return null;
 
-  const snapshot: AnthropicRateLimitSnapshot = {
+  const snapshot: RateLimitSnapshot = {
     provider: "anthropic",
     capturedAt: now.toISOString(),
+    type: "standard",
   };
   if (url) snapshot.source = { url };
 
@@ -124,8 +116,13 @@ export async function readAnthropicRateLimitSnapshot(): Promise<
 > {
   try {
     const raw = await fs.readFile(SNAPSHOT_PATH, "utf8");
-    const parsed = JSON.parse(raw) as AnthropicRateLimitSnapshot;
-    if (!parsed || parsed.provider !== "anthropic") return null;
+    const parsed = JSON.parse(raw) as RateLimitSnapshot;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.provider !== "anthropic") return null;
+    if (parsed.type !== "standard" && parsed.type !== "unified") {
+      const inferredType = parsed.unified ? "unified" : "standard";
+      return { ...parsed, type: inferredType };
+    }
     return parsed;
   } catch {
     return null;
