@@ -17,6 +17,7 @@
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Block streaming: default to text_end and suppress duplicate block sends while in-flight.
+- Block streaming: avoid duplicate block chunks when providers repeat full content on text_end.
 - Block streaming: drop final payloads after soft chunking to keep Discord order intact.
 - Gmail hooks: resolve gcloud Python to a real executable when PATH uses mise shims — thanks @joargp.
 - Control UI: generate UUIDs when `crypto.randomUUID()` is unavailable over HTTP — thanks @ratulsarna.
@@ -34,6 +35,7 @@
 - Build: require AVX2 Bun for x86_64 relay packaging (reject baseline builds).
 - Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
 - WhatsApp: honor per-group mention gating overrides when group ids are stored as session keys.
+- Dependencies: bump pi-mono packages to 0.32.3.
 
 ### Docs
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.
@@ -42,6 +44,7 @@
 - Skills: add tmux skill + interactive coding guidance in coding-agent.
 - Gateway: document port configuration + multi-instance isolation.
 - Onboarding/Config: add protocol notes for wizard + schema RPC.
+- Queue: clarify steer-backlog behavior and update examples for streaming surfaces.
 
 ## 2.0.0-beta5 — 2026-01-03
 

@@ -27,6 +27,10 @@ Inbound messages can steer the current run, wait for a followup turn, or do both
 - `interrupt` (legacy): abort the active run for that session, then run the newest message.
 - `queue` (legacy alias): same as `steer`.
 
+Steer-backlog means you can get a followup response after the steered run, so
+streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
+one response per inbound message.
+
 Defaults (when unset in config):
 - All surfaces → `collect`
 
@@ -40,7 +44,7 @@ Configure globally or per surface via `routing.queue`:
       debounceMs: 1000,
       cap: 20,
       drop: "summarize",
-      bySurface: { discord: "steer-backlog" }
+      bySurface: { discord: "collect" }
     }
   }
 }

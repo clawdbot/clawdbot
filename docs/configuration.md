@@ -171,7 +171,7 @@ Controls how inbound messages behave when an agent run is already active.
       bySurface: {
         whatsapp: "collect",
         telegram: "collect",
-        discord: "steer-backlog",
+        discord: "collect",
         imessage: "collect",
         webchat: "collect"
       }

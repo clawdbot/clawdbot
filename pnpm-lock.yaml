@@ -11,9 +11,9 @@ patchedDependencies:
   '@mariozechner/pi-ai':
     hash: 969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae
     path: patches/@mariozechner__pi-ai.patch
-  '@mariozechner/pi-coding-agent@0.31.1':
+  '@mariozechner/pi-coding-agent@0.32.3':
     hash: d0d5ffa1bfda8a0f9d14a5e73a074014346d3edbdb2ffc91444d3be5119f5745
-    path: patches/@mariozechner__pi-coding-agent@0.31.1.patch
+    path: patches/@mariozechner__pi-coding-agent@0.32.3.patch
 
 importers:
 
@@ -29,17 +29,17 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.31.1
-        version: 0.31.1(ws@8.18.3)(zod@4.3.4)
+        specifier: ^0.32.3
+        version: 0.32.3(ws@8.18.3)(zod@4.3.4)
       '@mariozechner/pi-ai':
-        specifier: ^0.31.1
-        version: 0.31.1(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)
+        specifier: ^0.32.3
+        version: 0.32.3(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.31.1
-        version: 0.31.1(patch_hash=d0d5ffa1bfda8a0f9d14a5e73a074014346d3edbdb2ffc91444d3be5119f5745)(ws@8.18.3)(zod@4.3.4)
+        specifier: ^0.32.3
+        version: 0.32.3(patch_hash=d0d5ffa1bfda8a0f9d14a5e73a074014346d3edbdb2ffc91444d3be5119f5745)(ws@8.18.3)(zod@4.3.4)
       '@mariozechner/pi-tui':
-        specifier: ^0.31.1
-        version: 0.31.1
+        specifier: ^0.32.3
+        version: 0.32.3
       '@sinclair/typebox':
         specifier: 0.34.46
         version: 0.34.46
@@ -744,22 +744,22 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.31.1':
-    resolution: {integrity: sha512-skY2ZGrVbTkbTpdHql3mR0//BbLeqwKWQ0bnoI2H7YHbR5bTDSaYwtRtSdEgfPVgTk+WBQaZOZOv6be4qCAsww==}
+  '@mariozechner/pi-agent-core@0.32.3':
+    resolution: {integrity: sha512-NN/fd8eBISnRbQYblLjiaRbcFjz+SEFOGhZDZCXYgHJikTV8VyEon0nZFh7agBZJ7sXZaumMTjw/pGFrBFKcmA==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.31.1':
-    resolution: {integrity: sha512-mqqitu/69ofLPmQEj7m04SvPQZEX+uacLHU9oQxz1c1khclsjw2S7G/v5P/3jK4hZjoZfHkPJRwPMFvEbo3wAA==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
-
-  '@mariozechner/pi-coding-agent@0.31.1':
-    resolution: {integrity: sha512-S+IQMYJssNFXQcdk8iB3tY0b1Idi0gAZCdwGCkTSG+vGghO0rdo+vQ+/v5KM6BhW2XsKiYz/2XCG8237iVwINA==}
+  '@mariozechner/pi-ai@0.32.3':
+    resolution: {integrity: sha512-njaa4/pN7U1TbjI1PKqII3M/W1CQ/obPAu5A4KHsX74e8sKjDEiEELUWzLTa5xOj+l1OXp/FtzI0hfJDq682rQ==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.31.1':
-    resolution: {integrity: sha512-79hDQPAMPxKO0HKoXiFLp1HFbRDwweYL31l2wlsEzhPYgIYvx0Ii7X+KK4yMjjfDc4SjX6ZmSnJ4MUFAanuVzA==}
+  '@mariozechner/pi-coding-agent@0.32.3':
+    resolution: {integrity: sha512-kOuzflbWc8GWHGOu/7KJQ1P3IodDk4AdOvibkJDcAn2aw5kG+LZAjLGt72tIMQRQna51i9XzL4nSvbxqV+mgWw==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-tui@0.32.3':
+    resolution: {integrity: sha512-aq7e6qXcwSHvaTUKj5Ut9BY+ZezQ2rL+V4Sd2R5SnBW6JMCt5GnR/8uYBC2PcdxBQzGL9TnzjrC4av5jR+ilow==}
     engines: {node: '>=20.0.0'}
 
   '@mistralai/mistralai@1.10.0':
@@ -3351,10 +3351,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.31.1(ws@8.18.3)(zod@4.3.4)':
+  '@mariozechner/pi-agent-core@0.32.3(ws@8.18.3)(zod@4.3.4)':
     dependencies:
-      '@mariozechner/pi-ai': 0.31.1(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)
-      '@mariozechner/pi-tui': 0.31.1
+      '@mariozechner/pi-ai': 0.32.3(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)
+      '@mariozechner/pi-tui': 0.32.3
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3363,7 +3363,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.31.1(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)':
+  '@mariozechner/pi-ai@0.32.3(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.4)
       '@google/genai': 1.34.0
@@ -3383,11 +3383,11 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.31.1(patch_hash=d0d5ffa1bfda8a0f9d14a5e73a074014346d3edbdb2ffc91444d3be5119f5745)(ws@8.18.3)(zod@4.3.4)':
+  '@mariozechner/pi-coding-agent@0.32.3(patch_hash=d0d5ffa1bfda8a0f9d14a5e73a074014346d3edbdb2ffc91444d3be5119f5745)(ws@8.18.3)(zod@4.3.4)':
     dependencies:
-      '@mariozechner/pi-agent-core': 0.31.1(ws@8.18.3)(zod@4.3.4)
-      '@mariozechner/pi-ai': 0.31.1(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)
-      '@mariozechner/pi-tui': 0.31.1
+      '@mariozechner/pi-agent-core': 0.32.3(ws@8.18.3)(zod@4.3.4)
+      '@mariozechner/pi-ai': 0.32.3(patch_hash=969db6f3f4cc91fec48124e1f5e515b386b1f1bed807769d0a80c28abadbaaae)(ws@8.18.3)(zod@4.3.4)
+      '@mariozechner/pi-tui': 0.32.3
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.2
@@ -3395,6 +3395,7 @@ snapshots:
       glob: 11.1.0
       jiti: 2.6.1
       marked: 15.0.12
+      sharp: 0.34.5
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3403,7 +3404,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.31.1':
+  '@mariozechner/pi-tui@0.32.3':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2

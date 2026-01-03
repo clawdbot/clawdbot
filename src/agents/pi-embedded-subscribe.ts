@@ -259,6 +259,11 @@ export function subscribeEmbeddedPiSession(params: {
     if (!blockChunking) return;
     const minChars = Math.max(1, Math.floor(blockChunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
+    if (force && blockBuffer.length > 0 && blockBuffer.length <= maxChars) {
+      emitBlockChunk(blockBuffer);
+      blockBuffer = "";
+      return;
+    }
     if (blockBuffer.length < minChars && !force) return;
     while (blockBuffer.length >= minChars || (force && blockBuffer.length > 0)) {
       const breakIdx = pickBreakIndex(blockBuffer);
@@ -437,12 +442,30 @@ export function subscribeEmbeddedPiSession(params: {
             evtType === "text_start" ||
             evtType === "text_end"
           ) {
-            const chunk =
+            const delta =
               typeof assistantRecord?.delta === "string"
                 ? assistantRecord.delta
-                : typeof assistantRecord?.content === "string"
-                  ? assistantRecord.content
-                  : "";
+                : "";
+            const content =
+              typeof assistantRecord?.content === "string"
+                ? assistantRecord.content
+                : "";
+            let chunk = "";
+            if (evtType === "text_delta") {
+              chunk = delta;
+            } else if (evtType === "text_start" || evtType === "text_end") {
+              if (delta) {
+                chunk = delta;
+              } else if (content) {
+                if (content.startsWith(deltaBuffer)) {
+                  chunk = content.slice(deltaBuffer.length);
+                } else if (deltaBuffer.startsWith(content)) {
+                  chunk = "";
+                } else if (!deltaBuffer.includes(content)) {
+                  chunk = content;
+                }
+              }
+            }
             if (chunk) {
               deltaBuffer += chunk;
               blockBuffer += chunk;
