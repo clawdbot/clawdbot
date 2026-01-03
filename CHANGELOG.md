@@ -21,6 +21,7 @@
 - Config: remove `routing.groupChat.requireMention` + `telegram.requireMention`; use `whatsapp.groups`, `imessage.groups`, and `telegram.groups` defaults instead (run `clawdis doctor` to migrate).
 
 ### Features
+- Discord: expand `discord` tool actions (reactions, stickers, polls, threads, search, moderation gates) (#115) — thanks @thewilloftheshadow.
 - Discord/Telegram: add reply tags (`[[reply_to_current]]`, `[[reply_to:<id>]]`) with per-provider `replyToMode` (off|first|all) for native threaded replies.
 - Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
