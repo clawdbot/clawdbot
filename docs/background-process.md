@@ -13,10 +13,10 @@ Clawdis runs shell commands through the `bash` tool and keeps long‑running tas
 
 Key parameters:
 - `command` (required)
-- `yieldMs` (default 20000): auto‑background after this delay
+- `yieldMs` (default 10000): auto‑background after this delay
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill the process after this timeout
-- `stdinMode` (`pipe` | `pty`): use a real TTY when `pty` is requested and node-pty loads (otherwise warns + falls back)
+- Need a real TTY? Use the tmux skill.
 - `workdir`, `env`
 
 Behavior:
@@ -30,7 +30,7 @@ Environment overrides:
 - `PI_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
 
 Config (preferred):
-- `agent.bash.backgroundMs` (default 20000)
+- `agent.bash.backgroundMs` (default 10000)
 - `agent.bash.timeoutSec` (default 1800)
 - `agent.bash.cleanupMs` (default 1800000)
 

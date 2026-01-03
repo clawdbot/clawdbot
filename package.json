@@ -95,7 +95,6 @@
     "grammy": "^1.39.2",
     "json5": "^2.2.3",
     "long": "5.3.2",
-    "node-pty": "^1.1.0",
     "playwright-core": "1.57.0",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",

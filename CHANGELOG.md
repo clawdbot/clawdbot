@@ -5,6 +5,7 @@
 ### Breaking
 - Identifiers: rename bundle IDs and internal domains to `com.clawdis.*` (macOS: `com.clawdis.mac`, iOS: `com.clawdis.ios`, Android: `com.clawdis.android`) and update the gateway LaunchAgent label to `com.clawdis.gateway`.
 - Agent tools: drop the `clawdis_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
+- Bash tool: remove `stdinMode: "pty"`/node-pty support; use the tmux skill for real TTYs.
 
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
@@ -18,6 +19,7 @@
 
 ### Fixes
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
+- Bash tool: default auto-background delay to 10s.
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Block streaming: default to text_end and suppress duplicate block sends while in-flight.
 - Block streaming: avoid duplicate block chunks when providers repeat full content on text_end.

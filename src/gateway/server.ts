@@ -86,6 +86,11 @@ import {
   authorizeGatewayConnect,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import {
+  type GatewayReloadPlan,
+  type ProviderKind,
+  startGatewayConfigReloader,
+} from "./config-reload.js";
 import { normalizeControlUiBasePath } from "./control-ui.js";
 import { resolveHooksConfig } from "./hooks.js";
 import {
@@ -94,13 +99,12 @@ import {
   resolveGatewayBindHost,
 } from "./net.js";
 import { createBridgeHandlers } from "./server-bridge.js";
-import { createBridgeSubscriptionManager } from "./server-bridge-subscriptions.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
-  startGatewayConfigReloader,
-  type GatewayReloadPlan,
-  type ProviderKind,
-} from "./config-reload.js";
+  type BridgeListConnectedFn,
+  type BridgeSendEventFn,
+  createBridgeSubscriptionManager,
+} from "./server-bridge-subscriptions.js";
+import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createAgentEventHandler, createChatRunState } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -862,6 +866,11 @@ export async function startGatewayServer(
   const bridgeSubscribe = bridgeSubscriptions.subscribe;
   const bridgeUnsubscribe = bridgeSubscriptions.unsubscribe;
   const bridgeUnsubscribeAll = bridgeSubscriptions.unsubscribeAll;
+  const bridgeSendEvent: BridgeSendEventFn = (opts) => {
+    bridge?.sendEvent(opts);
+  };
+  const bridgeListConnected: BridgeListConnectedFn = () =>
+    bridge?.listConnected() ?? [];
   const bridgeSendToSession = (
     sessionKey: string,
     event: string,
@@ -871,20 +880,16 @@ export async function startGatewayServer(
       sessionKey,
       event,
       payload,
-      bridge ? (opts) => bridge.sendEvent(opts) : undefined,
+      bridgeSendEvent,
     );
   const bridgeSendToAllSubscribed = (event: string, payload: unknown) =>
-    bridgeSubscriptions.sendToAllSubscribed(
-      event,
-      payload,
-      bridge ? (opts) => bridge.sendEvent(opts) : undefined,
-    );
+    bridgeSubscriptions.sendToAllSubscribed(event, payload, bridgeSendEvent);
   const bridgeSendToAllConnected = (event: string, payload: unknown) =>
     bridgeSubscriptions.sendToAllConnected(
       event,
       payload,
-      bridge ? () => bridge.listConnected() : undefined,
-      bridge ? (opts) => bridge.sendEvent(opts) : undefined,
+      bridgeListConnected,
+      bridgeSendEvent,
     );
 
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
@@ -1663,7 +1668,9 @@ export async function startGatewayServer(
 
     if (plan.restartProviders.size > 0) {
       if (process.env.CLAWDIS_SKIP_PROVIDERS === "1") {
-        logProviders.info("skipping provider reload (CLAWDIS_SKIP_PROVIDERS=1)");
+        logProviders.info(
+          "skipping provider reload (CLAWDIS_SKIP_PROVIDERS=1)",
+        );
       } else {
         const restartProvider = async (
           name: ProviderKind,
@@ -1712,10 +1719,7 @@ export async function startGatewayServer(
       }
     }
 
-    setCommandLaneConcurrency(
-      "cron",
-      nextConfig.cron?.maxConcurrentRuns ?? 1,
-    );
+    setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency("main", nextConfig.agent?.maxConcurrent ?? 1);
 
     if (plan.hotReasons.length > 0) {

@@ -494,7 +494,7 @@ export async function runEmbeddedPiAgent(params: {
         };
         const queueHandle: EmbeddedPiQueueHandle = {
           queueMessage: async (text: string) => {
-            await session.queueMessage(text);
+            await session.steer(text);
           },
           isStreaming: () => session.isStreaming,
           abort: abortRun,

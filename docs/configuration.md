@@ -388,7 +388,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
     },
     maxConcurrent: 3,
     bash: {
-      backgroundMs: 20000,
+      backgroundMs: 10000,
       timeoutSec: 1800,
       cleanupMs: 1800000
     },
@@ -427,7 +427,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
 
 `agent.bash` configures background bash defaults:
-- `backgroundMs`: time before auto-background (ms, default 20000)
+- `backgroundMs`: time before auto-background (ms, default 10000)
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
 

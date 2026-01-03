@@ -18,10 +18,10 @@ Run shell commands in the workspace.
 
 Core parameters:
 - `command` (required)
-- `yieldMs` (auto-background after timeout, default 20000)
+- `yieldMs` (auto-background after timeout, default 10000)
 - `background` (immediate background)
 - `timeout` (seconds; kills the process if exceeded, default 1800)
-- `stdinMode` (`pipe` | `pty`; `pty` uses node-pty for a real TTY with fallback warning)
+- Need a real TTY? Use the tmux skill.
 
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.

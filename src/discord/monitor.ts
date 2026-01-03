@@ -367,8 +367,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         message.content?.trim() ??
         media?.placeholder ??
         message.embeds[0]?.description ??
-        (forwardedSnapshot ? "<forwarded message>" : "") ??
-        "";
+        (forwardedSnapshot ? "<forwarded message>" : "");
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
         return;

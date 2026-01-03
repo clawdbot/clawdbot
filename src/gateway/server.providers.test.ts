@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -64,6 +63,9 @@ describe("gateway server providers", () => {
   test("telegram.logout clears bot token from config", async () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
+    const { readConfigFileSnapshot, writeConfigFile } = await import(
+      "../config/config.js"
+    );
     await writeConfigFile({
       telegram: {
         botToken: "123:abc",

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { agentCommand } from "../commands/agent.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -64,6 +63,7 @@ const hoisted = vi.hoisted(() => ({
     }>,
   },
   cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
+  agentCommand: vi.fn().mockResolvedValue(undefined),
   testIsNixMode: { value: false },
   sessionStoreSaveDelayMs: { value: 0 },
 }));
@@ -75,6 +75,7 @@ export const bridgeSendEvent = hoisted.bridgeSendEvent;
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
+export const agentCommand = hoisted.agentCommand;
 
 export const testState = {
   sessionStorePath: undefined as string | undefined,
@@ -290,7 +291,7 @@ vi.mock("../web/outbound.js", () => ({
     .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand: vi.fn().mockResolvedValue(undefined),
+  agentCommand,
 }));
 
 process.env.CLAWDIS_SKIP_PROVIDERS = "1";
@@ -509,5 +510,3 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
   }
   throw new Error("timeout waiting for system event");
 }
-
-export { agentCommand };
