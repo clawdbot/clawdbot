@@ -56,10 +56,12 @@ test-*.mjs
 test-*.js
 debug-*.js
 fix-*.js
-fix-*.js
+fix-*.mjs
 simulate-*.mjs
 regenerate-*.js
+regenerate-*.mjs
 create-*.js
+update-*.mjs
 load-*.mjs
 reproduce-*.mjs
 
@@ -94,9 +96,12 @@ docs/project_gathering/
 # Deep research working files (generated)
 docs/sdd/
 runs/
-.flows/
 prompts/
 sdd-flow/
+.flows/
+
+# Local start/test scripts
+start-*.sh
 
 # Development monitoring/watch scripts
 *-watch.sh
