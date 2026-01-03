@@ -4,8 +4,15 @@
  */
 
 import { spawn } from "node:child_process";
-import { access, constants, readFile } from "node:fs/promises";
+import {
+  access,
+  constants,
+  mkdir,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { getDefaultDeepResearchCliPath, loadConfig } from "../config/config.js";
 import { normalizeDeepResearchTopic } from "./topic.js";
@@ -74,6 +81,68 @@ export async function validateCli(
   }
 }
 
+type AgentSummaryPayload = {
+  summary_bullets?: string[];
+  short_answer_summary_2_initial_request?: string;
+  opinion?: string;
+};
+
+async function buildPublishFallbackResult(params: {
+  baseDir: string;
+  runId: string;
+  prompt: string;
+  publishError?: string;
+}): Promise<string | null> {
+  const runDir = path.join(params.baseDir, "runs", params.runId);
+  const resultJsonPath = path.join(runDir, "result.json");
+  try {
+    await access(resultJsonPath, constants.R_OK);
+    return resultJsonPath;
+  } catch {
+    // result.json is expected to be missing after publish failure
+  }
+
+  const agentSummaryPath = path.join(runDir, "md", "agent_summary.json");
+  const reportMdPath = path.join(runDir, "md", "report.md");
+
+  try {
+    await access(agentSummaryPath, constants.R_OK);
+    await access(reportMdPath, constants.R_OK);
+  } catch {
+    return null;
+  }
+
+  const agentSummaryRaw = await readFile(agentSummaryPath, "utf-8");
+  const agentSummary = JSON.parse(agentSummaryRaw) as AgentSummaryPayload;
+  const publishUrl = pathToFileURL(reportMdPath).toString();
+
+  const result = {
+    run_id: params.runId,
+    status: "completed",
+    prompt: params.prompt,
+    agent_summary: {
+      summary_bullets: agentSummary.summary_bullets ?? [],
+      short_answer_summary_2_initial_request:
+        agentSummary.short_answer_summary_2_initial_request ?? "",
+      opinion: agentSummary.opinion ?? "",
+    },
+    publish: {
+      ok: false,
+      url: publishUrl,
+      error: params.publishError ?? "publish failed",
+      source_md: `runs/${params.runId}/md/report.md`,
+    },
+    report: {
+      md: `runs/${params.runId}/md/report.md`,
+      txt: `runs/${params.runId}/report.txt`,
+    },
+  };
+
+  await mkdir(runDir, { recursive: true });
+  await writeFile(resultJsonPath, JSON.stringify(result, null, 2), "utf-8");
+  return resultJsonPath;
+}
+
 /**
  * Execute deep research CLI
  * @returns Promise resolving to execution result
@@ -82,8 +151,7 @@ export async function executeDeepResearch(
   options: ExecuteOptions,
 ): Promise<ExecuteResult> {
   const cfg = loadConfig();
-  const cliPath =
-    cfg.deepResearch?.cliPath ?? getDefaultDeepResearchCliPath();
+  const cliPath = cfg.deepResearch?.cliPath ?? getDefaultDeepResearchCliPath();
   const dryRun = options.dryRun ?? cfg.deepResearch?.dryRun ?? true;
   const outputLanguage =
     options.outputLanguage ?? cfg.deepResearch?.outputLanguage ?? "auto";
@@ -147,6 +215,8 @@ export async function executeDeepResearch(
     let stdoutBuffer = "";
     let finished = false;
     let timeoutId: NodeJS.Timeout | undefined;
+    let publishError: string | undefined;
+    let runErrorDetail: string | undefined;
     const baseDir = path.dirname(resolvedCliPath);
 
     const finish = (result: ExecuteResult) => {
@@ -204,6 +274,16 @@ export async function executeDeepResearch(
           if (event.event === "run.complete" && event.result) {
             resultJsonPath = event.result;
           }
+          if (event.event === "publish.error") {
+            if (typeof event.detail === "string") {
+              publishError = event.detail;
+            } else {
+              publishError = "publish failed";
+            }
+          }
+          if (event.event === "run.error" && typeof event.detail === "string") {
+            runErrorDetail = event.detail;
+          }
         } catch {
           // Not JSON, ignore
         }
@@ -219,6 +299,27 @@ export async function executeDeepResearch(
       let resolvedSuccess = success;
       let resolvedError = success ? undefined : `Exit code: ${code}`;
       let resolvedResultJsonPath = resultJsonPath;
+      const publishFailed =
+        Boolean(publishError) ||
+        (runErrorDetail?.includes("publish required but failed") ?? false);
+
+      if (!success && publishFailed && runId && !resolvedResultJsonPath) {
+        try {
+          const fallbackResultPath = await buildPublishFallbackResult({
+            baseDir,
+            runId,
+            prompt: normalized.topic,
+            publishError,
+          });
+          if (fallbackResultPath) {
+            resolvedResultJsonPath = fallbackResultPath;
+            resolvedSuccess = true;
+            resolvedError = undefined;
+          }
+        } catch {
+          // Ignore fallback errors and keep failure as-is.
+        }
+      }
 
       if (!success && dryRun && !resolvedResultJsonPath) {
         const fallbackPath = path.join(baseDir, dryRunFallbackResult);
