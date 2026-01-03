@@ -5,13 +5,13 @@
  */
 
 /**
- * Local session state tracked by acp-gw.
+ * Local session state tracked by acp.
  * The actual conversation state lives in the Gateway.
  */
 export type AcpGwSession = {
   /** ACP session ID (UUID) */
   sessionId: string;
-  /** Gateway session key ("acp-gw:<uuid>") */
+  /** Gateway session key ("acp:<uuid>") */
   sessionKey: string;
   /** Working directory from newSession */
   cwd: string;
@@ -24,7 +24,7 @@ export type AcpGwSession = {
 };
 
 /**
- * CLI options for acp-gw server.
+ * CLI options for acp server.
  */
 export type AcpGwOptions = {
   /** Gateway WebSocket URL (default: ws://127.0.0.1:18789) */

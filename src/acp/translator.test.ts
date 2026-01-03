@@ -604,7 +604,7 @@ describe("AcpGwAgent", () => {
 
       verboseAgent.start();
 
-      expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("[acp-gw]"));
+      expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("[acp]"));
       
       stderrWrite.mockRestore();
     });

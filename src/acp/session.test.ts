@@ -15,7 +15,7 @@ import {
   initSessionStore,
 } from "./session.js";
 
-describe("acp-gw session manager", () => {
+describe("acp session manager", () => {
   beforeEach(() => {
     clearAllSessions();
   });
@@ -150,7 +150,7 @@ describe("acp-gw session manager", () => {
     let storePath: string;
 
     beforeEach(() => {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-gw-test-"));
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-test-"));
       storePath = path.join(tempDir, "sessions.json");
       clearAllSessions();
     });

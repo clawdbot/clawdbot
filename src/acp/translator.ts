@@ -71,7 +71,7 @@ export class AcpGwAgent implements Agent {
     this.gateway = gateway;
     this.opts = opts;
     this.log = opts.verbose
-      ? (msg: string) => process.stderr.write(`[acp-gw] ${msg}\n`)
+      ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`)
       : () => {};
   }
 

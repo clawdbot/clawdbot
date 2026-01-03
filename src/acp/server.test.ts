@@ -9,7 +9,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // We need to test parseArgs which is not exported, so we'll test via the module
 // For now, test the exported serveAcpGw indirectly through its options handling
 
-describe("acp-gw server", () => {
+describe("acp server", () => {
   describe("parseArgs (via CLI simulation)", () => {
     // Since parseArgs is not exported, we test the behavior through import
     // We can at least verify the module loads correctly

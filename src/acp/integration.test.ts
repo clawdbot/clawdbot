@@ -1,7 +1,7 @@
 /**
  * ACP-GW Integration Tests
  * 
- * These tests spin up a real Gateway and test acp-gw end-to-end.
+ * These tests spin up a real Gateway and test acp end-to-end.
  * They require more setup but test the full flow.
  */
 
@@ -38,7 +38,7 @@ function createMockConnection() {
   return { connection, updates };
 }
 
-describe("acp-gw integration", () => {
+describe("acp integration", () => {
   let gatewayServer: Awaited<ReturnType<typeof startGatewayServer>>;
   let gatewayPort: number;
   let gatewayUrl: string;
@@ -84,7 +84,7 @@ describe("acp-gw integration", () => {
   });
 
   describe("session lifecycle", () => {
-    it("creates a session via acp-gw", async () => {
+    it("creates a session via acp", async () => {
       const { connection } = createMockConnection();
       
       const gateway = new GatewayClient({

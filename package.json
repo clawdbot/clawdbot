@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "bin": {
     "clawdis": "dist/index.js",
-    "clawd-acp": "dist/acp-gw/server.js",
+    "clawd-acp": "dist/acp/server.js",
     "clawd-acp-client": "dist/acp-client/client.js"
   },
   "files": [
@@ -49,7 +49,7 @@
     "clawdis": "tsx src/index.ts",
     "gateway:watch": "tsx watch --clear-screen=false --include 'src/**/*.ts' src/index.ts gateway --force",
     "clawdis:rpc": "tsx src/index.ts agent --mode rpc --json",
-    "acp-gw": "node dist/acp-gw/server.js",
+    "acp": "node dist/acp/server.js",
     "lint": "biome check src test && oxlint --type-aware src test --ignore-pattern src/canvas-host/a2ui/a2ui.bundle.js",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:fix": "biome check --write --unsafe src && biome format --write src",
