@@ -221,7 +221,9 @@ export async function runReplyAgent(params: {
                     }
                     text = stripped.text;
                   }
-                  await typing.startTypingOnText(text);
+                  if (!opts?.isHeartbeat) {
+                    await typing.startTypingOnText(text);
+                  }
                   await opts.onPartialReply?.({
                     text,
                     mediaUrls: payload.mediaUrls,
@@ -270,7 +272,9 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      await typing.startTypingOnText(cleaned);
+                      if (!opts?.isHeartbeat) {
+                        await typing.startTypingOnText(cleaned);
+                      }
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -311,7 +315,9 @@ export async function runReplyAgent(params: {
                     }
                     text = stripped.text;
                   }
-                  await typing.startTypingOnText(text);
+                  if (!opts?.isHeartbeat) {
+                    await typing.startTypingOnText(text);
+                  }
                   await opts.onToolResult?.({
                     text,
                     mediaUrls: payload.mediaUrls,
@@ -410,7 +416,7 @@ export async function runReplyAgent(params: {
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
     });
-    if (shouldSignalTyping) {
+    if (shouldSignalTyping && !opts?.isHeartbeat) {
       await typing.startTypingLoop();
     }
 
