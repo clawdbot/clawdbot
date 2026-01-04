@@ -7,6 +7,7 @@ import type { Skill } from "@mariozechner/pi-coding-agent";
 import JSON5 from "json5";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeE164 } from "../utils.js";
+import { resolveStateDir } from "./paths.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -84,8 +85,11 @@ export type SessionSkillSnapshot = {
   resolvedSkills?: Skill[];
 };
 
-export function resolveSessionTranscriptsDir(): string {
-  return path.join(os.homedir(), ".clawdbot", "sessions");
+export function resolveSessionTranscriptsDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return path.join(resolveStateDir(env, homedir), "sessions");
 }
 
 export function resolveDefaultSessionStorePath(): string {

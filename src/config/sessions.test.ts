@@ -8,6 +8,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveSessionKey,
+  resolveSessionTranscriptsDir,
   updateLastRoute,
 } from "./sessions.js";
 
@@ -126,5 +127,21 @@ describe("sessions", () => {
     expect(store.main?.updatedAt).toBeGreaterThanOrEqual(123);
     expect(store.main?.lastChannel).toBe("telegram");
     expect(store.main?.lastTo).toBe("12345");
+  });
+
+  it("derives session transcripts dir from CLAWDBOT_STATE_DIR", () => {
+    const dir = resolveSessionTranscriptsDir(
+      { CLAWDBOT_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
+      () => "/home/ignored",
+    );
+    expect(dir).toBe("/custom/state/sessions");
+  });
+
+  it("falls back to CLAWDIS_STATE_DIR for session transcripts dir", () => {
+    const dir = resolveSessionTranscriptsDir(
+      { CLAWDIS_STATE_DIR: "/legacy/state" } as NodeJS.ProcessEnv,
+      () => "/home/ignored",
+    );
+    expect(dir).toBe("/legacy/state/sessions");
   });
 });
