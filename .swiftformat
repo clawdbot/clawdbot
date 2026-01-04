@@ -48,4 +48,4 @@
 --allman false
 
 # Exclusions
---exclude .build,.swiftpm,DerivedData,node_modules,dist,coverage,xcuserdata,apps/macos/Sources/ClawdisProtocol
+--exclude .build,.swiftpm,DerivedData,node_modules,dist,coverage,xcuserdata,apps/macos/Sources/ClawdisProtocol,apps/macos/Sources/ClawdbotProtocol
