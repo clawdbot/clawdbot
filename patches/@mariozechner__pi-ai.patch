@@ -1,42 +1,43 @@
 diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..76166a34784cbc0718d4b9bd1fa6336a6dd394ec 100644
 --- a/dist/providers/google-shared.js
 +++ b/dist/providers/google-shared.js
-@@ -52,19 +52,25 @@
+@@ -51,9 +51,19 @@ export function convertMessages(model, context) {
+                     parts.push({ text: sanitizeSurrogates(block.text) });
                  }
                  else if (block.type === "thinking") {
-                     // Thinking blocks require signatures for Claude via Antigravity.
+-                    // Thinking blocks require signatures for Claude via Antigravity.
 -                    // If signature is missing (e.g. from GPT-OSS), convert to regular text with delimiters.
 -                    if (block.thinkingSignature) {
-+                    // Only send thought signatures for Claude models - Gemini doesn't support them
-+                    // and will mimic <thinking> tags if we include them as text.
-+                    if (block.thinkingSignature && model.id.includes("claude")) {
++                    // Thinking blocks handling varies by model:
++                    // - Claude via Antigravity: requires thinkingSignature
++                    // - Gemini: skip entirely (doesn't understand thoughtSignature, and mimics <thinking> tags)
++                    // - Other models: convert to text with delimiters
++                    const isGemini = model.id.toLowerCase().includes("gemini");
++                    const isClaude = model.id.toLowerCase().includes("claude");
++                    if (isGemini) {
++                        // Skip thinking blocks entirely for Gemini - it doesn't support them
++                        // and will mimic <thinking> tags if we convert to text
++                        continue;
++                    }
++                    else if (block.thinkingSignature && isClaude) {
++                        // Claude via Antigravity requires the signature
                          parts.push({
                              thought: true,
                              text: sanitizeSurrogates(block.thinking),
-                             thoughtSignature: block.thinkingSignature,
+@@ -61,6 +71,7 @@ export function convertMessages(model, context) {
                          });
                      }
--                    else {
--                        parts.push({
--                            text: `<thinking>\n${sanitizeSurrogates(block.thinking)}\n</thinking>`,
--                        });
-+                    else if (!model.id.includes("gemini")) {
-+                        // For non-Gemini, non-Claude models, include as text with delimiters
-+                        // Skip entirely for Gemini to avoid it mimicking the pattern
-+                        if (block.thinking && block.thinking.trim()) {
-+                            parts.push({
-+                                text: `<thinking>\n${sanitizeSurrogates(block.thinking)}\n</thinking>`,
-+                            });
-+                        }
-                     }
-+                    // For Gemini models without Claude signature: skip thinking blocks entirely
-                 }
-                 else if (block.type === "toolCall") {
-                     const part = {
-@@ -147,6 +153,77 @@
+                     else {
++                        // Other models: convert to text with delimiters
+                         parts.push({
+                             text: `<thinking>\n${sanitizeSurrogates(block.thinking)}\n</thinking>`,
+                         });
+@@ -146,6 +157,77 @@ export function convertMessages(model, context) {
+     }
      return contents;
  }
- /**
++/**
 + * Sanitize JSON Schema for Google Cloud Code Assist API.
 + * Removes unsupported keywords like patternProperties, const, anyOf, etc.
 + * and converts to a format compatible with Google's function declarations.
@@ -107,11 +108,10 @@ diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
 +    }
 +    return sanitized;
 +}
-+/**
+ /**
   * Convert tools to Gemini function declarations format.
   */
- export function convertTools(tools) {
-@@ -157,7 +234,7 @@
+@@ -157,7 +239,7 @@ export function convertTools(tools) {
              functionDeclarations: tools.map((tool) => ({
                  name: tool.name,
                  description: tool.description,
@@ -120,3 +120,15 @@ diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
              })),
          },
      ];
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6ed334863e 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -486,7 +486,6 @@ function convertTools(tools) {
+         name: tool.name,
+         description: tool.description,
+         parameters: tool.parameters, // TypeBox already generates JSON Schema
+-        strict: null,
+     }));
+ }
+ function mapStopReason(status) {
