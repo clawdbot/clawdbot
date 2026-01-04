@@ -936,6 +936,70 @@ export async function startGatewayServer(
       ? bridgeHost
       : undefined;
 
+  const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+  const stopNodePresenceTimer = (nodeId: string) => {
+    const timer = nodePresenceTimers.get(nodeId);
+    if (timer) {
+      clearInterval(timer);
+    }
+    nodePresenceTimers.delete(nodeId);
+  };
+
+  const beaconNodePresence = (node: {
+    nodeId: string;
+    displayName?: string;
+    remoteIp?: string;
+    version?: string;
+    platform?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+  }, reason: string) => {
+    const host = node.displayName?.trim() || node.nodeId;
+    const rawIp = node.remoteIp?.trim();
+    const ip = rawIp && !isLoopbackAddress(rawIp) ? rawIp : undefined;
+    const version = node.version?.trim() || "unknown";
+    const platform = node.platform?.trim() || undefined;
+    const deviceFamily = node.deviceFamily?.trim() || undefined;
+    const modelIdentifier = node.modelIdentifier?.trim() || undefined;
+    const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason ${reason}`;
+    upsertPresence(node.nodeId, {
+      host,
+      ip,
+      version,
+      platform,
+      deviceFamily,
+      modelIdentifier,
+      mode: "remote",
+      reason,
+      lastInputSeconds: 0,
+      instanceId: node.nodeId,
+      text,
+    });
+    presenceVersion += 1;
+    broadcast(
+      "presence",
+      { presence: listSystemPresence() },
+      {
+        dropIfSlow: true,
+        stateVersion: {
+          presence: presenceVersion,
+          health: healthVersion,
+        },
+      },
+    );
+  };
+
+  const startNodePresenceTimer = (node: { nodeId: string }) => {
+    stopNodePresenceTimer(node.nodeId);
+    nodePresenceTimers.set(
+      node.nodeId,
+      setInterval(() => {
+        beaconNodePresence(node, "periodic");
+      }, 180_000),
+    );
+  };
+
   if (bridgeEnabled && bridgePort > 0 && bridgeHost) {
     try {
       const started = await startNodeBridgeServer({
@@ -946,38 +1010,8 @@ export async function startGatewayServer(
         canvasHostHost: canvasHostHostForBridge,
         onRequest: (nodeId, req) => handleBridgeRequest(nodeId, req),
         onAuthenticated: async (node) => {
-          const host = node.displayName?.trim() || node.nodeId;
-          const ip = node.remoteIp?.trim();
-          const version = node.version?.trim() || "unknown";
-          const platform = node.platform?.trim() || undefined;
-          const deviceFamily = node.deviceFamily?.trim() || undefined;
-          const modelIdentifier = node.modelIdentifier?.trim() || undefined;
-          const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason node-connected`;
-          upsertPresence(node.nodeId, {
-            host,
-            ip,
-            version,
-            platform,
-            deviceFamily,
-            modelIdentifier,
-            mode: "remote",
-            reason: "node-connected",
-            lastInputSeconds: 0,
-            instanceId: node.nodeId,
-            text,
-          });
-          presenceVersion += 1;
-          broadcast(
-            "presence",
-            { presence: listSystemPresence() },
-            {
-              dropIfSlow: true,
-              stateVersion: {
-                presence: presenceVersion,
-                health: healthVersion,
-              },
-            },
-          );
+          beaconNodePresence(node, "node-connected");
+          startNodePresenceTimer(node);
 
           try {
             const cfg = await loadVoiceWakeConfig();
@@ -992,38 +1026,8 @@ export async function startGatewayServer(
         },
         onDisconnected: (node) => {
           bridgeUnsubscribeAll(node.nodeId);
-          const host = node.displayName?.trim() || node.nodeId;
-          const ip = node.remoteIp?.trim();
-          const version = node.version?.trim() || "unknown";
-          const platform = node.platform?.trim() || undefined;
-          const deviceFamily = node.deviceFamily?.trim() || undefined;
-          const modelIdentifier = node.modelIdentifier?.trim() || undefined;
-          const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason node-disconnected`;
-          upsertPresence(node.nodeId, {
-            host,
-            ip,
-            version,
-            platform,
-            deviceFamily,
-            modelIdentifier,
-            mode: "remote",
-            reason: "node-disconnected",
-            lastInputSeconds: 0,
-            instanceId: node.nodeId,
-            text,
-          });
-          presenceVersion += 1;
-          broadcast(
-            "presence",
-            { presence: listSystemPresence() },
-            {
-              dropIfSlow: true,
-              stateVersion: {
-                presence: presenceVersion,
-                health: healthVersion,
-              },
-            },
-          );
+          stopNodePresenceTimer(node.nodeId);
+          beaconNodePresence(node, "node-disconnected");
         },
         onEvent: handleBridgeEvent,
         onPairRequested: (request) => {

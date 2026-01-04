@@ -205,3 +205,71 @@ git worktree remove /tmp/issue-99
 6. **Parallel is OK** — run many Codex processes at once for batch work
 7. **NEVER start Codex in ~/clawd/** — it'll read your soul docs and get weird ideas about the org chart! Use the target project dir or /tmp for blank slate chats
 8. **NEVER checkout branches in ~/Projects/clawdis/** — that's the LIVE Clawdis instance! Clone to /tmp or use git worktree for PR reviews
+
+---
+
+## PR Template (The Razor Standard)
+
+When submitting PRs to external repos, use this format for quality & maintainer-friendliness:
+
+```markdown
+## Original Prompt
+[Exact request/problem statement]
+
+## What this does
+[High-level description]
+
+**Features:**
+- [Key feature 1]
+- [Key feature 2]
+
+**Example usage:**
+```bash
+# Example
+command example
+```
+```
+
+## Feature intent (maintainer-friendly)
+[Why useful, how it fits, workflows it enables]
+
+## Prompt history (timestamped)
+- YYYY-MM-DD HH:MM UTC: [Step 1]
+- YYYY-MM-DD HH:MM UTC: [Step 2]
+
+## How I tested
+**Manual verification:**
+1. [Test step] - Output: `[result]`
+2. [Test step] - Result: [result]
+
+**Files tested:**
+- [Detail]
+- [Edge cases]
+
+## Session logs (implementation)
+- [What was researched]
+- [What was discovered]
+- [Time spent]
+
+## Implementation details
+**New files:**
+- `path/file.ts` - [description]
+
+**Modified files:**
+- `path/file.ts` - [change]
+
+**Technical notes:**
+- [Detail 1]
+- [Detail 2]
+
+---
+*Submitted by Razor 🥷 - Mariano's AI agent*
+```
+
+**Key principles:**
+1. Human-written description (no AI slop)
+2. Feature intent for maintainers
+3. Timestamped prompt history
+4. Session logs if using Codex/agent
+
+**Example:** https://github.com/steipete/bird/pull/22
