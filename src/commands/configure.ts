@@ -53,6 +53,7 @@ import {
 import { setupProviders } from "./onboard-providers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
+import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 type WizardSection =
   | "model"
@@ -373,6 +374,8 @@ async function maybeInstallDaemon(params: {
 }) {
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({ env: process.env });
+  let shouldCheckLinger = false;
+  let shouldInstall = true;
   if (loaded) {
     const action = guardCancel(
       await select({
@@ -387,7 +390,8 @@ async function maybeInstallDaemon(params: {
     );
     if (action === "restart") {
       await service.restart({ stdout: process.stdout });
-      return;
+      shouldCheckLinger = true;
+      shouldInstall = false;
     }
     if (action === "skip") return;
     if (action === "reinstall") {
@@ -395,24 +399,37 @@ async function maybeInstallDaemon(params: {
     }
   }
 
-  const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-    process.argv[1]?.endsWith(".ts");
-  const { programArguments, workingDirectory } =
-    await resolveGatewayProgramArguments({ port: params.port, dev: devMode });
-  const environment: Record<string, string | undefined> = {
-    PATH: process.env.PATH,
-    CLAWDBOT_GATEWAY_TOKEN: params.gatewayToken,
-    CLAWDBOT_LAUNCHD_LABEL:
-      process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-  };
-  await service.install({
-    env: process.env,
-    stdout: process.stdout,
-    programArguments,
-    workingDirectory,
-    environment,
-  });
+  if (shouldInstall) {
+    const devMode =
+      process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
+      process.argv[1]?.endsWith(".ts");
+    const { programArguments, workingDirectory } =
+      await resolveGatewayProgramArguments({ port: params.port, dev: devMode });
+    const environment: Record<string, string | undefined> = {
+      PATH: process.env.PATH,
+      CLAWDBOT_GATEWAY_TOKEN: params.gatewayToken,
+      CLAWDBOT_LAUNCHD_LABEL:
+        process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+    };
+    await service.install({
+      env: process.env,
+      stdout: process.stdout,
+      programArguments,
+      workingDirectory,
+      environment,
+    });
+    shouldCheckLinger = true;
+  }
+
+  if (shouldCheckLinger) {
+    await ensureSystemdUserLingerInteractive({
+      runtime: params.runtime,
+      prompter: { confirm, note },
+      reason:
+        "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+      requireConfirm: true,
+    });
+  }
 }
 
 export async function runConfigureWizard(

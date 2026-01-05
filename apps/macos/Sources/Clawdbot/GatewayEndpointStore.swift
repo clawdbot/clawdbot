@@ -262,12 +262,10 @@ actor GatewayEndpointStore {
         tailscaleIP: String?) -> String
     {
         switch bindMode {
-        case "tailnet":
-            return tailscaleIP ?? "127.0.0.1"
-        case "auto":
-            return tailscaleIP ?? "127.0.0.1"
+        case "tailnet", "auto":
+            tailscaleIP ?? "127.0.0.1"
         default:
-            return "127.0.0.1"
+            "127.0.0.1"
         }
     }
 }

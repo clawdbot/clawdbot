@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 
 import type { SessionsListResult } from "../types";
@@ -12,7 +13,9 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   messages: unknown[];
+  toolMessages: unknown[];
   stream: string | null;
+  streamStartedAt: number | null;
   draft: string;
   connected: boolean;
   canSend: boolean;
@@ -77,17 +80,20 @@ export function renderChat(props: ChatProps) {
 
       <div class="chat-thread" role="log" aria-live="polite">
         ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
-        ${props.messages.map((m) => renderMessage(m))}
-        ${props.stream
-          ? renderMessage(
+        ${repeat(buildChatItems(props), (item) => item.key, (item) => {
+          if (item.kind === "reading-indicator") return renderReadingIndicator();
+          if (item.kind === "stream") {
+            return renderMessage(
               {
                 role: "assistant",
-                content: [{ type: "text", text: props.stream }],
-                timestamp: Date.now(),
+                content: [{ type: "text", text: item.text }],
+                timestamp: item.startedAt,
               },
               { streaming: true },
-            )
-          : nothing}
+            );
+          }
+          return renderMessage(item.message);
+        })}
       </div>
 
       <div class="chat-compose">
@@ -119,6 +125,76 @@ export function renderChat(props: ChatProps) {
       </div>
     </section>
   `;
+}
+
+type ChatItem =
+  | { kind: "message"; key: string; message: unknown }
+  | { kind: "stream"; key: string; text: string; startedAt: number }
+  | { kind: "reading-indicator"; key: string };
+
+function buildChatItems(props: ChatProps): ChatItem[] {
+  const items: ChatItem[] = [];
+  const history = Array.isArray(props.messages) ? props.messages : [];
+  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  for (let i = 0; i < history.length; i++) {
+    items.push({ kind: "message", key: messageKey(history[i], i), message: history[i] });
+  }
+  for (let i = 0; i < tools.length; i++) {
+    items.push({
+      kind: "message",
+      key: messageKey(tools[i], i + history.length),
+      message: tools[i],
+    });
+  }
+
+  if (props.stream !== null) {
+    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
+    if (props.stream.trim().length > 0) {
+      items.push({
+        kind: "stream",
+        key,
+        text: props.stream,
+        startedAt: props.streamStartedAt ?? Date.now(),
+      });
+    } else {
+      items.push({ kind: "reading-indicator", key });
+    }
+  }
+
+  return items;
+}
+
+function messageKey(message: unknown, index: number): string {
+  const m = message as Record<string, unknown>;
+  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  if (toolCallId) return `tool:${toolCallId}`;
+  const id = typeof m.id === "string" ? m.id : "";
+  if (id) return `msg:${id}`;
+  const messageId = typeof m.messageId === "string" ? m.messageId : "";
+  if (messageId) return `msg:${messageId}`;
+  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
+  const role = typeof m.role === "string" ? m.role : "unknown";
+  const fingerprint = extractText(message) ?? (typeof m.content === "string" ? m.content : null);
+  const seed = fingerprint ?? safeJson(message) ?? String(index);
+  const hash = fnv1a(seed);
+  return timestamp ? `msg:${role}:${timestamp}:${hash}` : `msg:${role}:${hash}`;
+}
+
+function safeJson(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 type SessionOption = {
@@ -169,6 +245,20 @@ function resolveSessionOptions(
   }
 
   return result;
+}
+
+function renderReadingIndicator() {
+  return html`
+    <div class="chat-line assistant">
+      <div class="chat-msg">
+        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+          <span class="chat-reading-indicator__dots">
+            <span></span><span></span><span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderMessage(message: unknown, opts?: { streaming?: boolean }) {

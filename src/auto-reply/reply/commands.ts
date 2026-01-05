@@ -1,4 +1,10 @@
+import fs from "node:fs";
+
+import { getEnvApiKey } from "@mariozechner/pi-ai";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveOAuthPath } from "../../config/paths.js";
 import {
   type SessionEntry,
   type SessionScope,
@@ -35,6 +41,59 @@ export type CommandContext = {
   from?: string;
   to?: string;
 };
+
+function hasOAuthCredentials(provider: string): boolean {
+  try {
+    const oauthPath = resolveOAuthPath();
+    if (!fs.existsSync(oauthPath)) return false;
+    const raw = fs.readFileSync(oauthPath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const entry = parsed?.[provider] as
+      | {
+          refresh?: string;
+          refresh_token?: string;
+          refreshToken?: string;
+          access?: string;
+          access_token?: string;
+          accessToken?: string;
+        }
+      | undefined;
+    if (!entry) return false;
+    const refresh =
+      entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
+    const access =
+      entry.access ?? entry.access_token ?? entry.accessToken ?? "";
+    return Boolean(refresh.trim() && access.trim());
+  } catch {
+    return false;
+  }
+}
+
+function resolveModelAuthLabel(provider?: string): string | undefined {
+  const resolved = provider?.trim();
+  if (!resolved) return undefined;
+
+  try {
+    const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
+    const stored = authStorage.get(resolved);
+    if (stored?.type === "oauth") return "oauth";
+    if (stored?.type === "api_key") return "api-key";
+  } catch {
+    // ignore auth storage errors
+  }
+
+  if (resolved === "anthropic") {
+    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
+    if (oauthEnv?.trim()) return "oauth";
+  }
+
+  if (hasOAuthCredentials(resolved)) return "oauth";
+
+  const envKey = getEnvApiKey(resolved);
+  if (envKey?.trim()) return "api-key";
+
+  return "unknown";
+}
 
 export function buildCommandContext(params: {
   ctx: MsgContext;
@@ -146,6 +205,7 @@ export async function handleCommands(params: {
     resolvedVerboseLevel,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
+    provider,
     model,
     contextTokens,
     isGroup,
@@ -297,7 +357,7 @@ export async function handleCommands(params: {
       : undefined;
     const statusText = buildStatusMessage({
       agent: {
-        ...(cfg.agent ?? {}),
+        ...cfg.agent,
         model,
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,
@@ -314,6 +374,7 @@ export async function handleCommands(params: {
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
       resolvedElevated: resolvedElevatedLevel,
+      modelAuth: resolveModelAuthLabel(provider),
       webLinked,
       webAuthAgeMs,
       heartbeatSeconds,

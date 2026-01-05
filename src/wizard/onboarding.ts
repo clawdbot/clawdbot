@@ -1,6 +1,10 @@
 import path from "node:path";
 
-import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
+import {
+  loginAnthropic,
+  type OAuthCredentials,
+  type OAuthProvider,
+} from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
@@ -30,6 +34,7 @@ import {
 import { setupProviders } from "../commands/onboard-providers.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
+import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -247,7 +252,8 @@ export async function runOnboardingWizard(
     try {
       const agentDir = resolveClawdbotAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      await authStorage.login("openai-codex", {
+      const provider = "openai-codex" as unknown as OAuthProvider;
+      await authStorage.login(provider, {
         onAuth: async ({ url }) => {
           if (isRemote) {
             spin.stop("OAuth URL ready");
@@ -532,6 +538,17 @@ export async function runOnboardingWizard(
         environment,
       });
     }
+
+    await ensureSystemdUserLingerInteractive({
+      runtime,
+      prompter: {
+        confirm: prompter.confirm,
+        note: prompter.note,
+      },
+      reason:
+        "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+      requireConfirm: true,
+    });
   }
 
   await sleep(1500);

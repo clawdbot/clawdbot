@@ -1,9 +1,13 @@
+import { getEnvApiKey } from "@mariozechner/pi-ai";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../../agents/defaults.js";
+import { hydrateAuthStorage } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   type ModelAliasIndex,
@@ -14,6 +18,7 @@ import {
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -38,6 +43,55 @@ import {
 } from "./queue.js";
 
 const SYSTEM_MARK = "⚙️";
+
+const maskApiKey = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "missing";
+  if (trimmed.length <= 16) return trimmed;
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
+};
+
+const resolveAuthLabel = async (
+  provider: string,
+  authStorage: ReturnType<typeof discoverAuthStorage>,
+  authPaths: { authPath: string; modelsPath: string },
+): Promise<{ label: string; source: string }> => {
+  const formatPath = (value: string) => shortenHomePath(value);
+  const stored = authStorage.get(provider);
+  if (stored?.type === "oauth") {
+    const email = stored.email?.trim();
+    return {
+      label: email ? `OAuth ${email}` : "OAuth (unknown)",
+      source: `auth.json: ${formatPath(authPaths.authPath)}`,
+    };
+  }
+  if (stored?.type === "api_key") {
+    return {
+      label: maskApiKey(stored.key),
+      source: `auth.json: ${formatPath(authPaths.authPath)}`,
+    };
+  }
+  const envKey = getEnvApiKey(provider);
+  if (envKey) return { label: maskApiKey(envKey), source: "env" };
+  if (provider === "anthropic") {
+    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
+    if (oauthEnv) {
+      return { label: "OAuth (env)", source: "env: ANTHROPIC_OAUTH_TOKEN" };
+    }
+  }
+  try {
+    const key = await authStorage.getApiKey(provider);
+    if (key) {
+      return {
+        label: maskApiKey(key),
+        source: `models.json: ${formatPath(authPaths.modelsPath)}`,
+      };
+    }
+  } catch {
+    // ignore missing auth
+  }
+  return { label: "missing", source: "missing" };
+};
 
 export type InlineDirectives = {
   cleaned: string;
@@ -196,11 +250,29 @@ export async function handleDirectiveOnly(params: {
   } = params;
 
   if (directives.hasModelDirective) {
+    const modelDirective = directives.rawModelDirective?.trim().toLowerCase();
     const isModelListAlias =
-      directives.rawModelDirective?.trim().toLowerCase() === "status";
+      modelDirective === "status" || modelDirective === "list";
     if (!directives.rawModelDirective || isModelListAlias) {
       if (allowedModelCatalog.length === 0) {
         return { text: "No models available." };
+      }
+      const agentDir = resolveClawdbotAgentDir();
+      const authStorage = discoverAuthStorage(agentDir);
+      const authPaths = {
+        authPath: `${agentDir}/auth.json`,
+        modelsPath: `${agentDir}/models.json`,
+      };
+      hydrateAuthStorage(authStorage);
+      const authByProvider = new Map<string, string>();
+      for (const entry of allowedModelCatalog) {
+        if (authByProvider.has(entry.provider)) continue;
+        const auth = await resolveAuthLabel(
+          entry.provider,
+          authStorage,
+          authPaths,
+        );
+        authByProvider.set(entry.provider, `${auth.label} (${auth.source})`);
       }
       const current = `${params.provider}/${params.model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
@@ -219,9 +291,11 @@ export async function handleDirectiveOnly(params: {
           aliases && aliases.length > 0
             ? ` (alias: ${aliases.join(", ")})`
             : "";
-        const suffix =
+        const nameSuffix =
           entry.name && entry.name !== entry.id ? ` — ${entry.name}` : "";
-        lines.push(`- ${label}${aliasSuffix}${suffix}`);
+        const authLabel = authByProvider.get(entry.provider) ?? "missing";
+        const authSuffix = ` — auth: ${authLabel}`;
+        lines.push(`- ${label}${aliasSuffix}${nameSuffix}${authSuffix}`);
       }
       return { text: lines.join("\n") };
     }

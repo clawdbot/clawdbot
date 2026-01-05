@@ -35,6 +35,7 @@ type StatusArgs = {
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
   resolvedElevated?: ElevatedLevel;
+  modelAuth?: string;
   now?: number;
   webLinked?: boolean;
   webAuthAgeMs?: number | null;
@@ -236,6 +237,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelLabel = model ? `${provider}/${model}` : "unknown";
 
   const agentLine = `Agent: embedded pi • ${modelLabel}`;
+  const authLine = args.modelAuth ? `Model auth: ${args.modelAuth}` : undefined;
 
   const workspaceLine = args.workspaceDir
     ? `Workspace: ${shortenHomePath(args.workspaceDir)}`
@@ -245,6 +247,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     "⚙️ Status",
     webLine,
     agentLine,
+    authLine,
     runtime.line,
     workspaceLine,
     contextLine,

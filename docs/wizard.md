@@ -72,8 +72,12 @@ It does **not** install or change anything on the remote host.
 
 6) **Daemon install**
    - macOS: LaunchAgent
+     - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
    - Linux: systemd user unit
+     - Wizard enables lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
+     - Requires sudo (writes `/var/lib/systemd/linger`).
    - Windows: Scheduled Task
+     - Runs on user logon; headless/system services are not configured by default.
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.

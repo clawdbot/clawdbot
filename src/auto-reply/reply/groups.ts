@@ -6,6 +6,43 @@ import type {
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 
+function normalizeDiscordSlug(value?: string | null) {
+  if (!value) return "";
+  let text = value.trim().toLowerCase();
+  if (!text) return "";
+  text = text.replace(/^[@#]+/, "");
+  text = text.replace(/[\s_]+/g, "-");
+  text = text.replace(/[^a-z0-9-]+/g, "-");
+  text = text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  return text;
+}
+
+function normalizeSlackSlug(raw?: string | null) {
+  const trimmed = raw?.trim().toLowerCase() ?? "";
+  if (!trimmed) return "";
+  const dashed = trimmed.replace(/\s+/g, "-");
+  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
+  return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+}
+
+function resolveDiscordGuildEntry(
+  guilds: NonNullable<ClawdbotConfig["discord"]>["guilds"],
+  groupSpace?: string,
+) {
+  if (!guilds || Object.keys(guilds).length === 0) return null;
+  const space = groupSpace?.trim();
+  if (space && guilds[space]) return guilds[space];
+  const normalized = normalizeDiscordSlug(space);
+  if (normalized && guilds[normalized]) return guilds[normalized];
+  if (normalized) {
+    const match = Object.values(guilds).find(
+      (entry) => normalizeDiscordSlug(entry?.slug ?? undefined) === normalized,
+    );
+    if (match) return match;
+  }
+  return guilds["*"] ?? null;
+}
+
 export function resolveGroupRequireMention(params: {
   cfg: ClawdbotConfig;
   ctx: TemplateContext;
@@ -14,6 +51,8 @@ export function resolveGroupRequireMention(params: {
   const { cfg, ctx, groupResolution } = params;
   const surface = groupResolution?.surface ?? ctx.Surface?.trim().toLowerCase();
   const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
+  const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
+  const groupSpace = ctx.GroupSpace?.trim();
   if (surface === "telegram") {
     if (groupId) {
       const groupConfig = cfg.telegram?.groups?.[groupId];
@@ -45,6 +84,58 @@ export function resolveGroupRequireMention(params: {
     }
     const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
     if (typeof groupDefault === "boolean") return groupDefault;
+    return true;
+  }
+  if (surface === "discord") {
+    const guildEntry = resolveDiscordGuildEntry(
+      cfg.discord?.guilds,
+      groupSpace,
+    );
+    const channelEntries = guildEntry?.channels;
+    if (channelEntries && Object.keys(channelEntries).length > 0) {
+      const channelSlug = normalizeDiscordSlug(groupRoom);
+      const entry =
+        (groupId ? channelEntries[groupId] : undefined) ??
+        (channelSlug
+          ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
+          : undefined) ??
+        (groupRoom
+          ? channelEntries[normalizeDiscordSlug(groupRoom)]
+          : undefined);
+      if (entry && typeof entry.requireMention === "boolean") {
+        return entry.requireMention;
+      }
+    }
+    if (typeof guildEntry?.requireMention === "boolean") {
+      return guildEntry.requireMention;
+    }
+    return true;
+  }
+  if (surface === "slack") {
+    const channels = cfg.slack?.channels ?? {};
+    const keys = Object.keys(channels);
+    if (keys.length === 0) return true;
+    const channelId = groupId?.trim();
+    const channelName = groupRoom?.replace(/^#/, "");
+    const normalizedName = normalizeSlackSlug(channelName);
+    const candidates = [
+      channelId ?? "",
+      channelName ? `#${channelName}` : "",
+      channelName ?? "",
+      normalizedName,
+    ].filter(Boolean);
+    let matched: { requireMention?: boolean } | undefined;
+    for (const candidate of candidates) {
+      if (candidate && channels[candidate]) {
+        matched = channels[candidate];
+        break;
+      }
+    }
+    const fallback = channels["*"];
+    const resolved = matched ?? fallback;
+    if (typeof resolved?.requireMention === "boolean") {
+      return resolved.requireMention;
+    }
     return true;
   }
   return true;

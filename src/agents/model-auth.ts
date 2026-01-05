@@ -124,6 +124,13 @@ function migrateOAuthStorageToAuthStorage(
   }
 }
 
+export function hydrateAuthStorage(
+  authStorage: ReturnType<typeof discoverAuthStorage>,
+): void {
+  ensureOAuthStorage();
+  migrateOAuthStorageToAuthStorage(authStorage);
+}
+
 function isOAuthProvider(provider: string): provider is OAuthProvider {
   return (
     provider === "anthropic" ||

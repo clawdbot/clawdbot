@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { agentCommand } from "../../commands/agent.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { buildMessageWithAttachments } from "../chat-attachments.js";
@@ -115,12 +116,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     context.chatAbortControllers.delete(runId);
     context.chatRunBuffers.delete(runId);
     context.chatDeltaSentAt.delete(runId);
-    context.removeChatRun(active.sessionId, runId, sessionKey);
+    context.removeChatRun(runId, runId, sessionKey);
 
     const payload = {
       runId,
       sessionKey,
-      seq: (context.agentRunSeq.get(active.sessionId) ?? 0) + 1,
+      seq: (context.agentRunSeq.get(runId) ?? 0) + 1,
       state: "aborted" as const,
     };
     context.broadcast("chat", payload);
@@ -201,6 +202,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       lastTo: entry?.lastTo,
     };
     const clientRunId = p.idempotencyKey;
+    registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
 
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -236,7 +238,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionId,
         sessionKey: p.sessionKey,
       });
-      context.addChatRun(sessionId, {
+      context.addChatRun(clientRunId, {
         sessionKey: p.sessionKey,
         clientRunId,
       });
@@ -252,6 +254,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         {
           message: messageWithAttachments,
           sessionId,
+          runId: clientRunId,
           thinking: p.thinking,
           deliver: p.deliver,
           timeout: Math.ceil(timeoutMs / 1000).toString(),

@@ -13,6 +13,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 import { healthCommand } from "./health.js";
 import { applyMinimaxConfig, setAnthropicApiKey } from "./onboard-auth.js";
 import {
@@ -231,6 +232,7 @@ export async function runNonInteractiveOnboarding(
       workingDirectory,
       environment,
     });
+    await ensureSystemdUserLingerNonInteractive({ runtime });
   }
 
   if (!opts.skipHealth) {

@@ -12,6 +12,7 @@ export type ChatState = {
   chatMessage: string;
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamStartedAt: number | null;
   lastError: string | null;
 };
 
@@ -62,6 +63,7 @@ export async function sendChat(state: ChatState): Promise<boolean> {
   const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
+  state.chatStreamStartedAt = now;
   try {
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
@@ -74,6 +76,7 @@ export async function sendChat(state: ChatState): Promise<boolean> {
     const error = String(err);
     state.chatRunId = null;
     state.chatStream = null;
+    state.chatStreamStartedAt = null;
     state.chatMessage = msg;
     state.lastError = error;
     state.chatMessages = [
@@ -100,13 +103,25 @@ export function handleChatEvent(
     return null;
 
   if (payload.state === "delta") {
-    state.chatStream = extractText(payload.message) ?? state.chatStream;
+    const next = extractText(payload.message);
+    if (typeof next === "string") {
+      const current = state.chatStream ?? "";
+      if (!current || next.length >= current.length) {
+        state.chatStream = next;
+      }
+    }
   } else if (payload.state === "final") {
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatStreamStartedAt = null;
+  } else if (payload.state === "aborted") {
+    state.chatStream = null;
+    state.chatRunId = null;
+    state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;

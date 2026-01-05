@@ -466,6 +466,21 @@ cd ~/path/to/clawdbot
 codex --full-auto "debug why clawdbot gateway won't start"
 ```
 
+### Gateway stops after I log out (Linux)
+
+Linux installs use a systemd **user** service. By default, systemd stops user
+services on logout/idle, which kills the Gateway.
+
+Fix:
+```bash
+sudo loginctl enable-linger $USER
+```
+
+**macOS/Windows**
+
+Gateway daemons run in the user session by default. Keep the user logged in.
+Headless/system services are not configured out of the box.
+
 ### Processes keep restarting after I kill them
 
 The gateway runs under a supervisor that auto-restarts it. You need to stop the supervisor, not just kill the process.
@@ -555,6 +570,8 @@ Use `/model` to switch without restarting:
 /model gemini
 /model gemini-flash
 ```
+
+List available models with `/model`, `/model list`, or `/model status`.
 
 Clawdbot ships a few default model shorthands (you can override them in config):
 `opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`.

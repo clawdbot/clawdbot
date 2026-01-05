@@ -178,6 +178,7 @@ export class ClawdbotApp extends LitElement {
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
+  private eventLogBuffer: EventLogEntry[] = [];
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -186,6 +187,7 @@ export class ClawdbotApp extends LitElement {
   @state() chatMessages: unknown[] = [];
   @state() chatToolMessages: unknown[] = [];
   @state() chatStream: string | null = null;
+  @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
   @state() chatThinkingLevel: string | null = null;
 
@@ -341,6 +343,7 @@ export class ClawdbotApp extends LitElement {
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
+  private chatHasAutoScrolled = false;
   private nodesPollInterval: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
@@ -386,10 +389,14 @@ export class ClawdbotApp extends LitElement {
         changed.has("chatToolMessages") ||
         changed.has("chatStream") ||
         changed.has("chatLoading") ||
-        changed.has("chatMessage") ||
         changed.has("tab"))
     ) {
-      this.scheduleChatScroll();
+      const forcedByTab = changed.has("tab");
+      const forcedByLoad =
+        changed.has("chatLoading") &&
+        changed.get("chatLoading") === true &&
+        this.chatLoading === false;
+      this.scheduleChatScroll(forcedByTab || forcedByLoad || !this.chatHasAutoScrolled);
     }
   }
 
@@ -424,7 +431,7 @@ export class ClawdbotApp extends LitElement {
     this.client.start();
   }
 
-  private scheduleChatScroll() {
+  private scheduleChatScroll(force = false) {
     if (this.chatScrollFrame) cancelAnimationFrame(this.chatScrollFrame);
     if (this.chatScrollTimeout != null) {
       clearTimeout(this.chatScrollTimeout);
@@ -434,11 +441,19 @@ export class ClawdbotApp extends LitElement {
       this.chatScrollFrame = null;
       const container = this.querySelector(".chat-thread") as HTMLElement | null;
       if (!container) return;
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const shouldStick = force || distanceFromBottom < 140;
+      if (!shouldStick) return;
+      if (force) this.chatHasAutoScrolled = true;
       container.scrollTop = container.scrollHeight;
       this.chatScrollTimeout = window.setTimeout(() => {
         this.chatScrollTimeout = null;
         const latest = this.querySelector(".chat-thread") as HTMLElement | null;
         if (!latest) return;
+        const latestDistanceFromBottom =
+          latest.scrollHeight - latest.scrollTop - latest.clientHeight;
+        if (!force && latestDistanceFromBottom >= 180) return;
         latest.scrollTop = latest.scrollHeight;
       }, 120);
     });
@@ -475,6 +490,10 @@ export class ClawdbotApp extends LitElement {
     this.toolStreamById.clear();
     this.toolStreamOrder = [];
     this.chatToolMessages = [];
+  }
+
+  resetChatScroll() {
+    this.chatHasAutoScrolled = false;
   }
 
   private trimToolStream() {
@@ -520,6 +539,8 @@ export class ClawdbotApp extends LitElement {
     if (sessionKey && sessionKey !== this.sessionKey) return;
     // Fallback: only accept session-less events for the active run.
     if (!sessionKey && this.chatRunId && payload.runId !== this.chatRunId) return;
+    if (this.chatRunId && payload.runId !== this.chatRunId) return;
+    if (!this.chatRunId) return;
 
     const data = payload.data ?? {};
     const toolCallId =
@@ -564,10 +585,13 @@ export class ClawdbotApp extends LitElement {
   }
 
   private onEvent(evt: GatewayEventFrame) {
-    this.eventLog = [
+    this.eventLogBuffer = [
       { ts: Date.now(), event: evt.event, payload: evt.payload },
-      ...this.eventLog,
+      ...this.eventLogBuffer,
     ].slice(0, 250);
+    if (this.tab === "debug") {
+      this.eventLog = this.eventLogBuffer;
+    }
 
     if (evt.event === "agent") {
       this.handleAgentEvent(evt.payload as AgentEventPayload | undefined);
@@ -577,6 +601,9 @@ export class ClawdbotApp extends LitElement {
     if (evt.event === "chat") {
       const payload = evt.payload as ChatEventPayload | undefined;
       const state = handleChatEvent(this, payload);
+      if (state === "final" || state === "error" || state === "aborted") {
+        this.resetToolStream();
+      }
       if (state === "final") void loadChatHistory(this);
       return;
     }
@@ -633,6 +660,7 @@ export class ClawdbotApp extends LitElement {
 
   setTab(next: Tab) {
     if (this.tab !== next) this.tab = next;
+    if (next === "chat") this.chatHasAutoScrolled = false;
     void this.refreshActiveTab();
     this.syncUrlWithTab(next, false);
   }
@@ -667,7 +695,10 @@ export class ClawdbotApp extends LitElement {
       await loadConfigSchema(this);
       await loadConfig(this);
     }
-    if (this.tab === "debug") await loadDebug(this);
+    if (this.tab === "debug") {
+      await loadDebug(this);
+      this.eventLog = this.eventLogBuffer;
+    }
   }
 
   private inferBasePath() {
@@ -740,6 +771,7 @@ export class ClawdbotApp extends LitElement {
 
   private setTabFromRoute(next: Tab) {
     if (this.tab !== next) this.tab = next;
+    if (next === "chat") this.chatHasAutoScrolled = false;
     if (this.connected) void this.refreshActiveTab();
   }
 
@@ -776,8 +808,16 @@ export class ClawdbotApp extends LitElement {
   }
   async handleSendChat() {
     if (!this.connected) return;
+    this.resetToolStream();
     const ok = await sendChat(this);
-    if (ok) void loadChatHistory(this);
+    if (ok && this.chatRunId) {
+      // chat.send returned (run finished), but we missed the chat final event.
+      this.chatRunId = null;
+      this.chatStream = null;
+      this.chatStreamStartedAt = null;
+      this.resetToolStream();
+      void loadChatHistory(this);
+    }
     this.scheduleChatScroll();
   }
 

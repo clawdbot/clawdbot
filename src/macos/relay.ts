@@ -32,13 +32,6 @@ async function main() {
     process.exit(0);
   }
 
-  if (process.env.CLAWDBOT_SMOKE_QR === "1") {
-    const { renderQrPngBase64 } = await import("../web/qr-image.js");
-    await renderQrPngBase64("clawdbot-smoke");
-    console.log("smoke: qr ok");
-    return;
-  }
-
   await patchBunLongForProtobuf();
 
   const { loadDotEnv } = await import("../infra/dotenv.js");
@@ -52,11 +45,15 @@ async function main() {
 
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
+  const { isUnhandledRejectionHandled } = await import(
+    "../infra/unhandled-rejections.js"
+  );
 
   const { buildProgram } = await import("../cli/program.js");
   const program = buildProgram();
 
   process.on("unhandledRejection", (reason, _promise) => {
+    if (isUnhandledRejectionHandled(reason)) return;
     console.error(
       "[clawdbot] Unhandled promise rejection:",
       reason instanceof Error ? (reason.stack ?? reason.message) : reason,

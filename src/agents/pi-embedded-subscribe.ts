@@ -195,56 +195,203 @@ export function subscribeEmbeddedPiSession(params: {
     }
   };
 
-  const findSentenceBreak = (window: string, minChars: number): number => {
-    if (!window) return -1;
-    const matches = window.matchAll(/[.!?](?=\s|$)/g);
-    let idx = -1;
-    for (const match of matches) {
-      const at = match.index ?? -1;
-      if (at < minChars) continue;
-      idx = at + 1;
-    }
-    return idx;
+  type FenceSpan = {
+    start: number;
+    end: number;
+    openLine: string;
+    marker: string;
+    indent: string;
   };
 
-  const findWhitespaceBreak = (window: string, minChars: number): number => {
-    for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window[i])) return i;
-    }
-    return -1;
+  type FenceSplit = {
+    closeFenceLine: string;
+    reopenFenceLine: string;
   };
 
-  const pickBreakIndex = (buffer: string): number => {
-    if (!blockChunking) return -1;
+  type BreakResult = {
+    index: number;
+    fenceSplit?: FenceSplit;
+  };
+
+  const parseFenceSpans = (buffer: string): FenceSpan[] => {
+    const spans: FenceSpan[] = [];
+    let open:
+      | {
+          start: number;
+          markerChar: string;
+          markerLen: number;
+          openLine: string;
+          marker: string;
+          indent: string;
+        }
+      | undefined;
+    let offset = 0;
+    while (offset <= buffer.length) {
+      const nextNewline = buffer.indexOf("\n", offset);
+      const lineEnd = nextNewline === -1 ? buffer.length : nextNewline;
+      const line = buffer.slice(offset, lineEnd);
+      const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (match) {
+        const indent = match[1];
+        const marker = match[2];
+        const markerChar = marker[0];
+        const markerLen = marker.length;
+        if (!open) {
+          open = {
+            start: offset,
+            markerChar,
+            markerLen,
+            openLine: line,
+            marker,
+            indent,
+          };
+        } else if (
+          open.markerChar === markerChar &&
+          markerLen >= open.markerLen
+        ) {
+          const end = nextNewline === -1 ? buffer.length : nextNewline + 1;
+          spans.push({
+            start: open.start,
+            end,
+            openLine: open.openLine,
+            marker: open.marker,
+            indent: open.indent,
+          });
+          open = undefined;
+        }
+      }
+      if (nextNewline === -1) break;
+      offset = nextNewline + 1;
+    }
+    if (open) {
+      spans.push({
+        start: open.start,
+        end: buffer.length,
+        openLine: open.openLine,
+        marker: open.marker,
+        indent: open.indent,
+      });
+    }
+    return spans;
+  };
+
+  const findFenceSpanAt = (
+    spans: FenceSpan[],
+    index: number,
+  ): FenceSpan | undefined =>
+    spans.find((span) => index > span.start && index < span.end);
+
+  const isSafeBreak = (spans: FenceSpan[], index: number): boolean =>
+    !findFenceSpanAt(spans, index);
+
+  const pickSoftBreakIndex = (buffer: string): BreakResult => {
+    if (!blockChunking) return { index: -1 };
     const minChars = Math.max(1, Math.floor(blockChunking.minChars));
-    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
-    if (buffer.length < minChars) return -1;
-    const window = buffer.slice(0, Math.min(maxChars, buffer.length));
-
+    if (buffer.length < minChars) return { index: -1 };
+    const fenceSpans = parseFenceSpans(buffer);
     const preference = blockChunking.breakPreference ?? "paragraph";
-    const paragraphIdx = window.lastIndexOf("\n\n");
-    if (preference === "paragraph" && paragraphIdx >= minChars) {
-      return paragraphIdx;
+
+    if (preference === "paragraph") {
+      let paragraphIdx = buffer.lastIndexOf("\n\n");
+      while (paragraphIdx >= minChars) {
+        if (isSafeBreak(fenceSpans, paragraphIdx)) {
+          return { index: paragraphIdx };
+        }
+        paragraphIdx = buffer.lastIndexOf("\n\n", paragraphIdx - 1);
+      }
     }
 
-    const newlineIdx = window.lastIndexOf("\n");
-    if (
-      (preference === "paragraph" || preference === "newline") &&
-      newlineIdx >= minChars
-    ) {
-      return newlineIdx;
+    if (preference === "paragraph" || preference === "newline") {
+      let newlineIdx = buffer.lastIndexOf("\n");
+      while (newlineIdx >= minChars) {
+        if (isSafeBreak(fenceSpans, newlineIdx)) {
+          return { index: newlineIdx };
+        }
+        newlineIdx = buffer.lastIndexOf("\n", newlineIdx - 1);
+      }
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSentenceBreak(window, minChars);
-      if (sentenceIdx >= minChars) return sentenceIdx;
+      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index ?? -1;
+        if (at < minChars) continue;
+        const candidate = at + 1;
+        if (isSafeBreak(fenceSpans, candidate)) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) return { index: sentenceIdx };
     }
 
-    const whitespaceIdx = findWhitespaceBreak(window, minChars);
-    if (whitespaceIdx >= minChars) return whitespaceIdx;
+    return { index: -1 };
+  };
 
-    if (buffer.length >= maxChars) return maxChars;
-    return -1;
+  const pickBreakIndex = (buffer: string): BreakResult => {
+    if (!blockChunking) return { index: -1 };
+    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
+    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
+    if (buffer.length < minChars) return { index: -1 };
+    const window = buffer.slice(0, Math.min(maxChars, buffer.length));
+    const fenceSpans = parseFenceSpans(buffer);
+
+    const preference = blockChunking.breakPreference ?? "paragraph";
+    if (preference === "paragraph") {
+      let paragraphIdx = window.lastIndexOf("\n\n");
+      while (paragraphIdx >= minChars) {
+        if (isSafeBreak(fenceSpans, paragraphIdx)) {
+          return { index: paragraphIdx };
+        }
+        paragraphIdx = window.lastIndexOf("\n\n", paragraphIdx - 1);
+      }
+    }
+
+    if (preference === "paragraph" || preference === "newline") {
+      let newlineIdx = window.lastIndexOf("\n");
+      while (newlineIdx >= minChars) {
+        if (isSafeBreak(fenceSpans, newlineIdx)) {
+          return { index: newlineIdx };
+        }
+        newlineIdx = window.lastIndexOf("\n", newlineIdx - 1);
+      }
+    }
+
+    if (preference !== "newline") {
+      const matches = window.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index ?? -1;
+        if (at < minChars) continue;
+        const candidate = at + 1;
+        if (isSafeBreak(fenceSpans, candidate)) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) return { index: sentenceIdx };
+    }
+
+    for (let i = window.length - 1; i >= minChars; i--) {
+      if (/\s/.test(window[i]) && isSafeBreak(fenceSpans, i)) {
+        return { index: i };
+      }
+    }
+
+    if (buffer.length >= maxChars) {
+      if (isSafeBreak(fenceSpans, maxChars)) return { index: maxChars };
+      const fence = findFenceSpanAt(fenceSpans, maxChars);
+      if (fence) {
+        return {
+          index: maxChars,
+          fenceSplit: {
+            closeFenceLine: `${fence.indent}${fence.marker}`,
+            reopenFenceLine: fence.openLine,
+          },
+        };
+      }
+      return { index: maxChars };
+    }
+    return { index: -1 };
   };
 
   const emitBlockChunk = (text: string) => {
@@ -268,36 +415,50 @@ export function subscribeEmbeddedPiSession(params: {
     if (!blockChunking) return;
     const minChars = Math.max(1, Math.floor(blockChunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
-    // Force flush small remainders as a single chunk to avoid re-splitting.
-    if (force && blockBuffer.length > 0 && blockBuffer.length <= maxChars) {
-      emitBlockChunk(blockBuffer);
-      blockBuffer = "";
-      return;
-    }
     if (blockBuffer.length < minChars && !force) return;
     while (
       blockBuffer.length >= minChars ||
       (force && blockBuffer.length > 0)
     ) {
-      const breakIdx = pickBreakIndex(blockBuffer);
-      if (breakIdx <= 0) {
+      const breakResult =
+        force && blockBuffer.length <= maxChars
+          ? pickSoftBreakIndex(blockBuffer)
+          : pickBreakIndex(blockBuffer);
+      if (breakResult.index <= 0) {
         if (force) {
           emitBlockChunk(blockBuffer);
           blockBuffer = "";
         }
         return;
       }
-      const rawChunk = blockBuffer.slice(0, breakIdx);
+      const breakIdx = breakResult.index;
+      let rawChunk = blockBuffer.slice(0, breakIdx);
       if (rawChunk.trim().length === 0) {
         blockBuffer = blockBuffer.slice(breakIdx).trimStart();
         continue;
       }
+      let nextBuffer = blockBuffer.slice(breakIdx);
+      const fenceSplit = breakResult.fenceSplit;
+      if (fenceSplit) {
+        const closeFence = rawChunk.endsWith("\n")
+          ? `${fenceSplit.closeFenceLine}\n`
+          : `\n${fenceSplit.closeFenceLine}\n`;
+        rawChunk = `${rawChunk}${closeFence}`;
+        const reopenFence = fenceSplit.reopenFenceLine.endsWith("\n")
+          ? fenceSplit.reopenFenceLine
+          : `${fenceSplit.reopenFenceLine}\n`;
+        nextBuffer = `${reopenFence}${nextBuffer}`;
+      }
       emitBlockChunk(rawChunk);
-      const nextStart =
-        breakIdx < blockBuffer.length && /\s/.test(blockBuffer[breakIdx])
-          ? breakIdx + 1
-          : breakIdx;
-      blockBuffer = blockBuffer.slice(nextStart).trimStart();
+      if (fenceSplit) {
+        blockBuffer = nextBuffer;
+      } else {
+        const nextStart =
+          breakIdx < blockBuffer.length && /\s/.test(blockBuffer[breakIdx])
+            ? breakIdx + 1
+            : breakIdx;
+        blockBuffer = blockBuffer.slice(nextStart).trimStart();
+      }
       if (blockBuffer.length < minChars && !force) return;
       if (blockBuffer.length < maxChars && !force) return;
     }
@@ -523,30 +684,21 @@ export function subscribeEmbeddedPiSession(params: {
               }
             }
 
-            if (params.onBlockReply && blockChunking) {
+            if (
+              params.onBlockReply &&
+              blockChunking &&
+              blockReplyBreak === "text_end"
+            ) {
               drainBlockBuffer(false);
             }
 
             if (evtType === "text_end" && blockReplyBreak === "text_end") {
               if (blockChunking && blockBuffer.length > 0) {
                 drainBlockBuffer(true);
-              } else if (next && next !== lastBlockReplyText) {
-                lastBlockReplyText = next || undefined;
-                if (next) assistantTexts.push(next);
-                if (next && params.onBlockReply) {
-                  const { text: cleanedText, mediaUrls } =
-                    splitMediaFromOutput(next);
-                  if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-                    void params.onBlockReply({
-                      text: cleanedText,
-                      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-                    });
-                  }
-                }
+              } else if (blockBuffer.length > 0) {
+                emitBlockChunk(blockBuffer);
               }
-              deltaBuffer = "";
               blockBuffer = "";
-              lastStreamedAssistant = undefined;
             }
           }
         }
@@ -571,7 +723,8 @@ export function subscribeEmbeddedPiSession(params: {
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
-          if (!addedDuringMessage && text) {
+          const chunkingEnabled = Boolean(blockChunking);
+          if (!chunkingEnabled && !addedDuringMessage && text) {
             const last = assistantTexts.at(-1);
             if (!last || last !== text) assistantTexts.push(text);
           }

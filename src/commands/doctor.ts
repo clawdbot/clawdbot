@@ -31,6 +31,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { healthCommand } from "./health.js";
+import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -598,6 +599,28 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
   cfg = await maybeRepairSandboxImages(cfg, runtime);
 
   await maybeMigrateLegacyGatewayService(cfg, runtime);
+
+  if (process.platform === "linux" && resolveMode(cfg) === "local") {
+    const service = resolveGatewayService();
+    let loaded = false;
+    try {
+      loaded = await service.isLoaded({ env: process.env });
+    } catch {
+      loaded = false;
+    }
+    if (loaded) {
+      await ensureSystemdUserLingerInteractive({
+        runtime,
+        prompter: {
+          confirm: (params) => guardCancel(confirm(params), runtime),
+          note,
+        },
+        reason:
+          "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+        requireConfirm: true,
+      });
+    }
+  }
 
   const workspaceDir = resolveUserPath(
     cfg.agent?.workspace ?? DEFAULT_WORKSPACE,

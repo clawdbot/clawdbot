@@ -27,6 +27,7 @@ import {
   PortInUseError,
 } from "./infra/ports.js";
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
+import { isUnhandledRejectionHandled } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { monitorWebProvider } from "./provider-web.js";
@@ -79,6 +80,7 @@ if (isMain) {
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
   process.on("unhandledRejection", (reason, _promise) => {
+    if (isUnhandledRejectionHandled(reason)) return;
     console.error(
       "[clawdbot] Unhandled promise rejection:",
       reason instanceof Error ? (reason.stack ?? reason.message) : reason,

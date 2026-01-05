@@ -378,16 +378,20 @@ export function renderApp(state: AppViewState) {
                 state.sessionKey = next;
                 state.chatMessage = "";
                 state.chatStream = null;
+                state.chatStreamStartedAt = null;
                 state.chatRunId = null;
                 state.resetToolStream();
+                state.resetChatScroll();
                 state.applySettings({ ...state.settings, sessionKey: next });
                 void loadChatHistory(state);
               },
               thinkingLevel: state.chatThinkingLevel,
               loading: state.chatLoading,
               sending: state.chatSending,
-              messages: [...state.chatMessages, ...state.chatToolMessages],
+              messages: state.chatMessages,
+              toolMessages: state.chatToolMessages,
               stream: state.chatStream,
+              streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
               connected: state.connected,
               canSend: state.connected,

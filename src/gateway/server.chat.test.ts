@@ -830,7 +830,7 @@ describe("gateway server chat", () => {
     );
 
     emitAgentEvent({
-      runId: "sess-main",
+      runId: "idem-1",
       stream: "lifecycle",
       data: { phase: "end" },
     });
@@ -852,7 +852,7 @@ describe("gateway server chat", () => {
     );
 
     emitAgentEvent({
-      runId: "sess-main",
+      runId: "idem-2",
       stream: "lifecycle",
       data: { phase: "end" },
     });
