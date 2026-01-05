@@ -385,7 +385,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "disabled",
-        allowFrom: ["77112533"],
+        allowFrom: ["123456789"],
       },
     });
 
@@ -397,7 +397,7 @@ describe("createTelegramBot", () => {
     await handler({
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 77112533, username: "mneves" },
+        from: { id: 123456789, username: "testuser" },
         text: "@clawdbot_bot hello",
         date: 1736380800,
       },
@@ -418,7 +418,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "allowlist",
-        allowFrom: ["77112533"], // Does not include sender 999999
+        allowFrom: ["123456789"], // Does not include sender 999999
       },
     });
 
@@ -450,7 +450,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "allowlist",
-        allowFrom: ["77112533"],
+        allowFrom: ["123456789"],
         groups: { "*": { requireMention: false } }, // Skip mention check
       },
     });
@@ -463,7 +463,7 @@ describe("createTelegramBot", () => {
     await handler({
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 77112533, username: "mneves" }, // In allowFrom
+        from: { id: 123456789, username: "testuser" }, // In allowFrom
         text: "hello",
         date: 1736380800,
       },
@@ -483,7 +483,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "allowlist",
-        allowFrom: ["@mneves"], // By username
+        allowFrom: ["@testuser"], // By username
         groups: { "*": { requireMention: false } },
       },
     });
@@ -496,7 +496,7 @@ describe("createTelegramBot", () => {
     await handler({
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 12345, username: "mneves" }, // Username matches @mneves
+        from: { id: 12345, username: "testuser" }, // Username matches @testuser
         text: "hello",
         date: 1736380800,
       },
@@ -548,7 +548,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "allowlist",
-        allowFrom: ["@MNeves"], // Uppercase in config
+        allowFrom: ["@TestUser"], // Uppercase in config
         groups: { "*": { requireMention: false } },
       },
     });
@@ -561,7 +561,7 @@ describe("createTelegramBot", () => {
     await handler({
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 12345, username: "mneves" }, // Lowercase in message
+        from: { id: 12345, username: "testuser" }, // Lowercase in message
         text: "hello",
         date: 1736380800,
       },
@@ -581,7 +581,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "disabled", // Even with disabled, DMs should work
-        allowFrom: ["77112533"],
+        allowFrom: ["123456789"],
       },
     });
 
@@ -592,8 +592,8 @@ describe("createTelegramBot", () => {
 
     await handler({
       message: {
-        chat: { id: 77112533, type: "private" }, // Direct message
-        from: { id: 77112533, username: "mneves" },
+        chat: { id: 123456789, type: "private" }, // Direct message
+        from: { id: 123456789, username: "testuser" },
         text: "hello",
         date: 1736380800,
       },
@@ -646,7 +646,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       telegram: {
         groupPolicy: "allowlist",
-        allowFrom: ["77112533"],
+        allowFrom: ["123456789"],
       },
     });
 
