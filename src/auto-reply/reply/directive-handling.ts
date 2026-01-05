@@ -272,10 +272,7 @@ export async function handleDirectiveOnly(params: {
           authStorage,
           authPaths,
         );
-        authByProvider.set(
-          entry.provider,
-          `${auth.label} (${auth.source})`,
-        );
+        authByProvider.set(entry.provider, `${auth.label} (${auth.source})`);
       }
       const current = `${params.provider}/${params.model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
