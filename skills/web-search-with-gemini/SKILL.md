@@ -1,34 +1,34 @@
 ---
 name: web-search-with-gemini
-description: 🔴 DEPRECATED - Use built-in web_search tool instead. Perform deep research queries using Gemini with multi-perspective reasoning, answering in Russian.
+description: 🔴 CUSTOM SKILL - Use this for deep research queries using Gemini with multi-perspective reasoning, answering in Russian.
 metadata: {"clawdis":{"emoji":"🔍","requires":{"bins":["web_search_with_gemini"]},"install":[{"id":"manual","kind":"manual","instructions":"Script at scripts/web_search_with_gemini.sh"}]}}
 ---
 
-# web-search-with-gemini [DEPRECATED]
+# web-search-with-gemini [CUSTOM SKILL]
 
-**NOTE: This skill is deprecated. Use the built-in `web_search` tool instead.**
+**This is a custom deep-research web search skill with ultrathink capability.**
 
-The `web_search` tool is now automatically available in Pi agent and provides better integration with visual markers.
+## Features
 
-## Built-in Web Search Tool
-
-The Pi agent now includes a native `web_search` tool that:
-- Automatically searches the web when user asks about current information
-- Returns results with clear visual markers (🌐 Результат поиска:)
-- Works with Gemini backend for Russian-language results
-- No external dependencies required
+- **Deep Research**: Multi-perspective reasoning for complex queries
+- **Ultrathink Mode**: High-level thinking for nuanced answers
+- **Russian Language**: All responses in Russian
+- **Gemini Backend**: Uses Gemini models with advanced prompting
 
 ## Usage
 
-Simply ask the agent to search:
-```
-User: google 2666 for me
-Agent: [automatically uses web_search tool]
-→ 🌐 Результат поиска: [search results]
+The Pi agent will automatically use this skill for web searches when properly configured.
+
+Direct usage:
+```bash
+./scripts/web_search_with_gemini.sh "Your deep research question"
 ```
 
-## Legacy Usage (Deprecated)
+With model selection:
+```bash
+./scripts/web_search_with_gemini.sh --model gemini-3-flash-preview "Latest AI trends"
+```
 
-If you still need the advanced ultrathink functionality:
-- **Basic**: `web_search_with_gemini "Who won the World Cup in 2022?"`
-- **Specific Model**: `web_search_with_gemini --model gemini-2.0-flash "Latest AI trends"`
+## Configuration
+
+This skill uses the prompt tail from `prompts/web-search-tail.yaml` which adds ultrathink directives.
