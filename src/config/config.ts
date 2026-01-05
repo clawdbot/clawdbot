@@ -415,6 +415,7 @@ export type ClawdisConfig = {
   talk?: TalkConfig;
   deepResearch?: DeepResearchConfig;
   webSearch?: WebSearchConfig;
+  tts?: TTSConfig;
   gateway?: GatewayConfig;
   skills?: Record<string, SkillConfig>;
 };
@@ -701,6 +702,37 @@ const webSearchSchema = z
 
 export type WebSearchConfig = z.infer<typeof webSearchSchema>;
 
+// TTS configuration defaults
+const TTS_DEFAULTS = {
+  enabled: true,
+  minimaxGroupId: "default",
+  model: "speech-2.6-hd",
+  voiceId: "English_CalmWoman",
+  emotion: "fluent",
+  speed: 1.0,
+  cacheTtlSec: 604800, // 7 days
+  timeoutSec: 30,
+  maxChars: 9500,
+} as const;
+
+// TTS configuration schema
+const ttsSchema = z
+  .object({
+    enabled: z.boolean().default(TTS_DEFAULTS.enabled),
+    minimaxApiKey: z.string().optional(),
+    minimaxGroupId: z.string().default(TTS_DEFAULTS.minimaxGroupId),
+    model: z.string().default(TTS_DEFAULTS.model),
+    voiceId: z.string().default(TTS_DEFAULTS.voiceId),
+    emotion: z.string().default(TTS_DEFAULTS.emotion),
+    speed: z.number().positive().default(TTS_DEFAULTS.speed),
+    cacheTtlSec: z.number().int().positive().default(TTS_DEFAULTS.cacheTtlSec),
+    timeoutSec: z.number().int().positive().default(TTS_DEFAULTS.timeoutSec),
+    maxChars: z.number().int().positive().default(TTS_DEFAULTS.maxChars),
+  })
+  .optional();
+
+export type TTSConfig = z.infer<typeof ttsSchema>;
+
 const ClawdisSchema = z.object({
   identity: z
     .object({
@@ -893,6 +925,7 @@ const ClawdisSchema = z.object({
     .optional(),
   deepResearch: deepResearchSchema,
   webSearch: webSearchSchema,
+  tts: ttsSchema,
   gateway: z
     .object({
       mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
@@ -1004,8 +1037,10 @@ export function loadConfig(): ClawdisConfig {
   try {
     if (!fs.existsSync(configPath)) {
       return applyTelegramEnvOverrides(
-        applyWebSearchEnvOverrides(
-          applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+        applyTTSEnvOverrides(
+          applyWebSearchEnvOverrides(
+            applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+          ),
         ),
       );
     }
@@ -1013,8 +1048,10 @@ export function loadConfig(): ClawdisConfig {
     const parsed = JSON5.parse(raw);
     if (typeof parsed !== "object" || parsed === null) {
       return applyTelegramEnvOverrides(
-        applyWebSearchEnvOverrides(
-          applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+        applyTTSEnvOverrides(
+          applyWebSearchEnvOverrides(
+            applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+          ),
         ),
       );
     }
@@ -1024,22 +1061,30 @@ export function loadConfig(): ClawdisConfig {
       for (const iss of validated.error.issues) {
         console.error(`- ${iss.path.join(".")}: ${iss.message}`);
       }
-      return applyWebSearchEnvOverrides(
-        applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+      return applyTelegramEnvOverrides(
+        applyTTSEnvOverrides(
+          applyWebSearchEnvOverrides(
+            applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+          ),
+        ),
       );
     }
     return applyTelegramEnvOverrides(
-      applyWebSearchEnvOverrides(
-        applyDeepResearchEnvOverrides(
-          applyIdentityDefaults(validated.data as ClawdisConfig),
+      applyTTSEnvOverrides(
+        applyWebSearchEnvOverrides(
+          applyDeepResearchEnvOverrides(
+            applyIdentityDefaults(validated.data as ClawdisConfig),
+          ),
         ),
       ),
     );
   } catch (err) {
     console.error(`Failed to read config at ${configPath}`, err);
     return applyTelegramEnvOverrides(
-      applyWebSearchEnvOverrides(
-        applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+      applyTTSEnvOverrides(
+        applyWebSearchEnvOverrides(
+          applyDeepResearchEnvOverrides(applyIdentityDefaults({})),
+        ),
       ),
     );
   }
@@ -1230,6 +1275,47 @@ function applyWebSearchEnvOverrides(config: ClawdisConfig): ClawdisConfig {
     ...config,
     webSearch,
   };
+}
+
+function applyTTSEnvOverrides(config: ClawdisConfig): ClawdisConfig {
+  const envEnabled = process.env.TTS_ENABLED;
+  const envApiKey = process.env.MINIMAX_API_KEY;
+  const envGroupId = process.env.MINIMAX_GROUP_ID;
+  const envVoiceId = process.env.TTS_VOICE_ID;
+  const envCacheTtl = process.env.TTS_CACHE_TTL_SEC;
+  const envTimeout = process.env.TTS_TIMEOUT_SEC;
+
+  if (!envEnabled && !envApiKey && !envGroupId && !envVoiceId && !envCacheTtl && !envTimeout) {
+    return config;
+  }
+
+  const tts: TTSConfig = {
+    enabled: config.tts?.enabled ?? TTS_DEFAULTS.enabled,
+    minimaxApiKey: config.tts?.minimaxApiKey,
+    minimaxGroupId: config.tts?.minimaxGroupId ?? TTS_DEFAULTS.minimaxGroupId,
+    model: config.tts?.model ?? TTS_DEFAULTS.model,
+    voiceId: config.tts?.voiceId ?? TTS_DEFAULTS.voiceId,
+    emotion: config.tts?.emotion ?? TTS_DEFAULTS.emotion,
+    speed: config.tts?.speed ?? TTS_DEFAULTS.speed,
+    cacheTtlSec: config.tts?.cacheTtlSec ?? TTS_DEFAULTS.cacheTtlSec,
+    timeoutSec: config.tts?.timeoutSec ?? TTS_DEFAULTS.timeoutSec,
+    maxChars: config.tts?.maxChars ?? TTS_DEFAULTS.maxChars,
+  };
+
+  if (envEnabled) tts.enabled = envEnabled === "true";
+  if (envApiKey) tts.minimaxApiKey = envApiKey.trim();
+  if (envGroupId) tts.minimaxGroupId = envGroupId.trim();
+  if (envVoiceId) tts.voiceId = envVoiceId.trim();
+  if (envCacheTtl) {
+    const parsed = parseInt(envCacheTtl, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) tts.cacheTtlSec = parsed;
+  }
+  if (envTimeout) {
+    const parsed = parseInt(envTimeout, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) tts.timeoutSec = parsed;
+  }
+
+  return { ...config, tts };
 }
 
 function applyTelegramEnvOverrides(config: ClawdisConfig): ClawdisConfig {
