@@ -429,6 +429,7 @@ export async function runEmbeddedPiAgent(params: {
               reasoningTagHint,
               runtimeInfo,
               sandboxInfo,
+              toolNames: tools.map((tool) => tool.name),
             }),
             contextFiles,
             skills: promptSkills,
@@ -466,8 +467,10 @@ export async function runEmbeddedPiAgent(params: {
             session.agent.replaceMessages(prior);
           }
           let aborted = Boolean(params.abortSignal?.aborted);
-          const abortRun = () => {
+          let timedOut = false;
+          const abortRun = (isTimeout = false) => {
             aborted = true;
+            if (isTimeout) timedOut = true;
             void session.abort();
           };
           const queueHandle: EmbeddedPiQueueHandle = {
@@ -504,7 +507,7 @@ export async function runEmbeddedPiAgent(params: {
               log.warn(
                 `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
               );
-              abortRun();
+              abortRun(true); // Mark as timeout for potential failover
               if (!abortWarnTimer) {
                 abortWarnTimer = setTimeout(() => {
                   if (!session.isStreaming) return;
@@ -635,8 +638,19 @@ export async function runEmbeddedPiAgent(params: {
             );
 
           log.debug(
-            `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
+            `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted} timedOut=${timedOut}`,
           );
+
+          // If we timed out, treat as rate limit and try next account
+          if (timedOut && accountKey) {
+            log.warn(
+              `Antigravity account ${accountKey} timed out (possible rate limit). Trying next account...`,
+            );
+            markAntigravityFailure(accountKey);
+            excludedAccounts.add(accountKey);
+            lastError = new Error(`Timeout on account ${accountKey}`);
+            continue;
+          }
 
           if (accountKey) markAntigravitySuccess(accountKey);
 
