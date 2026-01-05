@@ -2,7 +2,7 @@
 import { Buffer } from "node:buffer";
 
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions, Message } from "grammy";
+import type { ApiClientOptions, BotCommand, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
@@ -78,6 +78,26 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     if (typeof opts.requireMention === "boolean") return opts.requireMention;
     return true;
   };
+
+  const registerCommands = async () => {
+    const commands: BotCommand[] = [
+      { command: "help", description: "Show available commands" },
+      { command: "status", description: "Show current status" },
+      { command: "new", description: "Start a new conversation" },
+      { command: "stop", description: "Stop current generation" },
+      { command: "model", description: "Show or change the model" },
+      { command: "thinking", description: "Set thinking level" },
+    ];
+    try {
+      await bot.api.setMyCommands(commands, {
+        scope: { type: "all_private_chats" },
+      });
+      logVerbose("Registered Telegram slash commands");
+    } catch (err) {
+      logVerbose(`Failed to register Telegram commands: ${String(err)}`);
+    }
+  };
+  void registerCommands();
 
   const workingMessages = new Map<
     string,
