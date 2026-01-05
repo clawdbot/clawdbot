@@ -10,6 +10,9 @@ export type MsgContext = {
   MediaPath?: string;
   MediaUrl?: string;
   MediaType?: string;
+  MediaPaths?: string[];
+  MediaUrls?: string[];
+  MediaTypes?: string[];
   Transcript?: string;
   ChatType?: string;
   GroupSubject?: string;

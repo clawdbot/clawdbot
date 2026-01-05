@@ -209,3 +209,135 @@ describe("telegram inbound media", () => {
     fetchSpy.mockRestore();
   });
 });
+
+describe("telegram media groups", () => {
+  const waitForMediaGroupProcessing = () =>
+    new Promise((resolve) => setTimeout(resolve, 600));
+
+  it("buffers messages with same media_group_id and processes them together", async () => {
+    const { createTelegramBot } = await import("./bot.js");
+    const replyModule = await import("../auto-reply/reply.js");
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    const runtimeError = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "image/png" },
+      arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+    } as Response);
+
+    createTelegramBot({
+      token: "tok",
+      runtime: {
+        log: vi.fn(),
+        error: runtimeError,
+        exit: () => {
+          throw new Error("exit");
+        },
+      },
+    });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 1,
+        caption: "Here are my photos",
+        date: 1736380800,
+        media_group_id: "album123",
+        photo: [{ file_id: "photo1" }],
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ file_path: "photos/photo1.jpg" }),
+    });
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 2,
+        date: 1736380801,
+        media_group_id: "album123",
+        photo: [{ file_id: "photo2" }],
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ file_path: "photos/photo2.jpg" }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    await waitForMediaGroupProcessing();
+
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("Here are my photos");
+    expect(payload.MediaPaths).toHaveLength(2);
+
+    fetchSpy.mockRestore();
+  }, 2000);
+
+  it("processes separate media groups independently", async () => {
+    const { createTelegramBot } = await import("./bot.js");
+    const replyModule = await import("../auto-reply/reply.js");
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "image/png" },
+      arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+    } as Response);
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 1,
+        caption: "Album A",
+        date: 1736380800,
+        media_group_id: "albumA",
+        photo: [{ file_id: "photoA1" }],
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ file_path: "photos/photoA1.jpg" }),
+    });
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 2,
+        caption: "Album B",
+        date: 1736380801,
+        media_group_id: "albumB",
+        photo: [{ file_id: "photoB1" }],
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ file_path: "photos/photoB1.jpg" }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    await waitForMediaGroupProcessing();
+
+    expect(replySpy).toHaveBeenCalledTimes(2);
+
+    fetchSpy.mockRestore();
+  }, 2000);
+});
