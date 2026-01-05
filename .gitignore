@@ -149,6 +149,9 @@ test*.md
 *_test.md
 scripts/test-*.sh
 
+# E2E test results (local)
+tests/e2e_web_search_results/
+
 # Development update/create scripts
 create_*.py
 create_*.sh
@@ -163,3 +166,8 @@ update_*_*.py
 # Generated HTML guides
 *_guide.html
 *-guide.html
+
+# Exception: allowed HTML comparison docs
+!docs/comparison.html
+!docs/deep-research-comparison.md
+!docs/web-search-skill.md
