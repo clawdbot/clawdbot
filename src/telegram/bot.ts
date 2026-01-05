@@ -39,6 +39,7 @@ import { loadWebMedia } from "../web/media.js";
 import { startLivenessProbe, type LivenessProbeOptions } from "./liveness-probe.js";
 import { messages as webSearchMessages } from "../web-search/messages.js";
 import { executeWebSearch } from "../web-search/executor.js";
+import { formatTelegramMessage } from "./formatter.js";
 
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;
@@ -47,8 +48,8 @@ const webSearchInFlight = new Set<number>();
 const CATEGORY_CONFIDENCE_THRESHOLD = 0.7;
 const CATEGORY_MIN_WORDS = 2;
 const CATEGORY_MIN_CHARS = 6;
-const AUDIO_STATUS_MESSAGE = "🎙️ Голосовое получено. Распознаю...";
-const AUDIO_STATUS_DONE = "✅ Готово";
+const AUDIO_STATUS_MESSAGE = "○ Голосовое получено. Распознаю...";
+const AUDIO_STATUS_DONE = "● Готово";
 
 type StatusMessage = {
   chatId: number;
@@ -333,7 +334,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               await editTelegramMessage(
                 bot.api,
                 progressStatus,
-                `🛠️ Использую инструмент: *${name}*...`,
+                formatTelegramMessage(`○ Инструмент: *${name}*...`),
               );
             }
           },
@@ -644,7 +645,9 @@ async function runWebSearch(
         webSearchMessages.acknowledgment(),
       );
     } else {
-      const sent = await ctx.reply(webSearchMessages.acknowledgment());
+      const sent = await ctx.reply(webSearchMessages.acknowledgment(), {
+        parse_mode: "MarkdownV2",
+      });
       statusChatId = ctx.chat?.id;
       statusMessageId = sent.message_id;
     }
@@ -653,8 +656,8 @@ async function runWebSearch(
       throw new Error("Failed to get message ID for status update");
     }
 
-    // Execute search
-    const result = await executeWebSearch(query);
+    // Execute search with 90s timeout for deep research
+    const result = await executeWebSearch(query, { timeoutMs: 90000 });
 
     if (result.success && result.result) {
       // Edit the original message with result
@@ -662,6 +665,7 @@ async function runWebSearch(
         statusChatId,
         statusMessageId,
         webSearchMessages.resultDelivery(result.result),
+        { parse_mode: "MarkdownV2" },
       );
     } else {
       // Edit with error
@@ -669,6 +673,7 @@ async function runWebSearch(
         statusChatId,
         statusMessageId,
         webSearchMessages.error(result.error || "Unknown error", result.runId),
+        { parse_mode: "MarkdownV2" },
       );
     }
   } catch (error) {
@@ -682,6 +687,7 @@ async function runWebSearch(
           webSearchMessages.error(
             error instanceof Error ? error.message : String(error),
           ),
+          { parse_mode: "MarkdownV2" },
         );
       } catch (editError) {
         // If edit fails, send new message
@@ -689,6 +695,7 @@ async function runWebSearch(
           webSearchMessages.error(
             error instanceof Error ? error.message : String(error),
           ),
+          { parse_mode: "MarkdownV2" },
         );
       }
     } else {
@@ -697,6 +704,7 @@ async function runWebSearch(
         webSearchMessages.error(
           error instanceof Error ? error.message : String(error),
         ),
+        { parse_mode: "MarkdownV2" },
       );
     }
   } finally {
@@ -711,15 +719,16 @@ async function editTelegramMessage(
   text: string,
   replyMarkup?: ReplyMarkup,
 ): Promise<void> {
+  const formatted = formatTelegramMessage(text);
   try {
-    await api.editMessageText(statusMessage.chatId, statusMessage.messageId, text, {
-      parse_mode: "Markdown",
+    await api.editMessageText(statusMessage.chatId, statusMessage.messageId, formatted, {
+      parse_mode: "MarkdownV2",
       reply_markup: replyMarkup,
     });
   } catch (err) {
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
-      await api.editMessageText(statusMessage.chatId, statusMessage.messageId, text, {
+      await api.editMessageText(statusMessage.chatId, statusMessage.messageId, formatted, {
         reply_markup: replyMarkup,
       });
       return;
@@ -792,7 +801,9 @@ async function handleDeepResearchCallback(
     deepResearchInFlight.add(callerId);
 
     await ctx.answerCallbackQuery({ text: messages.callbackAcknowledgment() });
-    const statusMessage = await ctx.reply(messages.progress("starting"));
+    const statusMessage = await ctx.reply(messages.progress("starting"), {
+      parse_mode: "MarkdownV2",
+    });
     const statusChatId = ctx.chat?.id;
     const statusMessageId = statusMessage.message_id;
     let statusStage: DeepResearchProgressStage = "starting";
@@ -810,7 +821,12 @@ async function handleDeepResearchCallback(
       if (nextText === lastStatusText) return;
       lastStatusText = nextText;
       try {
-        await ctx.api.editMessageText(statusChatId, statusMessageId, nextText);
+        await ctx.api.editMessageText(
+          statusChatId,
+          statusMessageId,
+          nextText,
+          { parse_mode: "MarkdownV2" },
+        );
       } catch (err) {
         logVerbose(
           `[deep-research] Failed to update status message: ${String(err)}`,
@@ -859,15 +875,18 @@ async function handleDeepResearchCallback(
     const deliveryContext = {
       sendMessage: async (text: string) => {
         try {
-          await ctx.reply(truncateForTelegram(text), {
-            parse_mode: "Markdown",
+          const formatted = formatTelegramMessage(`○ ${text}`);
+          await ctx.reply(truncateForTelegram(formatted), {
+            parse_mode: "MarkdownV2",
           });
         } catch {
           await ctx.reply(truncateForTelegram(text));
         }
       },
       sendError: async (text: string) => {
-        await ctx.reply(text, {
+        const formatted = formatTelegramMessage(`✂︎ ${text}`);
+        await ctx.reply(formatted, {
+          parse_mode: "MarkdownV2",
           reply_markup: createRetryButton(normalizedTopic, effectiveOwnerId),
         });
       },
@@ -1058,9 +1077,10 @@ async function sendTelegramText(
   text: string,
   runtime: RuntimeEnv,
 ): Promise<number | undefined> {
+  const formatted = formatTelegramMessage(`○ ${text}`);
   try {
-    const res = await bot.api.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
+    const res = await bot.api.sendMessage(chatId, formatted, {
+      parse_mode: "MarkdownV2",
     });
     return res.message_id;
   } catch (err) {
@@ -1069,7 +1089,7 @@ async function sendTelegramText(
       runtime.log?.(
         `telegram markdown parse failed; retrying without formatting: ${errText}`,
       );
-      const res = await bot.api.sendMessage(chatId, text, {});
+      const res = await bot.api.sendMessage(chatId, formatted, {});
       return res.message_id;
     }
     throw err;
