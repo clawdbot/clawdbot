@@ -409,6 +409,11 @@ export async function runEmbeddedPiAgent(params: {
           agentDir,
         );
 
+        // Split tools into built-in (recognized by pi-coding-agent SDK) and custom (clawdbot-specific)
+        const builtInToolNames = new Set(["read", "bash", "edit", "write"]);
+        const builtInTools = tools.filter((t) => builtInToolNames.has(t.name));
+        const customTools = tools.filter((t) => !builtInToolNames.has(t.name));
+
         const { session } = await createAgentSession({
           cwd: resolvedWorkspace,
           agentDir,
@@ -417,8 +422,10 @@ export async function runEmbeddedPiAgent(params: {
           model,
           thinkingLevel,
           systemPrompt,
-          // Custom tool set: extra bash/process + read image sanitization.
-          tools,
+          // Built-in tools recognized by pi-coding-agent SDK
+          tools: builtInTools,
+          // Custom clawdbot tools (browser, canvas, nodes, cron, etc.)
+          customTools,
           sessionManager,
           settingsManager,
           skills: promptSkills,
