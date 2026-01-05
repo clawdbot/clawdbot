@@ -15,6 +15,7 @@ import { danger, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { registerAntigravityCli } from "./antigravity-cli.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -418,6 +419,7 @@ Examples:
   registerGatewayCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
+  registerAntigravityCli(program);
   registerTuiCli(program);
   registerCronCli(program);
   registerDnsCli(program);

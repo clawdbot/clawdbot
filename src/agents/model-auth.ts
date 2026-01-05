@@ -15,16 +15,162 @@ import type { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 const OAUTH_FILENAME = "oauth.json";
+const ANTIGRAVITY_STATE_FILENAME = "antigravity-state.json";
 const DEFAULT_OAUTH_DIR = path.join(CONFIG_DIR, "credentials");
 let oauthStorageConfigured = false;
 let oauthStorageMigrated = false;
 
 type OAuthStorage = Record<string, OAuthCredentials>;
 
+interface AntigravityAccountState {
+  lastUsed: number;
+  errorCount: number;
+  cooldownUntil: number;
+}
+type AntigravityState = Record<string, AntigravityAccountState>;
+
 function resolveClawdbotOAuthPath(): string {
   const overrideDir =
     process.env.CLAWDBOT_OAUTH_DIR?.trim() || DEFAULT_OAUTH_DIR;
   return path.join(resolveUserPath(overrideDir), OAUTH_FILENAME);
+}
+
+function resolveAntigravityStatePath(): string {
+  const oauthPath = resolveClawdbotOAuthPath();
+  return path.join(path.dirname(oauthPath), ANTIGRAVITY_STATE_FILENAME);
+}
+
+function loadAntigravityState(): AntigravityState {
+  const pathname = resolveAntigravityStatePath();
+  if (!fsSync.existsSync(pathname)) return {};
+  try {
+    return JSON.parse(
+      fsSync.readFileSync(pathname, "utf8"),
+    ) as AntigravityState;
+  } catch {
+    return {};
+  }
+}
+
+function saveAntigravityState(state: AntigravityState): void {
+  const pathname = resolveAntigravityStatePath();
+  fsSync.writeFileSync(pathname, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+export function getAntigravityAccounts(storage: OAuthStorage): string[] {
+  return Object.keys(storage).filter(
+    (k) => k === "google-antigravity" || k.startsWith("google-antigravity:"),
+  );
+}
+
+export function markAntigravityFailure(accountKey: string) {
+  const state = loadAntigravityState();
+  const now = Date.now();
+  const entry = state[accountKey] || {
+    lastUsed: 0,
+    errorCount: 0,
+    cooldownUntil: 0,
+  };
+
+  entry.errorCount++;
+  // Exponential backoff: 1min, 5min, 25min, max 1h
+  const backoff = Math.min(
+    60 * 60 * 1000,
+    60 * 1000 * Math.pow(5, Math.min(entry.errorCount - 1, 3)),
+  );
+  entry.cooldownUntil = now + backoff;
+
+  state[accountKey] = entry;
+  saveAntigravityState(state);
+}
+
+export function markAntigravitySuccess(accountKey: string) {
+  const state = loadAntigravityState();
+  if (state[accountKey]) {
+    state[accountKey].errorCount = 0;
+    state[accountKey].cooldownUntil = 0;
+    state[accountKey].lastUsed = Date.now();
+    saveAntigravityState(state);
+  } else {
+    // Initialize state for new successful account
+    state[accountKey] = {
+      lastUsed: Date.now(),
+      errorCount: 0,
+      cooldownUntil: 0,
+    };
+    saveAntigravityState(state);
+  }
+}
+
+export function getNextAntigravityAccount(
+  storage: OAuthStorage,
+  exclude: Set<string> = new Set(),
+): string | null {
+  const accounts = getAntigravityAccounts(storage);
+  if (accounts.length === 0) return null;
+
+  const state = loadAntigravityState();
+  const now = Date.now();
+
+  // Filter out excluded accounts
+  const candidates = accounts.filter((a) => !exclude.has(a));
+  if (candidates.length === 0) return null;
+
+  // Filter out cooled down accounts
+  const ready = candidates.filter((a) => {
+    const s = state[a];
+    return !s || s.cooldownUntil <= now;
+  });
+
+  // If all are cooled down, pick the one with earliest cooldown expiry
+  if (ready.length === 0) {
+    return candidates.sort((a, b) => {
+      const sa = state[a]?.cooldownUntil ?? 0;
+      const sb = state[b]?.cooldownUntil ?? 0;
+      return sa - sb;
+    })[0];
+  }
+
+  // Round robin: pick the one with oldest lastUsed
+  return ready.sort((a, b) => {
+    const sa = state[a]?.lastUsed ?? 0;
+    const sb = state[b]?.lastUsed ?? 0;
+    return sa - sb;
+  })[0];
+}
+
+export async function getAntigravityApiKey(
+  authStorage: ReturnType<typeof discoverAuthStorage>,
+  excludeAccounts: Set<string> = new Set(),
+): Promise<{ apiKey: string; accountKey: string } | null> {
+  const oauthPath = resolveClawdbotOAuthPath();
+  const storage = loadOAuthStorageAt(oauthPath);
+  if (!storage) return null;
+
+  const accountKey = getNextAntigravityAccount(storage, excludeAccounts);
+  if (!accountKey) return null;
+
+  try {
+    // Construct temp storage with just the selected account as the "google-antigravity" provider
+    // This tricks getOAuthApiKey into refreshing/using this specific account
+    const creds = storage[accountKey];
+    const tempStorage: OAuthStorage = { "google-antigravity": creds };
+
+    const result = await getOAuthApiKey("google-antigravity", tempStorage);
+    if (result?.apiKey) {
+      // If credentials were refreshed, update the original storage
+      if (result.newCredentials) {
+        storage[accountKey] = result.newCredentials;
+        saveOAuthStorageAt(oauthPath, storage);
+      }
+      return { apiKey: result.apiKey, accountKey };
+    }
+  } catch (err) {
+    // If getting the key fails (e.g. refresh failed), mark it as failed immediately
+    markAntigravityFailure(accountKey);
+    throw err;
+  }
+  return null;
 }
 
 function loadOAuthStorageAt(pathname: string): OAuthStorage | null {
@@ -152,6 +298,13 @@ export async function getApiKeyForModel(
   }
   const envKey = getEnvApiKey(model.provider);
   if (envKey) return envKey;
+
+  if (model.provider === "google-antigravity") {
+    const result = await getAntigravityApiKey(authStorage);
+    if (result) return result.apiKey;
+    // Fall through if no account available
+  }
+
   if (isOAuthProvider(model.provider)) {
     const oauthPath = resolveClawdbotOAuthPath();
     const storage = loadOAuthStorageAt(oauthPath);

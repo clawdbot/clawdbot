@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 
 import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
+import {
+  type Api,
+  type AssistantMessage,
+  type Model,
+} from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
   createAgentSession,
@@ -26,7 +30,12 @@ import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { getApiKeyForModel } from "./model-auth.js";
+import {
+  getApiKeyForModel,
+  getAntigravityApiKey,
+  markAntigravityFailure,
+  markAntigravitySuccess,
+} from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
@@ -314,305 +323,358 @@ export async function runEmbeddedPiAgent(params: {
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
-      const apiKey = await getApiKeyForModel(model, authStorage);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
+      const excludedAccounts = new Set<string>();
+      let lastError: unknown;
 
-      const thinkingLevel = mapThinkingLevel(params.thinkLevel);
+      // Loop for Antigravity failover
+      while (true) {
+        let apiKey: string;
+        let accountKey: string | undefined;
 
-      log.debug(
-        `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
-      );
-
-      await fs.mkdir(resolvedWorkspace, { recursive: true });
-      await ensureSessionHeader({
-        sessionFile: params.sessionFile,
-        sessionId: params.sessionId,
-        cwd: resolvedWorkspace,
-      });
-
-      let restoreSkillEnv: (() => void) | undefined;
-      process.chdir(resolvedWorkspace);
-      try {
-        const shouldLoadSkillEntries =
-          !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
-        const skillEntries = shouldLoadSkillEntries
-          ? loadWorkspaceSkillEntries(resolvedWorkspace)
-          : [];
-        const skillsSnapshot =
-          params.skillsSnapshot ??
-          buildWorkspaceSkillSnapshot(resolvedWorkspace, {
-            config: params.config,
-            entries: skillEntries,
-          });
-        const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
-        const sandbox = await resolveSandboxContext({
-          config: params.config,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: resolvedWorkspace,
-        });
-        restoreSkillEnv = params.skillsSnapshot
-          ? applySkillEnvOverridesFromSnapshot({
-              snapshot: params.skillsSnapshot,
-              config: params.config,
-            })
-          : applySkillEnvOverrides({
-              skills: skillEntries ?? [],
-              config: params.config,
-            });
-
-        const bootstrapFiles =
-          await loadWorkspaceBootstrapFiles(resolvedWorkspace);
-        const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
-        const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
-        // Tool schemas must be provider-compatible (OpenAI requires top-level `type: "object"`).
-        // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
-        const tools = createClawdbotCodingTools({
-          bash: {
-            ...params.config?.agent?.bash,
-            elevated: params.bashElevated,
-          },
-          sandbox,
-          surface: params.surface,
-          sessionKey: params.sessionKey ?? params.sessionId,
-          config: params.config,
-        });
-        const machineName = await getMachineDisplayName();
-        const runtimeInfo = {
-          host: machineName,
-          os: `${os.type()} ${os.release()}`,
-          arch: os.arch(),
-          node: process.version,
-          model: `${provider}/${modelId}`,
-        };
-        const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
-        const reasoningTagHint = provider === "ollama";
-        const systemPrompt = buildSystemPrompt({
-          appendPrompt: buildAgentSystemPromptAppend({
-            workspaceDir: resolvedWorkspace,
-            defaultThinkLevel: params.thinkLevel,
-            extraSystemPrompt: params.extraSystemPrompt,
-            ownerNumbers: params.ownerNumbers,
-            reasoningTagHint,
-            runtimeInfo,
-            sandboxInfo,
-            toolNames: tools.map((tool) => tool.name),
-          }),
-          contextFiles,
-          skills: promptSkills,
-          cwd: resolvedWorkspace,
-          tools,
-        });
-
-        const sessionManager = SessionManager.open(params.sessionFile);
-        const settingsManager = SettingsManager.create(
-          resolvedWorkspace,
-          agentDir,
-        );
-
-        const { session } = await createAgentSession({
-          cwd: resolvedWorkspace,
-          agentDir,
-          authStorage,
-          modelRegistry,
-          model,
-          thinkingLevel,
-          systemPrompt,
-          // Custom tool set: extra bash/process + read image sanitization.
-          tools,
-          sessionManager,
-          settingsManager,
-          skills: promptSkills,
-          contextFiles,
-        });
-
-        const prior = await sanitizeSessionMessagesImages(
-          session.messages,
-          "session:history",
-        );
-        if (prior.length > 0) {
-          session.agent.replaceMessages(prior);
-        }
-        let aborted = Boolean(params.abortSignal?.aborted);
-        const abortRun = () => {
-          aborted = true;
-          void session.abort();
-        };
-        const queueHandle: EmbeddedPiQueueHandle = {
-          queueMessage: async (text: string) => {
-            await session.steer(text);
-          },
-          isStreaming: () => session.isStreaming,
-          abort: abortRun,
-        };
-        ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
-
-        const {
-          assistantTexts,
-          toolMetas,
-          unsubscribe,
-          waitForCompactionRetry,
-        } = subscribeEmbeddedPiSession({
-          session,
-          runId: params.runId,
-          verboseLevel: params.verboseLevel,
-          shouldEmitToolResult: params.shouldEmitToolResult,
-          onToolResult: params.onToolResult,
-          onBlockReply: params.onBlockReply,
-          blockReplyBreak: params.blockReplyBreak,
-          blockReplyChunking: params.blockReplyChunking,
-          onPartialReply: params.onPartialReply,
-          onAgentEvent: params.onAgentEvent,
-          enforceFinalTag: params.enforceFinalTag,
-        });
-
-        let abortWarnTimer: NodeJS.Timeout | undefined;
-        const abortTimer = setTimeout(
-          () => {
-            log.warn(
-              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-            );
-            abortRun();
-            if (!abortWarnTimer) {
-              abortWarnTimer = setTimeout(() => {
-                if (!session.isStreaming) return;
-                log.warn(
-                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
-                );
-              }, 10_000);
-            }
-          },
-          Math.max(1, params.timeoutMs),
-        );
-
-        let messagesSnapshot: AgentMessage[] = [];
-        let sessionIdUsed = session.sessionId;
-        const onAbort = () => {
-          abortRun();
-        };
-        if (params.abortSignal) {
-          if (params.abortSignal.aborted) {
-            onAbort();
-          } else {
-            params.abortSignal.addEventListener("abort", onAbort, {
-              once: true,
-            });
-          }
-        }
-        let promptError: unknown = null;
-        try {
-          const promptStartedAt = Date.now();
-          log.debug(
-            `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
+        if (model.provider === "google-antigravity") {
+          const result = await getAntigravityApiKey(
+            authStorage,
+            excludedAccounts,
           );
-          try {
-            await session.prompt(params.prompt);
-          } catch (err) {
-            promptError = err;
-          } finally {
-            log.debug(
-              `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
-            );
+          if (!result) {
+            if (excludedAccounts.size > 0)
+              throw lastError || new Error("All antigravity accounts failed");
+            throw new Error("No antigravity accounts available");
           }
-          await waitForCompactionRetry();
-          messagesSnapshot = session.messages.slice();
-          sessionIdUsed = session.sessionId;
-        } finally {
-          clearTimeout(abortTimer);
-          if (abortWarnTimer) {
-            clearTimeout(abortWarnTimer);
-            abortWarnTimer = undefined;
-          }
-          unsubscribe();
-          if (ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === queueHandle) {
-            ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
-            notifyEmbeddedRunEnded(params.sessionId);
-          }
-          session.dispose();
-          params.abortSignal?.removeEventListener?.("abort", onAbort);
-        }
-        if (promptError && !aborted) {
-          throw promptError;
+          apiKey = result.apiKey;
+          accountKey = result.accountKey;
+        } else {
+          apiKey = await getApiKeyForModel(model, authStorage);
         }
 
-        const lastAssistant = messagesSnapshot
-          .slice()
-          .reverse()
-          .find((m) => (m as AgentMessage)?.role === "assistant") as
-          | AssistantMessage
-          | undefined;
+        authStorage.setRuntimeApiKey(model.provider, apiKey);
 
-        const usage = lastAssistant?.usage;
-        const agentMeta: EmbeddedPiAgentMeta = {
-          sessionId: sessionIdUsed,
-          provider: lastAssistant?.provider ?? provider,
-          model: lastAssistant?.model ?? model.id,
-          usage: usage
-            ? {
-                input: usage.input,
-                output: usage.output,
-                cacheRead: usage.cacheRead,
-                cacheWrite: usage.cacheWrite,
-                total: usage.totalTokens,
-              }
-            : undefined,
-        };
-
-        const replyItems: Array<{ text: string; media?: string[] }> = [];
-
-        const errorText = lastAssistant
-          ? formatAssistantErrorText(lastAssistant)
-          : undefined;
-        if (errorText) replyItems.push({ text: errorText });
-
-        const inlineToolResults =
-          params.verboseLevel === "on" &&
-          !params.onPartialReply &&
-          !params.onToolResult &&
-          toolMetas.length > 0;
-        if (inlineToolResults) {
-          for (const { toolName, meta } of toolMetas) {
-            const agg = formatToolAggregate(toolName, meta ? [meta] : []);
-            const { text: cleanedText, mediaUrls } = splitMediaFromOutput(agg);
-            if (cleanedText)
-              replyItems.push({ text: cleanedText, media: mediaUrls });
-          }
-        }
-
-        for (const text of assistantTexts.length
-          ? assistantTexts
-          : lastAssistant
-            ? [extractAssistantText(lastAssistant)]
-            : []) {
-          const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
-          if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) continue;
-          replyItems.push({ text: cleanedText, media: mediaUrls });
-        }
-
-        const payloads = replyItems
-          .map((item) => ({
-            text: item.text?.trim() ? item.text.trim() : undefined,
-            mediaUrls: item.media?.length ? item.media : undefined,
-            mediaUrl: item.media?.[0],
-          }))
-          .filter(
-            (p) =>
-              p.text || p.mediaUrl || (p.mediaUrls && p.mediaUrls.length > 0),
-          );
+        const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
         log.debug(
-          `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"} account=${accountKey ?? "default"}`,
         );
-        return {
-          payloads: payloads.length ? payloads : undefined,
-          meta: {
-            durationMs: Date.now() - started,
-            agentMeta,
-            aborted,
-          },
-        };
-      } finally {
-        restoreSkillEnv?.();
-        process.chdir(prevCwd);
+
+        await fs.mkdir(resolvedWorkspace, { recursive: true });
+        await ensureSessionHeader({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          cwd: resolvedWorkspace,
+        });
+
+        let restoreSkillEnv: (() => void) | undefined;
+        process.chdir(resolvedWorkspace);
+        try {
+          const shouldLoadSkillEntries =
+            !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+          const skillEntries = shouldLoadSkillEntries
+            ? loadWorkspaceSkillEntries(resolvedWorkspace)
+            : [];
+          const skillsSnapshot =
+            params.skillsSnapshot ??
+            buildWorkspaceSkillSnapshot(resolvedWorkspace, {
+              config: params.config,
+              entries: skillEntries,
+            });
+          const sandboxSessionKey =
+            params.sessionKey?.trim() || params.sessionId;
+          const sandbox = await resolveSandboxContext({
+            config: params.config,
+            sessionKey: sandboxSessionKey,
+            workspaceDir: resolvedWorkspace,
+          });
+          restoreSkillEnv = params.skillsSnapshot
+            ? applySkillEnvOverridesFromSnapshot({
+                snapshot: params.skillsSnapshot,
+                config: params.config,
+              })
+            : applySkillEnvOverrides({
+                skills: skillEntries ?? [],
+                config: params.config,
+              });
+
+          const bootstrapFiles =
+            await loadWorkspaceBootstrapFiles(resolvedWorkspace);
+          const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+          const promptSkills = resolvePromptSkills(
+            skillsSnapshot,
+            skillEntries,
+          );
+          const tools = createClawdbotCodingTools({
+            bash: {
+              ...params.config?.agent?.bash,
+              elevated: params.bashElevated,
+            },
+            sandbox,
+            surface: params.surface,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            config: params.config,
+          });
+          const machineName = await getMachineDisplayName();
+          const runtimeInfo = {
+            host: machineName,
+            os: `${os.type()} ${os.release()}`,
+            arch: os.arch(),
+            node: process.version,
+            model: `${provider}/${modelId}`,
+          };
+          const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
+          const reasoningTagHint = provider === "ollama";
+          const systemPrompt = buildSystemPrompt({
+            appendPrompt: buildAgentSystemPromptAppend({
+              workspaceDir: resolvedWorkspace,
+              defaultThinkLevel: params.thinkLevel,
+              extraSystemPrompt: params.extraSystemPrompt,
+              ownerNumbers: params.ownerNumbers,
+              reasoningTagHint,
+              runtimeInfo,
+              sandboxInfo,
+            }),
+            contextFiles,
+            skills: promptSkills,
+            cwd: resolvedWorkspace,
+            tools,
+          });
+
+          const sessionManager = SessionManager.open(params.sessionFile);
+          const settingsManager = SettingsManager.create(
+            resolvedWorkspace,
+            agentDir,
+          );
+
+          const { session } = await createAgentSession({
+            cwd: resolvedWorkspace,
+            agentDir,
+            authStorage,
+            modelRegistry,
+            model,
+            thinkingLevel,
+            systemPrompt,
+            // Custom tool set: extra bash/process + read image sanitization.
+            tools,
+            sessionManager,
+            settingsManager,
+            skills: promptSkills,
+            contextFiles,
+          });
+
+          const prior = await sanitizeSessionMessagesImages(
+            session.messages,
+            "session:history",
+          );
+          if (prior.length > 0) {
+            session.agent.replaceMessages(prior);
+          }
+          let aborted = Boolean(params.abortSignal?.aborted);
+          const abortRun = () => {
+            aborted = true;
+            void session.abort();
+          };
+          const queueHandle: EmbeddedPiQueueHandle = {
+            queueMessage: async (text: string) => {
+              await session.steer(text);
+            },
+            isStreaming: () => session.isStreaming,
+            abort: abortRun,
+          };
+          ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
+
+          const {
+            assistantTexts,
+            toolMetas,
+            unsubscribe,
+            waitForCompactionRetry,
+          } = subscribeEmbeddedPiSession({
+            session,
+            runId: params.runId,
+            verboseLevel: params.verboseLevel,
+            shouldEmitToolResult: params.shouldEmitToolResult,
+            onToolResult: params.onToolResult,
+            onBlockReply: params.onBlockReply,
+            blockReplyBreak: params.blockReplyBreak,
+            blockReplyChunking: params.blockReplyChunking,
+            onPartialReply: params.onPartialReply,
+            onAgentEvent: params.onAgentEvent,
+            enforceFinalTag: params.enforceFinalTag,
+          });
+
+          let abortWarnTimer: NodeJS.Timeout | undefined;
+          const abortTimer = setTimeout(
+            () => {
+              log.warn(
+                `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+              );
+              abortRun();
+              if (!abortWarnTimer) {
+                abortWarnTimer = setTimeout(() => {
+                  if (!session.isStreaming) return;
+                  log.warn(
+                    `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                  );
+                }, 10_000);
+              }
+            },
+            Math.max(1, params.timeoutMs),
+          );
+
+          let messagesSnapshot: AgentMessage[] = [];
+          let sessionIdUsed = session.sessionId;
+          const onAbort = () => {
+            abortRun();
+          };
+          if (params.abortSignal) {
+            if (params.abortSignal.aborted) {
+              onAbort();
+            } else {
+              params.abortSignal.addEventListener("abort", onAbort, {
+                once: true,
+              });
+            }
+          }
+          let promptError: unknown = null;
+          try {
+            const promptStartedAt = Date.now();
+            log.debug(
+              `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            try {
+              await session.prompt(params.prompt);
+            } catch (err) {
+              promptError = err;
+            } finally {
+              log.debug(
+                `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+              );
+            }
+            await waitForCompactionRetry();
+            messagesSnapshot = session.messages.slice();
+            sessionIdUsed = session.sessionId;
+          } finally {
+            clearTimeout(abortTimer);
+            if (abortWarnTimer) {
+              clearTimeout(abortWarnTimer);
+              abortWarnTimer = undefined;
+            }
+            unsubscribe();
+            if (ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === queueHandle) {
+              ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
+              notifyEmbeddedRunEnded(params.sessionId);
+            }
+            session.dispose();
+            params.abortSignal?.removeEventListener?.("abort", onAbort);
+          }
+          if (promptError && !aborted) {
+            throw promptError;
+          }
+
+          const lastAssistant = messagesSnapshot
+            .slice()
+            .reverse()
+            .find((m) => (m as AgentMessage)?.role === "assistant") as
+            | AssistantMessage
+            | undefined;
+
+          const usage = lastAssistant?.usage;
+          const agentMeta: EmbeddedPiAgentMeta = {
+            sessionId: sessionIdUsed,
+            provider: lastAssistant?.provider ?? provider,
+            model: lastAssistant?.model ?? model.id,
+            usage: usage
+              ? {
+                  input: usage.input,
+                  output: usage.output,
+                  cacheRead: usage.cacheRead,
+                  cacheWrite: usage.cacheWrite,
+                  total: usage.totalTokens,
+                }
+              : undefined,
+          };
+
+          const replyItems: Array<{ text: string; media?: string[] }> = [];
+
+          const errorText = lastAssistant
+            ? formatAssistantErrorText(lastAssistant)
+            : undefined;
+          if (errorText) replyItems.push({ text: errorText });
+
+          const inlineToolResults =
+            params.verboseLevel === "on" &&
+            !params.onPartialReply &&
+            !params.onToolResult &&
+            toolMetas.length > 0;
+          if (inlineToolResults) {
+            for (const { toolName, meta } of toolMetas) {
+              const agg = formatToolAggregate(toolName, meta ? [meta] : []);
+              const { text: cleanedText, mediaUrls } =
+                splitMediaFromOutput(agg);
+              if (cleanedText)
+                replyItems.push({ text: cleanedText, media: mediaUrls });
+            }
+          }
+
+          for (const text of assistantTexts.length
+            ? assistantTexts
+            : lastAssistant
+              ? [extractAssistantText(lastAssistant)]
+              : []) {
+            const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
+            if (!cleanedText && (!mediaUrls || mediaUrls.length === 0))
+              continue;
+            replyItems.push({ text: cleanedText, media: mediaUrls });
+          }
+
+          const payloads = replyItems
+            .map((item) => ({
+              text: item.text?.trim() ? item.text.trim() : undefined,
+              mediaUrls: item.media?.length ? item.media : undefined,
+              mediaUrl: item.media?.[0],
+            }))
+            .filter(
+              (p) =>
+                p.text || p.mediaUrl || (p.mediaUrls && p.mediaUrls.length > 0),
+            );
+
+          log.debug(
+            `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
+          );
+
+          if (accountKey) markAntigravitySuccess(accountKey);
+
+          return {
+            payloads: payloads.length ? payloads : undefined,
+            meta: {
+              durationMs: Date.now() - started,
+              agentMeta,
+              aborted,
+            },
+          };
+        } catch (err) {
+          if (accountKey) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const isRetryable =
+              msg.includes("401") ||
+              msg.includes("403") ||
+              msg.includes("429") ||
+              msg.includes("quota") ||
+              msg.includes("rate limit") ||
+              msg.includes("timeout") ||
+              msg.includes("ETIMEDOUT");
+
+            if (isRetryable) {
+              markAntigravityFailure(accountKey);
+              excludedAccounts.add(accountKey);
+              lastError = err;
+              log.warn(
+                `Antigravity account ${accountKey} failed: ${msg}. Retrying...`,
+              );
+              continue;
+            }
+          }
+          throw err;
+        } finally {
+          restoreSkillEnv?.();
+          process.chdir(prevCwd);
+        }
       }
     }),
   );
