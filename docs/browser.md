@@ -287,3 +287,7 @@ Notes:
 - Sharing the user's logged-in Chrome sessions automatically.
 - General-purpose web scraping; this is primarily for "close-the-loop" verification
   and interaction.
+
+## Troubleshooting
+
+For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting.md](./browser-linux-troubleshooting.md).

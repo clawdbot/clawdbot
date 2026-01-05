@@ -225,3 +225,26 @@ clawdbot gateway        # start the Gateway again
 *"Have you tried turning it off and on again?"* — Every IT person ever
 
 🦞🔧
+
+### Browser Not Starting (Linux)
+
+If you see `"Failed to start Chrome CDP on port 18800"`:
+
+**Most likely cause:** Snap-packaged Chromium on Ubuntu.
+
+**Quick fix:** Install Google Chrome instead:
+```bash
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo dpkg -i google-chrome-stable_current_amd64.deb
+```
+
+Then set in config:
+```json
+{
+  "browser": {
+    "executablePath": "/usr/bin/google-chrome-stable"
+  }
+}
+```
+
+**Full guide:** See [browser-linux-troubleshooting.md](./browser-linux-troubleshooting.md)
