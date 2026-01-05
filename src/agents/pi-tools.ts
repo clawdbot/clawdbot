@@ -317,6 +317,36 @@ export function createClawdisCodingTools(options?: {
   return tools.map(normalizeToolParameters);
 }
 
+// Global map to track tool calls across requests (per-process)
+const GLOBAL_TOOL_CALL_TRACKER = new Map<string, { count: number; ts: number }>();
+const MAX_TOOL_CALLS_PER_MINUTE = 10;
+const TOOL_CALL_WINDOW_MS = 60000; // 1 minute
+
+function checkAndIncrementToolCall(toolName: string): boolean {
+  const now = Date.now();
+  const key = `${toolName}`;
+  
+  // Clean up old entries
+  for (const [k, data] of GLOBAL_TOOL_CALL_TRACKER.entries()) {
+    if (now - data.ts > TOOL_CALL_WINDOW_MS) {
+      GLOBAL_TOOL_CALL_TRACKER.delete(k);
+    }
+  }
+  
+  const data = GLOBAL_TOOL_CALL_TRACKER.get(key) || { count: 0, ts: now };
+  
+  // Reset if window expired
+  if (now - data.ts > TOOL_CALL_WINDOW_MS) {
+    data.count = 0;
+    data.ts = now;
+  }
+  
+  data.count += 1;
+  GLOBAL_TOOL_CALL_TRACKER.set(key, data);
+  
+  return data.count <= MAX_TOOL_CALLS_PER_MINUTE;
+}
+
 export function createWebSearchTool(): AnyAgentTool {
   return {
     name: "web_search",
@@ -334,6 +364,26 @@ export function createWebSearchTool(): AnyAgentTool {
       const logger = console; // Simple logger for debugging
       
       try {
+        // Loop protection
+        if (!checkAndIncrementToolCall('web_search')) {
+          logger.error(`[web_search] Loop detected: called >${MAX_TOOL_CALLS_PER_MINUTE} times in ${TOOL_CALL_WINDOW_MS/1000}s`);
+          return {
+            content: [
+              { type: "text", text: "❌ Превышен лимит вызовов web_search (защита от бесконечного цикла)" },
+            ],
+          };
+        }
+        
+        // Validate query
+        if (!query || query === 'undefined') {
+          logger.error(`[web_search] Invalid query: "${query}"`);
+          return {
+            content: [
+              { type: "text", text: "❌ Ошибка: пустой запрос для поиска" },
+            ],
+          };
+        }
+        
         logger.log(`[web_search] Executing search for: "${query}"`);
         
         // Use the project's google_web CLI
