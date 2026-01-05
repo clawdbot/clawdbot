@@ -29,6 +29,8 @@ export function getTTSClient(): MiniMaxTTSClient | null {
     apiKey,
     groupId: ttsConfig.minimaxGroupId,
     cacheTtlSec: ttsConfig.cacheTtlSec,
+    maxChars: ttsConfig.maxChars,
+    timeoutSec: ttsConfig.timeoutSec,
   });
 
   return cachedClient;

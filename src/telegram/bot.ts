@@ -53,7 +53,26 @@ const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;
 const deepResearchInFlight = new Set<number>();
 const webSearchInFlight = new Set<number>();
-const ttsInFlight = new Set<string>();
+
+// TTS in-flight tracking with TTL (5 minutes)
+const ttsInFlight = new Map<string, number>();
+const TTS_IN_FLIGHT_TTL_MS = 5 * 60 * 1000;
+const TTS_CLEANUP_INTERVAL_MS = 60 * 1000; // Clean every minute
+
+// Periodic cleanup of expired TTS entries
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, timestamp] of ttsInFlight.entries()) {
+    if (now - timestamp > TTS_IN_FLIGHT_TTL_MS) {
+      ttsInFlight.delete(key);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    logVerbose(`[tts] Cleaned up ${cleaned} expired in-flight entries`);
+  }
+}, TTS_CLEANUP_INTERVAL_MS);
 const CATEGORY_CONFIDENCE_THRESHOLD = 0.7;
 const CATEGORY_MIN_WORDS = 2;
 const CATEGORY_MIN_CHARS = 6;
@@ -968,14 +987,17 @@ async function handleTTSCallback(
     return true;
   }
 
-  // Check if already processing
+  // Check if already processing (with TTL check)
   const flightKey = `${callerId}:${textHash}`;
-  if (ttsInFlight.has(flightKey)) {
+  const now = Date.now();
+  const existingTimestamp = ttsInFlight.get(flightKey);
+  if (existingTimestamp && now - existingTimestamp < TTS_IN_FLIGHT_TTL_MS) {
     await ctx.answerCallbackQuery({ text: "Уже генерирую..." });
     return true;
   }
 
-  ttsInFlight.add(flightKey);
+  // Add with current timestamp
+  ttsInFlight.set(flightKey, now);
 
   try {
     await ctx.answerCallbackQuery({ text: "Генерирую аудио..." });

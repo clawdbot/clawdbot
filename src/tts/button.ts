@@ -11,11 +11,13 @@ const PROGRESS_BAR_SEGMENTS = 10;
 
 /**
  * Create hash from text for callback data
+ * Uses 16 chars (64 bits) for better collision resistance
  */
 function createTextHash(text: string): string {
   const hash = crypto.createHash("sha256");
   hash.update(text);
-  return hash.digest("hex").slice(0, 12);
+  // 16 chars = 64 bits, much better collision resistance than 12 chars (48 bits)
+  return hash.digest("hex").slice(0, 16);
 }
 
 /**
