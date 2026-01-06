@@ -216,15 +216,11 @@ const runCliJson = async (
 ): Promise<unknown> => {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const child = spawn(
-    "bun",
-    ["src/index.ts", ...args],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawn("bun", ["src/index.ts", ...args], {
+    cwd: process.cwd(),
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
   child.stdout?.on("data", (d) => stdout.push(String(d)));
