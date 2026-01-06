@@ -170,6 +170,30 @@ If your AI does something bad:
 4. **Rotate secrets:** If credentials were exposed
 5. **Update rules:** Add to your security prompt
 
+## Secret Scanning (detect-secrets)
+
+CI runs `detect-secrets scan --baseline .secrets.baseline` in the `secrets` job.
+When it fails, there are new findings that are not yet in the baseline.
+
+### If CI fails
+
+1. Reproduce locally:
+   ```bash
+   detect-secrets scan --baseline .secrets.baseline
+   ```
+2. Understand the tools:
+   - `detect-secrets scan` finds candidates and compares them to the baseline.
+   - `detect-secrets audit` opens an interactive review to mark each baseline
+     item as real or false positive.
+3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
+4. For false positives: run the interactive audit and mark them as false:
+   ```bash
+   detect-secrets audit .secrets.baseline
+   ```
+5. If you need new excludes, update `.detect-secrets.cfg` and run the scan again
+
+Commit the updated `.secrets.baseline` once it reflects the intended state.
+
 ## The Trust Hierarchy
 
 ```

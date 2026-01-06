@@ -78,6 +78,11 @@ Default timeout is 30 minutes. For long tasks:
 
 Or use the `process` tool to background long commands.
 
+### CI Secrets Scan Failed
+
+This means `detect-secrets` found new candidates not yet in the baseline.
+Follow the "Secret Scanning (detect-secrets)" section in `docs/security.md`.
+
 ### WhatsApp Disconnected
 
 ```bash
