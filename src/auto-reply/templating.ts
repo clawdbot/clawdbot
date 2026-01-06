@@ -16,6 +16,7 @@ export type MsgContext = {
   GroupRoom?: string;
   GroupSpace?: string;
   GroupMembers?: string;
+  GroupSystemPrompt?: string;
   SenderName?: string;
   SenderId?: string;
   SenderUsername?: string;

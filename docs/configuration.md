@@ -260,8 +260,23 @@ Set `telegram.enabled: false` to disable automatic startup.
   telegram: {
     enabled: true,
     botToken: "your-bot-token",
-    requireMention: true,
     allowFrom: ["123456789"],
+    groups: {
+      "*": { requireMention: true, skills: ["status"] },
+      "-1001234567890": {
+        requireMention: false,
+        skills: ["ops"],
+        topics: {
+          "44": {
+            skills: ["customer-support", "sizzy-support"],
+            systemPrompt: "Handle customer support triage only.",
+            autoReply: true,
+            allowFrom: ["123456789"]
+          },
+          "456": { skills: [] } // disable skills for topic 456
+        }
+      }
+    },
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
     webhookUrl: "https://example.com/telegram-webhook",
@@ -270,6 +285,17 @@ Set `telegram.enabled: false` to disable automatic startup.
   }
 }
 ```
+
+Per-group/topic skill filters live under `telegram.groups.<chatId>.skills` and
+`telegram.groups.<chatId>.topics.<message_thread_id>.skills`. Omit `skills` to
+load all skills; set `skills: []` to disable skills for that group/topic. Each
+topic starts its own session keyed by `message_thread_id`. Use `/id` to confirm
+chat and topic IDs. Skill names match the `name` field in each `SKILL.md`.
+You can also set `enabled`, `autoReply`, `allowFrom`, and `systemPrompt` on
+groups/topics to control availability, auto-replies, allowed users, and
+topic-specific system prompts (`enabled: false` disables the bot).
+Note: configuring `telegram.groups` enables the group allowlist; include `"*"`
+to allow all groups.
 
 ### `discord` (bot transport)
 
@@ -318,8 +344,18 @@ Configure the Discord bot by setting the bot token and optional gating:
         reactionNotifications: "own",       // off | own | all | allowlist
         users: ["987654321098765432"],      // optional per-guild user allowlist
         channels: {
-          general: { allow: true },
-          help: { allow: true, requireMention: true }
+          general: {
+            allow: true,
+            skills: ["status"],
+            systemPrompt: "Keep responses short.",
+            autoReply: true
+          },
+          help: {
+            allow: true,
+            requireMention: true,
+            skills: [],
+            users: ["kitze"]
+          }
         }
       }
     },
@@ -327,6 +363,13 @@ Configure the Discord bot by setting the bot token and optional gating:
   }
 }
 ```
+
+Discord channel skill filters live under `discord.guilds.<guildId>.channels.<channelId>.skills`.
+Omit `skills` to load all skills; set `skills: []` to disable skills for that channel.
+Prefer channel IDs for stable mappings. You can also set `enabled`, `autoReply`,
+`users`, and `systemPrompt` per channel (`enabled: false` disables the bot).
+Channel descriptions (topics) are included automatically and merged with any
+configured `systemPrompt`.
 
 Clawdbot starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
@@ -353,8 +396,14 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       groupChannels: ["G123"]
     },
     channels: {
-      C123: { allow: true, requireMention: true },
-      "#general": { allow: true, requireMention: false }
+      C123: {
+        enabled: true,
+        requireMention: true,
+        skills: ["customer-support"],
+        users: ["U123"],
+        systemPrompt: "You are the customer support assistant."
+      },
+      "#general": { enabled: true, autoReply: true }
     },
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
@@ -378,6 +427,11 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 ```
 
 Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+
+Slack channel skill filters live under `slack.channels.<channelId>.skills`. Omit `skills` to load all skills; set `skills: []` to disable skills for that channel.
+You can also set `enabled`, `autoReply`, `users`, and `systemPrompt` per channel (`enabled: false` disables the bot).
+Channel topics/purposes are included automatically and merged with any configured `systemPrompt`.
+Channel-specific `enabled`/`allow` values override wildcard defaults.
 
 Reaction notification modes:
 - `off`: no reaction events.

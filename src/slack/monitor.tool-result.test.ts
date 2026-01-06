@@ -6,6 +6,9 @@ const sendMock = vi.fn();
 const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
 let config: Record<string, unknown> = {};
+let conversationsInfoResponse: Record<string, unknown> = {
+  channel: { name: "dm", is_im: true },
+};
 const getSlackHandlers = () =>
   (
     globalThis as {
@@ -43,9 +46,9 @@ vi.mock("@slack/bolt", () => {
     client = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
       conversations: {
-        info: vi.fn().mockResolvedValue({
-          channel: { name: "dm", is_im: true },
-        }),
+        info: vi.fn().mockImplementation(() =>
+          Promise.resolve(conversationsInfoResponse),
+        ),
       },
       users: {
         info: vi.fn().mockResolvedValue({
@@ -80,6 +83,7 @@ beforeEach(() => {
     slack: { dm: { enabled: true }, groupDm: { enabled: false } },
     routing: { allowFrom: [] },
   };
+  conversationsInfoResponse = { channel: { name: "dm", is_im: true } };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();
   updateLastRouteMock.mockReset();
@@ -121,5 +125,109 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
     expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+  });
+
+  it("applies channel skill filters and system prompts", async () => {
+    conversationsInfoResponse = {
+      channel: {
+        name: "support",
+        is_channel: true,
+        topic: { value: "Support queue" },
+        purpose: { value: "Handle customers" },
+      },
+    };
+    config = {
+      slack: {
+        dm: { enabled: true },
+        channels: {
+          C1: {
+            autoReply: true,
+            skills: ["customer-support"],
+            users: ["U1"],
+            systemPrompt: "Be kind.",
+          },
+        },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "124",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    const [ctx, opts] = replyMock.mock.calls[0] ?? [];
+    expect(opts?.skillFilter).toEqual(["customer-support"]);
+    expect(ctx?.GroupSystemPrompt).toContain("Channel description:");
+    expect(ctx?.GroupSystemPrompt).toContain("Support queue");
+    expect(ctx?.GroupSystemPrompt).toContain("Be kind.");
+  });
+
+  it("lets channel config override wildcard disables", async () => {
+    conversationsInfoResponse = {
+      channel: {
+        name: "support",
+        is_channel: true,
+      },
+    };
+    config = {
+      slack: {
+        channels: {
+          "*": { enabled: false },
+          C1: { allow: true, autoReply: true },
+        },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "125",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
   });
 });

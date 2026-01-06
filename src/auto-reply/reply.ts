@@ -509,6 +509,10 @@ export async function getReplyFromConfig(
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
+  const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const extraSystemPrompt = [groupIntro, groupSystemPrompt]
+    .filter(Boolean)
+    .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
@@ -661,7 +665,7 @@ export async function getReplyFromConfig(
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers:
         command.ownerList.length > 0 ? command.ownerList : undefined,
-      extraSystemPrompt: groupIntro || undefined,
+      extraSystemPrompt: extraSystemPrompt || undefined,
       ...(provider === "ollama" ? { enforceFinalTag: true } : {}),
     },
   };

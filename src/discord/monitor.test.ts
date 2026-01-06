@@ -93,8 +93,14 @@ describe("discord guild/channel resolution", () => {
   it("resolves channel config by slug", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        help: { allow: true, requireMention: true },
+        general: {
+          allow: true,
+          skills: ["alpha"],
+          systemPrompt: "Short replies.",
+          autoReply: true,
+          users: ["kitze"],
+        },
+        help: { allow: true, requireMention: true, skills: [] },
       },
     };
     const channel = resolveDiscordChannelConfig({
@@ -105,6 +111,10 @@ describe("discord guild/channel resolution", () => {
     });
     expect(channel?.allowed).toBe(true);
     expect(channel?.requireMention).toBeUndefined();
+    expect(channel?.skills).toEqual(["alpha"]);
+    expect(channel?.systemPrompt).toBe("Short replies.");
+    expect(channel?.autoReply).toBe(true);
+    expect(channel?.users).toEqual(["kitze"]);
 
     const help = resolveDiscordChannelConfig({
       guildInfo,
@@ -114,6 +124,7 @@ describe("discord guild/channel resolution", () => {
     });
     expect(help?.allowed).toBe(true);
     expect(help?.requireMention).toBe(true);
+    expect(help?.skills).toEqual([]);
   });
 
   it("denies channel when config present but no match", () => {

@@ -11,7 +11,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 
 ## Goals
 - Let you talk to Clawdbot via a Telegram bot in DMs and groups.
-- Share the same `main` session used by WhatsApp/WebChat; groups stay isolated as `telegram:group:<chatId>`.
+- Share the same `main` session used by WhatsApp/WebChat; groups stay isolated as `telegram:group:<chatId>`, and forum topics split into `telegram:group:<chatId>:<topicId>`.
 - Keep transport routing deterministic: replies always go back to the surface they arrived on.
 
 ## How it will work (Bot API)
@@ -24,7 +24,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
      - The webhook listener currently binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
      - If you need a different public port/host, set `telegram.webhookUrl` to the externally reachable URL and use a reverse proxy to forward to `:8787`.
 4) Direct chats: user sends the first message; all subsequent turns land in the shared `main` session (default, no extra config).
-5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>` and require mention/command by default (override via `telegram.groups`).
+5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>` (topics add `:<topicId>`), and require mention/command by default (override via `telegram.groups`).
 6) Optional allowlist: use `telegram.allowFrom` for direct chats by chat id (`123456789` or `telegram:123456789`).
 
 ## Capabilities & limits (Bot API)
@@ -37,8 +37,9 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 - Library: grammY is the only client for send + gateway (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
 - Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention by default (override per chat in config).
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
-- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
+- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups` (plus per-topic overrides), `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
   - Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
+  - Topic overrides support `enabled`, `autoReply`, `allowFrom`, `systemPrompt`, and `skills` (`enabled: false` disables the bot).
 
 Example config:
 ```json5

@@ -88,6 +88,69 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     if (typeof opts.requireMention === "boolean") return opts.requireMention;
     return true;
   };
+  const resolveGroupTopicSettings = (
+    chatId: string | number,
+    topicId?: number,
+  ) => {
+    const groupId = String(chatId);
+    const groupConfig = cfg.telegram?.groups?.[groupId];
+    const groupDefault = cfg.telegram?.groups?.["*"];
+    const topicKey = typeof topicId === "number" ? String(topicId) : undefined;
+    const topicConfig = topicKey ? groupConfig?.topics?.[topicKey] : undefined;
+    const defaultTopicConfig = topicKey
+      ? groupDefault?.topics?.[topicKey]
+      : undefined;
+    const hasOverride = (value: unknown, key: string) =>
+      Boolean(
+        value &&
+          typeof value === "object" &&
+          Object.prototype.hasOwnProperty.call(value, key),
+      );
+    const resolveField = <T>(key: string): T | undefined => {
+      if (hasOverride(topicConfig, key)) {
+        return (topicConfig as Record<string, T>)[key];
+      }
+      if (hasOverride(defaultTopicConfig, key)) {
+        return (defaultTopicConfig as Record<string, T>)[key];
+      }
+      if (hasOverride(groupConfig, key)) {
+        return (groupConfig as Record<string, T>)[key];
+      }
+      if (hasOverride(groupDefault, key)) {
+        return (groupDefault as Record<string, T>)[key];
+      }
+      return undefined;
+    };
+    const rawSkills = resolveField<unknown>("skills");
+    const skills = Array.isArray(rawSkills) ? rawSkills : undefined;
+    const allowFrom = resolveField<Array<string | number>>("allowFrom");
+    const systemPrompt = resolveField<string>("systemPrompt");
+    const enabled = resolveField<boolean>("enabled");
+    const autoReply = resolveField<boolean>("autoReply");
+    return { skills, allowFrom, systemPrompt, enabled, autoReply };
+  };
+
+  const isTelegramUserAllowed = (
+    allowFromList: Array<string | number> | undefined,
+    msg: TelegramMessage,
+  ) => {
+    if (!Array.isArray(allowFromList) || allowFromList.length === 0) return true;
+    const normalized = allowFromList
+      .map((entry) => String(entry).trim())
+      .filter(Boolean);
+    if (normalized.includes("*")) return true;
+    const senderId = msg.from?.id ? String(msg.from.id) : "";
+    const senderUsername = msg.from?.username ?? "";
+    const usernameLower = senderUsername.toLowerCase();
+    const allowlist = new Set(normalized.map((entry) => entry.toLowerCase()));
+    if (senderId && allowlist.has(senderId)) return true;
+    if (senderId && allowlist.has(`telegram:${senderId}`)) return true;
+    if (senderUsername) {
+      if (allowlist.has(usernameLower)) return true;
+      if (allowlist.has(`@${usernameLower}`)) return true;
+    }
+    return false;
+  };
 
   bot.on("message", async (ctx) => {
     try {
@@ -96,6 +159,29 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const chatId = msg.chat.id;
       const isGroup =
         msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const topicId =
+        isGroup && typeof msg.message_thread_id === "number"
+          ? msg.message_thread_id
+          : undefined;
+      const topicSettings = isGroup
+        ? resolveGroupTopicSettings(chatId, topicId)
+        : undefined;
+      const skillFilter = topicSettings?.skills;
+      const groupSystemPrompt = topicSettings?.systemPrompt?.trim() || undefined;
+      if (isGroup && topicSettings?.enabled === false) {
+        logger.info(
+          { chatId, topicId, reason: "disabled" },
+          "skipping group message",
+        );
+        return;
+      }
+      if (isGroup && !isTelegramUserAllowed(topicSettings?.allowFrom, msg)) {
+        logger.info(
+          { chatId, topicId, reason: "user-not-allowed" },
+          "skipping group message",
+        );
+        return;
+      }
 
       if (isGroup && !isGroupAllowed(chatId)) {
         logger.warn(
@@ -107,7 +193,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
       const sendTyping = async () => {
         try {
-          await bot.api.sendChatAction(chatId, "typing");
+          await bot.api.sendChatAction(
+            chatId,
+            "typing",
+            topicId ? { message_thread_id: topicId } : undefined,
+          );
         } catch (err) {
           logVerbose(
             `telegram typing cue failed for chat ${chatId}: ${String(err)}`,
@@ -133,8 +223,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
 
       const botUsername = ctx.me?.username?.toLowerCase();
-      const allowFromList = Array.isArray(allowFrom)
-        ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
+      const commandAllowFrom =
+        isGroup && topicSettings?.allowFrom
+          ? topicSettings.allowFrom
+          : allowFrom;
+      const allowFromList = Array.isArray(commandAllowFrom)
+        ? commandAllowFrom.map((entry) => String(entry).trim()).filter(Boolean)
         : [];
       const senderId = msg.from?.id ? String(msg.from.id) : "";
       const senderUsername = msg.from?.username ?? "";
@@ -154,14 +248,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
         (ent) => ent.type === "mention",
       );
+      const resolvedRequireMention =
+        typeof topicSettings?.autoReply === "boolean"
+          ? !topicSettings.autoReply
+          : resolveGroupRequireMention(chatId);
       const shouldBypassMention =
         isGroup &&
-        resolveGroupRequireMention(chatId) &&
+        resolvedRequireMention &&
         !wasMentioned &&
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(msg.text ?? msg.caption ?? "");
-      if (isGroup && resolveGroupRequireMention(chatId) && botUsername) {
+      if (isGroup && resolvedRequireMention && botUsername) {
         if (!wasMentioned && !shouldBypassMention) {
           logger.info(
             { chatId, reason: "no-mention" },
@@ -201,10 +299,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
       const ctxPayload = {
         Body: body,
-        From: isGroup ? `group:${chatId}` : `telegram:${chatId}`,
+        From: isGroup
+          ? topicId !== undefined
+            ? `group:${chatId}:${topicId}`
+            : `group:${chatId}`
+          : `telegram:${chatId}`,
         To: `telegram:${chatId}`,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+        GroupSystemPrompt: groupSystemPrompt,
         SenderName: buildSenderName(msg),
         SenderId: senderId || undefined,
         SenderUsername: senderUsername || undefined,
@@ -258,6 +361,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             bot,
             replyToMode,
             textLimit,
+            topicId,
           });
         },
         onError: (err, info) => {
@@ -273,6 +377,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           onReplyStart: sendTyping,
           onToolResult: dispatcher.sendToolResult,
           onBlockReply: dispatcher.sendBlockReply,
+          skillFilter,
         },
         cfg,
       );
@@ -310,8 +415,10 @@ async function deliverReplies(params: {
   bot: Bot;
   replyToMode: ReplyToMode;
   textLimit: number;
+  topicId?: number;
 }) {
-  const { replies, chatId, runtime, bot, replyToMode, textLimit } = params;
+  const { replies, chatId, runtime, bot, replyToMode, textLimit, topicId } =
+    params;
   let hasReplied = false;
   for (const reply of replies) {
     if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
@@ -334,6 +441,7 @@ async function deliverReplies(params: {
             replyToId && (replyToMode === "all" || !hasReplied)
               ? replyToId
               : undefined,
+          topicId,
         });
         if (replyToId && !hasReplied) {
           hasReplied = true;
@@ -357,21 +465,25 @@ async function deliverReplies(params: {
         await bot.api.sendPhoto(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          message_thread_id: topicId,
         });
       } else if (kind === "video") {
         await bot.api.sendVideo(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          message_thread_id: topicId,
         });
       } else if (kind === "audio") {
         await bot.api.sendAudio(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          message_thread_id: topicId,
         });
       } else {
         await bot.api.sendDocument(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          message_thread_id: topicId,
         });
       }
       if (replyToId && !hasReplied) {
@@ -479,12 +591,13 @@ async function sendTelegramText(
   chatId: string,
   text: string,
   runtime: RuntimeEnv,
-  opts?: { replyToMessageId?: number },
+  opts?: { replyToMessageId?: number; topicId?: number },
 ): Promise<number | undefined> {
   try {
     const res = await bot.api.sendMessage(chatId, text, {
       parse_mode: "Markdown",
       reply_to_message_id: opts?.replyToMessageId,
+      message_thread_id: opts?.topicId,
     });
     return res.message_id;
   } catch (err) {
@@ -495,6 +608,7 @@ async function sendTelegramText(
       );
       const res = await bot.api.sendMessage(chatId, text, {
         reply_to_message_id: opts?.replyToMessageId,
+        message_thread_id: opts?.topicId,
       });
       return res.message_id;
     }

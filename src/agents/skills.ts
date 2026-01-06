@@ -385,11 +385,20 @@ function filterSkillEntries(
   skillFilter?: string[],
 ): SkillEntry[] {
   let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config }));
-  // If skillFilter is provided and non-empty, only include skills in the filter list
-  if (skillFilter && skillFilter.length > 0) {
-    console.log(`[skills] Applying skill filter: ${skillFilter.join(", ")}`);
-    filtered = filtered.filter((entry) => skillFilter.includes(entry.skill.name));
-    console.log(`[skills] After filter: ${filtered.map(e => e.skill.name).join(", ")}`);
+  // If skillFilter is provided, only include skills in the filter list.
+  if (skillFilter !== undefined) {
+    const normalized = skillFilter
+      .map((entry) => String(entry).trim())
+      .filter(Boolean);
+    const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
+    console.log(`[skills] Applying skill filter: ${label}`);
+    filtered =
+      normalized.length > 0
+        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
+        : [];
+    console.log(
+      `[skills] After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`,
+    );
   }
   return filtered;
 }

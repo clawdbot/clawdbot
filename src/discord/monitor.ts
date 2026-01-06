@@ -75,12 +75,28 @@ export type DiscordGuildEntryResolved = {
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: Array<string | number>;
-  channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+  channels?: Record<
+    string,
+    {
+      allow?: boolean;
+      requireMention?: boolean;
+      skills?: string[];
+      enabled?: boolean;
+      autoReply?: boolean;
+      users?: Array<string | number>;
+      systemPrompt?: string;
+    }
+  >;
 };
 
 export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
+  skills?: string[];
+  enabled?: boolean;
+  autoReply?: boolean;
+  users?: Array<string | number>;
+  systemPrompt?: string;
 };
 
 export function resolveDiscordReplyTarget(opts: {
@@ -275,6 +291,23 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         );
         return;
       }
+      if (isGuildMessage && channelConfig?.enabled === false) {
+        logVerbose(
+          `Blocked discord channel ${message.channelId} (disabled by config)`,
+        );
+        return;
+      }
+      const skillFilter = channelConfig?.skills;
+      const channelUsers = channelConfig?.users;
+      if (
+        isGuildMessage &&
+        !resolveDiscordUserAllowed(channelUsers ?? guildInfo?.users, message.author)
+      ) {
+        logVerbose(
+          `Blocked discord sender ${message.author.id} (not in channel allowlist)`,
+        );
+        return;
+      }
 
       if (isGuildMessage && historyLimit > 0 && baseText) {
         const history = guildHistories.get(message.channelId) ?? [];
@@ -289,7 +322,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
 
       const resolvedRequireMention =
-        channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
+        typeof channelConfig?.autoReply === "boolean"
+          ? !channelConfig.autoReply
+          : channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
       const hasAnyMention = Boolean(
         !isDirectMessage &&
           (message.mentions?.everyone ||
@@ -300,6 +335,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         isDirectMessage,
         allowFrom,
         guildInfo,
+        channelUsers,
         author: message.author,
       });
       const shouldBypassMention =
@@ -322,29 +358,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             "discord: skipping guild message",
           );
           return;
-        }
-      }
-
-      if (isGuildMessage) {
-        const userAllow = guildInfo?.users;
-        if (Array.isArray(userAllow) && userAllow.length > 0) {
-          const users = normalizeDiscordAllowList(userAllow, [
-            "discord:",
-            "user:",
-          ]);
-          const userOk =
-            !users ||
-            allowListMatches(users, {
-              id: message.author.id,
-              name: message.author.username,
-              tag: message.author.tag,
-            });
-          if (!userOk) {
-            logVerbose(
-              `Blocked discord guild sender ${message.author.id} (not in guild users allowlist)`,
-            );
-            return;
-          }
         }
       }
 
@@ -408,6 +421,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const groupRoom =
         isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
       const groupSubject = isDirectMessage ? undefined : groupRoom;
+      const channelDescription =
+        isGuildMessage && "topic" in message.channel
+          ? (message.channel.topic ?? undefined)
+          : undefined;
+      const systemPromptParts = [
+        channelDescription ? `Channel description: ${channelDescription}` : null,
+        channelConfig?.systemPrompt?.trim() || null,
+      ].filter((entry): entry is string => Boolean(entry));
+      const groupSystemPrompt =
+        systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
       const messageText = text;
       let combinedBody = formatAgentEnvelope({
         surface: "Discord",
@@ -498,6 +521,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         GroupSpace: isGuildMessage
           ? (guildInfo?.id ?? guildSlug) || undefined
           : undefined,
+        GroupSystemPrompt: groupSystemPrompt,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
@@ -563,6 +587,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           onBlockReply: (payload) => {
             dispatcher.sendBlockReply(payload);
           },
+          skillFilter,
         },
         cfg,
       );
@@ -998,13 +1023,28 @@ export function allowListMatches(
   return false;
 }
 
+function resolveDiscordUserAllowed(
+  users: Array<string | number> | undefined,
+  author: User,
+): boolean {
+  if (!Array.isArray(users) || users.length === 0) return true;
+  const allowList = normalizeDiscordAllowList(users, ["discord:", "user:"]);
+  if (!allowList) return true;
+  return allowListMatches(allowList, {
+    id: author.id,
+    name: author.username,
+    tag: author.tag,
+  });
+}
+
 function resolveDiscordCommandAuthorized(params: {
   isDirectMessage: boolean;
   allowFrom?: Array<string | number>;
   guildInfo?: DiscordGuildEntryResolved | null;
+  channelUsers?: Array<string | number>;
   author: User;
 }): boolean {
-  const { isDirectMessage, allowFrom, guildInfo, author } = params;
+  const { isDirectMessage, allowFrom, guildInfo, channelUsers, author } = params;
   if (isDirectMessage) {
     if (!Array.isArray(allowFrom) || allowFrom.length === 0) return true;
     const allowList = normalizeDiscordAllowList(allowFrom, [
@@ -1018,15 +1058,8 @@ function resolveDiscordCommandAuthorized(params: {
       tag: author.tag,
     });
   }
-  const users = guildInfo?.users;
-  if (!Array.isArray(users) || users.length === 0) return true;
-  const allowList = normalizeDiscordAllowList(users, ["discord:", "user:"]);
-  if (!allowList) return true;
-  return allowListMatches(allowList, {
-    id: author.id,
-    name: author.username,
-    tag: author.tag,
-  });
+  const users = Array.isArray(channelUsers) ? channelUsers : guildInfo?.users;
+  return resolveDiscordUserAllowed(users, author);
 }
 
 export function shouldEmitDiscordReactionNotification(params: {
@@ -1141,6 +1174,11 @@ export function resolveDiscordChannelConfig(params: {
     return {
       allowed: entry.allow !== false,
       requireMention: entry.requireMention,
+      skills: entry.skills,
+      enabled: entry.enabled,
+      autoReply: entry.autoReply,
+      users: entry.users,
+      systemPrompt: entry.systemPrompt,
     };
   }
   return { allowed: true };

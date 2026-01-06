@@ -580,12 +580,22 @@ export const ClawdbotSchema = z.object({
             .object({
               requireMention: z.boolean().optional(),
               skills: z.array(z.string()).optional(),
+              enabled: z.boolean().optional(),
+              autoReply: z.boolean().optional(),
+              allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+              systemPrompt: z.string().optional(),
               topics: z
                 .record(
                   z.string(),
                   z
                     .object({
                       skills: z.array(z.string()).optional(),
+                      enabled: z.boolean().optional(),
+                      autoReply: z.boolean().optional(),
+                      allowFrom: z
+                        .array(z.union([z.string(), z.number()]))
+                        .optional(),
+                      systemPrompt: z.string().optional(),
                     })
                     .optional(),
                 )
@@ -665,6 +675,10 @@ export const ClawdbotSchema = z.object({
                       allow: z.boolean().optional(),
                       requireMention: z.boolean().optional(),
                       skills: z.array(z.string()).optional(),
+                      enabled: z.boolean().optional(),
+                      autoReply: z.boolean().optional(),
+                      users: z.array(z.union([z.string(), z.number()])).optional(),
+                      systemPrompt: z.string().optional(),
                     })
                     .optional(),
                 )
@@ -721,6 +735,11 @@ export const ClawdbotSchema = z.object({
             .object({
               allow: z.boolean().optional(),
               requireMention: z.boolean().optional(),
+              skills: z.array(z.string()).optional(),
+              enabled: z.boolean().optional(),
+              autoReply: z.boolean().optional(),
+              users: z.array(z.union([z.string(), z.number()])).optional(),
+              systemPrompt: z.string().optional(),
             })
             .optional(),
         )

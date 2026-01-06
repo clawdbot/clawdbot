@@ -165,6 +165,33 @@ describe("buildWorkspaceSkillsPrompt", () => {
     }
   });
 
+  it("applies skill filters, including empty lists", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta"),
+      name: "beta",
+      description: "Beta skill",
+    });
+
+    const filteredPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      skillFilter: ["alpha"],
+    });
+    expect(filteredPrompt).toContain("alpha");
+    expect(filteredPrompt).not.toContain("beta");
+
+    const emptyPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      skillFilter: [],
+    });
+    expect(emptyPrompt).toBe("");
+  });
+
   it("prefers workspace skills over managed skills", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
     const managedDir = path.join(workspaceDir, ".managed");

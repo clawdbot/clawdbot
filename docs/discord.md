@@ -124,6 +124,8 @@ Example “single server, only allow me, only allow #help”:
 Notes:
 - `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
 - If `channels` is present, any channel not listed is denied by default.
+- Channel overrides support `enabled`, `autoReply`, `users`, and `systemPrompt` (`enabled: false` disables the bot).
+- Channel descriptions (topics) are included automatically and merged with `systemPrompt`.
 
 ### 6) Verify it works
 1. Start the gateway.

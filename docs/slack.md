@@ -103,8 +103,14 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
       "groupChannels": ["G123"]
     },
     "channels": {
-      "C123": { "allow": true, "requireMention": true },
-      "#general": { "allow": true, "requireMention": false }
+      "C123": {
+        "enabled": true,
+        "requireMention": true,
+        "skills": ["customer-support"],
+        "users": ["U123"],
+        "systemPrompt": "You are the customer support assistant."
+      },
+      "#general": { "enabled": true, "autoReply": true }
     },
     "reactionNotifications": "own",
     "reactionAllowlist": ["U123"],
@@ -154,5 +160,10 @@ Slack tool actions can be gated with `slack.actions.*`:
 
 ## Notes
 - Mention gating is controlled via `slack.channels` (set `requireMention` to `true`).
+- `autoReply: true` replies to every message without needing a mention.
+- Per-channel skill filters live under `slack.channels.<channelId>.skills` (empty array disables skills).
+- Channel topics/purposes are merged into `systemPrompt` when present.
+- Use `users` in a channel config to limit who can invoke the bot.
+- Channel-specific `enabled`/`allow` values override wildcard defaults.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
 - Attachments are downloaded to the media store when permitted and under the size limit.

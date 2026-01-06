@@ -25,6 +25,52 @@ function normalizeSlackSlug(raw?: string | null) {
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
+function parseTelegramGroupId(value?: string | null) {
+  const raw = value?.trim() ?? "";
+  if (!raw) return { chatId: undefined, topicId: undefined };
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length >= 2 && /^-?\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
+    return { chatId: parts[0], topicId: parts[1] };
+  }
+  return { chatId: raw, topicId: undefined };
+}
+
+function hasOwn(obj: unknown, key: string): boolean {
+  return Boolean(
+    obj &&
+      typeof obj === "object" &&
+      Object.prototype.hasOwnProperty.call(obj, key),
+  );
+}
+
+function resolveTelegramAutoReply(params: {
+  cfg: ClawdbotConfig;
+  chatId?: string;
+  topicId?: string;
+}): boolean | undefined {
+  const { cfg, chatId, topicId } = params;
+  if (!chatId) return undefined;
+  const groupConfig = cfg.telegram?.groups?.[chatId];
+  const groupDefault = cfg.telegram?.groups?.["*"];
+  const topicConfig =
+    topicId && groupConfig?.topics ? groupConfig.topics[topicId] : undefined;
+  const defaultTopicConfig =
+    topicId && groupDefault?.topics ? groupDefault.topics[topicId] : undefined;
+  if (hasOwn(topicConfig, "autoReply")) {
+    return (topicConfig as { autoReply?: boolean }).autoReply;
+  }
+  if (hasOwn(defaultTopicConfig, "autoReply")) {
+    return (defaultTopicConfig as { autoReply?: boolean }).autoReply;
+  }
+  if (hasOwn(groupConfig, "autoReply")) {
+    return (groupConfig as { autoReply?: boolean }).autoReply;
+  }
+  if (hasOwn(groupDefault, "autoReply")) {
+    return (groupDefault as { autoReply?: boolean }).autoReply;
+  }
+  return undefined;
+}
+
 function resolveDiscordGuildEntry(
   guilds: NonNullable<ClawdbotConfig["discord"]>["guilds"],
   groupSpace?: string,
@@ -54,8 +100,11 @@ export function resolveGroupRequireMention(params: {
   const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
   if (surface === "telegram") {
-    if (groupId) {
-      const groupConfig = cfg.telegram?.groups?.[groupId];
+    const { chatId, topicId } = parseTelegramGroupId(groupId);
+    const autoReply = resolveTelegramAutoReply({ cfg, chatId, topicId });
+    if (typeof autoReply === "boolean") return !autoReply;
+    if (chatId) {
+      const groupConfig = cfg.telegram?.groups?.[chatId];
       if (typeof groupConfig?.requireMention === "boolean") {
         return groupConfig.requireMention;
       }
@@ -102,6 +151,9 @@ export function resolveGroupRequireMention(params: {
         (groupRoom
           ? channelEntries[normalizeDiscordSlug(groupRoom)]
           : undefined);
+      if (entry && typeof entry.autoReply === "boolean") {
+        return !entry.autoReply;
+      }
       if (entry && typeof entry.requireMention === "boolean") {
         return entry.requireMention;
       }
@@ -124,7 +176,7 @@ export function resolveGroupRequireMention(params: {
       channelName ?? "",
       normalizedName,
     ].filter(Boolean);
-    let matched: { requireMention?: boolean } | undefined;
+    let matched: { requireMention?: boolean; autoReply?: boolean } | undefined;
     for (const candidate of candidates) {
       if (candidate && channels[candidate]) {
         matched = channels[candidate];
@@ -133,6 +185,9 @@ export function resolveGroupRequireMention(params: {
     }
     const fallback = channels["*"];
     const resolved = matched ?? fallback;
+    if (typeof resolved?.autoReply === "boolean") {
+      return !resolved.autoReply;
+    }
     if (typeof resolved?.requireMention === "boolean") {
       return resolved.requireMention;
     }
