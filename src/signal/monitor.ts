@@ -1,12 +1,17 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
@@ -54,6 +59,7 @@ export type MonitorSignalOpts = {
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
   allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
 };
 
@@ -96,14 +102,37 @@ function resolveAllowFrom(opts: MonitorSignalOpts): string[] {
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
+function resolveGroupAllowFrom(opts: MonitorSignalOpts): string[] {
+  const cfg = loadConfig();
+  const raw =
+    opts.groupAllowFrom ??
+    cfg.signal?.groupAllowFrom ??
+    (cfg.signal?.allowFrom && cfg.signal.allowFrom.length > 0
+      ? cfg.signal.allowFrom
+      : []);
+  return raw.map((entry) => String(entry).trim()).filter(Boolean);
+}
+
 function isAllowedSender(sender: string, allowFrom: string[]): boolean {
-  if (allowFrom.length === 0) return true;
+  if (allowFrom.length === 0) return false;
   if (allowFrom.includes("*")) return true;
   const normalizedAllow = allowFrom
     .map((entry) => entry.replace(/^signal:/i, ""))
     .map((entry) => normalizeE164(entry));
   const normalizedSender = normalizeE164(sender);
   return normalizedAllow.includes(normalizedSender);
+}
+
+export function isSignalGroupAllowed(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  allowFrom: string[];
+  sender: string;
+}): boolean {
+  const { groupPolicy, allowFrom, sender } = params;
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
+  if (allowFrom.length === 0) return false;
+  return isAllowedSender(sender, allowFrom);
 }
 
 async function waitForSignalDaemonReady(params: {
@@ -220,7 +249,10 @@ export async function monitorSignalProvider(
   const textLimit = resolveTextChunkLimit(cfg, "signal");
   const baseUrl = resolveBaseUrl(opts);
   const account = resolveAccount(opts);
+  const dmPolicy = cfg.signal?.dmPolicy ?? "pairing";
   const allowFrom = resolveAllowFrom(opts);
+  const groupAllowFrom = resolveGroupAllowFrom(opts);
+  const groupPolicy = cfg.signal?.groupPolicy ?? "open";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.signal?.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments =
@@ -287,15 +319,82 @@ export async function monitorSignalProvider(
       if (account && normalizeE164(sender) === normalizeE164(account)) {
         return;
       }
-      const commandAuthorized = isAllowedSender(sender, allowFrom);
-      if (!commandAuthorized) {
-        logVerbose(`Blocked signal sender ${sender} (not in allowFrom)`);
-        return;
-      }
-
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
+      const storeAllowFrom = await readProviderAllowFromStore("signal").catch(
+        () => [],
+      );
+      const effectiveDmAllow = [...allowFrom, ...storeAllowFrom];
+      const effectiveGroupAllow = [...groupAllowFrom, ...storeAllowFrom];
+      const dmAllowed =
+        dmPolicy === "open" ? true : isAllowedSender(sender, effectiveDmAllow);
+
+      if (!isGroup) {
+        if (dmPolicy === "disabled") return;
+        if (!dmAllowed) {
+          if (dmPolicy === "pairing") {
+            const senderId = normalizeE164(sender);
+            const { code } = await upsertProviderPairingRequest({
+              provider: "signal",
+              id: senderId,
+              meta: {
+                name: envelope.sourceName ?? undefined,
+              },
+            });
+            logVerbose(
+              `signal pairing request sender=${senderId} code=${code}`,
+            );
+            try {
+              await sendMessageSignal(
+                senderId,
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider signal <code>",
+                ].join("\n"),
+                { baseUrl, account, maxBytes: mediaMaxBytes },
+              );
+            } catch (err) {
+              logVerbose(
+                `signal pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked signal sender ${sender} (dmPolicy=${dmPolicy})`,
+            );
+          }
+          return;
+        }
+      }
+      if (isGroup && groupPolicy === "disabled") {
+        logVerbose("Blocked signal group message (groupPolicy: disabled)");
+        return;
+      }
+      if (isGroup && groupPolicy === "allowlist") {
+        if (effectiveGroupAllow.length === 0) {
+          logVerbose(
+            "Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)",
+          );
+          return;
+        }
+        if (!isAllowedSender(sender, effectiveGroupAllow)) {
+          logVerbose(
+            `Blocked signal group sender ${sender} (not in groupAllowFrom)`,
+          );
+          return;
+        }
+      }
+
+      const commandAuthorized = isGroup
+        ? effectiveGroupAllow.length > 0
+          ? isAllowedSender(sender, effectiveGroupAllow)
+          : true
+        : dmAllowed;
       const messageText = (dataMessage.message ?? "").trim();
 
       let mediaPath: string | undefined;
@@ -379,56 +478,32 @@ export async function monitorSignalProvider(
         );
       }
 
-      let blockSendChain: Promise<void> = Promise.resolve();
-      const sendBlockReply = (payload: ReplyPayload) => {
-        if (
-          !payload?.text &&
-          !payload?.mediaUrl &&
-          !(payload?.mediaUrls?.length ?? 0)
-        ) {
-          return;
-        }
-        blockSendChain = blockSendChain
-          .then(async () => {
-            await deliverReplies({
-              replies: [payload],
-              target: ctxPayload.To,
-              baseUrl,
-              account,
-              runtime,
-              maxBytes: mediaMaxBytes,
-              textLimit,
-            });
-          })
-          .catch((err) => {
-            runtime.error?.(
-              danger(`signal block reply failed: ${String(err)}`),
-            );
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: cfg.messages?.responsePrefix,
+        deliver: async (payload) => {
+          await deliverReplies({
+            replies: [payload],
+            target: ctxPayload.To,
+            baseUrl,
+            account,
+            runtime,
+            maxBytes: mediaMaxBytes,
+            textLimit,
           });
-      };
-
-      const replyResult = await getReplyFromConfig(
-        ctxPayload,
-        { onBlockReply: sendBlockReply },
-        cfg,
-      );
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-      await blockSendChain;
-      if (replies.length === 0) return;
-
-      await deliverReplies({
-        replies,
-        target: ctxPayload.To,
-        baseUrl,
-        account,
-        runtime,
-        maxBytes: mediaMaxBytes,
-        textLimit,
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            danger(`signal ${info.kind} reply failed: ${String(err)}`),
+          );
+        },
       });
+
+      const { queuedFinal } = await dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+      });
+      if (!queuedFinal) return;
     };
 
     await streamSignalEvents({

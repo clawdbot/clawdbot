@@ -11,6 +11,11 @@ function isNodeRuntime(execPath: string): boolean {
   return base === "node" || base === "node.exe";
 }
 
+function isBunRuntime(execPath: string): boolean {
+  const base = path.basename(execPath).toLowerCase();
+  return base === "bun" || base === "bun.exe";
+}
+
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) throw new Error("Unable to resolve CLI entrypoint path");
@@ -108,16 +113,16 @@ function resolveRepoRootForDev(): string {
   return parts.slice(0, srcIndex).join(path.sep);
 }
 
-async function resolveTsxCliPath(repoRoot: string): Promise<string> {
-  const candidate = path.join(
-    repoRoot,
-    "node_modules",
-    "tsx",
-    "dist",
-    "cli.mjs",
-  );
-  await fs.access(candidate);
-  return candidate;
+async function resolveBunPath(): Promise<string> {
+  // Bun is expected to be in PATH, resolve via which/where
+  const { execSync } = await import("node:child_process");
+  try {
+    const bunPath = execSync("which bun", { encoding: "utf8" }).trim();
+    await fs.access(bunPath);
+    return bunPath;
+  } catch {
+    throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
+  }
 }
 
 export async function resolveGatewayProgramArguments(params: {
@@ -125,28 +130,40 @@ export async function resolveGatewayProgramArguments(params: {
   dev?: boolean;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway-daemon", "--port", String(params.port)];
-  const nodePath = process.execPath;
+  const execPath = process.execPath;
 
   if (!params.dev) {
     try {
       const cliEntrypointPath = await resolveCliEntrypointPathForService();
       return {
-        programArguments: [nodePath, cliEntrypointPath, ...gatewayArgs],
+        programArguments: [execPath, cliEntrypointPath, ...gatewayArgs],
       };
     } catch (error) {
-      if (!isNodeRuntime(nodePath)) {
-        return { programArguments: [nodePath, ...gatewayArgs] };
+      // If running under bun or another runtime that can execute TS directly
+      if (!isNodeRuntime(execPath)) {
+        return { programArguments: [execPath, ...gatewayArgs] };
       }
       throw error;
     }
   }
 
+  // Dev mode: use bun to run TypeScript directly
   const repoRoot = resolveRepoRootForDev();
-  const tsxCliPath = await resolveTsxCliPath(repoRoot);
   const devCliPath = path.join(repoRoot, "src", "index.ts");
   await fs.access(devCliPath);
+
+  // If already running under bun, use current execPath
+  if (isBunRuntime(execPath)) {
+    return {
+      programArguments: [execPath, devCliPath, ...gatewayArgs],
+      workingDirectory: repoRoot,
+    };
+  }
+
+  // Otherwise resolve bun from PATH
+  const bunPath = await resolveBunPath();
   return {
-    programArguments: [nodePath, tsxCliPath, devCliPath, ...gatewayArgs],
+    programArguments: [bunPath, devCliPath, ...gatewayArgs],
     workingDirectory: repoRoot,
   };
 }

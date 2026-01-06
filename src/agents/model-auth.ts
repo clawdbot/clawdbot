@@ -1,179 +1,157 @@
-import fsSync from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
+import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import type { ClawdbotConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.js";
+import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
-  type Api,
-  getEnvApiKey,
-  getOAuthApiKey,
-  type Model,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai";
-import type { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+  type AuthProfileStore,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  resolveApiKeyForProfile,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+export {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
-const OAUTH_FILENAME = "oauth.json";
-const DEFAULT_OAUTH_DIR = path.join(CONFIG_DIR, "credentials");
-let oauthStorageConfigured = false;
-let oauthStorageMigrated = false;
-
-type OAuthStorage = Record<string, OAuthCredentials>;
-
-function resolveClawdbotOAuthPath(): string {
-  const overrideDir =
-    process.env.CLAWDBOT_OAUTH_DIR?.trim() || DEFAULT_OAUTH_DIR;
-  return path.join(resolveUserPath(overrideDir), OAUTH_FILENAME);
+export function getCustomProviderApiKey(
+  cfg: ClawdbotConfig | undefined,
+  provider: string,
+): string | undefined {
+  const providers = cfg?.models?.providers ?? {};
+  const entry = providers[provider] as ModelProviderConfig | undefined;
+  const key = entry?.apiKey?.trim();
+  return key || undefined;
 }
 
-function loadOAuthStorageAt(pathname: string): OAuthStorage | null {
-  if (!fsSync.existsSync(pathname)) return null;
-  try {
-    const content = fsSync.readFileSync(pathname, "utf8");
-    const json = JSON.parse(content) as OAuthStorage;
-    if (!json || typeof json !== "object") return null;
-    return json;
-  } catch {
-    return null;
+export async function resolveApiKeyForProvider(params: {
+  provider: string;
+  cfg?: ClawdbotConfig;
+  profileId?: string;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+}): Promise<{ apiKey: string; profileId?: string; source: string }> {
+  const { provider, cfg, profileId, preferredProfile } = params;
+  const store = params.store ?? ensureAuthProfileStore();
+
+  if (profileId) {
+    const resolved = await resolveApiKeyForProfile({
+      cfg,
+      store,
+      profileId,
+    });
+    if (!resolved) {
+      throw new Error(`No credentials found for profile "${profileId}".`);
+    }
+    return {
+      apiKey: resolved.apiKey,
+      profileId,
+      source: `profile:${profileId}`,
+    };
   }
-}
 
-function hasAnthropicOAuth(storage: OAuthStorage): boolean {
-  const entry = storage.anthropic as
-    | {
-        refresh?: string;
-        refresh_token?: string;
-        refreshToken?: string;
-        access?: string;
-        access_token?: string;
-        accessToken?: string;
+  const order = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider,
+    preferredProfile,
+  });
+  for (const candidate of order) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: candidate,
+      });
+      if (resolved) {
+        return {
+          apiKey: resolved.apiKey,
+          profileId: candidate,
+          source: `profile:${candidate}`,
+        };
       }
-    | undefined;
-  if (!entry) return false;
-  const refresh =
-    entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
-  const access = entry.access ?? entry.access_token ?? entry.accessToken ?? "";
-  return Boolean(refresh.trim() && access.trim());
-}
-
-function saveOAuthStorageAt(pathname: string, storage: OAuthStorage): void {
-  const dir = path.dirname(pathname);
-  fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fsSync.writeFileSync(
-    pathname,
-    `${JSON.stringify(storage, null, 2)}\n`,
-    "utf8",
-  );
-  fsSync.chmodSync(pathname, 0o600);
-}
-
-function legacyOAuthPaths(): string[] {
-  const paths: string[] = [];
-  const piOverride = process.env.PI_CODING_AGENT_DIR?.trim();
-  if (piOverride) {
-    paths.push(path.join(resolveUserPath(piOverride), OAUTH_FILENAME));
+    } catch {}
   }
-  paths.push(path.join(os.homedir(), ".pi", "agent", OAUTH_FILENAME));
-  paths.push(path.join(os.homedir(), ".claude", OAUTH_FILENAME));
-  paths.push(path.join(os.homedir(), ".config", "claude", OAUTH_FILENAME));
-  paths.push(path.join(os.homedir(), ".config", "anthropic", OAUTH_FILENAME));
-  return Array.from(new Set(paths));
-}
 
-function importLegacyOAuthIfNeeded(destPath: string): void {
-  if (fsSync.existsSync(destPath)) return;
-  for (const legacyPath of legacyOAuthPaths()) {
-    const storage = loadOAuthStorageAt(legacyPath);
-    if (!storage || !hasAnthropicOAuth(storage)) continue;
-    saveOAuthStorageAt(destPath, storage);
-    return;
+  const envResolved = resolveEnvApiKey(provider);
+  if (envResolved) {
+    return { apiKey: envResolved.apiKey, source: envResolved.source };
   }
-}
 
-export function ensureOAuthStorage(): void {
-  if (oauthStorageConfigured) return;
-  oauthStorageConfigured = true;
-  const oauthPath = resolveClawdbotOAuthPath();
-  importLegacyOAuthIfNeeded(oauthPath);
-}
-
-function isValidOAuthCredential(
-  entry: OAuthCredentials | undefined,
-): entry is OAuthCredentials {
-  if (!entry) return false;
-  return Boolean(
-    entry.access?.trim() &&
-      entry.refresh?.trim() &&
-      Number.isFinite(entry.expires),
-  );
-}
-
-function migrateOAuthStorageToAuthStorage(
-  authStorage: ReturnType<typeof discoverAuthStorage>,
-): void {
-  if (oauthStorageMigrated) return;
-  oauthStorageMigrated = true;
-  const oauthPath = resolveClawdbotOAuthPath();
-  const storage = loadOAuthStorageAt(oauthPath);
-  if (!storage) return;
-  for (const [provider, creds] of Object.entries(storage)) {
-    if (!isValidOAuthCredential(creds)) continue;
-    if (authStorage.get(provider)) continue;
-    authStorage.set(provider, { type: "oauth", ...creds });
+  const customKey = getCustomProviderApiKey(cfg, provider);
+  if (customKey) {
+    return { apiKey: customKey, source: "models.json" };
   }
-}
 
-export function hydrateAuthStorage(
-  authStorage: ReturnType<typeof discoverAuthStorage>,
-): void {
-  ensureOAuthStorage();
-  migrateOAuthStorageToAuthStorage(authStorage);
-}
-
-function isOAuthProvider(provider: string): provider is OAuthProvider {
-  return (
-    provider === "anthropic" ||
-    provider === "anthropic-oauth" ||
-    provider === "google" ||
-    provider === "openai" ||
-    provider === "openai-compatible" ||
-    provider === "openai-codex" ||
-    provider === "github-copilot" ||
-    provider === "google-gemini-cli" ||
-    provider === "google-antigravity"
-  );
-}
-
-export async function getApiKeyForModel(
-  model: Model<Api>,
-  authStorage: ReturnType<typeof discoverAuthStorage>,
-): Promise<string> {
-  ensureOAuthStorage();
-  migrateOAuthStorageToAuthStorage(authStorage);
-  const storedKey = await authStorage.getApiKey(model.provider);
-  if (storedKey) return storedKey;
-  if (model.provider === "anthropic") {
-    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
-    if (oauthEnv?.trim()) return oauthEnv.trim();
-  }
-  const envKey = getEnvApiKey(model.provider);
-  if (envKey) return envKey;
-  if (isOAuthProvider(model.provider)) {
-    const oauthPath = resolveClawdbotOAuthPath();
-    const storage = loadOAuthStorageAt(oauthPath);
-    if (storage) {
-      try {
-        const result = await getOAuthApiKey(model.provider, storage);
-        if (result?.apiKey) {
-          storage[model.provider] = result.newCredentials;
-          saveOAuthStorageAt(oauthPath, storage);
-          return result.apiKey;
-        }
-      } catch {
-        // fall through to error below
-      }
+  if (provider === "openai") {
+    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
+    if (hasCodex) {
+      throw new Error(
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.2 (ChatGPT OAuth) or set OPENAI_API_KEY for openai/gpt-5.2.',
+      );
     }
   }
-  throw new Error(`No API key found for provider "${model.provider}"`);
+
+  throw new Error(`No API key found for provider "${provider}".`);
+}
+
+export type EnvApiKeyResult = { apiKey: string; source: string };
+
+export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
+  const applied = new Set(getShellEnvAppliedKeys());
+  const pick = (envVar: string): EnvApiKeyResult | null => {
+    const value = process.env[envVar]?.trim();
+    if (!value) return null;
+    const source = applied.has(envVar)
+      ? `shell env: ${envVar}`
+      : `env: ${envVar}`;
+    return { apiKey: value, source };
+  };
+
+  if (provider === "github-copilot") {
+    return (
+      pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN")
+    );
+  }
+
+  if (provider === "anthropic") {
+    return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
+  }
+
+  if (provider === "google-vertex") {
+    const envKey = getEnvApiKey(provider);
+    if (!envKey) return null;
+    return { apiKey: envKey, source: "gcloud adc" };
+  }
+
+  const envMap: Record<string, string> = {
+    openai: "OPENAI_API_KEY",
+    google: "GEMINI_API_KEY",
+    groq: "GROQ_API_KEY",
+    cerebras: "CEREBRAS_API_KEY",
+    xai: "XAI_API_KEY",
+    openrouter: "OPENROUTER_API_KEY",
+    zai: "ZAI_API_KEY",
+    mistral: "MISTRAL_API_KEY",
+  };
+  const envVar = envMap[provider];
+  if (!envVar) return null;
+  return pick(envVar);
+}
+
+export async function getApiKeyForModel(params: {
+  model: Model<Api>;
+  cfg?: ClawdbotConfig;
+  profileId?: string;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+}): Promise<{ apiKey: string; profileId?: string; source: string }> {
+  return resolveApiKeyForProvider({
+    provider: params.model.provider,
+    cfg: params.cfg,
+    profileId: params.profileId,
+    preferredProfile: params.preferredProfile,
+    store: params.store,
+  });
 }

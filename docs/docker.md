@@ -59,6 +59,12 @@ docker compose exec clawdbot-gateway node dist/index.js health --token "$CLAWDBO
 scripts/e2e/onboard-docker.sh
 ```
 
+### QR import smoke test (Docker)
+
+```bash
+pnpm test:docker:qr
+```
+
 ### Notes
 
 - Gateway bind defaults to `lan` for container use.

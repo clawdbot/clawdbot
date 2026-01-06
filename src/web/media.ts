@@ -22,6 +22,29 @@ type WebMediaOptions = {
   optimizeImages?: boolean;
 };
 
+function stripQuotes(value: string): string {
+  return value.replace(/^["']|["']$/g, "");
+}
+
+function parseContentDispositionFileName(
+  header?: string | null,
+): string | undefined {
+  if (!header) return undefined;
+  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
+  if (starMatch?.[1]) {
+    const cleaned = stripQuotes(starMatch[1].trim());
+    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
+    try {
+      return path.basename(decodeURIComponent(encoded));
+    } catch {
+      return path.basename(encoded);
+    }
+  }
+  const match = /filename\s*=\s*([^;]+)/i.exec(header);
+  if (match?.[1]) return path.basename(stripQuotes(match[1].trim()));
+  return undefined;
+}
+
 async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
@@ -54,11 +77,11 @@ async function loadWebMediaInternal(
   };
 
   if (/^https?:\/\//i.test(mediaUrl)) {
-    let fileName: string | undefined;
+    let fileNameFromUrl: string | undefined;
     try {
       const url = new URL(mediaUrl);
       const base = path.basename(url.pathname);
-      fileName = base || undefined;
+      fileNameFromUrl = base || undefined;
     } catch {
       // ignore parse errors; leave undefined
     }
@@ -67,10 +90,18 @@ async function loadWebMediaInternal(
       throw new Error(`Failed to fetch media: HTTP ${res.status}`);
     }
     const array = Buffer.from(await res.arrayBuffer());
+    const headerFileName = parseContentDispositionFileName(
+      res.headers.get("content-disposition"),
+    );
+    let fileName = headerFileName || fileNameFromUrl || undefined;
+    const filePathForMime =
+      headerFileName && path.extname(headerFileName)
+        ? headerFileName
+        : mediaUrl;
     const contentType = await detectMime({
       buffer: array,
       headerMime: res.headers.get("content-type"),
-      filePath: mediaUrl,
+      filePath: filePathForMime,
     });
     if (fileName && !path.extname(fileName) && contentType) {
       const ext = extensionForMime(contentType);

@@ -10,7 +10,9 @@ import {
 } from "../infra/shell-env.js";
 import {
   applyIdentityDefaults,
-  applyModelAliasDefaults,
+  applyLoggingDefaults,
+  applyMessageDefaults,
+  applyModelDefaults,
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
@@ -113,9 +115,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
         return {};
       }
-      const cfg = applyModelAliasDefaults(
+      const cfg = applyModelDefaults(
         applySessionDefaults(
-          applyIdentityDefaults(validated.data as ClawdbotConfig),
+          applyLoggingDefaults(
+            applyMessageDefaults(
+              applyIdentityDefaults(validated.data as ClawdbotConfig),
+            ),
+          ),
         ),
       );
 
@@ -145,7 +151,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const config = applyTalkApiKey(
-        applyModelAliasDefaults(applySessionDefaults({})),
+        applyModelDefaults(applySessionDefaults(applyMessageDefaults({}))),
       );
       const legacyIssues: LegacyConfigIssue[] = [];
       return {
@@ -201,7 +207,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parsed: parsedRes.parsed,
         valid: true,
         config: applyTalkApiKey(
-          applyModelAliasDefaults(applySessionDefaults(validated.config)),
+          applyModelDefaults(
+            applySessionDefaults(
+              applyLoggingDefaults(applyMessageDefaults(validated.config)),
+            ),
+          ),
         ),
         issues: [],
         legacyIssues,
@@ -224,7 +234,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     await deps.fs.promises.mkdir(path.dirname(configPath), {
       recursive: true,
     });
-    const json = JSON.stringify(applyModelAliasDefaults(cfg), null, 2)
+    const json = JSON.stringify(applyModelDefaults(cfg), null, 2)
       .trimEnd()
       .concat("\n");
     await deps.fs.promises.writeFile(configPath, json, "utf-8");

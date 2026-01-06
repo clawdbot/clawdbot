@@ -38,6 +38,7 @@ const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
 });
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
+const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 
@@ -85,10 +86,23 @@ vi.mock("../daemon/service.js", () => ({
     notLoadedText: "not loaded",
     install: serviceInstall,
     uninstall: serviceUninstall,
+    stop: serviceStop,
     restart: serviceRestart,
     isLoaded: serviceIsLoaded,
     readCommand: vi.fn(),
   }),
+}));
+
+vi.mock("../telegram/pairing-store.js", () => ({
+  readTelegramAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../telegram/token.js", () => ({
+  resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
 vi.mock("../runtime.js", () => ({

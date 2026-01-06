@@ -54,6 +54,32 @@ export function applyIdentityDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   return mutated ? next : cfg;
 }
 
+export function applyMessageDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const messages = cfg.messages;
+  const hasAckReaction = messages?.ackReaction !== undefined;
+  const hasAckScope = messages?.ackReactionScope !== undefined;
+  if (hasAckReaction && hasAckScope) return cfg;
+
+  const fallbackEmoji = cfg.identity?.emoji?.trim() || "👀";
+  const nextMessages = messages ? { ...messages } : {};
+  let mutated = false;
+
+  if (!hasAckReaction) {
+    nextMessages.ackReaction = fallbackEmoji;
+    mutated = true;
+  }
+  if (!hasAckScope) {
+    nextMessages.ackReactionScope = "group-mentions";
+    mutated = true;
+  }
+
+  if (!mutated) return cfg;
+  return {
+    ...cfg,
+    messages: nextMessages,
+  };
+}
+
 export function applySessionDefaults(
   cfg: ClawdbotConfig,
   options: SessionDefaultsOptions = {},
@@ -92,43 +118,23 @@ export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
-function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-export function applyModelAliasDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   const existingAgent = cfg.agent;
   if (!existingAgent) return cfg;
-  const existingAliases = existingAgent?.modelAliases ?? {};
-
-  const byNormalized = new Map<string, string>();
-  for (const key of Object.keys(existingAliases)) {
-    const norm = normalizeAliasKey(key);
-    if (!norm) continue;
-    if (!byNormalized.has(norm)) byNormalized.set(norm, key);
-  }
+  const existingModels = existingAgent.models ?? {};
+  if (Object.keys(existingModels).length === 0) return cfg;
 
   let mutated = false;
-  const nextAliases: Record<string, string> = { ...existingAliases };
+  const nextModels: Record<string, { alias?: string }> = {
+    ...existingModels,
+  };
 
-  for (const [canonicalKey, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
-    const norm = normalizeAliasKey(canonicalKey);
-    const existingKey = byNormalized.get(norm);
-
-    if (!existingKey) {
-      nextAliases[canonicalKey] = target;
-      byNormalized.set(norm, canonicalKey);
-      mutated = true;
-      continue;
-    }
-
-    const existingValue = String(existingAliases[existingKey] ?? "");
-    if (existingKey !== canonicalKey && existingValue === target) {
-      delete nextAliases[existingKey];
-      nextAliases[canonicalKey] = target;
-      byNormalized.set(norm, canonicalKey);
-      mutated = true;
-    }
+  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+    const entry = nextModels[target];
+    if (!entry) continue;
+    if (entry.alias !== undefined) continue;
+    nextModels[target] = { ...entry, alias };
+    mutated = true;
   }
 
   if (!mutated) return cfg;
@@ -137,7 +143,20 @@ export function applyModelAliasDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
     ...cfg,
     agent: {
       ...existingAgent,
-      modelAliases: nextAliases,
+      models: nextModels,
+    },
+  };
+}
+
+export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const logging = cfg.logging;
+  if (!logging) return cfg;
+  if (logging.redactSensitive) return cfg;
+  return {
+    ...cfg,
+    logging: {
+      ...logging,
+      redactSensitive: "tools",
     },
   };
 }

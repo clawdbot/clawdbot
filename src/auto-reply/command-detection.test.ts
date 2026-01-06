@@ -1,0 +1,35 @@
+import { describe, expect, it } from "vitest";
+import { hasControlCommand } from "./command-detection.js";
+import { parseActivationCommand } from "./group-activation.js";
+import { parseSendPolicyCommand } from "./send-policy.js";
+
+describe("control command parsing", () => {
+  it("requires slash for send policy", () => {
+    expect(parseSendPolicyCommand("/send on")).toEqual({
+      hasCommand: true,
+      mode: "allow",
+    });
+    expect(parseSendPolicyCommand("/send")).toEqual({ hasCommand: true });
+    expect(parseSendPolicyCommand("send on")).toEqual({ hasCommand: false });
+    expect(parseSendPolicyCommand("send")).toEqual({ hasCommand: false });
+  });
+
+  it("requires slash for activation", () => {
+    expect(parseActivationCommand("/activation mention")).toEqual({
+      hasCommand: true,
+      mode: "mention",
+    });
+    expect(parseActivationCommand("activation mention")).toEqual({
+      hasCommand: false,
+    });
+  });
+
+  it("treats bare commands as non-control", () => {
+    expect(hasControlCommand("/send")).toBe(true);
+    expect(hasControlCommand("send")).toBe(false);
+    expect(hasControlCommand("/help")).toBe(true);
+    expect(hasControlCommand("help")).toBe(false);
+    expect(hasControlCommand("/status")).toBe(true);
+    expect(hasControlCommand("status")).toBe(false);
+  });
+});

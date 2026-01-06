@@ -47,7 +47,7 @@ export function renderCron(props: CronProps) {
           </div>
           <div class="stat">
             <div class="stat-label">Jobs</div>
-            <div class="stat-value">${props.status?.jobCount ?? "n/a"}</div>
+            <div class="stat-value">${props.status?.jobs ?? "n/a"}</div>
           </div>
           <div class="stat">
             <div class="stat-label">Next wake</div>
@@ -185,6 +185,10 @@ export function renderCron(props: CronProps) {
                     <option value="last">Last</option>
                     <option value="whatsapp">WhatsApp</option>
                     <option value="telegram">Telegram</option>
+                    <option value="discord">Discord</option>
+                    <option value="slack">Slack</option>
+                    <option value="signal">Signal</option>
+                    <option value="imessage">iMessage</option>
                   </select>
                 </label>
                 <label class="field">
@@ -387,4 +391,3 @@ function renderRun(entry: CronRunLogEntry) {
     </div>
   `;
 }
-

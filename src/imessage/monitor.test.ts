@@ -7,6 +7,8 @@ const stopMock = vi.fn();
 const sendMock = vi.fn();
 const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
+const readAllowFromStoreMock = vi.fn();
+const upsertPairingRequestMock = vi.fn();
 
 let config: Record<string, unknown> = {};
 let notificationHandler:
@@ -28,6 +30,13 @@ vi.mock("../auto-reply/reply.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendMessageIMessage: (...args: unknown[]) => sendMock(...args),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertProviderPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -63,7 +72,11 @@ async function waitForSubscribe() {
 
 beforeEach(() => {
   config = {
-    imessage: { groups: { "*": { requireMention: true } } },
+    imessage: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groups: { "*": { requireMention: true } },
+    },
     session: { mainKey: "main" },
     routing: {
       groupChat: { mentionPatterns: ["@clawd"] },
@@ -79,6 +92,10 @@ beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ messageId: "ok" });
   replyMock.mockReset().mockResolvedValue({ text: "ok" });
   updateLastRouteMock.mockReset();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock
+    .mockReset()
+    .mockResolvedValue({ code: "PAIRCODE", created: true });
   notificationHandler = undefined;
   closeResolve = undefined;
 });
@@ -139,6 +156,139 @@ describe("monitorIMessageProvider", () => {
     expect(replyMock).toHaveBeenCalled();
   });
 
+  it("allows group messages when requireMention is true but no mentionPatterns exist", async () => {
+    config = {
+      ...config,
+      routing: { groupChat: { mentionPatterns: [] }, allowFrom: [] },
+      imessage: { groups: { "*": { requireMention: true } } },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 12,
+          chat_id: 777,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello group",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).toHaveBeenCalled();
+  });
+
+  it("blocks group messages when imessage.groups is set without a wildcard", async () => {
+    config = {
+      ...config,
+      imessage: { groups: { "99": { requireMention: false } } },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 13,
+          chat_id: 123,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "@clawd hello",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("prefixes tool and final replies with responsePrefix", async () => {
+    config = {
+      ...config,
+      messages: { responsePrefix: "PFX" },
+    };
+    replyMock.mockImplementation(async (_ctx, opts) => {
+      await opts?.onToolResult?.({ text: "tool update" });
+      return { text: "final reply" };
+    });
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 7,
+          chat_id: 77,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
+    expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+  });
+
+  it("defaults to dmPolicy=pairing behavior when allowFrom is empty", async () => {
+    config = {
+      ...config,
+      imessage: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+        groups: { "*": { requireMention: true } },
+      },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 99,
+          chat_id: 77,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Pairing code: PAIRCODE",
+    );
+  });
+
   it("delivers group replies when mentioned", async () => {
     replyMock.mockResolvedValueOnce({ text: "yo" });
     const run = monitorIMessageProvider();
@@ -171,10 +321,13 @@ describe("monitorIMessageProvider", () => {
     );
   });
 
-  it("honors allowFrom entries", async () => {
+  it("honors group allowlist when groupPolicy is allowlist", async () => {
     config = {
       ...config,
-      imessage: { allowFrom: ["chat_id:101"] },
+      imessage: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["chat_id:101"],
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -185,6 +338,35 @@ describe("monitorIMessageProvider", () => {
         message: {
           id: 3,
           chat_id: 202,
+          sender: "+15550003333",
+          is_from_me: false,
+          text: "@clawd hi",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks group messages when groupPolicy is disabled", async () => {
+    config = {
+      ...config,
+      imessage: { groupPolicy: "disabled" },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 10,
+          chat_id: 303,
           sender: "+15550003333",
           is_from_me: false,
           text: "@clawd hi",

@@ -8,26 +8,26 @@ read_when:
 
 ## First run (recommended)
 
-Clawdbot uses a dedicated workspace directory for the agent. Default: `~/.clawdbot/workspace`.
+Clawdbot uses a dedicated workspace directory for the agent. Default: `~/clawd` (configurable via `agent.workspace`).
 
 1) Create the workspace (if it doesn’t already exist):
 
 ```bash
-mkdir -p ~/.clawdbot/workspace
+mkdir -p ~/clawd
 ```
 
 2) Copy the default workspace templates into the workspace:
 
 ```bash
-cp docs/templates/AGENTS.md ~/.clawdbot/workspace/AGENTS.md
-cp docs/templates/SOUL.md ~/.clawdbot/workspace/SOUL.md
-cp docs/templates/TOOLS.md ~/.clawdbot/workspace/TOOLS.md
+cp docs/templates/AGENTS.md ~/clawd/AGENTS.md
+cp docs/templates/SOUL.md ~/clawd/SOUL.md
+cp docs/templates/TOOLS.md ~/clawd/TOOLS.md
 ```
 
 3) Optional: if you want the personal assistant skill roster, replace AGENTS.md with this file:
 
 ```bash
-cp docs/AGENTS.default.md ~/.clawdbot/workspace/AGENTS.md
+cp docs/AGENTS.default.md ~/clawd/AGENTS.md
 ```
 
 4) Optional: choose a different workspace by setting `agent.workspace` (supports `~`):
@@ -73,7 +73,7 @@ cp docs/AGENTS.default.md ~/.clawdbot/workspace/AGENTS.md
 If you treat this workspace as Clawd’s “memory”, make it a git repo (ideally private) so `AGENTS.md` and your memory files are backed up.
 
 ```bash
-cd ~/.clawdbot/workspace
+cd ~/clawd
 git init
 git add AGENTS.md
 git commit -m "Add Clawd workspace"

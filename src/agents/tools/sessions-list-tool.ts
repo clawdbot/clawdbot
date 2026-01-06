@@ -44,7 +44,16 @@ const SessionsListToolSchema = Type.Object({
   messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
-export function createSessionsListTool(): AnyAgentTool {
+function resolveSandboxSessionToolsVisibility(
+  cfg: ReturnType<typeof loadConfig>,
+) {
+  return cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+}
+
+export function createSessionsListTool(opts?: {
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
@@ -54,6 +63,20 @@ export function createSessionsListTool(): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const visibility = resolveSandboxSessionToolsVisibility(cfg);
+      const requesterInternalKey =
+        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
+          ? resolveInternalSessionKey({
+              key: opts.agentSessionKey,
+              alias,
+              mainKey,
+            })
+          : undefined;
+      const restrictToSpawned =
+        opts?.sandboxed === true &&
+        visibility === "spawned" &&
+        requesterInternalKey &&
+        !requesterInternalKey.toLowerCase().startsWith("subagent:");
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
         value.trim().toLowerCase(),
@@ -86,8 +109,9 @@ export function createSessionsListTool(): AnyAgentTool {
         params: {
           limit,
           activeMinutes,
-          includeGlobal: true,
-          includeUnknown: true,
+          includeGlobal: !restrictToSpawned,
+          includeUnknown: !restrictToSpawned,
+          spawnedBy: restrictToSpawned ? requesterInternalKey : undefined,
         },
       })) as {
         path?: string;

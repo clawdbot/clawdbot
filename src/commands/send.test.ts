@@ -81,6 +81,26 @@ describe("sendCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("g1"));
   });
 
+  it("does not override remote gateway URL", async () => {
+    callGatewayMock.mockResolvedValueOnce({ messageId: "g2" });
+    testConfig = {
+      gateway: { mode: "remote", remote: { url: "wss://remote.example" } },
+    };
+    const deps = makeDeps();
+    await sendCommand(
+      {
+        to: "+1",
+        message: "hi",
+      },
+      deps,
+      runtime,
+    );
+    const args = callGatewayMock.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(args?.url).toBeUndefined();
+  });
+
   it("passes gifPlayback to gateway send", async () => {
     callGatewayMock.mockClear();
     callGatewayMock.mockResolvedValueOnce({ messageId: "g1" });

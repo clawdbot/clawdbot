@@ -29,8 +29,8 @@ cat ~/.clawdbot/clawdbot.json | jq '.whatsapp.allowFrom'
 
 **Check 2:** For group chats, is mention required?
 ```bash
-# The message must match mentionPatterns or explicit mentions; defaults live in whatsapp.groups
-cat ~/.clawdbot/clawdbot.json | jq '.routing.groupChat, .whatsapp.groups'
+# The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
+cat ~/.clawdbot/clawdbot.json | jq '.routing.groupChat, .whatsapp.groups, .telegram.groups, .imessage.groups, .discord.guilds'
 ```
 
 **Check 3:** Check the logs
@@ -105,7 +105,7 @@ If you’re logged out / unlinked:
 
 ```bash
 clawdbot logout
-rm -rf ~/.clawdbot/credentials # if logout can't cleanly remove everything
+trash ~/.clawdbot/credentials # if logout can't cleanly remove everything
 clawdbot login --verbose       # re-scan QR
 ```
 
@@ -165,6 +165,13 @@ lsof -nP -i :18789
 kill -9 <PID>
 ```
 
+If the gateway is supervised by launchd, killing the PID will just respawn it.
+Stop the supervisor instead:
+```bash
+clawdbot gateway stop
+# Or: launchctl bootout gui/$UID/com.clawdbot.gateway
+```
+
 **Fix 2: Check embedded gateway**
 Ensure the gateway relay was properly bundled. Run `./scripts/package-mac-app.sh` and ensure `bun` is installed.
 
@@ -208,7 +215,7 @@ tail -20 /tmp/clawdbot/clawdbot-*.log
 Nuclear option:
 
 ```bash
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 clawdbot login         # re-pair WhatsApp
 clawdbot gateway        # start the Gateway again
 ```

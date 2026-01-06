@@ -16,7 +16,7 @@ export function parseActivationCommand(raw?: string): {
   if (!raw) return { hasCommand: false };
   const trimmed = raw.trim();
   if (!trimmed) return { hasCommand: false };
-  const match = trimmed.match(/^\/?activation\b(?:\s+([a-zA-Z]+))?/i);
+  const match = trimmed.match(/^\/activation\b(?:\s+([a-zA-Z]+))?/i);
   if (!match) return { hasCommand: false };
   const mode = normalizeGroupActivation(match[1]);
   return { hasCommand: true, mode };

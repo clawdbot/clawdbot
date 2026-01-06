@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 export function resolveControlUiRepoRoot(
@@ -76,7 +76,7 @@ export async function ensureControlUiAssetsBuilt(
     return {
       ok: false,
       built: false,
-      message: `${hint}. Build them with \`pnpm ui:build\`.`,
+      message: `${hint}. Build them with \`bun run ui:build\`.`,
     };
   }
 
@@ -85,35 +85,28 @@ export async function ensureControlUiAssetsBuilt(
     return { ok: true, built: false };
   }
 
-  const pnpmWhich = process.platform === "win32" ? "where" : "which";
-  const pnpm = await runExec(pnpmWhich, ["pnpm"])
-    .then(
-      (r) =>
-        r.stdout
-          .split(/\r?\n/g)
-          .map((l) => l.trim())
-          .find(Boolean) ?? "",
-    )
-    .catch(() => "");
-  if (!pnpm) {
+  const uiScript = path.join(repoRoot, "scripts", "ui.js");
+  if (!fs.existsSync(uiScript)) {
     return {
       ok: false,
       built: false,
-      message:
-        "Control UI assets not found and pnpm missing. Install pnpm, then run `pnpm ui:build`.",
+      message: `Control UI assets missing but ${uiScript} is unavailable.`,
     };
   }
 
-  runtime.log("Control UI assets missing; building (pnpm ui:build)…");
+  runtime.log("Control UI assets missing; building (ui:build)…");
 
   const ensureInstalled = !fs.existsSync(
     path.join(repoRoot, "ui", "node_modules"),
   );
   if (ensureInstalled) {
-    const install = await runCommandWithTimeout([pnpm, "ui:install"], {
-      cwd: repoRoot,
-      timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
-    });
+    const install = await runCommandWithTimeout(
+      [process.execPath, uiScript, "install"],
+      {
+        cwd: repoRoot,
+        timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
+      },
+    );
     if (install.code !== 0) {
       return {
         ok: false,
@@ -123,10 +116,13 @@ export async function ensureControlUiAssetsBuilt(
     }
   }
 
-  const build = await runCommandWithTimeout([pnpm, "ui:build"], {
-    cwd: repoRoot,
-    timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
-  });
+  const build = await runCommandWithTimeout(
+    [process.execPath, uiScript, "build"],
+    {
+      cwd: repoRoot,
+      timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
+    },
+  );
   if (build.code !== 0) {
     return {
       ok: false,

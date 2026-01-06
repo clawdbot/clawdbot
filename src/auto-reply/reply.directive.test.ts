@@ -37,11 +37,24 @@ vi.mock("../agents/model-catalog.js", () => ({
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-reply-"));
   const previousHome = process.env.HOME;
+  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = base;
+  process.env.CLAWDBOT_STATE_DIR = path.join(base, ".clawdbot");
+  process.env.CLAWDBOT_AGENT_DIR = path.join(base, ".clawdbot", "agent");
+  process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
   try {
     return await fn(base);
   } finally {
     process.env.HOME = previousHome;
+    if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
+    else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+    if (previousAgentDir === undefined) delete process.env.CLAWDBOT_AGENT_DIR;
+    else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+    if (previousPiAgentDir === undefined)
+      delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
     await fs.rm(base, { recursive: true, force: true });
   }
 }
@@ -566,9 +579,12 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "anthropic/claude-opus-4-5",
+            model: { primary: "anthropic/claude-opus-4-5" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
           },
           session: { store: storePath },
         },
@@ -593,9 +609,12 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "anthropic/claude-opus-4-5",
+            model: { primary: "anthropic/claude-opus-4-5" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
           },
           session: { store: storePath },
         },
@@ -620,9 +639,12 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "anthropic/claude-opus-4-5",
+            model: { primary: "anthropic/claude-opus-4-5" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
           },
           session: { store: storePath },
         },
@@ -632,6 +654,33 @@ describe("directive parsing", () => {
       expect(text).toContain("anthropic/claude-opus-4-5");
       expect(text).toContain("openai/gpt-4.1-mini");
       expect(text).toContain("auth:");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not repeat missing auth labels on /model list", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model list", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            workspace: path.join(home, "clawd"),
+            models: {
+              "anthropic/claude-opus-4-5": {},
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("auth:");
+      expect(text).not.toContain("missing (missing)");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -646,9 +695,12 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "anthropic/claude-opus-4-5",
+            model: { primary: "anthropic/claude-opus-4-5" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["openai/gpt-4.1-mini"],
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
           },
           session: { store: storePath },
         },
@@ -674,11 +726,11 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "openai/gpt-4.1-mini",
+            model: { primary: "openai/gpt-4.1-mini" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["openai/gpt-4.1-mini", "anthropic/claude-opus-4-5"],
-            modelAliases: {
-              Opus: "anthropic/claude-opus-4-5",
+            models: {
+              "openai/gpt-4.1-mini": {},
+              "anthropic/claude-opus-4-5": { alias: "Opus" },
             },
           },
           session: { store: storePath },
@@ -696,6 +748,55 @@ describe("directive parsing", () => {
     });
   });
 
+  it("stores auth profile overrides on /model directive", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+      const authDir = path.join(home, ".clawdbot", "agent");
+      await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
+      await fs.writeFile(
+        path.join(authDir, "auth-profiles.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "anthropic:work": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-test-1234567890",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        { Body: "/model Opus@anthropic:work", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: { primary: "openai/gpt-4.1-mini" },
+            workspace: path.join(home, "clawd"),
+            models: {
+              "openai/gpt-4.1-mini": {},
+              "anthropic/claude-opus-4-5": { alias: "Opus" },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Auth profile set to anthropic:work");
+      const store = loadSessionStore(storePath);
+      const entry = store.main;
+      expect(entry.authProfileOverride).toBe("anthropic:work");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("queues a system event when switching models", async () => {
     await withTempHome(async (home) => {
       drainSystemEvents();
@@ -707,11 +808,11 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "openai/gpt-4.1-mini",
+            model: { primary: "openai/gpt-4.1-mini" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["openai/gpt-4.1-mini", "anthropic/claude-opus-4-5"],
-            modelAliases: {
-              Opus: "anthropic/claude-opus-4-5",
+            models: {
+              "openai/gpt-4.1-mini": {},
+              "anthropic/claude-opus-4-5": { alias: "Opus" },
             },
           },
           session: { store: storePath },
@@ -746,9 +847,12 @@ describe("directive parsing", () => {
         {},
         {
           agent: {
-            model: "anthropic/claude-opus-4-5",
+            model: { primary: "anthropic/claude-opus-4-5" },
             workspace: path.join(home, "clawd"),
-            allowedModels: ["openai/gpt-4.1-mini"],
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
           },
           whatsapp: {
             allowFrom: ["*"],

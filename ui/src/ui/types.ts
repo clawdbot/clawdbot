@@ -271,7 +271,14 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       deliver?: boolean;
-      channel?: "last" | "whatsapp" | "telegram";
+      channel?:
+        | "last"
+        | "whatsapp"
+        | "telegram"
+        | "discord"
+        | "slack"
+        | "signal"
+        | "imessage";
       to?: string;
       bestEffortDeliver?: boolean;
     };
@@ -306,7 +313,7 @@ export type CronJob = {
 
 export type CronStatus = {
   enabled: boolean;
-  jobCount: number;
+  jobs: number;
   nextWakeAtMs?: number | null;
 };
 

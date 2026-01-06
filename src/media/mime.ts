@@ -107,6 +107,17 @@ export function extensionForMime(mime?: string | null): string | undefined {
   return EXT_BY_MIME[mime.toLowerCase()];
 }
 
+export function isGifMedia(opts: {
+  contentType?: string | null;
+  fileName?: string | null;
+}): boolean {
+  if (opts.contentType?.toLowerCase() === "image/gif") return true;
+  const ext = opts.fileName
+    ? path.extname(opts.fileName).toLowerCase()
+    : undefined;
+  return ext === ".gif";
+}
+
 export function imageMimeFromFormat(
   format?: string | null,
 ): string | undefined {

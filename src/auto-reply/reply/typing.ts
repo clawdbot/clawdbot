@@ -3,6 +3,8 @@ export type TypingController = {
   startTypingLoop: () => Promise<void>;
   startTypingOnText: (text?: string) => Promise<void>;
   refreshTypingTtl: () => void;
+  markRunComplete: () => void;
+  markDispatchIdle: () => void;
   cleanup: () => void;
 };
 
@@ -21,6 +23,9 @@ export function createTypingController(params: {
     log,
   } = params;
   let started = false;
+  let active = false;
+  let runComplete = false;
+  let dispatchIdle = false;
   let typingTimer: NodeJS.Timeout | undefined;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = typingIntervalSeconds * 1000;
@@ -28,6 +33,13 @@ export function createTypingController(params: {
   const formatTypingTtl = (ms: number) => {
     if (ms % 60_000 === 0) return `${ms / 60_000}m`;
     return `${Math.round(ms / 1000)}s`;
+  };
+
+  const resetCycle = () => {
+    started = false;
+    active = false;
+    runComplete = false;
+    dispatchIdle = false;
   };
 
   const cleanup = () => {
@@ -39,6 +51,7 @@ export function createTypingController(params: {
       clearInterval(typingTimer);
       typingTimer = undefined;
     }
+    resetCycle();
   };
 
   const refreshTypingTtl = () => {
@@ -61,9 +74,18 @@ export function createTypingController(params: {
   };
 
   const ensureStart = async () => {
+    if (!active) {
+      active = true;
+    }
     if (started) return;
     started = true;
     await triggerTyping();
+  };
+
+  const maybeStopOnIdle = () => {
+    if (!active) return;
+    // Stop only when the model run is done and the dispatcher queue is empty.
+    if (runComplete && dispatchIdle) cleanup();
   };
 
   const startTypingLoop = async () => {
@@ -85,11 +107,23 @@ export function createTypingController(params: {
     await startTypingLoop();
   };
 
+  const markRunComplete = () => {
+    runComplete = true;
+    maybeStopOnIdle();
+  };
+
+  const markDispatchIdle = () => {
+    dispatchIdle = true;
+    maybeStopOnIdle();
+  };
+
   return {
     onReplyStart: ensureStart,
     startTypingLoop,
     startTypingOnText,
     refreshTypingTtl,
+    markRunComplete,
+    markDispatchIdle,
     cleanup,
   };
 }

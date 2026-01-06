@@ -15,7 +15,7 @@ let resolvingA2uiRoot: Promise<string | null> | null = null;
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    // Running from source (tsx) or dist (tsc + copied assets).
+    // Running from source (bun) or dist (tsc + copied assets).
     path.resolve(here, "a2ui"),
     // Running from dist without copied assets (fallback to source).
     path.resolve(here, "../../src/canvas-host/a2ui"),

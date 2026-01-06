@@ -5,9 +5,9 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveConfiguredModelRef } from "./model-selection.js";
 
 describe("resolveConfiguredModelRef", () => {
-  it("parses provider/model from agent.model", () => {
+  it("parses provider/model from agent.model.primary", () => {
     const cfg = {
-      agent: { model: "openai/gpt-4.1-mini" },
+      agent: { model: { primary: "openai/gpt-4.1-mini" } },
     } satisfies ClawdbotConfig;
 
     const resolved = resolveConfiguredModelRef({
@@ -19,9 +19,9 @@ describe("resolveConfiguredModelRef", () => {
     expect(resolved).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
   });
 
-  it("falls back to anthropic when agent.model omits provider", () => {
+  it("falls back to anthropic when agent.model.primary omits provider", () => {
     const cfg = {
-      agent: { model: "claude-opus-4-5" },
+      agent: { model: { primary: "claude-opus-4-5" } },
     } satisfies ClawdbotConfig;
 
     const resolved = resolveConfiguredModelRef({
@@ -54,9 +54,9 @@ describe("resolveConfiguredModelRef", () => {
   it("resolves agent.model aliases when configured", () => {
     const cfg = {
       agent: {
-        model: "Opus",
-        modelAliases: {
-          Opus: "anthropic/claude-opus-4-5",
+        model: { primary: "Opus" },
+        models: {
+          "anthropic/claude-opus-4-5": { alias: "Opus" },
         },
       },
     } satisfies ClawdbotConfig;
@@ -71,5 +71,19 @@ describe("resolveConfiguredModelRef", () => {
       provider: "anthropic",
       model: "claude-opus-4-5",
     });
+  });
+
+  it("still resolves legacy agent.model string", () => {
+    const cfg = {
+      agent: { model: "openai/gpt-4.1-mini" },
+    } satisfies ClawdbotConfig;
+
+    const resolved = resolveConfiguredModelRef({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
+
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
   });
 });

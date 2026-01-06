@@ -147,12 +147,13 @@ Example:
 - Session files: `~/.clawdbot/sessions/{{SessionId}}.jsonl`
 - Session metadata (token usage, last route, etc): `~/.clawdbot/sessions/sessions.json` (legacy: `~/.clawdbot/sessions.json`)
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, the agent replies with a short hello to confirm the reset.
+- `/compact [instructions]` compacts the session context and reports the remaining context budget.
 
 ## Heartbeats (proactive mode)
 
 When `agent.heartbeat.every` is set to a positive interval, CLAWDBOT periodically runs a heartbeat prompt (default: `HEARTBEAT`).
 
-- If the agent replies with `HEARTBEAT_OK` (exact token), CLAWDBOT suppresses outbound delivery for that heartbeat.
+- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agent.heartbeat.ackMaxChars`), CLAWDBOT suppresses outbound delivery for that heartbeat.
 
 ```json5
 {
@@ -193,5 +194,9 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 - WebChat: [WebChat](./webchat.md)
 - Gateway ops: [Gateway runbook](./gateway.md)
 - Cron + wakeups: [Cron + wakeups](./cron.md)
-- macOS menu bar companion: [Clawdbot macOS app](./clawdbot-mac.md)
+- macOS menu bar companion: [Clawdbot macOS app](./macos.md)
+- iOS node app: [iOS app](./ios.md)
+- Android node app: [Android app](./android.md)
+- Windows status: [Windows app](./windows.md)
+- Linux status: [Linux app](./linux.md)
 - Security: [Security](./security.md)

@@ -7,6 +7,7 @@ export type UiSettings = {
   token: string;
   sessionKey: string;
   theme: ThemeMode;
+  chatFocusMode: boolean;
 };
 
 export function loadSettings(): UiSettings {
@@ -20,6 +21,7 @@ export function loadSettings(): UiSettings {
     token: "",
     sessionKey: "main",
     theme: "system",
+    chatFocusMode: false,
   };
 
   try {
@@ -42,6 +44,10 @@ export function loadSettings(): UiSettings {
         parsed.theme === "system"
           ? parsed.theme
           : defaults.theme,
+      chatFocusMode:
+        typeof parsed.chatFocusMode === "boolean"
+          ? parsed.chatFocusMode
+          : defaults.chatFocusMode,
     };
   } catch {
     return defaults;

@@ -16,6 +16,7 @@ import {
   resolveEmbeddedSessionLane,
   waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   normalizeElevatedLevel,
@@ -347,6 +348,52 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 updatedAt: Math.max(existing.updatedAt ?? 0, now),
               }
             : { sessionId: randomUUID(), updatedAt: now };
+
+          if ("spawnedBy" in p) {
+            const raw = p.spawnedBy;
+            if (raw === null) {
+              if (existing?.spawnedBy) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "spawnedBy cannot be cleared once set",
+                  },
+                };
+              }
+            } else if (raw !== undefined) {
+              const trimmed = String(raw).trim();
+              if (!trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "invalid spawnedBy: empty",
+                  },
+                };
+              }
+              if (!key.startsWith("subagent:")) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message:
+                      "spawnedBy is only supported for subagent:* sessions",
+                  },
+                };
+              }
+              if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "spawnedBy cannot be changed once set",
+                  },
+                };
+              }
+              next.spawnedBy = trimmed;
+            }
+          }
 
           if ("thinkingLevel" in p) {
             const raw = p.thinkingLevel;
@@ -886,10 +933,6 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             timeoutMs?: number;
             idempotencyKey: string;
           };
-          const timeoutMs = Math.min(
-            Math.max(p.timeoutMs ?? 30_000, 0),
-            30_000,
-          );
           const normalizedAttachments =
             p.attachments?.map((a) => ({
               type: typeof a?.type === "string" ? a.type : undefined,
@@ -928,7 +971,13 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             }
           }
 
-          const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
+          const { cfg, storePath, store, entry } = loadSessionEntry(
+            p.sessionKey,
+          );
+          const timeoutMs = resolveAgentTimeoutMs({
+            cfg,
+            overrideMs: p.timeoutMs,
+          });
           const now = Date.now();
           const sessionId = entry?.sessionId ?? randomUUID();
           const sessionEntry: SessionEntry = {

@@ -3,6 +3,7 @@ import {
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
   restartLaunchAgent,
+  stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
 import {
@@ -10,6 +11,7 @@ import {
   isScheduledTaskInstalled,
   readScheduledTaskCommand,
   restartScheduledTask,
+  stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
 import {
@@ -17,6 +19,7 @@ import {
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
   restartSystemdService,
+  stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
 
@@ -37,6 +40,7 @@ export type GatewayService = {
     env: Record<string, string | undefined>;
     stdout: NodeJS.WritableStream;
   }) => Promise<void>;
+  stop: (args: { stdout: NodeJS.WritableStream }) => Promise<void>;
   restart: (args: { stdout: NodeJS.WritableStream }) => Promise<void>;
   isLoaded: (args: {
     env: Record<string, string | undefined>;
@@ -59,6 +63,9 @@ export function resolveGatewayService(): GatewayService {
       uninstall: async (args) => {
         await uninstallLaunchAgent(args);
       },
+      stop: async (args) => {
+        await stopLaunchAgent(args);
+      },
       restart: async (args) => {
         await restartLaunchAgent(args);
       },
@@ -78,6 +85,9 @@ export function resolveGatewayService(): GatewayService {
       uninstall: async (args) => {
         await uninstallSystemdService(args);
       },
+      stop: async (args) => {
+        await stopSystemdService(args);
+      },
       restart: async (args) => {
         await restartSystemdService(args);
       },
@@ -96,6 +106,9 @@ export function resolveGatewayService(): GatewayService {
       },
       uninstall: async (args) => {
         await uninstallScheduledTask(args);
+      },
+      stop: async (args) => {
+        await stopScheduledTask(args);
       },
       restart: async (args) => {
         await restartScheduledTask(args);

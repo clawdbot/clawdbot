@@ -29,40 +29,40 @@ html[data-theme="auto"] {
 }
 
 html[data-theme="dark"] {
-  --bg0: #06141f;
-  --bg1: #031019;
-  --panel: #061a16;
-  --panel2: #071f19;
-  --text: #d6f6ea;
-  --muted: #95c9b9;
-  --faint: #66a391;
-  --link: #79ffd0;
-  --link2: #ff775f;
+  --bg0: #0b1a22;
+  --bg1: #0a1720;
+  --panel: #0e231f;
+  --panel2: #102a24;
+  --text: #c9eadc;
+  --muted: #8ab8aa;
+  --faint: #699b8d;
+  --link: #6fe8c7;
+  --link2: #ff7b63;
   --accent: #ff4f40;
-  --accent2: #67ff9b;
-  --frame-border: #b7ffe6;
-  --code-bg: #04110d;
-  --code-fg: #dcfff1;
-  --code-accent: #67ff9b;
+  --accent2: #5fdfa2;
+  --frame-border: #6fbfa8;
+  --code-bg: #091814;
+  --code-fg: #d7f5e8;
+  --code-accent: #5fdfa2;
 }
 
 @media (prefers-color-scheme: dark) {
   html[data-theme="auto"] {
-    --bg0: #06141f;
-    --bg1: #031019;
-    --panel: #061a16;
-    --panel2: #071f19;
-    --text: #d6f6ea;
-    --muted: #95c9b9;
-    --faint: #66a391;
-    --link: #79ffd0;
-    --link2: #ff775f;
+    --bg0: #0b1a22;
+    --bg1: #0a1720;
+    --panel: #0e231f;
+    --panel2: #102a24;
+    --text: #c9eadc;
+    --muted: #8ab8aa;
+    --faint: #699b8d;
+    --link: #6fe8c7;
+    --link2: #ff7b63;
     --accent: #ff4f40;
-    --accent2: #67ff9b;
-    --frame-border: #b7ffe6;
-    --code-bg: #04110d;
-    --code-fg: #dcfff1;
-    --code-accent: #67ff9b;
+    --accent2: #5fdfa2;
+    --frame-border: #6fbfa8;
+    --code-bg: #091814;
+    --code-fg: #d7f5e8;
+    --code-accent: #5fdfa2;
   }
 }
 
@@ -70,9 +70,12 @@ html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
-html,
-body {
+html {
   height: 100%;
+}
+
+body {
+  min-height: 100%;
 }
 
 body {
@@ -87,39 +90,9 @@ body {
   overflow-x: hidden;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.45;
-  background-image:
-    linear-gradient(to right, color-mix(in oklab, var(--text) 10%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in oklab, var(--text) 10%, transparent) 1px, transparent 1px);
-  background-size: 28px 28px;
-  mix-blend-mode: overlay;
-}
-
+body::before,
 body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    to bottom,
-    rgba(0, 0, 0, var(--scanline-opacity)),
-    rgba(0, 0, 0, var(--scanline-opacity)) 1px,
-    transparent 1px,
-    transparent var(--scanline-size)
-  );
-  opacity: 0.8;
-  mix-blend-mode: multiply;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  body::after {
-    display: none;
-  }
+  display: none;
 }
 
 .skip-link {

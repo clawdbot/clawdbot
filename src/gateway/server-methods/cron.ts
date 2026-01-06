@@ -1,4 +1,8 @@
 import {
+  normalizeCronJobCreate,
+  normalizeCronJobPatch,
+} from "../../cron/normalize.js";
+import {
   readCronRunLogEntries,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
@@ -72,7 +76,8 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, status, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
-    if (!validateCronAddParams(params)) {
+    const normalized = normalizeCronJobCreate(params) ?? params;
+    if (!validateCronAddParams(normalized)) {
       respond(
         false,
         undefined,
@@ -83,11 +88,18 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(params as unknown as CronJobCreate);
+    const job = await context.cron.add(normalized as unknown as CronJobCreate);
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
-    if (!validateCronUpdateParams(params)) {
+    const normalizedPatch = normalizeCronJobPatch(
+      (params as { patch?: unknown } | null)?.patch,
+    );
+    const candidate =
+      normalizedPatch && typeof params === "object" && params !== null
+        ? { ...(params as Record<string, unknown>), patch: normalizedPatch }
+        : params;
+    if (!validateCronUpdateParams(candidate)) {
       respond(
         false,
         undefined,
@@ -98,7 +110,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const p = candidate as {
       id: string;
       patch: Record<string, unknown>;
     };

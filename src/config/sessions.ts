@@ -26,6 +26,8 @@ export type SessionChatType = "direct" | "group" | "room";
 export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
+  /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
+  spawnedBy?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   chatType?: SessionChatType;
@@ -34,6 +36,7 @@ export type SessionEntry = {
   elevatedLevel?: string;
   providerOverride?: string;
   modelOverride?: string;
+  authProfileOverride?: string;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
@@ -54,6 +57,7 @@ export type SessionEntry = {
   modelProvider?: string;
   model?: string;
   contextTokens?: number;
+  compactionCount?: number;
   displayName?: string;
   surface?: string;
   subject?: string;

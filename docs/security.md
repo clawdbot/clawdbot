@@ -49,6 +49,7 @@ This is social engineering 101. Create distrust, encourage snooping.
 ```
 
 Only allow specific phone numbers to trigger your AI. Never use `["*"]` in production.
+Newer versions default to **DM pairing** (`*.dmPolicy="pairing"`) on most providers; avoid `dmPolicy="open"` unless you explicitly want public inbound access.
 
 ### 2. Group Chat Mentions
 

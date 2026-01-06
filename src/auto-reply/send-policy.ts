@@ -17,7 +17,7 @@ export function parseSendPolicyCommand(raw?: string): {
   if (!raw) return { hasCommand: false };
   const trimmed = raw.trim();
   if (!trimmed) return { hasCommand: false };
-  const match = trimmed.match(/^\/?send\b(?:\s+([a-zA-Z]+))?/i);
+  const match = trimmed.match(/^\/send\b(?:\s+([a-zA-Z]+))?/i);
   if (!match) return { hasCommand: false };
   const token = match[1]?.trim().toLowerCase();
   if (!token) return { hasCommand: true };

@@ -1,76 +1,56 @@
 import { describe, expect, it } from "vitest";
-import { applyModelAliasDefaults } from "./defaults.js";
+import { applyModelDefaults } from "./defaults.js";
 import type { ClawdbotConfig } from "./types.js";
 
-describe("applyModelAliasDefaults", () => {
-  it("adds default shorthands", () => {
-    const cfg = { agent: {} } satisfies ClawdbotConfig;
-    const next = applyModelAliasDefaults(cfg);
+describe("applyModelDefaults", () => {
+  it("adds default aliases when models are present", () => {
+    const cfg = {
+      agent: {
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-5.2": {},
+        },
+      },
+    } satisfies ClawdbotConfig;
+    const next = applyModelDefaults(cfg);
 
-    expect(next.agent?.modelAliases).toEqual({
-      opus: "anthropic/claude-opus-4-5",
-      sonnet: "anthropic/claude-sonnet-4-5",
-      gpt: "openai/gpt-5.2",
-      "gpt-mini": "openai/gpt-5-mini",
-      gemini: "google/gemini-3-pro-preview",
-      "gemini-flash": "google/gemini-3-flash-preview",
-    });
+    expect(next.agent?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe(
+      "opus",
+    );
+    expect(next.agent?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
   });
 
-  it("normalizes casing when alias matches the default target", () => {
+  it("does not override existing aliases", () => {
     const cfg = {
-      agent: { modelAliases: { Opus: "anthropic/claude-opus-4-5" } },
+      agent: {
+        models: {
+          "anthropic/claude-opus-4-5": { alias: "Opus" },
+        },
+      },
     } satisfies ClawdbotConfig;
 
-    const next = applyModelAliasDefaults(cfg);
+    const next = applyModelDefaults(cfg);
 
-    expect(next.agent?.modelAliases).toMatchObject({
-      opus: "anthropic/claude-opus-4-5",
-    });
-    expect(next.agent?.modelAliases).not.toHaveProperty("Opus");
+    expect(next.agent?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe(
+      "Opus",
+    );
   });
 
-  it("does not override existing alias values", () => {
+  it("respects explicit empty alias disables", () => {
     const cfg = {
-      agent: { modelAliases: { gpt: "openai/gpt-4.1" } },
+      agent: {
+        models: {
+          "google/gemini-3-pro-preview": { alias: "" },
+          "google/gemini-3-flash-preview": {},
+        },
+      },
     } satisfies ClawdbotConfig;
 
-    const next = applyModelAliasDefaults(cfg);
+    const next = applyModelDefaults(cfg);
 
-    expect(next.agent?.modelAliases?.gpt).toBe("openai/gpt-4.1");
-    expect(next.agent?.modelAliases).toMatchObject({
-      "gpt-mini": "openai/gpt-5-mini",
-      opus: "anthropic/claude-opus-4-5",
-      sonnet: "anthropic/claude-sonnet-4-5",
-      gemini: "google/gemini-3-pro-preview",
-      "gemini-flash": "google/gemini-3-flash-preview",
-    });
-  });
-
-  it("does not rename when casing differs and value differs", () => {
-    const cfg = {
-      agent: { modelAliases: { GPT: "openai/gpt-4.1-mini" } },
-    } satisfies ClawdbotConfig;
-
-    const next = applyModelAliasDefaults(cfg);
-
-    expect(next.agent?.modelAliases).toMatchObject({
-      GPT: "openai/gpt-4.1-mini",
-    });
-    expect(next.agent?.modelAliases).not.toHaveProperty("gpt");
-  });
-
-  it("respects explicit empty-string disables", () => {
-    const cfg = {
-      agent: { modelAliases: { gemini: "" } },
-    } satisfies ClawdbotConfig;
-
-    const next = applyModelAliasDefaults(cfg);
-
-    expect(next.agent?.modelAliases?.gemini).toBe("");
-    expect(next.agent?.modelAliases).toHaveProperty(
+    expect(next.agent?.models?.["google/gemini-3-pro-preview"]?.alias).toBe("");
+    expect(next.agent?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
       "gemini-flash",
-      "google/gemini-3-flash-preview",
     );
   });
 });

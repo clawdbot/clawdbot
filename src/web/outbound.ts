@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
+import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import {
   type ActiveWebSendOptions,
@@ -81,6 +82,52 @@ export async function sendMessageWhatsApp(
     logger.error(
       { err: String(err), to, hasMedia: Boolean(options.mediaUrl) },
       "failed to send via web session",
+    );
+    throw err;
+  }
+}
+export async function sendPollWhatsApp(
+  to: string,
+  poll: PollInput,
+  _options: { verbose: boolean },
+): Promise<{ messageId: string; toJid: string }> {
+  const correlationId = randomUUID();
+  const startedAt = Date.now();
+  const active = getActiveWebListener();
+  if (!active) {
+    throw new Error(
+      "No active gateway listener. Start the gateway before sending WhatsApp polls.",
+    );
+  }
+  const logger = getChildLogger({
+    module: "web-outbound",
+    correlationId,
+    to,
+  });
+  try {
+    const jid = toWhatsappJid(to);
+    const normalized = normalizePollInput(poll, { maxOptions: 12 });
+    outboundLog.info(`Sending poll -> ${jid}: "${normalized.question}"`);
+    logger.info(
+      {
+        jid,
+        question: normalized.question,
+        optionCount: normalized.options.length,
+        maxSelections: normalized.maxSelections,
+      },
+      "sending poll",
+    );
+    const result = await active.sendPoll(to, normalized);
+    const messageId =
+      (result as { messageId?: string })?.messageId ?? "unknown";
+    const durationMs = Date.now() - startedAt;
+    outboundLog.info(`Sent poll ${messageId} -> ${jid} (${durationMs}ms)`);
+    logger.info({ jid, messageId }, "sent poll");
+    return { messageId, toJid: jid };
+  } catch (err) {
+    logger.error(
+      { err: String(err), to, question: poll.question },
+      "failed to send poll via web session",
     );
     throw err;
   }

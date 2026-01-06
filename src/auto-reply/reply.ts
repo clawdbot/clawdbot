@@ -11,6 +11,7 @@ import {
   resolveEmbeddedSessionLane,
 } from "../agents/pi-embedded.js";
 import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -24,6 +25,7 @@ import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
@@ -42,6 +44,7 @@ import {
   defaultGroupActivation,
   resolveGroupRequireMention,
 } from "./reply/groups.js";
+import { stripMentions } from "./reply/mentions.js";
 import {
   createModelSelectionState,
   resolveContextTokens,
@@ -75,6 +78,9 @@ export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
+
+const CONTROL_COMMAND_PREFIX_RE =
+  /^\/(?:status|help|thinking|think|t|verbose|v|elevated|elev|model|queue|activation|send|restart|reset|new|compact)\b/i;
 
 function normalizeAllowToken(value?: string) {
   if (!value) return "";
@@ -216,8 +222,7 @@ export async function getReplyFromConfig(
     ensureBootstrapFiles: true,
   });
   const workspaceDir = workspace.dir;
-  const timeoutSeconds = Math.max(agentCfg?.timeoutSeconds ?? 600, 1);
-  const timeoutMs = timeoutSeconds * 1000;
+  const timeoutMs = resolveAgentTimeoutMs({ cfg });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
@@ -228,6 +233,7 @@ export async function getReplyFromConfig(
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });
+  opts?.onTypingController?.(typing);
 
   let transcribedText: string | undefined;
   if (cfg.routing?.transcribeAudio && isAudio(ctx.MediaType)) {
@@ -240,7 +246,17 @@ export async function getReplyFromConfig(
     }
   }
 
-  const sessionState = await initSessionState({ ctx, cfg });
+  const commandAuthorized = ctx.CommandAuthorized ?? true;
+  const commandAuth = resolveCommandAuthorization({
+    ctx,
+    cfg,
+    commandAuthorized,
+  });
+  const sessionState = await initSessionState({
+    ctx,
+    cfg,
+    commandAuthorized,
+  });
   let {
     sessionCtx,
     sessionEntry,
@@ -258,7 +274,6 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   const rawBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const commandAuthorized = ctx.CommandAuthorized ?? true;
   const parsedDirectives = parseInlineDirectives(rawBody);
   const directives = commandAuthorized
     ? parsedDirectives
@@ -361,7 +376,9 @@ export async function getReplyFromConfig(
       : `Model switched to ${label}.`;
   const isModelListAlias =
     directives.hasModelDirective &&
-    directives.rawModelDirective?.trim().toLowerCase() === "status";
+    ["status", "list"].includes(
+      directives.rawModelDirective?.trim().toLowerCase() ?? "",
+    );
   const effectiveModelDirective = isModelListAlias
     ? undefined
     : directives.rawModelDirective;
@@ -376,6 +393,7 @@ export async function getReplyFromConfig(
     })
   ) {
     const directiveReply = await handleDirectiveOnly({
+      cfg,
       directives,
       sessionEntry,
       sessionStore,
@@ -401,6 +419,7 @@ export async function getReplyFromConfig(
   const persisted = await persistInlineDirectives({
     directives,
     effectiveModelDirective,
+    cfg,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -512,6 +531,16 @@ export async function getReplyFromConfig(
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
+  const strippedCommandBody = isGroup
+    ? stripMentions(triggerBodyNormalized, ctx, cfg)
+    : triggerBodyNormalized;
+  if (
+    !commandAuth.isAuthorizedSender &&
+    CONTROL_COMMAND_PREFIX_RE.test(strippedCommandBody.trim())
+  ) {
+    typing.cleanup();
+    return undefined;
+  }
   if (!commandAuthorized && !baseBodyTrimmedRaw && hasControlCommand(rawBody)) {
     typing.cleanup();
     return undefined;
@@ -634,6 +663,7 @@ export async function getReplyFromConfig(
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
+  const authProfileId = sessionEntry?.authProfileOverride;
   const followupRun = {
     prompt: queuedBody,
     summaryLine: baseBodyTrimmedRaw,
@@ -648,6 +678,7 @@ export async function getReplyFromConfig(
       skillsSnapshot,
       provider,
       model,
+      authProfileId,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       elevatedLevel: resolvedElevatedLevel,

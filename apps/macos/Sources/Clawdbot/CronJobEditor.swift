@@ -323,6 +323,9 @@ struct CronJobEditor: View {
                             Text("whatsapp").tag(GatewayAgentChannel.whatsapp)
                             Text("telegram").tag(GatewayAgentChannel.telegram)
                             Text("discord").tag(GatewayAgentChannel.discord)
+                            Text("slack").tag(GatewayAgentChannel.slack)
+                            Text("signal").tag(GatewayAgentChannel.signal)
+                            Text("imessage").tag(GatewayAgentChannel.imessage)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)

@@ -13,7 +13,6 @@ const DEFAULT_CONFIG = {
   messages: {
     messagePrefix: undefined,
     responsePrefix: undefined,
-    timestampPrefix: false,
   },
 };
 

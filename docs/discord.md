@@ -23,11 +23,15 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
    - If you prefer env vars, still add `discord: { enabled: true }` to `~/.clawdbot/clawdbot.json` and set `DISCORD_BOT_TOKEN`.
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
-7. Optional DM control: set `discord.dm.enabled = false` to ignore all DMs, or `discord.dm.allowFrom` to allow specific users (ids or names). Use `discord.dm.groupEnabled` + `discord.dm.groupChannels` to allow group DMs.
-8. Optional guild rules: set `discord.guilds` keyed by guild id (preferred) or slug, with per-channel rules.
-9. Optional slash commands: enable `discord.slashCommand` to accept user-installed app commands (ephemeral replies). Slash invocations respect the same DM/guild allowlists.
-10. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
-11. Reactions: the agent can trigger reactions via the `discord` tool (gated by `discord.actions.*`).
+7. Direct chats: secure by default via `discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code; approve via `clawdbot pairing approve --provider discord <code>`.
+   - To keep old “open to anyone” behavior: set `discord.dm.policy="open"` and `discord.dm.allowFrom=["*"]`.
+   - To hard-allowlist: set `discord.dm.policy="allowlist"` and list senders in `discord.dm.allowFrom`.
+   - To ignore all DMs: set `discord.dm.enabled=false` or `discord.dm.policy="disabled"`.
+8. Group DMs are ignored by default; enable via `discord.dm.groupEnabled` and optionally restrict by `discord.dm.groupChannels`.
+9. Optional guild rules: set `discord.guilds` keyed by guild id (preferred) or slug, with per-channel rules.
+10. Optional slash commands: enable `discord.slashCommand` to accept user-installed app commands (ephemeral replies). Slash invocations respect the same DM/guild allowlists.
+11. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
+12. Reactions: the agent can trigger reactions via the `discord` tool (gated by `discord.actions.*`).
     - The `discord` tool is only exposed when the current surface is Discord.
 12. Slash commands use isolated session keys (`${sessionPrefix}:${userId}`) rather than the shared `main` session.
 
@@ -123,6 +127,7 @@ Example “single server, only allow me, only allow #help”:
 
 Notes:
 - `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
+- `routing.groupChat.mentionPatterns` also count as mentions for guild messages.
 - If `channels` is present, any channel not listed is denied by default.
 
 ### 6) Verify it works
@@ -137,7 +142,7 @@ Notes:
   - The bot lacks channel permissions (View/Send/Read History), or
   - Your config requires mentions and you didn’t mention it, or
   - Your guild/channel allowlist denies the channel/user.
-- **DMs don’t work**: `discord.dm.enabled` may be `false` or `discord.dm.allowFrom` doesn’t include you.
+- **DMs don’t work**: `discord.dm.enabled=false`, `discord.dm.policy="disabled"`, or you haven’t been approved yet (`discord.dm.policy="pairing"`).
 
 ## Capabilities & limits
 - DMs and guild text channels (threads are treated as separate channels; voice not supported).
@@ -154,6 +159,7 @@ Notes:
   discord: {
     enabled: true,
     token: "abc.123",
+    groupPolicy: "open",
     mediaMaxMb: 8,
     actions: {
       reactions: true,
@@ -181,6 +187,7 @@ Notes:
     },
     dm: {
       enabled: true,
+      policy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["123456789012345678", "steipete"],
       groupEnabled: false,
       groupChannels: ["clawd-dm"]
@@ -202,10 +209,15 @@ Notes:
 }
 ```
 
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
+
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
-- `dm.allowFrom`: DM allowlist (user ids or names). Omit or set to `["*"]` to allow any DM sender.
+- `dm.policy`: DM access control (`pairing` recommended). `"open"` requires `dm.allowFrom=["*"]`.
+- `dm.allowFrom`: DM allowlist (user ids or names). Used by `dm.policy="allowlist"` and for `dm.policy="open"` validation.
 - `dm.groupEnabled`: enable group DMs (default `false`).
 - `dm.groupChannels`: optional allowlist for group DM channel ids or slugs.
+- `groupPolicy`: controls guild channel handling (`open|disabled|allowlist`); `allowlist` requires channel allowlists.
 - `guilds`: per-guild rules keyed by guild id (preferred) or slug.
 - `guilds."*"`: default per-guild settings applied when no explicit entry exists.
 - `guilds.<id>.slug`: optional friendly slug used for display names.

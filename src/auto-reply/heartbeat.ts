@@ -1,6 +1,7 @@
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 export const HEARTBEAT_PROMPT = "HEARTBEAT";
+export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 30;
 
 export type StripHeartbeatMode = "heartbeat" | "message";
 
@@ -44,7 +45,10 @@ export function stripHeartbeatToken(
   if (!trimmed) return { shouldSkip: true, text: "", didStrip: false };
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
-  const maxAckChars = Math.max(0, opts.maxAckChars ?? 30);
+  const maxAckChars = Math.max(
+    0,
+    opts.maxAckChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
 
   if (!trimmed.includes(HEARTBEAT_TOKEN)) {
     return { shouldSkip: false, text: trimmed, didStrip: false };

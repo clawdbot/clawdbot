@@ -27,8 +27,10 @@ export function splitMediaFromOutput(raw: string): {
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
 } {
-  const trimmedRaw = raw.trim();
-  if (!trimmedRaw) return { text: "" };
+  // KNOWN: Leading whitespace is semantically meaningful in Markdown (lists, indented fences).
+  // We only trim the end; token cleanup below handles removing `MEDIA:` lines.
+  const trimmedRaw = raw.trimEnd();
+  if (!trimmedRaw.trim()) return { text: "" };
 
   const media: string[] = [];
   let foundMediaToken = false;

@@ -14,6 +14,7 @@ import {
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -37,8 +38,9 @@ export type SessionInitResult = {
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
+  commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
-  const { ctx, cfg } = params;
+  const { ctx, cfg, commandAuthorized } = params;
   const sessionCfg = cfg.session;
   const mainKey = sessionCfg?.mainKey ?? "main";
   const resetTriggers = sessionCfg?.resetTriggers?.length
@@ -76,6 +78,11 @@ export async function initSessionState(params: {
 
   const rawBody = ctx.Body ?? "";
   const trimmedBody = rawBody.trim();
+  const resetAuthorized = resolveCommandAuthorization({
+    ctx,
+    cfg,
+    commandAuthorized,
+  }).isAuthorizedSender;
   // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
   // web inbox before we get here. They prevented reset triggers like "/new"
   // from matching, so strip structural wrappers when checking for resets.
@@ -84,6 +91,7 @@ export async function initSessionState(params: {
     : triggerBodyNormalized;
   for (const trigger of resetTriggers) {
     if (!trigger) continue;
+    if (!resetAuthorized) break;
     if (trimmedBody === trigger || strippedForReset === trigger) {
       isNewSession = true;
       bodyStripped = "";

@@ -671,6 +671,10 @@ export async function startGatewayServer(
   >();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
   setCommandLaneConcurrency("main", cfgAtStart.agent?.maxConcurrent ?? 1);
+  setCommandLaneConcurrency(
+    "subagent",
+    cfgAtStart.agent?.subagents?.maxConcurrent ?? 1,
+  );
 
   const cronLogger = getChildLogger({
     module: "cron",
@@ -1757,6 +1761,10 @@ export async function startGatewayServer(
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency("main", nextConfig.agent?.maxConcurrent ?? 1);
+    setCommandLaneConcurrency(
+      "subagent",
+      nextConfig.agent?.subagents?.maxConcurrent ?? 1,
+    );
 
     if (plan.hotReasons.length > 0) {
       logReload.info(

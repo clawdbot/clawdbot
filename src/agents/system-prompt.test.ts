@@ -46,4 +46,16 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("sessions_send");
     expect(prompt).toContain("Unavailable tools (do not call):");
   });
+
+  it("includes user time when provided", () => {
+    const prompt = buildAgentSystemPromptAppend({
+      workspaceDir: "/tmp/clawd",
+      userTimezone: "America/Chicago",
+      userTime: "2026-01-05 15:26",
+    });
+
+    expect(prompt).toContain("## Time");
+    expect(prompt).toContain("User timezone: America/Chicago");
+    expect(prompt).toContain("Current user time: 2026-01-05 15:26");
+  });
 });

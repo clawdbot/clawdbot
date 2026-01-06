@@ -110,6 +110,56 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         }
       : { sessionId: randomUUID(), updatedAt: now };
 
+    if ("spawnedBy" in p) {
+      const raw = p.spawnedBy;
+      if (raw === null) {
+        if (existing?.spawnedBy) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawnedBy cannot be cleared once set",
+            ),
+          );
+          return;
+        }
+      } else if (raw !== undefined) {
+        const trimmed = String(raw).trim();
+        if (!trimmed) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "invalid spawnedBy: empty"),
+          );
+          return;
+        }
+        if (!key.startsWith("subagent:")) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawnedBy is only supported for subagent:* sessions",
+            ),
+          );
+          return;
+        }
+        if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawnedBy cannot be changed once set",
+            ),
+          );
+          return;
+        }
+        next.spawnedBy = trimmed;
+      }
+    }
+
     if ("thinkingLevel" in p) {
       const raw = p.thinkingLevel;
       if (raw === null) {

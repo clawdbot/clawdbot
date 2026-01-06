@@ -91,7 +91,7 @@ Mapping options (summary):
 - `hooks.mappings` lets you define `match`, `action`, and templates in config.
 - `hooks.transformsDir` + `transform.module` loads a JS/TS module for custom logic.
 - Use `match.source` to keep a generic ingest endpoint (payload-driven routing).
-- TS transforms require a TS loader (e.g. `tsx`) or precompiled `.js` at runtime.
+- TS transforms require a TS loader (e.g. `bun`) or precompiled `.js` at runtime.
 - `clawdbot hooks gmail setup` writes `hooks.gmail` config for `clawdbot hooks gmail run`.
 
 ## Responses

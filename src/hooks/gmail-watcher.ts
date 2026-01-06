@@ -20,6 +20,12 @@ import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 
 const log = createSubsystemLogger("gmail-watcher");
 
+const ADDRESS_IN_USE_RE = /address already in use|EADDRINUSE/i;
+
+export function isAddressInUseError(line: string): boolean {
+  return ADDRESS_IN_USE_RE.test(line);
+}
+
 let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
@@ -61,6 +67,7 @@ async function startGmailWatch(
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${args.join(" ")}`);
+  let addressInUse = false;
 
   const child = spawn("gog", args, {
     stdio: ["ignore", "pipe", "pipe"],
@@ -74,7 +81,11 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 
   child.stderr?.on("data", (data: Buffer) => {
     const line = data.toString().trim();
-    if (line) log.warn(`[gog] ${line}`);
+    if (!line) return;
+    if (isAddressInUseError(line)) {
+      addressInUse = true;
+    }
+    log.warn(`[gog] ${line}`);
   });
 
   child.on("error", (err) => {
@@ -83,6 +94,14 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 
   child.on("exit", (code, signal) => {
     if (shuttingDown) return;
+    if (addressInUse) {
+      log.warn(
+        "gog serve failed to bind (address already in use); stopping restarts. " +
+          "Another watcher is likely running. Set CLAWDBOT_SKIP_GMAIL_WATCHER=1 or stop the other process.",
+      );
+      watcherProcess = null;
+      return;
+    }
     log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`);
     watcherProcess = null;
     setTimeout(() => {

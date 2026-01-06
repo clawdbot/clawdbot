@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types";
-import { renderConfigForm } from "./config-form";
+import { analyzeConfigSchema, renderConfigForm } from "./config-form";
 
 export type ConfigProps = {
   raw: string;
@@ -24,6 +24,16 @@ export type ConfigProps = {
 export function renderConfig(props: ConfigProps) {
   const validity =
     props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
+  const analysis = analyzeConfigSchema(props.schema);
+  const formUnsafe = analysis.schema
+    ? analysis.unsupportedPaths.length > 0
+    : false;
+  const canSaveForm =
+    Boolean(props.formValue) && !props.loading && !formUnsafe;
+  const canSave =
+    props.connected &&
+    !props.saving &&
+    (props.formMode === "raw" ? true : canSaveForm);
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
@@ -52,7 +62,7 @@ export function renderConfig(props: ConfigProps) {
           </button>
           <button
             class="btn primary"
-            ?disabled=${props.saving || !props.connected}
+            ?disabled=${!canSave}
             @click=${props.onSave}
           >
             ${props.saving ? "Saving…" : "Save"}
@@ -70,11 +80,19 @@ export function renderConfig(props: ConfigProps) {
             ${props.schemaLoading
               ? html`<div class="muted">Loading schema…</div>`
               : renderConfigForm({
-                  schema: props.schema,
+                  schema: analysis.schema,
                   uiHints: props.uiHints,
                   value: props.formValue,
+                  disabled: props.loading || !props.formValue,
+                  unsupportedPaths: analysis.unsupportedPaths,
                   onPatch: props.onFormPatch,
                 })}
+            ${formUnsafe
+              ? html`<div class="callout danger" style="margin-top: 12px;">
+                  Form view can’t safely edit some fields.
+                  Use Raw to avoid losing config entries.
+                </div>`
+              : nothing}
           </div>`
         : html`<label class="field" style="margin-top: 12px;">
             <span>Raw JSON5</span>

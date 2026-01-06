@@ -84,6 +84,7 @@ export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand = hoisted.agentCommand;
 
 export const testState = {
+  agentConfig: undefined as Record<string, unknown> | undefined,
   sessionStorePath: undefined as string | undefined,
   sessionConfig: undefined as Record<string, unknown> | undefined,
   allowFrom: undefined as string[] | undefined,
@@ -243,6 +244,7 @@ vi.mock("../config/config.js", async () => {
       agent: {
         model: "anthropic/claude-opus-4-5",
         workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
+        ...testState.agentConfig,
       },
       whatsapp: {
         allowFrom: testState.allowFrom,
@@ -351,6 +353,7 @@ export function installGatewayTestHooks() {
     testState.cronStorePath = undefined;
     testState.sessionConfig = undefined;
     testState.sessionStorePath = undefined;
+    testState.agentConfig = undefined;
     testState.allowFrom = undefined;
     testIsNixMode.value = false;
     cronIsolatedRun.mockClear();

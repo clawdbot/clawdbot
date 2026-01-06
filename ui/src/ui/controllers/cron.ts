@@ -73,7 +73,14 @@ export function buildCronPayload(form: CronFormState) {
     kind: "agentTurn";
     message: string;
     deliver?: boolean;
-    channel?: "last" | "whatsapp" | "telegram";
+    channel?:
+      | "last"
+      | "whatsapp"
+      | "telegram"
+      | "discord"
+      | "slack"
+      | "signal"
+      | "imessage";
     to?: string;
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };
@@ -188,4 +195,3 @@ export async function loadCronRuns(state: CronState, jobId: string) {
     state.cronError = String(err);
   }
 }
-

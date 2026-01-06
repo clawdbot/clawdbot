@@ -122,3 +122,32 @@ export async function ensureSkillSnapshot(params: {
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
+
+export async function incrementCompactionCount(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  now?: number;
+}): Promise<number | undefined> {
+  const {
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    now = Date.now(),
+  } = params;
+  if (!sessionStore || !sessionKey) return undefined;
+  const entry = sessionStore[sessionKey] ?? sessionEntry;
+  if (!entry) return undefined;
+  const nextCount = (entry.compactionCount ?? 0) + 1;
+  sessionStore[sessionKey] = {
+    ...entry,
+    compactionCount: nextCount,
+    updatedAt: now,
+  };
+  if (storePath) {
+    await saveSessionStore(storePath, sessionStore);
+  }
+  return nextCount;
+}

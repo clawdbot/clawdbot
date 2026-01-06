@@ -10,10 +10,10 @@ surface anything that needs attention without spamming the user.
 
 ## Prompt contract
 - Heartbeat body defaults to `HEARTBEAT` (configurable via `agent.heartbeat.prompt`).
-- If nothing needs attention, the model should reply **exactly** `HEARTBEAT_OK`.
+- If nothing needs attention, the model should reply `HEARTBEAT_OK`.
 - During heartbeat runs, Clawdbot treats `HEARTBEAT_OK` as an ack when it appears at
   the **start or end** of the reply. Clawdbot strips the token and discards the
-  reply if the remaining content is **≤ 30 characters**.
+  reply if the remaining content is **≤ `ackMaxChars`** (default: 30).
 - If `HEARTBEAT_OK` is in the **middle** of a reply, it is not treated specially.
 - For alerts, do **not** include `HEARTBEAT_OK`; return only the alert text.
 
@@ -21,6 +21,13 @@ surface anything that needs attention without spamming the user.
 If the model accidentally includes `HEARTBEAT_OK` at the start or end of a
 normal (non-heartbeat) reply, Clawdbot strips the token and logs a verbose
 message. If the reply is only `HEARTBEAT_OK`, it is dropped.
+
+### Outbound normalization (all providers)
+For **all providers** (WhatsApp/Web, Telegram, Slack, Discord, Signal, iMessage),
+Clawdbot applies the same filtering to tool summaries, streaming block replies,
+and final replies:
+- drop payloads that are only `HEARTBEAT_OK` with no media
+- strip `HEARTBEAT_OK` at the edges when mixed with other text
 
 ## Config
 
@@ -32,7 +39,8 @@ message. If the reply is only `HEARTBEAT_OK`, it is dropped.
       model: "anthropic/claude-opus-4-5",
       target: "last",          // last | whatsapp | telegram | none
       to: "+15551234567",      // optional override for whatsapp/telegram
-      prompt: "HEARTBEAT"      // optional override
+      prompt: "HEARTBEAT",     // optional override
+      ackMaxChars: 30          // max chars allowed after HEARTBEAT_OK
     }
   }
 }
@@ -48,6 +56,7 @@ message. If the reply is only `HEARTBEAT_OK`, it is dropped.
   - `none`: do not deliver externally; output stays in the session (WebChat-visible).
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
+- `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
 
 ## Behavior
 - Runs in the main session (`main`, or `global` when scope is global).

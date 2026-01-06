@@ -1,3 +1,8 @@
+---
+summary: "Slack socket mode setup and Clawdbot config"
+read_when: "Setting up Slack or debugging Slack socket mode"
+---
+
 # Slack (socket mode)
 
 ## Setup
@@ -50,8 +55,14 @@ Use this Slack app manifest to create the app quickly (adjust the name/command i
         "channels:history",
         "channels:read",
         "groups:history",
+        "groups:read",
+        "groups:write",
         "im:history",
+        "im:read",
+        "im:write",
         "mpim:history",
+        "mpim:read",
+        "mpim:write",
         "users:read",
         "app_mentions:read",
         "reactions:read",
@@ -87,6 +98,44 @@ Use this Slack app manifest to create the app quickly (adjust the name/command i
 }
 ```
 
+## Scopes (current vs optional)
+Slack's Conversations API is type-scoped: you only need the scopes for the
+conversation types you actually touch (channels, groups, im, mpim). See
+https://api.slack.com/docs/conversations-api for the overview.
+
+### Required by current code
+- `chat:write` (send/update/delete messages via `chat.postMessage`)
+  https://api.slack.com/methods/chat.postMessage
+- `im:write` (open DMs via `conversations.open` for user DMs)
+  https://api.slack.com/methods/conversations.open
+- `channels:history`, `groups:history`, `im:history`, `mpim:history`
+  (`conversations.history` in `src/slack/actions.ts`)
+  https://api.slack.com/methods/conversations.history
+- `channels:read`, `groups:read`, `im:read`, `mpim:read`
+  (`conversations.info` in `src/slack/monitor.ts`)
+  https://api.slack.com/methods/conversations.info
+- `users:read` (`users.info` in `src/slack/monitor.ts` + `src/slack/actions.ts`)
+  https://api.slack.com/methods/users.info
+- `reactions:read`, `reactions:write` (`reactions.get` / `reactions.add`)
+  https://api.slack.com/methods/reactions.get
+  https://api.slack.com/methods/reactions.add
+- `pins:read`, `pins:write` (`pins.list` / `pins.add` / `pins.remove`)
+  https://api.slack.com/scopes/pins:read
+  https://api.slack.com/scopes/pins:write
+- `emoji:read` (`emoji.list`)
+  https://api.slack.com/scopes/emoji:read
+- `files:write` (uploads via `files.uploadV2`)
+  https://api.slack.com/messaging/files/uploading
+
+### Not needed today (but likely future)
+- `mpim:write` (only if we add group-DM open/DM start via `conversations.open`)
+- `groups:write` (only if we add private-channel management: create/rename/invite/archive)
+- `chat:write.public` (only if we want to post to channels the bot isn't in)
+  https://api.slack.com/scopes/chat:write.public
+- `users:read.email` (only if we need email fields from `users.info`)
+  https://api.slack.com/changelog/2017-04-narrowing-email-access
+- `files:read` (only if we start listing/reading file metadata)
+
 ## Config
 Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
 
@@ -96,8 +145,10 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     "enabled": true,
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
+    "groupPolicy": "open",
     "dm": {
       "enabled": true,
+      "policy": "pairing",
       "allowFrom": ["U123", "U456", "*"],
       "groupEnabled": false,
       "groupChannels": ["G123"]
@@ -131,10 +182,22 @@ Tokens can also be supplied via env vars:
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
+
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
+
+## DM security (pairing)
+- Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.
+- Approve via: `clawdbot pairing approve --provider slack <code>`.
+- To allow anyone: set `slack.dm.policy="open"` and `slack.dm.allowFrom=["*"]`.
+
+## Group policy
+- `slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).
+- `allowlist` requires channels to be listed in `slack.channels`.
 
 ## Delivery targets
 Use these with cron/CLI sends:
@@ -153,6 +216,6 @@ Slack tool actions can be gated with `slack.actions.*`:
 | emojiList | enabled | Custom emoji list |
 
 ## Notes
-- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`).
+- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
 - Attachments are downloaded to the media store when permitted and under the size limit.

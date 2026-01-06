@@ -12,6 +12,7 @@ Goal: small, hard-to-misuse tool surface so agents can list sessions, fetch hist
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
+- `sessions_spawn`
 
 ## Key Model
 - Main direct chat bucket is always the literal key `"main"`.
@@ -34,6 +35,7 @@ Parameters:
 Behavior:
 - `messageLimit > 0` fetches `chat.history` per session and includes the last N messages.
 - Tool results are filtered out in list output; use `sessions_history` for tool messages.
+- When running in a **sandboxed** agent session, session tools default to **spawned-only visibility** (see below).
 
 Row shape (JSON):
 - `key`: session key (string)
@@ -117,3 +119,36 @@ Runtime override (per session entry):
 Enforcement points:
 - `chat.send` / `agent` (gateway)
 - auto-reply delivery logic
+
+## sessions_spawn
+Spawn a sub-agent run in an isolated session and announce the result back to the requester chat surface.
+
+Parameters:
+- `task` (required)
+- `label?` (optional; used for logs/UI)
+- `timeoutSeconds?` (default 0; 0 = fire-and-forget)
+- `cleanup?` (`delete|keep`, default `delete`)
+
+Behavior:
+- Starts a new `subagent:<uuid>` session with `deliver: false`.
+- Sub-agents default to the full tool surface **minus session tools** (configurable via `agent.subagents.tools`).
+- Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
+- After completion (or best-effort wait), Clawdbot runs a sub-agent **announce step** and posts the result to the requester chat surface.
+- Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
+
+## Sandbox Session Visibility
+
+Sandboxed sessions can use session tools, but by default they only see sessions they spawned via `sessions_spawn`.
+
+Config:
+
+```json5
+{
+  agent: {
+    sandbox: {
+      // default: "spawned"
+      sessionToolsVisibility: "spawned" // or "all"
+    }
+  }
+}
+```

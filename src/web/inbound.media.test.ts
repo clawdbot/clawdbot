@@ -5,6 +5,11 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
+const upsertPairingRequestMock = vi
+  .fn()
+  .mockResolvedValue({ code: "PAIRCODE", created: true });
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -16,11 +21,17 @@ vi.mock("../config/config.js", async (importOriginal) => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     }),
   };
 });
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertProviderPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
+}));
 
 const HOME = path.join(
   os.tmpdir(),

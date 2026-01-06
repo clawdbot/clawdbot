@@ -1,8 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { loadWebMedia } = vi.hoisted(() => ({
+  loadWebMedia: vi.fn(),
+}));
+
+vi.mock("../web/media.js", () => ({
+  loadWebMedia,
+}));
 
 import { sendMessageTelegram } from "./send.js";
 
 describe("sendMessageTelegram", () => {
+  beforeEach(() => {
+    loadWebMedia.mockReset();
+  });
+
   it("falls back to plain text when Telegram rejects Markdown", async () => {
     const chatId = "123";
     const parseErr = new Error(
@@ -66,5 +78,33 @@ describe("sendMessageTelegram", () => {
     await expect(
       sendMessageTelegram(chatId, "hi", { token: "tok", api }),
     ).rejects.toThrow(/chat_id=123/);
+  });
+
+  it("sends GIF media as animation", async () => {
+    const chatId = "123";
+    const sendAnimation = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: chatId },
+    });
+    const api = { sendAnimation } as unknown as {
+      sendAnimation: typeof sendAnimation;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("GIF89a"),
+      fileName: "fun.gif",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/fun",
+    });
+
+    expect(sendAnimation).toHaveBeenCalledTimes(1);
+    expect(sendAnimation).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+    });
+    expect(res.messageId).toBe("9");
   });
 });

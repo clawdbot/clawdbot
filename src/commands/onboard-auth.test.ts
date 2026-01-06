@@ -5,11 +5,12 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveOAuthPath } from "../config/paths.js";
 import { writeOAuthCredentials } from "./onboard-auth.js";
 
 describe("writeOAuthCredentials", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -22,12 +23,24 @@ describe("writeOAuthCredentials", () => {
     } else {
       process.env.CLAWDBOT_STATE_DIR = previousStateDir;
     }
+    if (previousAgentDir === undefined) {
+      delete process.env.CLAWDBOT_AGENT_DIR;
+    } else {
+      process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+    }
+    if (previousPiAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+    }
     delete process.env.CLAWDBOT_OAUTH_DIR;
   });
 
-  it("writes oauth.json under CLAWDBOT_STATE_DIR/credentials", async () => {
+  it("writes auth-profiles.json under CLAWDBOT_STATE_DIR/agent", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-oauth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
     const creds = {
       refresh: "refresh-token",
@@ -37,16 +50,19 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("anthropic", creds);
 
-    const oauthPath = resolveOAuthPath();
-    expect(oauthPath).toBe(
-      path.join(tempStateDir, "credentials", "oauth.json"),
+    const authProfilePath = path.join(
+      tempStateDir,
+      "agent",
+      "auth-profiles.json",
     );
-
-    const raw = await fs.readFile(oauthPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, OAuthCredentials>;
-    expect(parsed.anthropic).toMatchObject({
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    };
+    expect(parsed.profiles?.["anthropic:default"]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
+      type: "oauth",
     });
   });
 });

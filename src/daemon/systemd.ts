@@ -3,12 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-
+import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import {
   GATEWAY_SYSTEMD_SERVICE_NAME,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
 } from "./constants.js";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -89,12 +88,7 @@ export async function enableSystemdUserLinger(params: {
     needsSudo && params.sudoMode !== undefined
       ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]
       : [];
-  const argv = [
-    ...sudoArgs,
-    "loginctl",
-    "enable-linger",
-    user,
-  ];
+  const argv = [...sudoArgs, "loginctl", "enable-linger", user];
   try {
     const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000 });
     return {
@@ -335,6 +329,22 @@ export async function uninstallSystemdService({
   } catch {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }
+}
+
+export async function stopSystemdService({
+  stdout,
+}: {
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  await assertSystemdAvailable();
+  const unitName = `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
+  const res = await execSystemctl(["--user", "stop", unitName]);
+  if (res.code !== 0) {
+    throw new Error(
+      `systemctl stop failed: ${res.stderr || res.stdout}`.trim(),
+    );
+  }
+  stdout.write(`Stopped systemd service: ${unitName}\n`);
 }
 
 export async function restartSystemdService({

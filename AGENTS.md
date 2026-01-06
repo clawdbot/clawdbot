@@ -7,7 +7,9 @@
 
 ## Build, Test, and Development Commands
 - Install deps: `pnpm install`
-- Run CLI in dev: `pnpm clawdbot ...` (tsx entry) or `pnpm dev` for `src/index.ts`.
+- Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
+- Run CLI in dev: `pnpm clawdbot ...` (bun) or `pnpm dev`.
+- Node remains supported for running built output (`dist/*`) and production installs.
 - Type-check/build: `pnpm build` (tsc)
 - Lint/format: `pnpm lint` (biome check), `pnpm format` (biome format)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
@@ -30,6 +32,10 @@
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
 - PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
+- When working on a PR: add a changelog entry with the PR ID and thank the contributor.
+- When working on an issue: reference the issue in the changelog entry.
+- When merging a PR: leave a PR comment that explains exactly what we did.
+- When merging a PR from a new contributor: add their avatar to the README “Thanks to all clawtributors” thumbnail list.
 
 ## Security & Configuration Tips
 - Web provider stores creds at `~/.clawdbot/credentials/`; rerun `clawdbot login` if logged out.

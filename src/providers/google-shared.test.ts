@@ -231,4 +231,252 @@ describe("google-shared convertMessages", () => {
       thoughtSignature: "sig",
     });
   });
+
+  it("merges consecutive user messages to satisfy Gemini role alternation", () => {
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "Hello",
+        },
+        {
+          role: "user",
+          content: "How are you?",
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    // Should merge into a single user message
+    expect(contents).toHaveLength(1);
+    expect(contents[0].role).toBe("user");
+    expect(contents[0].parts).toHaveLength(2);
+  });
+
+  it("merges consecutive user messages for non-Gemini Google models", () => {
+    const model = makeModel("claude-3-opus");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "First",
+        },
+        {
+          role: "user",
+          content: "Second",
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    expect(contents).toHaveLength(1);
+    expect(contents[0].role).toBe("user");
+    expect(contents[0].parts).toHaveLength(2);
+  });
+
+  it("merges consecutive model messages to satisfy Gemini role alternation", () => {
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "Hello",
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi there!" }],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "How can I help?" }],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    // Should have 1 user + 1 merged model message
+    expect(contents).toHaveLength(2);
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("model");
+    expect(contents[1].parts).toHaveLength(2);
+  });
+
+  it("handles user message after tool result without model response in between", () => {
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "Use a tool",
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "myTool",
+              arguments: { arg: "value" },
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "myTool",
+          content: [{ type: "text", text: "Tool result" }],
+          isError: false,
+          timestamp: 0,
+        },
+        {
+          role: "user",
+          content: "Now do something else",
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    // Tool result creates a user turn with functionResponse
+    // The next user message should be merged into it or there should be proper alternation
+    // Check that we don't have consecutive user messages
+    for (let i = 1; i < contents.length; i++) {
+      if (contents[i].role === "user" && contents[i - 1].role === "user") {
+        // If consecutive, they should have been merged
+        expect.fail("Consecutive user messages should be merged");
+      }
+    }
+    // The conversation should be valid for Gemini
+    expect(contents.length).toBeGreaterThan(0);
+  });
+
+  it("ensures function call comes after user turn, not after model turn", () => {
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "Hello",
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi!" }],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "myTool",
+              arguments: {},
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    // Consecutive model messages should be merged so function call is in same turn as text
+    expect(contents).toHaveLength(2);
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("model");
+    // The model message should have both text and function call
+    expect(contents[1].parts?.length).toBe(2);
+  });
 });

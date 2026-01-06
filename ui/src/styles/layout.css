@@ -1,16 +1,28 @@
 .shell {
   --shell-pad: 18px;
   --shell-gap: 18px;
+  --shell-nav-col: minmax(220px, 280px);
+  --shell-topbar-row: auto;
+  --shell-focus-duration: 220ms;
+  --shell-focus-ease: cubic-bezier(0.2, 0.85, 0.25, 1);
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
+  grid-template-columns: var(--shell-nav-col) minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-row) 1fr;
   grid-template-areas:
     "topbar topbar"
     "nav content";
   gap: var(--shell-gap);
   padding: var(--shell-pad);
   animation: dashboard-enter 0.6s ease-out;
+  transition: padding var(--shell-focus-duration) var(--shell-focus-ease);
+}
+
+.shell--chat-focus {
+  --shell-pad: 10px;
+  --shell-gap: 12px;
+  --shell-nav-col: 0px;
+  --shell-topbar-row: 0px;
 }
 
 .topbar {
@@ -27,6 +39,23 @@
   background: linear-gradient(135deg, var(--chrome), rgba(255, 255, 255, 0.02));
   backdrop-filter: blur(18px);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  transform-origin: top center;
+  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease),
+    transform var(--shell-focus-duration) var(--shell-focus-ease),
+    max-height var(--shell-focus-duration) var(--shell-focus-ease),
+    padding var(--shell-focus-duration) var(--shell-focus-ease),
+    border-width var(--shell-focus-duration) var(--shell-focus-ease);
+  max-height: max(0px, var(--topbar-height, 92px));
+}
+
+.shell--chat-focus .topbar {
+  opacity: 0;
+  transform: translateY(-10px);
+  max-height: 0px;
+  padding: 0;
+  border-width: 0;
+  pointer-events: none;
 }
 
 .brand {
@@ -72,6 +101,23 @@
   background: var(--panel);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(18px);
+  transform-origin: left center;
+  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease),
+    transform var(--shell-focus-duration) var(--shell-focus-ease),
+    max-width var(--shell-focus-duration) var(--shell-focus-ease),
+    padding var(--shell-focus-duration) var(--shell-focus-ease),
+    border-width var(--shell-focus-duration) var(--shell-focus-ease);
+  max-width: 320px;
+}
+
+.shell--chat-focus .nav {
+  opacity: 0;
+  transform: translateX(-12px);
+  max-width: 0px;
+  padding: 0;
+  border-width: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .nav-group {
@@ -163,6 +209,21 @@
   justify-content: space-between;
   gap: 12px;
   padding: 0 6px;
+  overflow: hidden;
+  transform-origin: top center;
+  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease),
+    transform var(--shell-focus-duration) var(--shell-focus-ease),
+    max-height var(--shell-focus-duration) var(--shell-focus-ease),
+    padding var(--shell-focus-duration) var(--shell-focus-ease);
+  max-height: 90px;
+}
+
+.shell--chat-focus .content-header {
+  opacity: 0;
+  transform: translateY(-10px);
+  max-height: 0px;
+  padding: 0;
+  pointer-events: none;
 }
 
 .page-title {
@@ -229,6 +290,7 @@
   .shell {
     --shell-pad: 12px;
     --shell-gap: 12px;
+    --shell-nav-col: 1fr;
     grid-template-columns: 1fr;
     grid-template-rows: auto auto 1fr;
     grid-template-areas:

@@ -6,6 +6,12 @@ import {
   loadConfig,
   resolveGatewayPort,
 } from "../config/config.js";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_SYSTEMD_SERVICE_NAME,
+  GATEWAY_WINDOWS_TASK_NAME,
+} from "../daemon/constants.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -43,6 +49,80 @@ function parsePort(raw: unknown): number | null {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return parsed;
+}
+
+function describeUnknownError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (typeof err === "number" || typeof err === "bigint") return err.toString();
+  if (typeof err === "boolean") return err ? "true" : "false";
+  if (err && typeof err === "object") {
+    if ("message" in err && typeof err.message === "string") {
+      return err.message;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return "Unknown error";
+    }
+  }
+  return "Unknown error";
+}
+
+function renderGatewayServiceStopHints(): string[] {
+  switch (process.platform) {
+    case "darwin":
+      return [
+        "Tip: clawdbot gateway stop",
+        `Or: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
+      ];
+    case "linux":
+      return [
+        "Tip: clawdbot gateway stop",
+        `Or: systemctl --user stop ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
+      ];
+    case "win32":
+      return [
+        "Tip: clawdbot gateway stop",
+        `Or: schtasks /End /TN "${GATEWAY_WINDOWS_TASK_NAME}"`,
+      ];
+    default:
+      return ["Tip: clawdbot gateway stop"];
+  }
+}
+
+function renderGatewayServiceStartHints(): string[] {
+  switch (process.platform) {
+    case "darwin":
+      return [
+        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
+      ];
+    case "linux":
+      return [`systemctl --user start ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`];
+    case "win32":
+      return [`schtasks /Run /TN "${GATEWAY_WINDOWS_TASK_NAME}"`];
+    default:
+      return [];
+  }
+}
+
+async function maybeExplainGatewayServiceStop() {
+  const service = resolveGatewayService();
+  let loaded: boolean | null = null;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = null;
+  }
+  if (loaded === false) return;
+  defaultRuntime.error(
+    loaded
+      ? `Gateway service appears ${service.loadedText}. Stop it first.`
+      : "Gateway service status unknown; if supervised, stop it first.",
+  );
+  for (const hint of renderGatewayServiceStopHints()) {
+    defaultRuntime.error(hint);
+  }
 }
 
 async function runGatewayLoop(params: {
@@ -285,8 +365,17 @@ export function registerGatewayCli(program: Command) {
             }),
         });
       } catch (err) {
-        if (err instanceof GatewayLockError) {
-          defaultRuntime.error(`Gateway failed to start: ${err.message}`);
+        if (
+          err instanceof GatewayLockError ||
+          (err &&
+            typeof err === "object" &&
+            (err as { name?: string }).name === "GatewayLockError")
+        ) {
+          const errMessage = describeUnknownError(err);
+          defaultRuntime.error(
+            `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot gateway stop`,
+          );
+          await maybeExplainGatewayServiceStop();
           defaultRuntime.exit(1);
           return;
         }
@@ -486,8 +575,17 @@ export function registerGatewayCli(program: Command) {
             }),
         });
       } catch (err) {
-        if (err instanceof GatewayLockError) {
-          defaultRuntime.error(`Gateway failed to start: ${err.message}`);
+        if (
+          err instanceof GatewayLockError ||
+          (err &&
+            typeof err === "object" &&
+            (err as { name?: string }).name === "GatewayLockError")
+        ) {
+          const errMessage = describeUnknownError(err);
+          defaultRuntime.error(
+            `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot gateway stop`,
+          );
+          await maybeExplainGatewayServiceStop();
           defaultRuntime.exit(1);
           return;
         }
@@ -634,6 +732,59 @@ export function registerGatewayCli(program: Command) {
         }
       }),
   );
+
+  gateway
+    .command("stop")
+    .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .action(async () => {
+      const service = resolveGatewayService();
+      let loaded = false;
+      try {
+        loaded = await service.isLoaded({ env: process.env });
+      } catch (err) {
+        defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+        return;
+      }
+      if (!loaded) {
+        defaultRuntime.log(`Gateway service ${service.notLoadedText}.`);
+        return;
+      }
+      try {
+        await service.stop({ stdout: process.stdout });
+      } catch (err) {
+        defaultRuntime.error(`Gateway stop failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
+
+  gateway
+    .command("restart")
+    .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .action(async () => {
+      const service = resolveGatewayService();
+      let loaded = false;
+      try {
+        loaded = await service.isLoaded({ env: process.env });
+      } catch (err) {
+        defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+        return;
+      }
+      if (!loaded) {
+        defaultRuntime.log(`Gateway service ${service.notLoadedText}.`);
+        for (const hint of renderGatewayServiceStartHints()) {
+          defaultRuntime.log(`Start with: ${hint}`);
+        }
+        return;
+      }
+      try {
+        await service.restart({ stdout: process.stdout });
+      } catch (err) {
+        defaultRuntime.error(`Gateway restart failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
 
   // Build default deps (keeps parity with other commands; future-proofing).
   void createDefaultDeps();

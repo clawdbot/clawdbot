@@ -57,7 +57,8 @@ export async function createModelSelectionState(params: {
   let provider = params.provider;
   let model = params.model;
 
-  const hasAllowlist = (agentCfg?.allowedModels?.length ?? 0) > 0;
+  const hasAllowlist =
+    agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const hasStoredOverride = Boolean(
     sessionEntry?.modelOverride || sessionEntry?.providerOverride,
   );
@@ -107,6 +108,27 @@ export async function createModelSelectionState(params: {
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
       model = storedModelOverride;
+    }
+  }
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntry.authProfileOverride
+  ) {
+    const { ensureAuthProfileStore } = await import(
+      "../../agents/auth-profiles.js"
+    );
+    const store = ensureAuthProfileStore();
+    const profile = store.profiles[sessionEntry.authProfileOverride];
+    if (!profile || profile.provider !== provider) {
+      delete sessionEntry.authProfileOverride;
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await saveSessionStore(storePath, sessionStore);
+      }
     }
   }
 

@@ -2,6 +2,7 @@
 import { Bot, InputFile } from "grammy";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mediaKindFromMime } from "../media/constants.js";
+import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 
 type TelegramSendOpts = {
@@ -110,17 +111,30 @@ export async function sendMessageTelegram(
   if (mediaUrl) {
     const media = await loadWebMedia(mediaUrl, opts.maxBytes);
     const kind = mediaKindFromMime(media.contentType ?? undefined);
-    const file = new InputFile(
-      media.buffer,
-      media.fileName ?? inferFilename(kind) ?? "file",
-    );
+    const isGif = isGifMedia({
+      contentType: media.contentType,
+      fileName: media.fileName,
+    });
+    const fileName =
+      media.fileName ??
+      (isGif ? "animation.gif" : inferFilename(kind)) ??
+      "file";
+    const file = new InputFile(media.buffer, fileName);
     const caption = text?.trim() || undefined;
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>
       | Awaited<ReturnType<typeof api.sendVideo>>
       | Awaited<ReturnType<typeof api.sendAudio>>
+      | Awaited<ReturnType<typeof api.sendAnimation>>
       | Awaited<ReturnType<typeof api.sendDocument>>;
-    if (kind === "image") {
+    if (isGif) {
+      result = await sendWithRetry(
+        () => api.sendAnimation(chatId, file, { caption }),
+        "animation",
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
+    } else if (kind === "image") {
       result = await sendWithRetry(
         () => api.sendPhoto(chatId, file, { caption }),
         "photo",

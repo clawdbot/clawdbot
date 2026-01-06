@@ -22,12 +22,14 @@ beforeEach(() => {
     // no-op: avoid real gateway WS connections in browser tests
   };
   window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
+  localStorage.clear();
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
   ClawdbotApp.prototype.connect = originalConnect;
   window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
+  localStorage.clear();
   document.body.innerHTML = "";
 });
 
@@ -102,13 +104,19 @@ describe("control UI routing", () => {
     }));
 
     await app.updateComplete;
-    await nextFrame();
+    for (let i = 0; i < 6; i++) {
+      await nextFrame();
+    }
 
     const container = app.querySelector(".chat-thread") as HTMLElement | null;
     expect(container).not.toBeNull();
     if (!container) return;
     const maxScroll = container.scrollHeight - container.clientHeight;
     expect(maxScroll).toBeGreaterThan(0);
+    for (let i = 0; i < 10; i++) {
+      if (container.scrollTop === maxScroll) break;
+      await nextFrame();
+    }
     expect(container.scrollTop).toBe(maxScroll);
   });
 

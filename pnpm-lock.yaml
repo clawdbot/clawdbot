@@ -9,8 +9,11 @@ overrides:
 
 patchedDependencies:
   '@mariozechner/pi-ai':
-    hash: 628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5
+    hash: b49275c3e2023970d8248ababef6df60e093e58a3ba3127c2ba4de1df387d06a
     path: patches/@mariozechner__pi-ai.patch
+  qrcode-terminal:
+    hash: ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12
+    path: patches/qrcode-terminal.patch
 
 importers:
 
@@ -26,17 +29,17 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.36.0
-        version: 0.36.0(ws@8.18.3)(zod@4.3.5)
+        specifier: ^0.37.2
+        version: 0.37.2(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
-        specifier: ^0.36.0
-        version: 0.36.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)
+        specifier: ^0.37.2
+        version: 0.37.2(patch_hash=b49275c3e2023970d8248ababef6df60e093e58a3ba3127c2ba4de1df387d06a)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.36.0
-        version: 0.36.0(ws@8.18.3)(zod@4.3.5)
+        specifier: ^0.37.2
+        version: 0.37.2(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.36.0
-        version: 0.36.0
+        specifier: ^0.37.2
+        version: 0.37.2
       '@sinclair/typebox':
         specifier: 0.34.46
         version: 0.34.46
@@ -100,9 +103,12 @@ importers:
       playwright-core:
         specifier: 1.57.0
         version: 1.57.0
+      proper-lockfile:
+        specifier: ^4.1.2
+        version: 4.1.2
       qrcode-terminal:
         specifier: ^0.12.0
-        version: 0.12.0
+        version: 0.12.0(patch_hash=ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12)
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -110,11 +116,11 @@ importers:
         specifier: ^4.10.2
         version: 4.10.2
       undici:
-        specifier: ^7.16.0
-        version: 7.16.0
+        specifier: ^7.18.0
+        version: 7.18.0
       ws:
-        specifier: ^8.18.3
-        version: 8.18.3
+        specifier: ^8.19.0
+        version: 8.19.0
       zod:
         specifier: ^4.3.5
         version: 4.3.5
@@ -143,6 +149,9 @@ importers:
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
+      '@types/proper-lockfile':
+        specifier: ^4.1.4
+        version: 4.1.4
       '@types/qrcode-terminal':
         specifier: ^0.12.2
         version: 0.12.2
@@ -171,8 +180,8 @@ importers:
         specifier: ^0.6.3
         version: 0.6.3
       oxlint:
-        specifier: ^1.36.0
-        version: 1.36.0(oxlint-tsgolint@0.10.1)
+        specifier: ^1.37.0
+        version: 1.37.0(oxlint-tsgolint@0.10.1)
       oxlint-tsgolint:
         specifier: ^0.10.1
         version: 0.10.1
@@ -185,9 +194,6 @@ importers:
       signal-utils:
         specifier: ^0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -801,22 +807,22 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.36.0':
-    resolution: {integrity: sha512-86BI1/j/MLxQHSWRXVLz8+NuSmDvLQebNb40+lFDI9XI9YBh8+r5fkYgU43u4j2TvANZ7iW6SFFnhWhzy8y6dg==}
+  '@mariozechner/pi-agent-core@0.37.2':
+    resolution: {integrity: sha512-GAN1lDVmlY1yH/FCfvpH29f2WBoqqMQkda7zKthOJO9l8tagxnlCWtq078CjzUGYlTDhKSf388XlOuDByBGYLA==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.36.0':
-    resolution: {integrity: sha512-xkzTgvdMzAZ/L/TgMH8z9Zi+aH0EWc54l5ygiafwvCgDk7xvfbylQG6pa9yn5zEn9T4NF9byJNk+nMHnycZvMQ==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
-
-  '@mariozechner/pi-coding-agent@0.36.0':
-    resolution: {integrity: sha512-lKdpuGE0yVs/96GnDhrPLEEFhRteHRtnkfX04KIBpcsEXXg2vyAlpxtjtZ9nlhYqLLIY7qJRkeyjbhcFFfbAAA==}
+  '@mariozechner/pi-ai@0.37.2':
+    resolution: {integrity: sha512-IhhvlPrgkdrlbS7QnV+qJPmlzKyae/aI1kenclG18/dXCypxUU50OuzGoVwrXvXw/RIHRwodhd7w4IH38Z7W4Q==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.36.0':
-    resolution: {integrity: sha512-4n+nmTd36q0AVCbqWmjtTHTjIEwlGayKKhc+4QbpN9U3Z9jyQQa8Za1P2OHRmi6Jeu+ISuf4VBDvgmgCaxPZYg==}
+  '@mariozechner/pi-coding-agent@0.37.2':
+    resolution: {integrity: sha512-wRFqcyY76h4mONO1si2oAn9WVKnhmVV28dPHjQXVPrl7uSwMCLn+Fcde/nmbL29pYfiU1il4GmUR+iSyoxBUVQ==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-tui@0.37.2':
+    resolution: {integrity: sha512-XNV+jEeWJxQ8U3r5njRotVs6DnEIunkLHSA4nnF4OaRRgrcsafD8M4Pm/3RywSucclVK8P7+KoGiBB2Lokkmuw==}
     engines: {node: '>=20.0.0'}
 
   '@mistralai/mistralai@1.10.0':
@@ -870,43 +876,43 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@oxlint/darwin-arm64@1.36.0':
-    resolution: {integrity: sha512-MJkj82GH+nhvWKJhSIM6KlZ8tyGKdogSQXtNdpIyP02r/tTayFJQaAEWayG2Jhsn93kske+nimg5MYFhwO/rlg==}
+  '@oxlint/darwin-arm64@1.37.0':
+    resolution: {integrity: sha512-qDa8qf4Th3sbk6P6wRbsv5paGeZ8EEOy8PtnT2IkAYSzjDHavw8nMK/lQvf6uS7LArjcmOfM1Y3KnZUFoNZZqg==}
     cpu: [arm64]
     os: [darwin]
 
-  '@oxlint/darwin-x64@1.36.0':
-    resolution: {integrity: sha512-VvEhfkqj/99dCTqOcfkyFXOSbx4lIy5u2m2GHbK4WCMDySokOcMTNRHGw8fH/WgQ5cDrDMSTYIGQTmnBGi9tiQ==}
+  '@oxlint/darwin-x64@1.37.0':
+    resolution: {integrity: sha512-FM0h0KyOQ4HCdhIX1ne6d80BxRra75h1ORce0jYNwQ49HT4RU8+9ywSMC7rQ79xWsmaahvkQPB7tMPyfjsQwAg==}
     cpu: [x64]
     os: [darwin]
 
-  '@oxlint/linux-arm64-gnu@1.36.0':
-    resolution: {integrity: sha512-EMx92X5q+hHc3olTuj/kgkx9+yP0p/AVs4yvHbUfzZhBekXNpUWxWvg4hIKmQWn+Ee2j4o80/0ACGO0hDYJ9mg==}
+  '@oxlint/linux-arm64-gnu@1.37.0':
+    resolution: {integrity: sha512-2axK0lftGwM6Q7wOuY2sassUqa4MKrG3iemVVyEpXzJ6g5QosxhCoFPp9v81/gmLT5kAdd2gskoDcfpDJliDNw==}
     cpu: [arm64]
     os: [linux]
 
-  '@oxlint/linux-arm64-musl@1.36.0':
-    resolution: {integrity: sha512-7YCxtrPIctVYLqWrWkk8pahdCxch6PtsaucfMLC7TOlDt4nODhnQd4yzEscKqJ8Gjrw1bF4g+Ngob1gB+Qr9Fw==}
+  '@oxlint/linux-arm64-musl@1.37.0':
+    resolution: {integrity: sha512-f3YROyGMIdUeXx0yD7RsAUBzBvD222D4l2GQRYF3AMxyp9mya17Rq/3wNLR4JDnAnboOul3DAEKNm+09lo3uZw==}
     cpu: [arm64]
     os: [linux]
 
-  '@oxlint/linux-x64-gnu@1.36.0':
-    resolution: {integrity: sha512-lnaJVlx5r3NWmoOMesfQXJSf78jHTn8Z+sdAf795Kgteo72+qGC1Uax2SToCJVN2J8PNG3oRV5bLriiCNR2i6Q==}
+  '@oxlint/linux-x64-gnu@1.37.0':
+    resolution: {integrity: sha512-FANOdOVQ2c4acYLM0dvtSoKELHSSnDBxDdm8OlXNzSRanQILrNpLgUqCXHFsfiHipFfNzz3Z417PxV6X4aBYog==}
     cpu: [x64]
     os: [linux]
 
-  '@oxlint/linux-x64-musl@1.36.0':
-    resolution: {integrity: sha512-AhuEU2Qdl66lSfTGu/Htirq8r/8q2YnZoG3yEXLMQWnPMn7efy8spD/N1NA7kH0Hll+cdfwgQkQqC2G4MS2lPQ==}
+  '@oxlint/linux-x64-musl@1.37.0':
+    resolution: {integrity: sha512-eYnSKT9knXdOQ9h+6nSjEHSx0+pW8PkGwtMNGXtCYR+/ZPKYIbtZVS0nZsFy+qizP+TRVSJrgc/JY3Xr0wjcQg==}
     cpu: [x64]
     os: [linux]
 
-  '@oxlint/win32-arm64@1.36.0':
-    resolution: {integrity: sha512-GlWCBjUJY2QgvBFuNRkiRJu7K/djLmM0UQKfZV8IN+UXbP/JbjZHWKRdd4LXlQmzoz7M5Hd6p+ElCej8/90FCg==}
+  '@oxlint/win32-arm64@1.37.0':
+    resolution: {integrity: sha512-2oHxNc4jcocfNWGWVVWQdEG+reZ5ncBZsmDoICJQ1rbCDx4Yimx8VUf1Ub9cCoJRcPiSLBxMqaeMaDClKixJIQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@oxlint/win32-x64@1.36.0':
-    resolution: {integrity: sha512-J+Vc00Utcf8p77lZPruQgb0QnQXuKnFogN88kCnOqs2a83I+vTBB8ILr0+L9sTwVRvIDMSC0pLdeQH4svWGFZg==}
+  '@oxlint/win32-x64@1.37.0':
+    resolution: {integrity: sha512-w+pBuTjGmGCGPhDjFhj/97K2tlGyq5LKAU6S7FHxROPuJRWJD6uio1L75Lsb8fKhwtw2rm54LLOX30Yi+nILxw==}
     cpu: [x64]
     os: [win32]
 
@@ -1269,6 +1275,9 @@ packages:
   '@types/node@25.0.3':
     resolution: {integrity: sha512-W609buLVRVmeW693xKfzHeIV6nJGGz98uCPfeXI1ELMLXVeKYZ9m15fAMSaUPBHYLGFsVRcMmSCksQOrZV9BYA==}
 
+  '@types/proper-lockfile@4.1.4':
+    resolution: {integrity: sha512-uo2ABllncSqg9F1D4nugVl9v93RmjxF6LJzQLMLDdPaXCUIDPeOJ21Gbqi43xNKzBi/WQ0Q0dICqufzQbMjipQ==}
+
   '@types/qrcode-terminal@0.12.2':
     resolution: {integrity: sha512-v+RcIEJ+Uhd6ygSQ0u5YYY7ZM+la7GgPbs0V/7l/kFs2uO4S8BcIUEMoP7za4DNIqNnUD5npf0A/7kBhrCKG5Q==}
 
@@ -1280,6 +1289,9 @@ packages:
 
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
+
+  '@types/retry@0.12.5':
+    resolution: {integrity: sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==}
 
   '@types/send@1.2.1':
     resolution: {integrity: sha512-arsCikDvlU99zl1g69TcAB3mzZPpxgw0UQnaHeC1Nwb015xp8bknZv5rIfri9xTOcMuaVgvabfIRA7PSZVuZIQ==}
@@ -1951,8 +1963,8 @@ packages:
     resolution: {integrity: sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==}
     engines: {node: '>=12.0.0'}
 
-  hookified@1.14.0:
-    resolution: {integrity: sha512-pi1ynXIMFx/uIIwpWJ/5CEtOHLGtnUB0WhGeeYT+fKcQ+WCQbm3/rrkAXnpfph++PgepNqPdTC2WTj8A6k6zoQ==}
+  hookified@1.15.0:
+    resolution: {integrity: sha512-51w+ZZGt7Zw5q7rM3nC4t3aLn/xvKDETsXqMczndvwyVQhAHfUmUuFBRFcos8Iyebtk7OAE9dL26wFNzZVVOkw==}
 
   html-escaper@2.0.2:
     resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
@@ -2418,8 +2430,8 @@ packages:
     resolution: {integrity: sha512-EEHNdo5cW2w1xwYdBQ7d3IXDqWAtMkfVFrh+9gQ4kYbYJwygY4QXSh1eH80/xVipZdVKujAwBgg/nNNHk56kxQ==}
     hasBin: true
 
-  oxlint@1.36.0:
-    resolution: {integrity: sha512-IicUdXfXgI8OKrDPnoSjvBfeEF8PkKtm+CoLlg4LYe4ypc8U+T4r7730XYshdBGZdelg+JRw8GtCb2w/KaaZvw==}
+  oxlint@1.37.0:
+    resolution: {integrity: sha512-MAw0JH8M5/vt9E2WxSsmJu53bVLmG6qNlVw1OXFenJYItTPbMBtW7j3n53+tgNhNuxFPundM1DR7V8E39qOOrg==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -2436,8 +2448,8 @@ packages:
     resolution: {integrity: sha512-RwFpb72c/BhQLEXIZ5K2e+AhgNVmIejGlTgiB9MzZ0e93GRvqZ7uSi0dvRF7/XIXDeNkra2fNHBxTyPDGySpjQ==}
     engines: {node: '>=8'}
 
-  p-queue@9.0.1:
-    resolution: {integrity: sha512-RhBdVhSwJb7Ocn3e8ULk4NMwBEuOxe+1zcgphUy9c2e5aR/xbEsdVXxHJ3lynw6Qiqu7OINEyHlZkiblEpaq7w==}
+  p-queue@9.1.0:
+    resolution: {integrity: sha512-O/ZPaXuQV29uSLbxWBGGZO1mCQXV2BLIwUr59JUU9SoH76mnYvtms7aafH/isNSNGwuEfP6W/4xD0/TJXxrizw==}
     engines: {node: '>=20'}
 
   p-retry@4.6.2:
@@ -2933,8 +2945,8 @@ packages:
     resolution: {integrity: sha512-gBLkYIlEnSp8pFbT64yFgGE6UIB9tAkhukC23PmMDCe5Nd+cRqKxSjw5y54MK2AZMgZfJWMaNE4nYUHgi1XEOw==}
     engines: {node: '>=18.17'}
 
-  undici@7.16.0:
-    resolution: {integrity: sha512-QEg3HPMll0o3t2ourKwOeUAZ159Kn9mx5pnzHRQO8+Wixmh88YdZRiIwat0iNzNNXn0yoEtXJqFpyW7eM8BV7g==}
+  undici@7.18.0:
+    resolution: {integrity: sha512-CfPufgPFHCYu0W4h1NiKW9+tNJ39o3kWm7Cm29ET1enSJx+AERfz7A2wAr26aY0SZbYzZlTBQtcHy15o60VZfQ==}
     engines: {node: '>=20.18.1'}
 
   unicode-properties@1.4.1:
@@ -3073,8 +3085,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@8.18.3:
-    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
+  ws@8.19.0:
+    resolution: {integrity: sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -3186,13 +3198,13 @@ snapshots:
     dependencies:
       '@cacheable/utils': 2.3.3
       '@keyv/bigmap': 1.3.0(keyv@5.5.5)
-      hookified: 1.14.0
+      hookified: 1.15.0
       keyv: 5.5.5
 
   '@cacheable/node-cache@1.7.6':
     dependencies:
       cacheable: 2.3.1
-      hookified: 1.14.0
+      hookified: 1.15.0
       keyv: 5.5.5
 
   '@cacheable/utils@2.3.3':
@@ -3290,7 +3302,7 @@ snapshots:
       '@vladfrangu/async_event_emitter': 2.4.7
       discord-api-types: 0.38.37
       tslib: 2.8.1
-      ws: 8.18.3
+      ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3397,7 +3409,7 @@ snapshots:
   '@google/genai@1.34.0':
     dependencies:
       google-auth-library: 10.5.0
-      ws: 8.18.3
+      ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -3548,7 +3560,7 @@ snapshots:
   '@keyv/bigmap@1.3.0(keyv@5.5.5)':
     dependencies:
       hashery: 1.4.0
-      hookified: 1.14.0
+      hookified: 1.15.0
       keyv: 5.5.5
 
   '@keyv/serialize@1.1.1': {}
@@ -3585,10 +3597,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.36.0(ws@8.18.3)(zod@4.3.5)':
+  '@mariozechner/pi-agent-core@0.37.2(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.36.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.36.0
+      '@mariozechner/pi-ai': 0.37.2(patch_hash=b49275c3e2023970d8248ababef6df60e093e58a3ba3127c2ba4de1df387d06a)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.37.2
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3597,7 +3609,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.36.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.37.2(patch_hash=b49275c3e2023970d8248ababef6df60e093e58a3ba3127c2ba4de1df387d06a)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@google/genai': 1.34.0
@@ -3606,7 +3618,7 @@ snapshots:
       ajv: 8.17.1
       ajv-formats: 3.0.1(ajv@8.17.1)
       chalk: 5.6.2
-      openai: 6.10.0(ws@8.18.3)(zod@4.3.5)
+      openai: 6.10.0(ws@8.19.0)(zod@4.3.5)
       partial-json: 0.1.7
       zod-to-json-schema: 3.25.1(zod@4.3.5)
     transitivePeerDependencies:
@@ -3617,12 +3629,12 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.36.0(ws@8.18.3)(zod@4.3.5)':
+  '@mariozechner/pi-coding-agent@0.37.2(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@crosscopy/clipboard': 0.2.8
-      '@mariozechner/pi-agent-core': 0.36.0(ws@8.18.3)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.36.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.36.0
+      '@mariozechner/pi-agent-core': 0.37.2(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.37.2(patch_hash=b49275c3e2023970d8248ababef6df60e093e58a3ba3127c2ba4de1df387d06a)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.37.2
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.2
@@ -3630,6 +3642,7 @@ snapshots:
       glob: 11.1.0
       jiti: 2.6.1
       marked: 15.0.12
+      proper-lockfile: 4.1.2
       sharp: 0.34.5
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -3639,7 +3652,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.36.0':
+  '@mariozechner/pi-tui@0.37.2':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
@@ -3691,28 +3704,28 @@ snapshots:
   '@oxlint-tsgolint/win32-x64@0.10.1':
     optional: true
 
-  '@oxlint/darwin-arm64@1.36.0':
+  '@oxlint/darwin-arm64@1.37.0':
     optional: true
 
-  '@oxlint/darwin-x64@1.36.0':
+  '@oxlint/darwin-x64@1.37.0':
     optional: true
 
-  '@oxlint/linux-arm64-gnu@1.36.0':
+  '@oxlint/linux-arm64-gnu@1.37.0':
     optional: true
 
-  '@oxlint/linux-arm64-musl@1.36.0':
+  '@oxlint/linux-arm64-musl@1.37.0':
     optional: true
 
-  '@oxlint/linux-x64-gnu@1.36.0':
+  '@oxlint/linux-x64-gnu@1.37.0':
     optional: true
 
-  '@oxlint/linux-x64-musl@1.36.0':
+  '@oxlint/linux-x64-musl@1.37.0':
     optional: true
 
-  '@oxlint/win32-arm64@1.36.0':
+  '@oxlint/win32-arm64@1.37.0':
     optional: true
 
-  '@oxlint/win32-x64@1.36.0':
+  '@oxlint/win32-x64@1.37.0':
     optional: true
 
   '@pinojs/redact@0.4.0': {}
@@ -3907,7 +3920,7 @@ snapshots:
       '@types/node': 25.0.3
       '@types/ws': 8.18.1
       eventemitter3: 5.0.1
-      ws: 8.18.3
+      ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - debug
@@ -4035,6 +4048,10 @@ snapshots:
     dependencies:
       undici-types: 7.16.0
 
+  '@types/proper-lockfile@4.1.4':
+    dependencies:
+      '@types/retry': 0.12.5
+
   '@types/qrcode-terminal@0.12.2': {}
 
   '@types/qs@6.14.0': {}
@@ -4042,6 +4059,8 @@ snapshots:
   '@types/range-parser@1.2.7': {}
 
   '@types/retry@0.12.0': {}
+
+  '@types/retry@0.12.5': {}
 
   '@types/send@1.2.1':
     dependencies:
@@ -4094,7 +4113,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.0.3
       vitest: 4.0.16(@types/node@25.0.3)(@vitest/browser-playwright@4.0.16)(@vitest/browser-preview@4.0.16)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
-      ws: 8.18.3
+      ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -4196,11 +4215,11 @@ snapshots:
       libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
       lru-cache: 11.2.4
       music-metadata: 11.10.4
-      p-queue: 9.0.1
+      p-queue: 9.1.0
       pino: 9.14.0
       protobufjs: 7.5.4
       sharp: 0.34.5
-      ws: 8.18.3
+      ws: 8.19.0
     optionalDependencies:
       audio-decode: 2.2.3
     transitivePeerDependencies:
@@ -4361,7 +4380,7 @@ snapshots:
     dependencies:
       '@cacheable/memory': 2.0.7
       '@cacheable/utils': 2.3.3
-      hookified: 1.14.0
+      hookified: 1.15.0
       keyv: 5.5.5
       qified: 0.5.3
 
@@ -4770,6 +4789,7 @@ snapshots:
   get-tsconfig@4.13.0:
     dependencies:
       resolve-pkg-maps: 1.0.0
+    optional: true
 
   glob-parent@5.1.2:
     dependencies:
@@ -4838,7 +4858,7 @@ snapshots:
 
   hashery@1.4.0:
     dependencies:
-      hookified: 1.14.0
+      hookified: 1.15.0
 
   hasown@2.0.2:
     dependencies:
@@ -4848,7 +4868,7 @@ snapshots:
 
   highlight.js@11.11.1: {}
 
-  hookified@1.14.0: {}
+  hookified@1.15.0: {}
 
   html-escaper@2.0.2: {}
 
@@ -5256,9 +5276,9 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  openai@6.10.0(ws@8.18.3)(zod@4.3.5):
+  openai@6.10.0(ws@8.19.0)(zod@4.3.5):
     optionalDependencies:
-      ws: 8.18.3
+      ws: 8.19.0
       zod: 4.3.5
 
   opus-decoder@0.7.11:
@@ -5275,16 +5295,16 @@ snapshots:
       '@oxlint-tsgolint/win32-arm64': 0.10.1
       '@oxlint-tsgolint/win32-x64': 0.10.1
 
-  oxlint@1.36.0(oxlint-tsgolint@0.10.1):
+  oxlint@1.37.0(oxlint-tsgolint@0.10.1):
     optionalDependencies:
-      '@oxlint/darwin-arm64': 1.36.0
-      '@oxlint/darwin-x64': 1.36.0
-      '@oxlint/linux-arm64-gnu': 1.36.0
-      '@oxlint/linux-arm64-musl': 1.36.0
-      '@oxlint/linux-x64-gnu': 1.36.0
-      '@oxlint/linux-x64-musl': 1.36.0
-      '@oxlint/win32-arm64': 1.36.0
-      '@oxlint/win32-x64': 1.36.0
+      '@oxlint/darwin-arm64': 1.37.0
+      '@oxlint/darwin-x64': 1.37.0
+      '@oxlint/linux-arm64-gnu': 1.37.0
+      '@oxlint/linux-arm64-musl': 1.37.0
+      '@oxlint/linux-x64-gnu': 1.37.0
+      '@oxlint/linux-x64-musl': 1.37.0
+      '@oxlint/win32-arm64': 1.37.0
+      '@oxlint/win32-x64': 1.37.0
       oxlint-tsgolint: 0.10.1
 
   p-finally@1.0.0: {}
@@ -5294,7 +5314,7 @@ snapshots:
       eventemitter3: 4.0.7
       p-timeout: 3.2.0
 
-  p-queue@9.0.1:
+  p-queue@9.1.0:
     dependencies:
       eventemitter3: 5.0.1
       p-timeout: 7.0.1
@@ -5453,14 +5473,14 @@ snapshots:
 
   qified@0.5.3:
     dependencies:
-      hookified: 1.14.0
+      hookified: 1.15.0
 
   qoa-format@1.0.1:
     dependencies:
       '@thi.ng/bitstream': 2.4.37
     optional: true
 
-  qrcode-terminal@0.12.0: {}
+  qrcode-terminal@0.12.0(patch_hash=ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12): {}
 
   qs@6.14.1:
     dependencies:
@@ -5531,7 +5551,8 @@ snapshots:
 
   require-from-string@2.0.2: {}
 
-  resolve-pkg-maps@1.0.0: {}
+  resolve-pkg-maps@1.0.0:
+    optional: true
 
   retry@0.12.0: {}
 
@@ -5855,6 +5876,7 @@ snapshots:
       get-tsconfig: 4.13.0
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   type-is@2.0.1:
     dependencies:
@@ -5876,7 +5898,7 @@ snapshots:
 
   undici@6.21.3: {}
 
-  undici@7.16.0: {}
+  undici@7.18.0: {}
 
   unicode-properties@1.4.1:
     dependencies:
@@ -5995,7 +6017,7 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.18.3: {}
+  ws@8.19.0: {}
 
   y18n@5.0.8: {}
 

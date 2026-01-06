@@ -22,7 +22,7 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 ## When something fails
 - `logged out` or status 409–515 → relink with `clawdbot logout` then `clawdbot login`.
 - Gateway unreachable → start it: `clawdbot gateway --port 18789` (use `--force` if the port is busy).
-- No inbound messages → confirm linked phone is online and the sender is allowed (`whatsapp.allowFrom`); for group chats, ensure mention rules match (`routing.groupChat.mentionPatterns` and `whatsapp.groups`).
+- No inbound messages → confirm linked phone is online and the sender is allowed (`whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`whatsapp.groups`, `routing.groupChat.mentionPatterns`).
 
 ## Dedicated "health" command
 `clawdbot health --json` asks the running Gateway for its health snapshot (no direct Baileys socket from the CLI). It reports linked creds, auth age, Baileys connect result/status code, session-store summary, and a probe duration. It exits non-zero if the Gateway is unreachable or the probe fails/timeouts. Use `--timeout <ms>` to override the 10s default.

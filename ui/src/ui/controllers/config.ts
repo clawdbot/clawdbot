@@ -100,6 +100,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   const config = snapshot.config ?? {};
   const telegram = (config.telegram ?? {}) as Record<string, unknown>;
   const discord = (config.discord ?? {}) as Record<string, unknown>;
+  const slack = (config.slack ?? {}) as Record<string, unknown>;
   const signal = (config.signal ?? {}) as Record<string, unknown>;
   const imessage = (config.imessage ?? {}) as Record<string, unknown>;
   const toList = (value: unknown) =>
@@ -401,7 +402,9 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const base = cloneConfigObject(state.configForm ?? {});
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
   setPathValue(base, path, value);
   state.configForm = base;
   state.configFormDirty = true;
@@ -411,7 +414,9 @@ export function removeConfigFormValue(
   state: ConfigState,
   path: Array<string | number>,
 ) {
-  const base = cloneConfigObject(state.configForm ?? {});
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
   removePathValue(base, path);
   state.configForm = base;
   state.configFormDirty = true;

@@ -1,3 +1,8 @@
+---
+summary: "Fix Chrome/Chromium CDP startup issues for Clawdbot browser control on Linux"
+read_when: "Browser control fails on Linux, especially with snap Chromium"
+---
+
 # Browser Troubleshooting (Linux)
 
 ## Problem: "Failed to start Chrome CDP on port 18800"

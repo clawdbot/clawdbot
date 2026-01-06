@@ -76,6 +76,34 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
+  it("uses content-disposition filename when available", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
+      headers: {
+        get: (name: string) => {
+          if (name === "content-disposition") {
+            return 'attachment; filename="report.pdf"';
+          }
+          if (name === "content-type") return "application/pdf";
+          return null;
+        },
+      },
+      status: 200,
+    } as Response);
+
+    const result = await loadWebMedia(
+      "https://example.com/download?id=1",
+      1024 * 1024,
+    );
+
+    expect(result.kind).toBe("document");
+    expect(result.fileName).toBe("report.pdf");
+
+    fetchMock.mockRestore();
+  });
+
   it("preserves GIF animation by skipping JPEG optimization", async () => {
     // Create a minimal valid GIF (1x1 pixel)
     // GIF89a header + minimal image data

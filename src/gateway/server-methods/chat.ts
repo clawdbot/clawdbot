@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommand } from "../../commands/agent.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -154,7 +155,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    const timeoutMs = Math.min(Math.max(p.timeoutMs ?? 30_000, 0), 30_000);
     const normalizedAttachments =
       p.attachments?.map((a) => ({
         type: typeof a?.type === "string" ? a.type : undefined,
@@ -189,6 +189,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const { cfg, storePath, store, entry } = loadSessionEntry(p.sessionKey);
+    const timeoutMs = resolveAgentTimeoutMs({
+      cfg,
+      overrideMs: p.timeoutMs,
+    });
     const now = Date.now();
     const sessionId = entry?.sessionId ?? randomUUID();
     const sessionEntry: SessionEntry = {

@@ -13,11 +13,16 @@ import {
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  stripHeartbeatToken,
+} from "../auto-reply/heartbeat.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -57,6 +62,28 @@ function pickSummaryFromPayloads(
   return undefined;
 }
 
+/**
+ * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
+ * Returns true if delivery should be skipped because there's no real content.
+ */
+function isHeartbeatOnlyResponse(
+  payloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>,
+  ackMaxChars: number,
+) {
+  if (payloads.length === 0) return true;
+  return payloads.every((payload) => {
+    // If there's media, we should deliver regardless of text content.
+    const hasMedia =
+      (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl);
+    if (hasMedia) return false;
+    // Use heartbeat mode to check if text is just HEARTBEAT_OK or short ack.
+    const result = stripHeartbeatToken(payload.text, {
+      mode: "heartbeat",
+      maxAckChars: ackMaxChars,
+    });
+    return result.shouldSkip;
+  });
+}
 function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
   jobPayload: {
@@ -208,12 +235,13 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   }
 
-  const timeoutSecondsRaw =
-    params.job.payload.kind === "agentTurn" && params.job.payload.timeoutSeconds
-      ? params.job.payload.timeoutSeconds
-      : (agentCfg?.timeoutSeconds ?? 600);
-  const timeoutSeconds = Math.max(Math.floor(timeoutSecondsRaw), 1);
-  const timeoutMs = timeoutSeconds * 1000;
+  const timeoutMs = resolveAgentTimeoutMs({
+    cfg: params.cfg,
+    overrideSeconds:
+      params.job.payload.kind === "agentTurn"
+        ? params.job.payload.timeoutSeconds
+        : undefined,
+  });
 
   const delivery =
     params.job.payload.kind === "agentTurn" &&
@@ -343,7 +371,15 @@ export async function runCronIsolatedAgentTurn(params: {
   const summary =
     pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
 
-  if (delivery) {
+  // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
+  // This allows cron jobs to silently ack when nothing to report but still deliver
+  // actual content when there is something to say.
+  const ackMaxChars =
+    params.cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+  const skipHeartbeatDelivery =
+    delivery && isHeartbeatOnlyResponse(payloads, Math.max(0, ackMaxChars));
+
+  if (delivery && !skipHeartbeatDelivery) {
     if (resolvedDelivery.channel === "whatsapp") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)

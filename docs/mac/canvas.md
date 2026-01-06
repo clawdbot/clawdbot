@@ -81,7 +81,7 @@ Canvas is exposed via the Gateway **node bridge**, so the agent can:
 This should be modeled after `WebChatManager`/`WebChatSwiftUIWindowController` but targeting `clawdbot-canvas://…` URLs.
 
 Related:
-- For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdbot://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See `docs/clawdbot-mac.md`.
+- For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdbot://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See `docs/macos.md`.
 
 ## Agent commands (current)
 

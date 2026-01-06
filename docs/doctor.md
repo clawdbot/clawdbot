@@ -27,8 +27,13 @@ Doctor will:
 - Show the migration it applied.
 - Rewrite `~/.clawdbot/clawdbot.json` with the updated schema.
 
+The Gateway also auto-runs doctor migrations on startup when it detects a legacy
+config format, so stale configs are repaired without manual intervention.
+
 Current migrations:
 - `routing.allowFrom` → `whatsapp.allowFrom`
+- `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
+  → `agent.models` + `agent.model.primary/fallbacks` + `agent.imageModel.primary/fallbacks`
 
 ## Usage
 

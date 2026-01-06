@@ -1,4 +1,4 @@
-import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -6,6 +6,15 @@ import {
 import chalk from "chalk";
 
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
+import {
+  type AuthProfileStore,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../../agents/auth-profiles.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   parseModelRef,
@@ -81,6 +90,17 @@ const isLocalBaseUrl = (baseUrl: string) => {
   }
 };
 
+const hasAuthForProvider = (
+  provider: string,
+  cfg: ClawdbotConfig,
+  authStore: AuthProfileStore,
+): boolean => {
+  if (listProfilesForProvider(authStore, provider).length > 0) return true;
+  if (resolveEnvApiKey(provider)) return true;
+  if (getCustomProviderApiKey(cfg, provider)) return true;
+  return false;
+};
+
 const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg,
@@ -110,7 +130,21 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
 
   addEntry(resolvedDefault, "default");
 
-  (cfg.agent?.modelFallbacks ?? []).forEach((raw, idx) => {
+  const modelConfig = cfg.agent?.model as
+    | { primary?: string; fallbacks?: string[] }
+    | undefined;
+  const imageModelConfig = cfg.agent?.imageModel as
+    | { primary?: string; fallbacks?: string[] }
+    | undefined;
+  const modelFallbacks =
+    typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const imageFallbacks =
+    typeof imageModelConfig === "object"
+      ? (imageModelConfig?.fallbacks ?? [])
+      : [];
+  const imagePrimary = imageModelConfig?.primary?.trim() ?? "";
+
+  modelFallbacks.forEach((raw, idx) => {
     const resolved = resolveModelRefFromString({
       raw: String(raw ?? ""),
       defaultProvider: DEFAULT_PROVIDER,
@@ -120,17 +154,16 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
     addEntry(resolved.ref, `fallback#${idx + 1}`);
   });
 
-  const imageModelRaw = cfg.agent?.imageModel?.trim();
-  if (imageModelRaw) {
+  if (imagePrimary) {
     const resolved = resolveModelRefFromString({
-      raw: imageModelRaw,
+      raw: imagePrimary,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
     });
     if (resolved) addEntry(resolved.ref, "image");
   }
 
-  (cfg.agent?.imageModelFallbacks ?? []).forEach((raw, idx) => {
+  imageFallbacks.forEach((raw, idx) => {
     const resolved = resolveModelRefFromString({
       raw: String(raw ?? ""),
       defaultProvider: DEFAULT_PROVIDER,
@@ -140,20 +173,10 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
     addEntry(resolved.ref, `img-fallback#${idx + 1}`);
   });
 
-  (cfg.agent?.allowedModels ?? []).forEach((raw) => {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
-    if (!parsed) return;
-    addEntry(parsed, "allowed");
-  });
-
-  for (const targetRaw of Object.values(cfg.agent?.modelAliases ?? {})) {
-    const resolved = resolveModelRefFromString({
-      raw: String(targetRaw ?? ""),
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (!resolved) continue;
-    addEntry(resolved.ref, "alias");
+  for (const key of Object.keys(cfg.agent?.models ?? {})) {
+    const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
+    if (!parsed) continue;
+    addEntry(parsed, "configured");
   }
 
   const entries: ConfiguredEntry[] = order.map((key) => {
@@ -190,8 +213,18 @@ function toModelRow(params: {
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
+  cfg?: ClawdbotConfig;
+  authStore?: AuthProfileStore;
 }): ModelRow {
-  const { model, key, tags, aliases = [], availableKeys } = params;
+  const {
+    model,
+    key,
+    tags,
+    aliases = [],
+    availableKeys,
+    cfg,
+    authStore,
+  } = params;
   if (!model) {
     return {
       key,
@@ -207,9 +240,11 @@ function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
-  const envKey = getEnvApiKey(model.provider);
   const available =
-    availableKeys?.has(modelKey(model.provider, model.id)) || Boolean(envKey);
+    availableKeys?.has(modelKey(model.provider, model.id)) ||
+    (cfg && authStore
+      ? hasAuthForProvider(model.provider, cfg, authStore)
+      : false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {
@@ -304,6 +339,7 @@ export async function modelsListCommand(
 ) {
   ensureFlagCompatibility(opts);
   const cfg = loadConfig();
+  const authStore = ensureAuthProfileStore();
   const providerFilter = opts.provider?.trim().toLowerCase();
 
   let models: Model<Api>[] = [];
@@ -346,6 +382,8 @@ export async function modelsListCommand(
           tags: configured ? Array.from(configured.tags) : [],
           aliases: configured?.aliases ?? [],
           availableKeys,
+          cfg,
+          authStore,
         }),
       );
     }
@@ -367,6 +405,8 @@ export async function modelsListCommand(
           tags: Array.from(entry.tags),
           aliases: entry.aliases,
           availableKeys,
+          cfg,
+          authStore,
         }),
       );
     }
@@ -392,13 +432,35 @@ export async function modelsStatusCommand(
     defaultModel: DEFAULT_MODEL,
   });
 
-  const rawModel = cfg.agent?.model?.trim() ?? "";
+  const modelConfig = cfg.agent?.model as
+    | { primary?: string; fallbacks?: string[] }
+    | string
+    | undefined;
+  const imageConfig = cfg.agent?.imageModel as
+    | { primary?: string; fallbacks?: string[] }
+    | string
+    | undefined;
+  const rawModel =
+    typeof modelConfig === "string"
+      ? modelConfig.trim()
+      : (modelConfig?.primary?.trim() ?? "");
   const defaultLabel = rawModel || `${resolved.provider}/${resolved.model}`;
-  const fallbacks = cfg.agent?.modelFallbacks ?? [];
-  const imageModel = cfg.agent?.imageModel?.trim() ?? "";
-  const imageFallbacks = cfg.agent?.imageModelFallbacks ?? [];
-  const aliases = cfg.agent?.modelAliases ?? {};
-  const allowed = cfg.agent?.allowedModels ?? [];
+  const fallbacks =
+    typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const imageModel =
+    typeof imageConfig === "string"
+      ? imageConfig.trim()
+      : (imageConfig?.primary?.trim() ?? "");
+  const imageFallbacks =
+    typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
+  const aliases = Object.entries(cfg.agent?.models ?? {}).reduce<
+    Record<string, string>
+  >((acc, [key, entry]) => {
+    const alias = entry?.alias?.trim();
+    if (alias) acc[alias] = key;
+    return acc;
+  }, {});
+  const allowed = Object.keys(cfg.agent?.models ?? {});
 
   if (opts.json) {
     runtime.log(
@@ -446,6 +508,8 @@ export async function modelsStatusCommand(
     }`,
   );
   runtime.log(
-    `Allowed (${allowed.length || 0}): ${allowed.length ? allowed.join(", ") : "all"}`,
+    `Configured models (${allowed.length || 0}): ${
+      allowed.length ? allowed.join(", ") : "all"
+    }`,
   );
 }

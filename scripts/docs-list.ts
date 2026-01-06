@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';

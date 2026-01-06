@@ -53,6 +53,11 @@ describe("gateway server sessions", () => {
             updatedAt: now - 120_000,
             totalTokens: 50,
           },
+          "subagent:one": {
+            sessionId: "sess-subagent",
+            updatedAt: now - 120_000,
+            spawnedBy: "main",
+          },
           global: {
             sessionId: "sess-global",
             updatedAt: now - 10_000,
@@ -147,6 +152,31 @@ describe("gateway server sessions", () => {
     expect(main2?.thinkingLevel).toBe("medium");
     expect(main2?.verboseLevel).toBeUndefined();
     expect(main2?.sendPolicy).toBe("deny");
+
+    const spawnedOnly = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      spawnedBy: "main",
+    });
+    expect(spawnedOnly.ok).toBe(true);
+    expect(spawnedOnly.payload?.sessions.map((s) => s.key)).toEqual([
+      "subagent:one",
+    ]);
+
+    const spawnedPatched = await rpcReq<{
+      ok: true;
+      entry: { spawnedBy?: string };
+    }>(ws, "sessions.patch", { key: "subagent:two", spawnedBy: "main" });
+    expect(spawnedPatched.ok).toBe(true);
+    expect(spawnedPatched.payload?.entry.spawnedBy).toBe("main");
+
+    const spawnedPatchedInvalidKey = await rpcReq(ws, "sessions.patch", {
+      key: "main",
+      spawnedBy: "main",
+    });
+    expect(spawnedPatchedInvalidKey.ok).toBe(false);
 
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];

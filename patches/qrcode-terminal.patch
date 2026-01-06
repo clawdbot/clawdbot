@@ -1,0 +1,12 @@
+diff --git a/lib/main.js b/lib/main.js
+index 488cc1aea9802b3d6ae13aee27556403bec55d1c..3de1f934868d81e8204f00e6a4bf2696a05f7340 100644
+--- a/lib/main.js
++++ b/lib/main.js
+@@ -1,5 +1,5 @@
+-var QRCode = require('./../vendor/QRCode'),
+-    QRErrorCorrectLevel = require('./../vendor/QRCode/QRErrorCorrectLevel'),
++var QRCode = require('./../vendor/QRCode/index.js'),
++    QRErrorCorrectLevel = require('./../vendor/QRCode/QRErrorCorrectLevel.js'),
+     black = "\033[40m  \033[0m",
+     white = "\033[47m  \033[0m",
+     toCell = function (isBlack) {

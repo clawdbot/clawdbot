@@ -1,8 +1,52 @@
 diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
-index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..76166a34784cbc0718d4b9bd1fa6336a6dd394ec 100644
+index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce582363124 100644
 --- a/dist/providers/google-shared.js
 +++ b/dist/providers/google-shared.js
-@@ -51,9 +51,19 @@ export function convertMessages(model, context) {
+@@ -10,13 +10,27 @@ import { transformMessages } from "./transorm-messages.js";
+ export function convertMessages(model, context) {
+     const contents = [];
+     const transformedMessages = transformMessages(context.messages, model);
++    
++    /**
++     * Helper to add content while merging consecutive messages of the same role.
++     * Gemini/Cloud Code Assist requires strict role alternation (user/model/user/model).
++     * Consecutive messages of the same role cause "function call turn" errors.
++     */
++    function addContent(role, parts) {
++        if (parts.length === 0) return;
++        const lastContent = contents[contents.length - 1];
++        if (lastContent?.role === role) {
++            // Merge into existing message of same role
++            lastContent.parts.push(...parts);
++        } else {
++            contents.push({ role, parts });
++        }
++    }
++    
+     for (const msg of transformedMessages) {
+         if (msg.role === "user") {
+             if (typeof msg.content === "string") {
+-                contents.push({
+-                    role: "user",
+-                    parts: [{ text: sanitizeSurrogates(msg.content) }],
+-                });
++                addContent("user", [{ text: sanitizeSurrogates(msg.content) }]);
+             }
+             else {
+                 const parts = msg.content.map((item) => {
+@@ -35,10 +49,7 @@ export function convertMessages(model, context) {
+                 const filteredParts = !model.input.includes("image") ? parts.filter((p) => p.text !== undefined) : parts;
+                 if (filteredParts.length === 0)
+                     continue;
+-                contents.push({
+-                    role: "user",
+-                    parts: filteredParts,
+-                });
++                addContent("user", filteredParts);
+             }
+         }
+         else if (msg.role === "assistant") {
+@@ -51,9 +62,19 @@ export function convertMessages(model, context) {
                      parts.push({ text: sanitizeSurrogates(block.text) });
                  }
                  else if (block.type === "thinking") {
@@ -25,7 +69,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..76166a34784cbc0718d4b9bd1fa6336a
                          parts.push({
                              thought: true,
                              text: sanitizeSurrogates(block.thinking),
-@@ -61,6 +71,7 @@ export function convertMessages(model, context) {
+@@ -61,6 +82,7 @@ export function convertMessages(model, context) {
                          });
                      }
                      else {
@@ -33,7 +77,44 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..76166a34784cbc0718d4b9bd1fa6336a
                          parts.push({
                              text: `<thinking>\n${sanitizeSurrogates(block.thinking)}\n</thinking>`,
                          });
-@@ -146,6 +157,77 @@ export function convertMessages(model, context) {
+@@ -85,10 +107,7 @@ export function convertMessages(model, context) {
+             }
+             if (parts.length === 0)
+                 continue;
+-            contents.push({
+-                role: "model",
+-                parts,
+-            });
++            addContent("model", parts);
+         }
+         else if (msg.role === "toolResult") {
+             // Extract text and image content
+@@ -125,27 +144,94 @@ export function convertMessages(model, context) {
+             }
+             // Cloud Code Assist API requires all function responses to be in a single user turn.
+             // Check if the last content is already a user turn with function responses and merge.
++            // Use addContent for proper role alternation handling.
+             const lastContent = contents[contents.length - 1];
+             if (lastContent?.role === "user" && lastContent.parts?.some((p) => p.functionResponse)) {
+                 lastContent.parts.push(functionResponsePart);
+             }
+             else {
+-                contents.push({
+-                    role: "user",
+-                    parts: [functionResponsePart],
+-                });
++                addContent("user", [functionResponsePart]);
+             }
+             // For older models, add images in a separate user message
++            // Note: This may create consecutive user messages, but addContent will merge them
+             if (hasImages && !supportsMultimodalFunctionResponse) {
+-                contents.push({
+-                    role: "user",
+-                    parts: [{ text: "Tool result image:" }, ...imageParts],
+-                });
++                addContent("user", [{ text: "Tool result image:" }, ...imageParts]);
+             }
+         }
      }
      return contents;
  }
@@ -111,7 +192,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..76166a34784cbc0718d4b9bd1fa6336a
  /**
   * Convert tools to Gemini function declarations format.
   */
-@@ -157,7 +239,7 @@ export function convertTools(tools) {
+@@ -157,7 +243,7 @@ export function convertTools(tools) {
              functionDeclarations: tools.map((tool) => ({
                  name: tool.name,
                  description: tool.description,

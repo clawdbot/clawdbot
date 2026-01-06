@@ -307,6 +307,35 @@ export async function uninstallLaunchAgent({
   }
 }
 
+function isLaunchctlNotLoaded(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): boolean {
+  const detail = `${res.stderr || res.stdout}`.toLowerCase();
+  return (
+    detail.includes("no such process") ||
+    detail.includes("could not find service") ||
+    detail.includes("not found")
+  );
+}
+
+export async function stopLaunchAgent({
+  stdout,
+}: {
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  const domain = resolveGuiDomain();
+  const label = GATEWAY_LAUNCH_AGENT_LABEL;
+  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
+    throw new Error(
+      `launchctl bootout failed: ${res.stderr || res.stdout}`.trim(),
+    );
+  }
+  stdout.write(`Stopped LaunchAgent: ${domain}/${label}\n`);
+}
+
 export async function installLaunchAgent({
   env,
   stdout,

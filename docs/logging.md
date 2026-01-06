@@ -42,6 +42,17 @@ You can tune console verbosity independently via:
 - `logging.consoleLevel` (default `info`)
 - `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
+## Tool summary redaction
+
+Verbose tool summaries (e.g. `🛠️ bash: ...`) can mask sensitive tokens before they hit the
+console stream. This is **tools-only** and does not alter file logs.
+
+- `logging.redactSensitive`: `off` | `tools` (default: `tools`)
+- `logging.redactPatterns`: array of regex strings (overrides defaults)
+  - Use raw regex strings (auto `gi`), or `/pattern/flags` if you need custom flags.
+  - Matches are masked by keeping the first 6 + last 4 chars (length >= 18), otherwise `***`.
+  - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, and popular token prefixes.
+
 ## Gateway WebSocket logs
 
 The gateway prints WebSocket protocol logs in two modes:

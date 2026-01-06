@@ -18,7 +18,13 @@ import {
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../auto-reply/reply/mentions.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { TypingController } from "../auto-reply/reply/typing.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   DiscordSlashCommandConfig,
@@ -35,6 +41,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -135,10 +145,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const dmConfig = cfg.discord?.dm;
   const guildEntries = cfg.discord?.guilds;
+  const groupPolicy = cfg.discord?.groupPolicy ?? "open";
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   const allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord");
+  const mentionRegexes = buildMentionRegexes(cfg);
+  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const historyLimit = Math.max(
     0,
     opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
@@ -150,7 +165,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
     );
   }
 
@@ -200,14 +215,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         logVerbose("discord: drop dm (dms disabled)");
         return;
       }
+      if (isDirectMessage && dmPolicy === "disabled") {
+        logVerbose("discord: drop dm (dmPolicy: disabled)");
+        return;
+      }
       const botId = client.user?.id;
-      const wasMentioned =
-        !isDirectMessage && Boolean(botId && message.mentions.has(botId));
       const forwardedSnapshot = resolveForwardedSnapshot(message);
       const forwardedText = forwardedSnapshot
         ? resolveDiscordSnapshotText(forwardedSnapshot.snapshot)
         : "";
       const baseText = resolveDiscordMessageText(message, forwardedText);
+      const wasMentioned =
+        !isDirectMessage &&
+        (Boolean(botId && message.mentions.has(botId)) ||
+          matchesMentionPatterns(baseText, mentionRegexes));
       if (shouldLogVerbose()) {
         logVerbose(
           `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${baseText ? "yes" : "no"}`,
@@ -268,6 +289,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         });
       if (isGroupDm && !groupDmAllowed) return;
 
+      const channelAllowlistConfigured =
+        Boolean(guildInfo?.channels) &&
+        Object.keys(guildInfo?.channels ?? {}).length > 0;
+      const channelAllowed = channelConfig?.allowed !== false;
+      if (
+        isGuildMessage &&
+        !isDiscordGroupAllowedByPolicy({
+          groupPolicy,
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        if (groupPolicy === "disabled") {
+          logVerbose("discord: drop guild message (groupPolicy: disabled)");
+        } else if (!channelAllowlistConfigured) {
+          logVerbose(
+            "discord: drop guild message (groupPolicy: allowlist, no channel allowlist)",
+          );
+        } else {
+          logVerbose(
+            `Blocked discord channel ${message.channelId} not in guild channel allowlist (groupPolicy: allowlist)`,
+          );
+        }
+        return;
+      }
+
       if (isGuildMessage && channelConfig?.allowed === false) {
         logVerbose(
           `Blocked discord channel ${message.channelId} not in guild channel allowlist`,
@@ -308,8 +355,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(baseText);
-      if (isGuildMessage && resolvedRequireMention) {
-        if (botId && !wasMentioned && !shouldBypassMention) {
+      const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+      if (isGuildMessage && resolvedRequireMention && canDetectMention) {
+        if (!wasMentioned && !shouldBypassMention) {
           logVerbose(
             `discord: drop guild message (mention required, botId=${botId})`,
           );
@@ -347,22 +395,58 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       }
 
-      if (isDirectMessage && Array.isArray(allowFrom) && allowFrom.length > 0) {
-        const allowList = normalizeDiscordAllowList(allowFrom, [
+      if (isDirectMessage && dmPolicy !== "open") {
+        const storeAllowFrom = await readProviderAllowFromStore(
+          "discord",
+        ).catch(() => []);
+        const effectiveAllowFrom = Array.from(
+          new Set([...(allowFrom ?? []), ...storeAllowFrom]),
+        );
+        const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
           "discord:",
           "user:",
         ]);
         const permitted =
-          allowList &&
+          allowList != null &&
           allowListMatches(allowList, {
             id: message.author.id,
             name: message.author.username,
             tag: message.author.tag,
           });
         if (!permitted) {
-          logVerbose(
-            `Blocked unauthorized discord sender ${message.author.id} (not in allowFrom)`,
-          );
+          if (dmPolicy === "pairing") {
+            const { code } = await upsertProviderPairingRequest({
+              provider: "discord",
+              id: message.author.id,
+              meta: {
+                username: message.author.username,
+                tag: message.author.tag,
+              },
+            });
+            logVerbose(
+              `discord pairing request sender=${message.author.id} tag=${message.author.tag} code=${code}`,
+            );
+            try {
+              await message.reply(
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider discord <code>",
+                ].join("\n"),
+              );
+            } catch (err) {
+              logVerbose(
+                `discord pairing reply failed for ${message.author.id}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked unauthorized discord sender ${message.author.id} (dmPolicy=${dmPolicy})`,
+            );
+          }
           return;
         }
       }
@@ -399,6 +483,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
         return;
+      }
+      const shouldAckReaction = () => {
+        if (!ackReaction) return false;
+        if (ackReactionScope === "all") return true;
+        if (ackReactionScope === "direct") return isDirectMessage;
+        const isGroupChat = isGuildMessage || isGroupDm;
+        if (ackReactionScope === "group-all") return isGroupChat;
+        if (ackReactionScope === "group-mentions") {
+          if (!isGuildMessage) return false;
+          if (!resolvedRequireMention) return false;
+          if (!canDetectMention) return false;
+          return wasMentioned || shouldBypassMention;
+        }
+        return false;
+      };
+      if (shouldAckReaction()) {
+        message.react(ackReaction).catch((err) => {
+          logVerbose(
+            `discord react failed for channel ${message.channelId}: ${String(err)}`,
+          );
+        });
       }
 
       const fromLabel = isDirectMessage
@@ -484,9 +589,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         From: isDirectMessage
           ? `discord:${message.author.id}`
           : `group:${message.channelId}`,
-        To: isDirectMessage
-          ? `user:${message.author.id}`
-          : `channel:${message.channelId}`,
+        To: `channel:${message.channelId}`,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
         SenderId: message.author.id,
@@ -532,49 +635,43 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
 
       let didSendReply = false;
-      let blockSendChain: Promise<void> = Promise.resolve();
-      const sendBlockReply = (payload: ReplyPayload) => {
-        if (
-          !payload?.text &&
-          !payload?.mediaUrl &&
-          !(payload?.mediaUrls?.length ?? 0)
-        ) {
-          return;
-        }
-        blockSendChain = blockSendChain
-          .then(async () => {
-            await deliverReplies({
-              replies: [payload],
-              target: replyTarget,
-              token,
-              runtime,
-              replyToMode,
-              textLimit,
-            });
-            didSendReply = true;
-          })
-          .catch((err) => {
-            runtime.error?.(
-              danger(`discord block reply failed: ${String(err)}`),
-            );
+      let typingController: TypingController | undefined;
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: cfg.messages?.responsePrefix,
+        deliver: async (payload) => {
+          await deliverReplies({
+            replies: [payload],
+            target: replyTarget,
+            token,
+            runtime,
+            replyToMode,
+            textLimit,
           });
-      };
-
-      const replyResult = await getReplyFromConfig(
-        ctxPayload,
-        {
-          onReplyStart: () => sendTyping(message),
-          onBlockReply: sendBlockReply,
+          didSendReply = true;
         },
+        onIdle: () => {
+          typingController?.markDispatchIdle();
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            danger(`discord ${info.kind} reply failed: ${String(err)}`),
+          );
+        },
+      });
+
+      const { queuedFinal, counts } = await dispatchReplyFromConfig({
+        ctx: ctxPayload,
         cfg,
-      );
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-      await blockSendChain;
-      if (replies.length === 0) {
+        dispatcher,
+        replyOptions: {
+          onReplyStart: () => sendTyping(message),
+          onTypingController: (typing) => {
+            typingController = typing;
+          },
+        },
+      });
+      typingController?.markDispatchIdle();
+      if (!queuedFinal) {
         if (
           isGuildMessage &&
           shouldClearHistory &&
@@ -585,19 +682,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
         return;
       }
-
-      await deliverReplies({
-        replies,
-        target: replyTarget,
-        token,
-        runtime,
-        replyToMode,
-        textLimit,
-      });
       didSendReply = true;
       if (shouldLogVerbose()) {
+        const finalCount = counts.final;
         logVerbose(
-          `discord: delivered ${replies.length} reply${replies.length === 1 ? "" : "ies"} to ${replyTarget}`,
+          `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
         );
       }
       if (
@@ -1150,6 +1239,18 @@ export function resolveDiscordChannelConfig(params: {
     };
   }
   return { allowed: true };
+}
+
+export function isDiscordGroupAllowedByPolicy(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  channelAllowlistConfigured: boolean;
+  channelAllowed: boolean;
+}): boolean {
+  const { groupPolicy, channelAllowlistConfigured, channelAllowed } = params;
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
+  if (!channelAllowlistConfigured) return false;
+  return channelAllowed;
 }
 
 export function resolveGroupDmAllow(params: {

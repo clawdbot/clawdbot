@@ -157,7 +157,7 @@ export function handleControlUiHttpRequest(
     res.statusCode = 503;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (or run `pnpm ui:dev` during development).",
+      "Control UI assets not found. Build them with `bun run ui:build` (or run `bun run ui:dev` during development).",
     );
     return true;
   }

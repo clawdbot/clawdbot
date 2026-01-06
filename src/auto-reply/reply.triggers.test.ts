@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) =>
@@ -13,9 +14,12 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import {
+  compactEmbeddedPiSession,
+  runEmbeddedPiAgent,
+} from "../agents/pi-embedded.js";
 import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
-import { resolveSessionKey } from "../config/sessions.js";
+import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -667,6 +671,111 @@ describe("trigger handling", () => {
       const prompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain("A new session was started via /new or /reset");
+    });
+  });
+
+  it("does not reset for unauthorized /reset", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/reset",
+          From: "+1003",
+          To: "+2000",
+          CommandAuthorized: false,
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+          whatsapp: {
+            allowFrom: ["+1999"],
+          },
+          session: {
+            store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
+          },
+        },
+      );
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("blocks /reset for non-owner senders", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/reset",
+          From: "+1003",
+          To: "+2000",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+          whatsapp: {
+            allowFrom: ["+1999"],
+          },
+          session: {
+            store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
+          },
+        },
+      );
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs /compact as a gated command", async () => {
+    await withTempHome(async (home) => {
+      const storePath = join(
+        tmpdir(),
+        `clawdbot-session-test-${Date.now()}.json`,
+      );
+      vi.mocked(compactEmbeddedPiSession).mockResolvedValue({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "x",
+          tokensBefore: 12000,
+        },
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/compact focus on decisions",
+          From: "+1003",
+          To: "+2000",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+          session: {
+            store: storePath,
+          },
+        },
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(compactEmbeddedPiSession).toHaveBeenCalledOnce();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      const store = loadSessionStore(storePath);
+      const sessionKey = resolveSessionKey("per-sender", {
+        Body: "/compact focus on decisions",
+        From: "+1003",
+        To: "+2000",
+      });
+      expect(store[sessionKey]?.compactionCount).toBe(1);
     });
   });
 

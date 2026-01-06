@@ -106,6 +106,40 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("chan1");
   });
 
+  it("adds missing permission hints on 50013", async () => {
+    const { rest, postMock, getMock } = makeRest();
+    const perms = new PermissionsBitField([
+      PermissionsBitField.Flags.ViewChannel,
+    ]);
+    const apiError = Object.assign(new Error("Missing Permissions"), {
+      code: 50013,
+      status: 403,
+    });
+    postMock.mockRejectedValueOnce(apiError);
+    getMock
+      .mockResolvedValueOnce({
+        id: "789",
+        guild_id: "guild1",
+        type: 0,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: perms.bitfield.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+
+    let error: unknown;
+    try {
+      await sendMessageDiscord("channel:789", "hello", { rest, token: "t" });
+    } catch (err) {
+      error = err;
+    }
+    expect(String(error)).toMatch(/missing permissions/i);
+    expect(String(error)).toMatch(/SendMessages/);
+  });
+
   it("uploads media attachments", async () => {
     const { rest, postMock } = makeRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
@@ -562,7 +596,7 @@ describe("sendPollDiscord", () => {
       "channel:789",
       {
         question: "Lunch?",
-        answers: ["Pizza", "Sushi"],
+        options: ["Pizza", "Sushi"],
       },
       {
         rest,

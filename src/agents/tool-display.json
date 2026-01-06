@@ -12,7 +12,7 @@
       "element",
       "node",
       "nodeId",
-      "jobId",
+      "id",
       "requestId",
       "to",
       "channelId",
@@ -136,10 +136,10 @@
           "label": "add",
           "detailKeys": ["job.name", "job.id", "job.schedule", "job.cron"]
         },
-        "update": { "label": "update", "detailKeys": ["jobId"] },
-        "remove": { "label": "remove", "detailKeys": ["jobId"] },
-        "run": { "label": "run", "detailKeys": ["jobId"] },
-        "runs": { "label": "runs", "detailKeys": ["jobId"] },
+        "update": { "label": "update", "detailKeys": ["id"] },
+        "remove": { "label": "remove", "detailKeys": ["id"] },
+        "run": { "label": "run", "detailKeys": ["id"] },
+        "runs": { "label": "runs", "detailKeys": ["id"] },
         "wake": { "label": "wake", "detailKeys": ["text", "mode"] }
       }
     },
@@ -164,6 +164,11 @@
       "emoji": "📨",
       "title": "Session Send",
       "detailKeys": ["sessionKey", "timeoutSeconds"]
+    },
+    "sessions_spawn": {
+      "emoji": "🧑‍🔧",
+      "title": "Sub-agent",
+      "detailKeys": ["label", "timeoutSeconds", "cleanup"]
     },
     "whatsapp_login": {
       "emoji": "🟢",
@@ -229,4 +234,3 @@
     }
   }
 }
-

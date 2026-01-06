@@ -27,6 +27,7 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import { extractReplyToTag } from "./reply-tags.js";
+import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 
 export async function runReplyAgent(params: {
@@ -167,6 +168,7 @@ export async function runReplyAgent(params: {
   };
 
   let didLogHeartbeatStrip = false;
+  let autoCompactionCompleted = false;
   try {
     const runId = crypto.randomUUID();
     if (sessionKey) {
@@ -195,6 +197,7 @@ export async function runReplyAgent(params: {
             enforceFinalTag: followupRun.run.enforceFinalTag,
             provider,
             model,
+            authProfileId: followupRun.run.authProfileId,
             thinkLevel: followupRun.run.thinkLevel,
             verboseLevel: followupRun.run.verboseLevel,
             bashElevated: followupRun.run.bashElevated,
@@ -232,6 +235,15 @@ export async function runReplyAgent(params: {
                   });
                 }
               : undefined,
+            onAgentEvent: (evt) => {
+              if (evt.stream !== "compaction") return;
+              const phase =
+                typeof evt.data.phase === "string" ? evt.data.phase : "";
+              const willRetry = Boolean(evt.data.willRetry);
+              if (phase === "end" && !willRetry) {
+                autoCompactionCompleted = true;
+              }
+            },
             onBlockReply:
               blockStreamingEnabled && opts?.onBlockReply
                 ? async (payload) => {
@@ -477,6 +489,21 @@ export async function runReplyAgent(params: {
 
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = filteredPayloads;
+    if (autoCompactionCompleted) {
+      const count = await incrementCompactionCount({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+      if (resolvedVerboseLevel === "on") {
+        const suffix = typeof count === "number" ? ` (count ${count})` : "";
+        finalPayloads = [
+          { text: `🧹 Auto-compaction complete${suffix}.` },
+          ...finalPayloads,
+        ];
+      }
+    }
     if (resolvedVerboseLevel === "on" && isNewSession) {
       finalPayloads = [
         { text: `🧭 New session: ${followupRun.run.sessionId}` },
@@ -488,6 +515,6 @@ export async function runReplyAgent(params: {
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
     );
   } finally {
-    typing.cleanup();
+    typing.markRunComplete();
   }
 }

@@ -11,11 +11,19 @@ export type ParsedCommand = {
   args: string;
 };
 
+const COMMAND_ALIASES: Record<string, string> = {
+  elev: "elevated",
+};
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.replace(/^\//, "").trim();
   if (!trimmed) return { name: "", args: "" };
   const [name, ...rest] = trimmed.split(/\s+/);
-  return { name: name.toLowerCase(), args: rest.join(" ").trim() };
+  const normalized = name.toLowerCase();
+  return {
+    name: COMMAND_ALIASES[normalized] ?? normalized,
+    args: rest.join(" ").trim(),
+  };
 }
 
 export function getSlashCommands(): SlashCommand[] {
@@ -48,6 +56,14 @@ export function getSlashCommands(): SlashCommand[] {
     {
       name: "elevated",
       description: "Set elevated on/off",
+      getArgumentCompletions: (prefix) =>
+        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
+          (value) => ({ value, label: value }),
+        ),
+    },
+    {
+      name: "elev",
+      description: "Alias for /elevated",
       getArgumentCompletions: (prefix) =>
         ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
           (value) => ({ value, label: value }),
@@ -88,6 +104,7 @@ export function helpText(): string {
     "/think <off|minimal|low|medium|high>",
     "/verbose <on|off>",
     "/elevated <on|off>",
+    "/elev <on|off>",
     "/activation <mention|always>",
     "/deliver <on|off>",
     "/new or /reset",

@@ -3,6 +3,7 @@ import type { LegacyConfigIssue } from "./types.js";
 type LegacyConfigRule = {
   path: string[];
   message: string;
+  match?: (value: unknown, root: Record<string, unknown>) => boolean;
 };
 
 type LegacyConfigMigration = {
@@ -26,6 +27,38 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["telegram", "requireMention"],
     message:
       'telegram.requireMention was removed; use telegram.groups."*".requireMention instead (run `clawdbot doctor` to migrate).',
+  },
+  {
+    path: ["agent", "model"],
+    message:
+      "agent.model string was replaced by agent.model.primary/fallbacks and agent.models (run `clawdbot doctor` to migrate).",
+    match: (value) => typeof value === "string",
+  },
+  {
+    path: ["agent", "imageModel"],
+    message:
+      "agent.imageModel string was replaced by agent.imageModel.primary/fallbacks (run `clawdbot doctor` to migrate).",
+    match: (value) => typeof value === "string",
+  },
+  {
+    path: ["agent", "allowedModels"],
+    message:
+      "agent.allowedModels was replaced by agent.models (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["agent", "modelAliases"],
+    message:
+      "agent.modelAliases was replaced by agent.models.*.alias (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["agent", "modelFallbacks"],
+    message:
+      "agent.modelFallbacks was replaced by agent.model.fallbacks (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["agent", "imageModelFallbacks"],
+    message:
+      "agent.imageModelFallbacks was replaced by agent.imageModel.fallbacks (run `clawdbot doctor` to migrate).",
   },
 ];
 
@@ -165,6 +198,161 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       }
     },
   },
+  {
+    id: "agent.model-config-v2",
+    describe:
+      "Migrate legacy agent.model/allowedModels/modelAliases/modelFallbacks/imageModelFallbacks to agent.models + model lists",
+    apply: (raw, changes) => {
+      const agent =
+        raw.agent && typeof raw.agent === "object"
+          ? (raw.agent as Record<string, unknown>)
+          : null;
+      if (!agent) return;
+
+      const legacyModel =
+        typeof agent.model === "string" ? String(agent.model) : undefined;
+      const legacyImageModel =
+        typeof agent.imageModel === "string"
+          ? String(agent.imageModel)
+          : undefined;
+      const legacyAllowed = Array.isArray(agent.allowedModels)
+        ? (agent.allowedModels as unknown[]).map(String)
+        : [];
+      const legacyModelFallbacks = Array.isArray(agent.modelFallbacks)
+        ? (agent.modelFallbacks as unknown[]).map(String)
+        : [];
+      const legacyImageModelFallbacks = Array.isArray(agent.imageModelFallbacks)
+        ? (agent.imageModelFallbacks as unknown[]).map(String)
+        : [];
+      const legacyAliases =
+        agent.modelAliases && typeof agent.modelAliases === "object"
+          ? (agent.modelAliases as Record<string, unknown>)
+          : {};
+
+      const hasLegacy =
+        legacyModel ||
+        legacyImageModel ||
+        legacyAllowed.length > 0 ||
+        legacyModelFallbacks.length > 0 ||
+        legacyImageModelFallbacks.length > 0 ||
+        Object.keys(legacyAliases).length > 0;
+      if (!hasLegacy) return;
+
+      const models =
+        agent.models && typeof agent.models === "object"
+          ? (agent.models as Record<string, unknown>)
+          : {};
+
+      const ensureModel = (rawKey?: string) => {
+        if (typeof rawKey !== "string") return;
+        const key = rawKey.trim();
+        if (!key) return;
+        if (!models[key]) models[key] = {};
+      };
+
+      ensureModel(legacyModel);
+      ensureModel(legacyImageModel);
+      for (const key of legacyAllowed) ensureModel(key);
+      for (const key of legacyModelFallbacks) ensureModel(key);
+      for (const key of legacyImageModelFallbacks) ensureModel(key);
+      for (const target of Object.values(legacyAliases)) {
+        if (typeof target !== "string") continue;
+        ensureModel(target);
+      }
+
+      for (const [alias, targetRaw] of Object.entries(legacyAliases)) {
+        if (typeof targetRaw !== "string") continue;
+        const target = targetRaw.trim();
+        if (!target) continue;
+        const entry =
+          models[target] && typeof models[target] === "object"
+            ? (models[target] as Record<string, unknown>)
+            : {};
+        if (!("alias" in entry)) {
+          entry.alias = alias;
+          models[target] = entry;
+        }
+      }
+
+      const currentModel =
+        agent.model && typeof agent.model === "object"
+          ? (agent.model as Record<string, unknown>)
+          : null;
+      if (currentModel) {
+        if (!currentModel.primary && legacyModel) {
+          currentModel.primary = legacyModel;
+        }
+        if (
+          legacyModelFallbacks.length > 0 &&
+          (!Array.isArray(currentModel.fallbacks) ||
+            currentModel.fallbacks.length === 0)
+        ) {
+          currentModel.fallbacks = legacyModelFallbacks;
+        }
+        agent.model = currentModel;
+      } else if (legacyModel || legacyModelFallbacks.length > 0) {
+        agent.model = {
+          primary: legacyModel,
+          fallbacks: legacyModelFallbacks.length ? legacyModelFallbacks : [],
+        };
+      }
+
+      const currentImageModel =
+        agent.imageModel && typeof agent.imageModel === "object"
+          ? (agent.imageModel as Record<string, unknown>)
+          : null;
+      if (currentImageModel) {
+        if (!currentImageModel.primary && legacyImageModel) {
+          currentImageModel.primary = legacyImageModel;
+        }
+        if (
+          legacyImageModelFallbacks.length > 0 &&
+          (!Array.isArray(currentImageModel.fallbacks) ||
+            currentImageModel.fallbacks.length === 0)
+        ) {
+          currentImageModel.fallbacks = legacyImageModelFallbacks;
+        }
+        agent.imageModel = currentImageModel;
+      } else if (legacyImageModel || legacyImageModelFallbacks.length > 0) {
+        agent.imageModel = {
+          primary: legacyImageModel,
+          fallbacks: legacyImageModelFallbacks.length
+            ? legacyImageModelFallbacks
+            : [],
+        };
+      }
+
+      agent.models = models;
+
+      if (legacyModel !== undefined) {
+        changes.push("Migrated agent.model string → agent.model.primary.");
+      }
+      if (legacyModelFallbacks.length > 0) {
+        changes.push("Migrated agent.modelFallbacks → agent.model.fallbacks.");
+      }
+      if (legacyImageModel !== undefined) {
+        changes.push(
+          "Migrated agent.imageModel string → agent.imageModel.primary.",
+        );
+      }
+      if (legacyImageModelFallbacks.length > 0) {
+        changes.push(
+          "Migrated agent.imageModelFallbacks → agent.imageModel.fallbacks.",
+        );
+      }
+      if (legacyAllowed.length > 0) {
+        changes.push("Migrated agent.allowedModels → agent.models.");
+      }
+      if (Object.keys(legacyAliases).length > 0) {
+        changes.push("Migrated agent.modelAliases → agent.models.*.alias.");
+      }
+
+      delete agent.allowedModels;
+      delete agent.modelAliases;
+      delete agent.modelFallbacks;
+      delete agent.imageModelFallbacks;
+    },
+  },
 ];
 
 export function findLegacyConfigIssues(raw: unknown): LegacyConfigIssue[] {
@@ -180,7 +368,7 @@ export function findLegacyConfigIssues(raw: unknown): LegacyConfigIssue[] {
       }
       cursor = (cursor as Record<string, unknown>)[key];
     }
-    if (cursor !== undefined) {
+    if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       issues.push({ path: rule.path.join("."), message: rule.message });
     }
   }

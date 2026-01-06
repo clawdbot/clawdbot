@@ -32,6 +32,7 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    authProfileId?: string;
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
     elevatedLevel?: ElevatedLevel;

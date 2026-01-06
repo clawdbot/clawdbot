@@ -23,7 +23,7 @@ Peekaboo’s privileged execution moved from “CLI → XPC helper” to “CLI 
 - It lets us piggyback on **either** Peekaboo.app’s permissions **or** Clawdbot.app’s permissions (whichever is running).
 - It avoids “two apps with two TCC bubbles” unless needed.
 
-Reference (Peekaboo submodule): `docs/bridge-host.md`.
+Reference (Peekaboo submodule): `Peekaboo/docs/bridge-host.md`.
 
 ## Architecture
 ### Processes

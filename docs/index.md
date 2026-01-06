@@ -19,7 +19,7 @@ read_when:
 <p align="center">
   <a href="https://github.com/clawdbot/clawdbot">GitHub</a> ·
   <a href="https://github.com/clawdbot/clawdbot/releases">Releases</a> ·
-  <a href="https://docs.clawdbot.com/">Docs</a> ·
+  <a href="https://github.com/clawdbot/clawdbot/blob/main/docs/index.md">Docs</a> ·
   <a href="./clawd.md">Clawd setup</a>
 </p>
 
@@ -42,7 +42,8 @@ WhatsApp / Telegram / Discord
               ├─ CLI (clawdbot …)
               ├─ Chat UI (SwiftUI)
               ├─ macOS app (Clawdbot.app)
-              └─ iOS node via Bridge + pairing
+              ├─ iOS node via Bridge + pairing
+              └─ Android node via Bridge + pairing
 ```
 
 Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns provider connections and the WebSocket control plane.
@@ -70,6 +71,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 🎤 **Voice notes** — Optional transcription hook
 - 🖥️ **WebChat + macOS app** — Local UI + menu bar companion for ops and voice wake
 - 📱 **iOS node** — Pairs as a node and exposes a Canvas surface
+- 📱 **Android node** — Pairs as a node and exposes Canvas + Chat + Camera
 
 Note: legacy Claude/Codex/Gemini/Opencode paths have been removed; Pi is the only coding-agent path.
 
@@ -126,6 +128,7 @@ Example:
 ## Docs
 
 - Start here:
+  - [Docs hubs (all pages linked)](./hubs.md)
   - [FAQ](./faq.md) ← *common questions answered*
   - [Configuration](./configuration.md)
   - [Nix mode](./nix.md)
@@ -149,6 +152,12 @@ Example:
   - [WhatsApp group messages](./group-messages.md)
   - [Media: images](./images.md)
   - [Media: audio](./audio.md)
+- Companion apps:
+  - [macOS app](./macos.md)
+  - [iOS app](./ios.md)
+  - [Android app](./android.md)
+  - [Windows app](./windows.md)
+  - [Linux app](./linux.md)
 - Ops and safety:
   - [Sessions](./session.md)
   - [Cron + wakeups](./cron.md)
@@ -172,6 +181,7 @@ Example:
 ## Core Contributors
 
 - **Maxim Vovshin** (@Hyaxia, 36747317+Hyaxia@users.noreply.github.com) — Blogwatcher skill
+- **Nacho Iacovino** (@nachoiacovino, nacho.iacovino@gmail.com) — Location parsing (Telegram + WhatsApp)
 
 ## License
 

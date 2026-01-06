@@ -233,6 +233,28 @@ export async function uninstallScheduledTask({
   }
 }
 
+function isTaskNotRunning(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): boolean {
+  const detail = `${res.stderr || res.stdout}`.toLowerCase();
+  return detail.includes("not running");
+}
+
+export async function stopScheduledTask({
+  stdout,
+}: {
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  await assertSchtasksAvailable();
+  const res = await execSchtasks(["/End", "/TN", GATEWAY_WINDOWS_TASK_NAME]);
+  if (res.code !== 0 && !isTaskNotRunning(res)) {
+    throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
+  }
+  stdout.write(`Stopped Scheduled Task: ${GATEWAY_WINDOWS_TASK_NAME}\n`);
+}
+
 export async function restartScheduledTask({
   stdout,
 }: {

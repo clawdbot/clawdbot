@@ -7,6 +7,8 @@ export function buildAgentSystemPromptAppend(params: {
   ownerNumbers?: string[];
   reasoningTagHint?: boolean;
   toolNames?: string[];
+  userTimezone?: string;
+  userTime?: string;
   runtimeInfo?: {
     host?: string;
     os?: string;
@@ -109,6 +111,8 @@ export function buildAgentSystemPromptAppend(params: {
         "<final>Hey there! What would you like to do next?</final>",
       ].join(" ")
     : undefined;
+  const userTimezone = params.userTimezone?.trim();
+  const userTime = params.userTime?.trim();
   const runtimeInfo = params.runtimeInfo;
   const runtimeLines: string[] = [];
   if (runtimeInfo?.host) runtimeLines.push(`Host: ${runtimeInfo.host}`);
@@ -182,6 +186,10 @@ export function buildAgentSystemPromptAppend(params: {
     "Never send streaming/partial replies to external messaging surfaces; only final replies should be delivered there.",
     "Clawdbot handles message transport automatically; respond normally and your reply will be delivered to the current chat.",
     "",
+    userTimezone || userTime ? "## Time" : "",
+    userTimezone ? `User timezone: ${userTimezone}` : "",
+    userTime ? `Current user time: ${userTime}` : "",
+    userTimezone || userTime ? "" : "",
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
     "- [[reply_to_current]] replies to the triggering message.",

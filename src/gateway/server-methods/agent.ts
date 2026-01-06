@@ -240,11 +240,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       defaultRuntime,
       context.deps,
     )
-      .then(() => {
+      .then((result) => {
         const payload = {
           runId,
           status: "ok" as const,
           summary: "completed",
+          result,
         };
         context.dedupe.set(`agent:${idem}`, {
           ts: Date.now(),

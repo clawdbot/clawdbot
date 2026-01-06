@@ -24,9 +24,15 @@ import type { AnyAgentTool } from "./common.js";
 const DEFAULT_PROMPT = "Describe the image.";
 
 function ensureImageToolConfigured(cfg?: ClawdbotConfig): boolean {
-  const primary = cfg?.agent?.imageModel?.trim();
-  const fallbacks = cfg?.agent?.imageModelFallbacks ?? [];
-  return Boolean(primary || fallbacks.length > 0);
+  const imageModel = cfg?.agent?.imageModel as
+    | { primary?: string; fallbacks?: string[] }
+    | string
+    | undefined;
+  const primary =
+    typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
+  const fallbacks =
+    typeof imageModel === "object" ? (imageModel?.fallbacks ?? []) : [];
+  return Boolean(primary?.trim() || fallbacks.length > 0);
 }
 
 function pickMaxBytes(
@@ -95,15 +101,18 @@ async function runImagePrompt(params: {
           `Model does not support images: ${provider}/${modelId}`,
         );
       }
-      const apiKey = await getApiKeyForModel(model, authStorage);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
+      const apiKeyInfo = await getApiKeyForModel({
+        model,
+        cfg: params.cfg,
+      });
+      authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
       const context = buildImageContext(
         params.prompt,
         params.base64,
         params.mimeType,
       );
       const message = (await complete(model, context, {
-        apiKey,
+        apiKey: apiKeyInfo.apiKey,
         maxTokens: 512,
         temperature: 0,
       })) as AssistantMessage;

@@ -41,18 +41,17 @@ export function buildModelAliasIndex(params: {
   cfg: ClawdbotConfig;
   defaultProvider: string;
 }): ModelAliasIndex {
-  const rawAliases = params.cfg.agent?.modelAliases ?? {};
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
 
-  for (const [aliasRaw, targetRaw] of Object.entries(rawAliases)) {
-    const alias = aliasRaw.trim();
-    if (!alias) continue;
-    const parsed = parseModelRef(
-      String(targetRaw ?? ""),
-      params.defaultProvider,
-    );
+  const rawModels = params.cfg.agent?.models ?? {};
+  for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
+    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
     if (!parsed) continue;
+    const alias = String(
+      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
+    ).trim();
+    if (!alias) continue;
     const aliasKey = normalizeAliasKey(alias);
     byAlias.set(aliasKey, { alias, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
@@ -88,7 +87,14 @@ export function resolveConfiguredModelRef(params: {
   defaultProvider: string;
   defaultModel: string;
 }): ModelRef {
-  const rawModel = params.cfg.agent?.model?.trim() || "";
+  const rawModel = (() => {
+    const raw = params.cfg.agent?.model as
+      | { primary?: string }
+      | string
+      | undefined;
+    if (typeof raw === "string") return raw.trim();
+    return raw?.primary?.trim() ?? "";
+  })();
   if (rawModel) {
     const trimmed = rawModel.trim();
     const aliasIndex = buildModelAliasIndex({
@@ -116,7 +122,10 @@ export function buildAllowedModelSet(params: {
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
 } {
-  const rawAllowlist = params.cfg.agent?.allowedModels ?? [];
+  const rawAllowlist = (() => {
+    const modelMap = params.cfg.agent?.models ?? {};
+    return Object.keys(modelMap);
+  })();
   const allowAny = rawAllowlist.length === 0;
   const catalogKeys = new Set(
     params.catalog.map((entry) => modelKey(entry.provider, entry.id)),

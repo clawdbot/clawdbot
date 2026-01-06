@@ -14,7 +14,7 @@ read_when:
 Script: `scripts/bench-model.ts`
 
 Usage:
-- `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
+- `source ~/.profile && bun scripts/bench-model.ts --runs 10`
 - Optional env: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
 - Default prompt: “Reply with a single word: ok. No punctuation or extra text.”
 
@@ -33,3 +33,11 @@ scripts/e2e/onboard-docker.sh
 ```
 
 This script drives the interactive wizard via a pseudo-tty, verifies config/workspace/session files, then starts the gateway and runs `clawdbot health`.
+
+## QR import smoke (Docker)
+
+Ensures `qrcode-terminal` loads under Node 22+ in Docker:
+
+```bash
+pnpm test:docker:qr
+```

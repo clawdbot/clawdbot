@@ -3,6 +3,8 @@ node_modules
 dist
 *.bun-build
 pnpm-lock.yaml
+bun.lock
+bun.lockb
 coverage
 .pnpm-store
 .worktrees/

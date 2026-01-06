@@ -1,3 +1,5 @@
+import type { PollInput } from "../polls.js";
+
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
 };
@@ -10,6 +12,7 @@ export type ActiveWebListener = {
     mediaType?: string,
     options?: ActiveWebSendOptions,
   ) => Promise<{ messageId: string }>;
+  sendPoll: (to: string, poll: PollInput) => Promise<{ messageId: string }>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };

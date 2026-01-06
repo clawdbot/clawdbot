@@ -68,6 +68,88 @@ describe("gateway server cron", () => {
     testState.cronStorePath = undefined;
   });
 
+  test("normalizes wrapped cron.add payloads", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(
+      testState.cronStorePath,
+      JSON.stringify({ version: 1, jobs: [] }),
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const atMs = Date.now() + 1000;
+    const addRes = await rpcReq(ws, "cron.add", {
+      data: {
+        name: "wrapped",
+        schedule: { atMs },
+        payload: { text: "hello" },
+      },
+    });
+    expect(addRes.ok).toBe(true);
+    const payload = addRes.payload as
+      | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
+      | undefined;
+    expect(payload?.sessionTarget).toBe("main");
+    expect(payload?.wakeMode).toBe("next-heartbeat");
+    expect((payload?.schedule as { kind?: unknown } | undefined)?.kind).toBe(
+      "at",
+    );
+
+    ws.close();
+    await server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    testState.cronStorePath = undefined;
+  });
+
+  test("normalizes cron.update patch payloads", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(
+      testState.cronStorePath,
+      JSON.stringify({ version: 1, jobs: [] }),
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const addRes = await rpcReq(ws, "cron.add", {
+      name: "patch test",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+    expect(addRes.ok).toBe(true);
+    const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+    const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+    expect(jobId.length > 0).toBe(true);
+
+    const atMs = Date.now() + 1_000;
+    const updateRes = await rpcReq(ws, "cron.update", {
+      id: jobId,
+      patch: {
+        schedule: { atMs },
+        payload: { text: "updated" },
+      },
+    });
+    expect(updateRes.ok).toBe(true);
+    const updated = updateRes.payload as
+      | { schedule?: { kind?: unknown }; payload?: { kind?: unknown } }
+      | undefined;
+    expect(updated?.schedule?.kind).toBe("at");
+    expect(updated?.payload?.kind).toBe("systemEvent");
+
+    ws.close();
+    await server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    testState.cronStorePath = undefined;
+  });
+
   test("writes cron run history to runs/<jobId>.jsonl", async () => {
     const dir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-gw-cron-log-"),
@@ -245,7 +327,9 @@ describe("gateway server cron", () => {
           : "";
       expect(storePath).toContain("jobs.json");
 
-      const atMs = Date.now() + 80;
+      // Avoid races: if we schedule too close to "now", the cron runner can
+      // finish before we start listening for the "finished" event.
+      const atMs = Date.now() + 1000;
       const addRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
@@ -263,8 +347,12 @@ describe("gateway server cron", () => {
         type: "event";
         event: string;
         payload?: { jobId?: string; action?: string; status?: string } | null;
-      }>((resolve) => {
-        const timeout = setTimeout(() => resolve(null as never), 8000);
+      }>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(
+            new Error(`timeout waiting for cron finished event: ${jobId}`),
+          );
+        }, 8000);
         ws.on("message", (data) => {
           const obj = JSON.parse(decodeWsData(data));
           if (

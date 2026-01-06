@@ -18,7 +18,7 @@ Updated: 2025-12-07
 - **Proxy:** optional `telegram.proxy` uses `undici.ProxyAgent` through grammY’s `client.baseFetch`.
 - **Webhook support:** `webhook-set.ts` wraps `setWebhook/deleteWebhook`; `webhook.ts` hosts the callback with health + graceful shutdown. Gateway enables webhook mode when `telegram.webhookUrl` is set (otherwise it long-polls).
 - **Sessions:** direct chats map to `main`; groups map to `telegram:group:<chatId>`; replies route back to the same surface.
-- **Config knobs:** `telegram.botToken`, `telegram.groups`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`.
+- **Config knobs:** `telegram.botToken`, `telegram.dmPolicy`, `telegram.groups` (allowlist + mention defaults), `telegram.allowFrom`, `telegram.groupAllowFrom`, `telegram.groupPolicy`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`.
 - **Tests:** grammy mocks cover DM + group mention gating and outbound send; more media/webhook fixtures still welcome.
 
 Open questions

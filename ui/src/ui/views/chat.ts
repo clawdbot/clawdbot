@@ -22,13 +22,14 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  focusMode: boolean;
   onRefresh: () => void;
+  onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
 };
 
 export function renderChat(props: ChatProps) {
-  const canInteract = props.connected;
   const canCompose = props.connected && !props.sending;
   const sessionOptions = resolveSessionOptions(props.sessionKey, props.sessions);
   const composePlaceholder = props.connected
@@ -43,7 +44,7 @@ export function renderChat(props: ChatProps) {
             <span>Session Key</span>
             <select
               .value=${props.sessionKey}
-              ?disabled=${!canInteract}
+              ?disabled=${!props.connected}
               @change=${(e: Event) =>
                 props.onSessionKeyChange((e.target as HTMLSelectElement).value)}
             >
@@ -57,7 +58,7 @@ export function renderChat(props: ChatProps) {
           </label>
           <button
             class="btn"
-            ?disabled=${props.loading || !canInteract}
+            ?disabled=${props.loading || !props.connected}
             @click=${props.onRefresh}
           >
             ${props.loading ? "Loading…" : "Refresh"}
@@ -65,6 +66,14 @@ export function renderChat(props: ChatProps) {
         </div>
         <div class="chat-header__right">
           <div class="muted">Thinking: ${props.thinkingLevel ?? "inherit"}</div>
+          <button
+            class="btn ${props.focusMode ? "active" : ""}"
+            @click=${props.onToggleFocusMode}
+            aria-pressed=${props.focusMode}
+            title="Toggle focus mode (hide header + sidebar)"
+          >
+            Focus
+          </button>
         </div>
       </div>
 

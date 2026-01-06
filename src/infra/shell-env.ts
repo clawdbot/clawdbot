@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+let lastAppliedKeys: string[] = [];
 
 function isTruthy(raw: string | undefined): boolean {
   if (!raw) return false;
@@ -34,13 +35,16 @@ export function loadShellEnvFallback(
   const logger = opts.logger ?? console;
   const exec = opts.exec ?? execFileSync;
 
-  if (!opts.enabled)
+  if (!opts.enabled) {
+    lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "disabled" };
+  }
 
   const hasAnyKey = opts.expectedKeys.some((key) =>
     Boolean(opts.env[key]?.trim()),
   );
   if (hasAnyKey) {
+    lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
   }
 
@@ -63,6 +67,7 @@ export function loadShellEnvFallback(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`[clawdbot] shell env fallback failed: ${msg}`);
+    lastAppliedKeys = [];
     return { ok: false, error: msg, applied: [] };
   }
 
@@ -87,6 +92,7 @@ export function loadShellEnvFallback(
     applied.push(key);
   }
 
+  lastAppliedKeys = applied;
   return { ok: true, applied };
 }
 
@@ -102,4 +108,8 @@ export function resolveShellEnvFallbackTimeoutMs(
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS;
   return Math.max(0, parsed);
+}
+
+export function getShellEnvAppliedKeys(): string[] {
+  return [...lastAppliedKeys];
 }

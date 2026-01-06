@@ -50,8 +50,13 @@ You can still run Clawdbot on your own Signal account if your goal is “respond
     httpHost: "127.0.0.1",
     httpPort: 8080,
 
-    // Who is allowed to talk to the bot
-    allowFrom: ["+15557654321"] // your personal number (or "*")
+    // Who is allowed to talk to the bot (DMs)
+    dmPolicy: "pairing", // pairing | allowlist | open | disabled
+    allowFrom: ["+15557654321"], // your personal number ("open" requires ["*"])
+
+    // Group policy + allowlist
+    groupPolicy: "open",
+    groupAllowFrom: ["+15557654321"]
   }
 }
 ```
@@ -59,6 +64,10 @@ You can still run Clawdbot on your own Signal account if your goal is “respond
    - `clawdbot gateway call providers.status --params '{"probe":true}'`
    - Expect `signal.probe.ok=true` and `signal.probe.version`.
 5) DM the bot number from your phone; Clawdbot replies.
+
+## DM pairing
+- Default: `signal.dmPolicy="pairing"` — unknown DM senders get a pairing code.
+- Approve via: `clawdbot pairing approve --provider signal <code>`.
 
 ## “Do I need a separate number?”
 - If you want “I text her and she texts me back”, yes: **use a separate Signal account/number for the bot**.

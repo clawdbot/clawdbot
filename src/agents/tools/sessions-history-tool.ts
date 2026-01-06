@@ -17,7 +17,37 @@ const SessionsHistoryToolSchema = Type.Object({
   includeTools: Type.Optional(Type.Boolean()),
 });
 
-export function createSessionsHistoryTool(): AnyAgentTool {
+function resolveSandboxSessionToolsVisibility(
+  cfg: ReturnType<typeof loadConfig>,
+) {
+  return cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+}
+
+async function isSpawnedSessionAllowed(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+}): Promise<boolean> {
+  try {
+    const list = (await callGateway({
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit: 500,
+        spawnedBy: params.requesterSessionKey,
+      },
+    })) as { sessions?: Array<Record<string, unknown>> };
+    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+    return sessions.some((entry) => entry?.key === params.targetSessionKey);
+  } catch {
+    return false;
+  }
+}
+
+export function createSessionsHistoryTool(opts?: {
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): AnyAgentTool {
   return {
     label: "Session History",
     name: "sessions_history",
@@ -30,11 +60,37 @@ export function createSessionsHistoryTool(): AnyAgentTool {
       });
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const visibility = resolveSandboxSessionToolsVisibility(cfg);
+      const requesterInternalKey =
+        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
+          ? resolveInternalSessionKey({
+              key: opts.agentSessionKey,
+              alias,
+              mainKey,
+            })
+          : undefined;
       const resolvedKey = resolveInternalSessionKey({
         key: sessionKey,
         alias,
         mainKey,
       });
+      const restrictToSpawned =
+        opts?.sandboxed === true &&
+        visibility === "spawned" &&
+        requesterInternalKey &&
+        !requesterInternalKey.toLowerCase().startsWith("subagent:");
+      if (restrictToSpawned) {
+        const ok = await isSpawnedSessionAllowed({
+          requesterSessionKey: requesterInternalKey,
+          targetSessionKey: resolvedKey,
+        });
+        if (!ok) {
+          return jsonResult({
+            status: "forbidden",
+            error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
+          });
+        }
+      }
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))

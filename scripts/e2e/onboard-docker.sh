@@ -10,6 +10,7 @@ docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 echo "Running onboarding E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
+  trap "" PIPE
   export TERM=xterm-256color
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
@@ -37,7 +38,7 @@ TRASH
     local delay="${2:-0.4}"
     # Let prompts render before sending keystrokes.
     sleep "$delay"
-    printf "%b" "$payload" >&3
+    printf "%b" "$payload" >&3 2>/dev/null || true
   }
 
   start_gateway() {
@@ -134,6 +135,8 @@ TRASH
     send $'"'"'\e[B'"'"' 0.6
     send $'"'"'\e[B'"'"' 0.6
     send $'"'"'\e[B'"'"' 0.6
+    send $'"'"'\e[B'"'"' 0.6
+    send $'"'"'\e[B'"'"' 0.6
     send $'"'"'\r'"'"' 0.6
     send $'"'"'\r'"'"' 0.5
     send $'"'"'\r'"'"' 0.5
@@ -170,7 +173,7 @@ TRASH
     # Configure providers now? (default Yes)
     send $'"'"'\r'"'"' 0.8
     send "" 0.8
-    # Select Telegram, Discord, Signal.
+    # Select Telegram, Discord, Slack.
     send $'"'"'\e[B'"'"' 0.4
     send $'"'"' '"'"' 0.4
     send $'"'"'\e[B'"'"' 0.4
@@ -178,11 +181,14 @@ TRASH
     send $'"'"'\e[B'"'"' 0.4
     send $'"'"' '"'"' 0.4
     send $'"'"'\r'"'"' 0.6
-    send $'"'"'tg_token\r'"'"' 0.6
-    send $'"'"'discord_token\r'"'"' 0.6
-    send $'"'"'n\r'"'"' 0.6
-    send $'"'"'+15551234567\r'"'"' 0.6
-    send $'"'"'n\r'"'"' 0.6
+    send $'"'"'tg_token\r'"'"' 0.8
+    send $'"'"'discord_token\r'"'"' 0.8
+    send "" 0.6
+    send $'"'"'\r'"'"' 0.6
+    send "" 0.6
+    send $'"'"'slack_bot\r'"'"' 0.8
+    send "" 0.6
+    send $'"'"'slack_app\r'"'"' 0.8
   }
 
   send_skills_flow() {
@@ -393,11 +399,11 @@ if (cfg?.telegram?.botToken !== "tg_token") {
 if (cfg?.discord?.token !== "discord_token") {
   errors.push(`discord.token mismatch (got ${cfg?.discord?.token ?? "unset"})`);
 }
-if (cfg?.signal?.account !== "+15551234567") {
-  errors.push(`signal.account mismatch (got ${cfg?.signal?.account ?? "unset"})`);
+if (cfg?.slack?.botToken !== "slack_bot") {
+  errors.push(`slack.botToken mismatch (got ${cfg?.slack?.botToken ?? "unset"})`);
 }
-if (cfg?.signal?.cliPath !== "signal-cli") {
-  errors.push(`signal.cliPath mismatch (got ${cfg?.signal?.cliPath ?? "unset"})`);
+if (cfg?.slack?.appToken !== "slack_app") {
+  errors.push(`slack.appToken mismatch (got ${cfg?.slack?.appToken ?? "unset"})`);
 }
 if (cfg?.wizard?.lastRunMode !== "local") {
   errors.push(`wizard.lastRunMode mismatch (got ${cfg?.wizard?.lastRunMode ?? "unset"})`);

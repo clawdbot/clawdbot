@@ -7,9 +7,10 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 
 export type LingerPrompter = {
-  confirm?: (params: { message: string; initialValue?: boolean }) => Promise<
-    boolean
-  >;
+  confirm?: (params: {
+    message: string;
+    initialValue?: boolean;
+  }) => Promise<boolean>;
   note: (message: string, title?: string) => Promise<void> | void;
 };
 
@@ -41,12 +42,9 @@ export async function ensureSystemdUserLingerInteractive(params: {
     params.reason ??
     "Systemd user services stop when you log out or go idle, which kills the Gateway.";
   const actionNote = params.requireConfirm
-    ? "We can enable lingering now (needs sudo; writes /var/lib/systemd/linger)."
-    : "Enabling lingering now (needs sudo; writes /var/lib/systemd/linger).";
-  await prompter.note(
-    `${reason}\n${actionNote}`,
-    title,
-  );
+    ? "We can enable lingering now (may require sudo; writes /var/lib/systemd/linger)."
+    : "Enabling lingering now (may require sudo; writes /var/lib/systemd/linger).";
+  await prompter.note(`${reason}\n${actionNote}`, title);
 
   if (params.requireConfirm && prompter.confirm) {
     const ok = await prompter.confirm({
@@ -62,16 +60,22 @@ export async function ensureSystemdUserLingerInteractive(params: {
     }
   }
 
+  const resultNoSudo = await enableSystemdUserLinger({
+    env,
+    user: status.user,
+  });
+  if (resultNoSudo.ok) {
+    await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
+    return;
+  }
+
   const result = await enableSystemdUserLinger({
     env,
     user: status.user,
     sudoMode: "prompt",
   });
   if (result.ok) {
-    await prompter.note(
-      `Enabled systemd lingering for ${status.user}.`,
-      title,
-    );
+    await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
     return;
   }
 

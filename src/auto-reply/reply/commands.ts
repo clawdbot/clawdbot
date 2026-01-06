@@ -1,33 +1,50 @@
-import fs from "node:fs";
-
-import { getEnvApiKey } from "@mariozechner/pi-ai";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
-import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
-import type { ClawdbotConfig } from "../../config/config.js";
-import { resolveOAuthPath } from "../../config/paths.js";
 import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../../agents/auth-profiles.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
+import {
+  abortEmbeddedPiRun,
+  compactEmbeddedPiSession,
+  isEmbeddedPiRunActive,
+  waitForEmbeddedPiRunEnd,
+} from "../../agents/pi-embedded.js";
+import type { ClawdbotConfig } from "../../config/config.js";
+import {
+  resolveSessionTranscriptPath,
   type SessionEntry,
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { triggerClawdbotRestart } from "../../infra/restart.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
 import { resolveHeartbeatSeconds } from "../../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../../web/session.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { buildHelpMessage, buildStatusMessage } from "../status.js";
+import {
+  buildHelpMessage,
+  buildStatusMessage,
+  formatContextUsageShort,
+  formatTokenCount,
+} from "../status.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
-import { stripMentions } from "./mentions.js";
+import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { incrementCompactionCount } from "./session-updates.js";
 
 export type CommandContext = {
   surface: string;
@@ -42,57 +59,54 @@ export type CommandContext = {
   to?: string;
 };
 
-function hasOAuthCredentials(provider: string): boolean {
-  try {
-    const oauthPath = resolveOAuthPath();
-    if (!fs.existsSync(oauthPath)) return false;
-    const raw = fs.readFileSync(oauthPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const entry = parsed?.[provider] as
-      | {
-          refresh?: string;
-          refresh_token?: string;
-          refreshToken?: string;
-          access?: string;
-          access_token?: string;
-          accessToken?: string;
-        }
-      | undefined;
-    if (!entry) return false;
-    const refresh =
-      entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
-    const access =
-      entry.access ?? entry.access_token ?? entry.accessToken ?? "";
-    return Boolean(refresh.trim() && access.trim());
-  } catch {
-    return false;
-  }
-}
-
-function resolveModelAuthLabel(provider?: string): string | undefined {
+function resolveModelAuthLabel(
+  provider?: string,
+  cfg?: ClawdbotConfig,
+): string | undefined {
   const resolved = provider?.trim();
   if (!resolved) return undefined;
 
-  try {
-    const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
-    const stored = authStorage.get(resolved);
-    if (stored?.type === "oauth") return "oauth";
-    if (stored?.type === "api_key") return "api-key";
-  } catch {
-    // ignore auth storage errors
+  const store = ensureAuthProfileStore();
+  const profiles = listProfilesForProvider(store, resolved);
+  if (profiles.length > 0) {
+    const modes = new Set(
+      profiles
+        .map((id) => store.profiles[id]?.type)
+        .filter((mode): mode is "api_key" | "oauth" => Boolean(mode)),
+    );
+    if (modes.has("oauth") && modes.has("api_key")) return "mixed";
+    if (modes.has("oauth")) return "oauth";
+    if (modes.has("api_key")) return "api-key";
   }
 
-  if (resolved === "anthropic") {
-    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
-    if (oauthEnv?.trim()) return "oauth";
+  const envKey = resolveEnvApiKey(resolved);
+  if (envKey?.apiKey) {
+    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
-  if (hasOAuthCredentials(resolved)) return "oauth";
-
-  const envKey = getEnvApiKey(resolved);
-  if (envKey?.trim()) return "api-key";
+  if (getCustomProviderApiKey(cfg, resolved)) return "api-key";
 
   return "unknown";
+}
+
+function extractCompactInstructions(params: {
+  rawBody?: string;
+  ctx: MsgContext;
+  cfg: ClawdbotConfig;
+  isGroup: boolean;
+}): string | undefined {
+  const raw = stripStructuralPrefixes(params.rawBody ?? "");
+  const stripped = params.isGroup
+    ? stripMentions(raw, params.ctx, params.cfg)
+    : raw;
+  const trimmed = stripped.trim();
+  if (!trimmed) return undefined;
+  const lowered = trimmed.toLowerCase();
+  const prefix = lowered.startsWith("/compact") ? "/compact" : null;
+  if (!prefix) return undefined;
+  let rest = trimmed.slice(prefix.length).trimStart();
+  if (rest.startsWith(":")) rest = rest.slice(1).trimStart();
+  return rest.length ? rest : undefined;
 }
 
 export function buildCommandContext(params: {
@@ -103,66 +117,31 @@ export function buildCommandContext(params: {
   triggerBodyNormalized: string;
   commandAuthorized: boolean;
 }): CommandContext {
-  const {
+  const { ctx, cfg, sessionKey, isGroup, triggerBodyNormalized } = params;
+  const auth = resolveCommandAuthorization({
     ctx,
     cfg,
-    sessionKey,
-    isGroup,
-    triggerBodyNormalized,
-    commandAuthorized,
-  } = params;
+    commandAuthorized: params.commandAuthorized,
+  });
   const surface = (ctx.Surface ?? "").trim().toLowerCase();
-  const isWhatsAppSurface =
-    surface === "whatsapp" ||
-    (ctx.From ?? "").startsWith("whatsapp:") ||
-    (ctx.To ?? "").startsWith("whatsapp:");
-
-  const configuredAllowFrom = isWhatsAppSurface
-    ? cfg.whatsapp?.allowFrom
-    : undefined;
-  const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
-  const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
-  const allowFromList =
-    configuredAllowFrom?.filter((entry) => entry?.trim()) ?? [];
-  const allowAll =
-    !isWhatsAppSurface ||
-    allowFromList.length === 0 ||
-    allowFromList.some((entry) => entry.trim() === "*");
-
-  const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
+  const abortKey =
+    sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = isGroup
     ? stripMentions(rawBodyNormalized, ctx, cfg)
     : rawBodyNormalized;
-  const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
-  const ownerCandidates =
-    isWhatsAppSurface && !allowAll
-      ? allowFromList.filter((entry) => entry !== "*")
-      : [];
-  if (isWhatsAppSurface && !allowAll && ownerCandidates.length === 0 && to) {
-    ownerCandidates.push(to);
-  }
-  const ownerList = ownerCandidates
-    .map((entry) => normalizeE164(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  const isOwner =
-    !isWhatsAppSurface ||
-    allowAll ||
-    ownerList.length === 0 ||
-    (senderE164 ? ownerList.includes(senderE164) : false);
-  const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
     surface,
-    isWhatsAppSurface,
-    ownerList,
-    isAuthorizedSender,
-    senderE164: senderE164 || undefined,
+    isWhatsAppSurface: auth.isWhatsAppSurface,
+    ownerList: auth.ownerList,
+    isAuthorizedSender: auth.isAuthorizedSender,
+    senderE164: auth.senderE164,
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,
-    from: from || undefined,
-    to: to || undefined,
+    from: auth.from,
+    to: auth.to,
   };
 }
 
@@ -191,6 +170,7 @@ export async function handleCommands(params: {
   shouldContinue: boolean;
 }> {
   const {
+    ctx,
     cfg,
     command,
     directives,
@@ -210,6 +190,16 @@ export async function handleCommands(params: {
     contextTokens,
     isGroup,
   } = params;
+
+  const resetRequested =
+    command.commandBodyNormalized === "/reset" ||
+    command.commandBodyNormalized === "/new";
+  if (resetRequested && !command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /reset from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
 
   const activationCommand = parseActivationCommand(
     command.commandBodyNormalized,
@@ -304,7 +294,6 @@ export async function handleCommands(params: {
 
   if (
     command.commandBodyNormalized === "/restart" ||
-    command.commandBodyNormalized === "restart" ||
     command.commandBodyNormalized.startsWith("/restart ")
   ) {
     if (!command.isAuthorizedSender) {
@@ -324,7 +313,6 @@ export async function handleCommands(params: {
 
   const helpRequested =
     command.commandBodyNormalized === "/help" ||
-    command.commandBodyNormalized === "help" ||
     /(?:^|\s)\/help(?=$|\s|:)\b/i.test(command.commandBodyNormalized);
   if (helpRequested) {
     if (!command.isAuthorizedSender) {
@@ -339,7 +327,6 @@ export async function handleCommands(params: {
   const statusRequested =
     directives.hasStatusDirective ||
     command.commandBodyNormalized === "/status" ||
-    command.commandBodyNormalized === "status" ||
     command.commandBodyNormalized.startsWith("/status ");
   if (statusRequested) {
     if (!command.isAuthorizedSender) {
@@ -358,7 +345,10 @@ export async function handleCommands(params: {
     const statusText = buildStatusMessage({
       agent: {
         ...cfg.agent,
-        model,
+        model: {
+          ...cfg.agent?.model,
+          primary: model,
+        },
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,
         verboseDefault: cfg.agent?.verboseDefault,
@@ -374,12 +364,90 @@ export async function handleCommands(params: {
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
       resolvedElevated: resolvedElevatedLevel,
-      modelAuth: resolveModelAuthLabel(provider),
+      modelAuth: resolveModelAuthLabel(provider, cfg),
       webLinked,
       webAuthAgeMs,
       heartbeatSeconds,
     });
     return { shouldContinue: false, reply: { text: statusText } };
+  }
+
+  const compactRequested =
+    command.commandBodyNormalized === "/compact" ||
+    command.commandBodyNormalized.startsWith("/compact ");
+  if (compactRequested) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /compact from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    if (!sessionEntry?.sessionId) {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Compaction unavailable (missing session id)." },
+      };
+    }
+    const sessionId = sessionEntry.sessionId;
+    if (isEmbeddedPiRunActive(sessionId)) {
+      abortEmbeddedPiRun(sessionId);
+      await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    }
+    const customInstructions = extractCompactInstructions({
+      rawBody: ctx.Body,
+      ctx,
+      cfg,
+      isGroup,
+    });
+    const result = await compactEmbeddedPiSession({
+      sessionId,
+      sessionKey,
+      surface: command.surface,
+      sessionFile: resolveSessionTranscriptPath(sessionId),
+      workspaceDir,
+      config: cfg,
+      skillsSnapshot: sessionEntry.skillsSnapshot,
+      provider,
+      model,
+      thinkLevel: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      customInstructions,
+      ownerNumbers:
+        command.ownerList.length > 0 ? command.ownerList : undefined,
+    });
+
+    const totalTokens =
+      sessionEntry.totalTokens ??
+      (sessionEntry.inputTokens ?? 0) + (sessionEntry.outputTokens ?? 0);
+    const contextSummary = formatContextUsageShort(
+      totalTokens > 0 ? totalTokens : null,
+      contextTokens ?? sessionEntry.contextTokens ?? null,
+    );
+    const compactLabel = result.ok
+      ? result.compacted
+        ? result.result?.tokensBefore
+          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+          : "Compacted"
+        : "Compaction skipped"
+      : "Compaction failed";
+    if (result.ok && result.compacted) {
+      await incrementCompactionCount({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
+    const reason = result.reason?.trim();
+    const line = reason
+      ? `${compactLabel}: ${reason} • ${contextSummary}`
+      : `${compactLabel} • ${contextSummary}`;
+    enqueueSystemEvent(line);
+    return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
   }
 
   const abortRequested = isAbortTrigger(command.rawBodyNormalized);

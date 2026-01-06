@@ -1,3 +1,8 @@
+---
+summary: "SSH tunnel setup for Clawdbot.app connecting to a remote gateway"
+read_when: "Connecting the macOS app to a remote gateway over SSH"
+---
+
 # Running Clawdbot.app with a Remote Gateway
 
 Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.

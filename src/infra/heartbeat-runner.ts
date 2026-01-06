@@ -1,5 +1,6 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_PROMPT,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
@@ -100,6 +101,13 @@ export function resolveHeartbeatPrompt(cfg: ClawdbotConfig) {
   const raw = cfg.agent?.heartbeat?.prompt;
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   return trimmed || HEARTBEAT_PROMPT;
+}
+
+function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig) {
+  return Math.max(
+    0,
+    cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
 }
 
 function resolveHeartbeatSession(cfg: ClawdbotConfig) {
@@ -277,11 +285,12 @@ async function restoreHeartbeatUpdatedAt(params: {
 
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
-  responsePrefix?: string,
+  responsePrefix: string | undefined,
+  ackMaxChars: number,
 ) {
   const stripped = stripHeartbeatToken(payload.text, {
     mode: "heartbeat",
-    maxAckChars: 30,
+    maxAckChars: ackMaxChars,
   });
   const hasMedia = Boolean(
     payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0,
@@ -478,9 +487,11 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    const ackMaxChars = resolveHeartbeatAckMaxChars(cfg);
     const normalized = normalizeHeartbeatReply(
       replyPayload,
       cfg.messages?.responsePrefix,
+      ackMaxChars,
     );
     if (normalized.shouldSkip && !normalized.hasMedia) {
       await restoreHeartbeatUpdatedAt({

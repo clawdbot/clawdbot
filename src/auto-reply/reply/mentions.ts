@@ -1,6 +1,35 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 
+export function buildMentionRegexes(cfg: ClawdbotConfig | undefined): RegExp[] {
+  const patterns = cfg?.routing?.groupChat?.mentionPatterns ?? [];
+  return patterns
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern, "i");
+      } catch {
+        return null;
+      }
+    })
+    .filter((value): value is RegExp => Boolean(value));
+}
+
+export function normalizeMentionText(text: string): string {
+  return (text ?? "")
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+    .toLowerCase();
+}
+
+export function matchesMentionPatterns(
+  text: string,
+  mentionRegexes: RegExp[],
+): boolean {
+  if (mentionRegexes.length === 0) return false;
+  const cleaned = normalizeMentionText(text ?? "");
+  if (!cleaned) return false;
+  return mentionRegexes.some((re) => re.test(cleaned));
+}
+
 export function stripStructuralPrefixes(text: string): string {
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.

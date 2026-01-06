@@ -333,6 +333,28 @@ function normalizeToolNames(list?: string[]) {
   return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 }
 
+const DEFAULT_SUBAGENT_TOOL_DENY = [
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+];
+
+function isSubagentSessionKey(sessionKey?: string): boolean {
+  const key = sessionKey?.trim().toLowerCase() ?? "";
+  return key.startsWith("subagent:");
+}
+
+function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
+  const configured = cfg?.agent?.subagents?.tools;
+  const deny = [
+    ...DEFAULT_SUBAGENT_TOOL_DENY,
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  return { allow, deny };
+}
+
 function filterToolsByPolicy(
   tools: AnyAgentTool[],
   policy?: SandboxToolPolicy,
@@ -534,6 +556,7 @@ export function createClawdbotCodingTools(options?: {
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
       agentSurface: options?.surface,
+      sandboxed: !!sandbox,
       config: options?.config,
     }),
   ];
@@ -553,7 +576,14 @@ export function createClawdbotCodingTools(options?: {
   const sandboxed = sandbox
     ? filterToolsByPolicy(globallyFiltered, sandbox.tools)
     : globallyFiltered;
+  const subagentFiltered =
+    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
+      ? filterToolsByPolicy(
+          sandboxed,
+          resolveSubagentToolPolicy(options.config),
+        )
+      : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
-  return sandboxed.map(normalizeToolParameters);
+  return subagentFiltered.map(normalizeToolParameters);
 }

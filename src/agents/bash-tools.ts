@@ -36,6 +36,7 @@ const DEFAULT_MAX_OUTPUT = clampNumber(
   150_000,
 );
 const DEFAULT_PATH =
+  process.env.PATH ??
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const stringEnum = (

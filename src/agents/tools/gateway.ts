@@ -9,10 +9,11 @@ export type GatewayCallOptions = {
 };
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
+  // Prefer an explicit override; otherwise let callGateway choose based on config.
   const url =
     typeof opts?.gatewayUrl === "string" && opts.gatewayUrl.trim()
       ? opts.gatewayUrl.trim()
-      : DEFAULT_GATEWAY_URL;
+      : undefined;
   const token =
     typeof opts?.gatewayToken === "string" && opts.gatewayToken.trim()
       ? opts.gatewayToken.trim()

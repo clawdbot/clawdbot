@@ -90,10 +90,8 @@ describe("gateway SIGTERM", () => {
     const err: string[] = [];
 
     child = spawn(
-      process.execPath,
+      "bun",
       [
-        "--import",
-        "tsx",
         "src/index.ts",
         "gateway",
         "--port",

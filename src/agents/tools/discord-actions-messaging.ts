@@ -24,6 +24,32 @@ type ActionGate = (
   defaultValue?: boolean,
 ) => boolean;
 
+function formatDiscordTimestamp(ts?: string | null): string | undefined {
+  if (!ts) return undefined;
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return undefined;
+
+  const yyyy = String(date.getFullYear()).padStart(4, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+
+  // getTimezoneOffset() is minutes *behind* UTC. Flip sign to get ISO offset.
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absOffsetMinutes = Math.abs(offsetMinutes);
+  const offsetH = String(Math.floor(absOffsetMinutes / 60)).padStart(2, "0");
+  const offsetM = String(absOffsetMinutes % 60).padStart(2, "0");
+
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const tzSuffix = tz ? `{${tz}}` : "";
+
+  // Compact ISO-like *local* timestamp with minutes precision.
+  // Example: 2025-01-02T03:04-08:00{America/Los_Angeles}
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}${sign}${offsetH}:${offsetM}${tzSuffix}`;
+}
+
 export async function handleDiscordMessagingAction(
   action: string,
   params: Record<string, unknown>,
@@ -100,9 +126,10 @@ export async function handleDiscordMessagingAction(
         typeof durationRaw === "number" && Number.isFinite(durationRaw)
           ? durationRaw
           : undefined;
+      const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
       await sendPollDiscord(
         to,
-        { question, answers, allowMultiselect, durationHours },
+        { question, options: answers, maxSelections, durationHours },
         { content },
       );
       return jsonResult({ ok: true });
@@ -133,7 +160,12 @@ export async function handleDiscordMessagingAction(
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
       });
-      return jsonResult({ ok: true, messages });
+      const formattedMessages = messages.map((message) => ({
+        ...message,
+        timestamp:
+          formatDiscordTimestamp(message.timestamp) ?? message.timestamp,
+      }));
+      return jsonResult({ ok: true, messages: formattedMessages });
     }
     case "sendMessage": {
       if (!isActionEnabled("messages")) {

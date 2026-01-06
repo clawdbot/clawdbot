@@ -87,15 +87,26 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agent.workspace": "Workspace",
-  "agent.model": "Default Model",
-  "agent.imageModel": "Image Model",
-  "agent.modelFallbacks": "Model Fallbacks",
-  "agent.imageModelFallbacks": "Image Model Fallbacks",
+  "auth.profiles": "Auth Profiles",
+  "auth.order": "Auth Profile Order",
+  "agent.models": "Models",
+  "agent.model.primary": "Primary Model",
+  "agent.model.fallbacks": "Model Fallbacks",
+  "agent.imageModel.primary": "Image Model",
+  "agent.imageModel.fallbacks": "Image Model Fallbacks",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
+  "messages.ackReaction": "Ack Reaction Emoji",
+  "messages.ackReactionScope": "Ack Reaction Scope",
   "talk.apiKey": "Talk API Key",
   "telegram.botToken": "Telegram Bot Token",
+  "telegram.dmPolicy": "Telegram DM Policy",
+  "whatsapp.dmPolicy": "WhatsApp DM Policy",
+  "signal.dmPolicy": "Signal DM Policy",
+  "imessage.dmPolicy": "iMessage DM Policy",
+  "discord.dm.policy": "Discord DM Policy",
+  "slack.dm.policy": "Slack DM Policy",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
   "slack.appToken": "Slack App Token",
@@ -114,14 +125,36 @@ const FIELD_HELP: Record<string, string> = {
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
     "Debounce window (ms) before applying config changes.",
-  "agent.modelFallbacks":
+  "auth.profiles": "Named auth profiles (provider + mode + optional email).",
+  "auth.order":
+    "Ordered auth profile IDs per provider (used for automatic failover).",
+  "agent.models":
+    "Configured model catalog (keys are full provider/model IDs).",
+  "agent.model.primary": "Primary model (provider/model).",
+  "agent.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
-  "agent.imageModel":
-    "Optional image-capable model (provider/model) used by the image tool.",
-  "agent.imageModelFallbacks":
-    "Ordered fallback image models (provider/model) used by the image tool.",
+  "agent.imageModel.primary":
+    "Optional image model (provider/model) used when the primary model lacks image input.",
+  "agent.imageModel.fallbacks":
+    "Ordered fallback image models (provider/model).",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
+  "messages.ackReaction":
+    "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.ackReactionScope":
+    'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
+  "telegram.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
+  "whatsapp.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
+  "signal.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires signal.allowFrom=["*"].',
+  "imessage.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires imessage.allowFrom=["*"].',
+  "discord.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires discord.dm.allowFrom=["*"].',
+  "slack.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

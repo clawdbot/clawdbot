@@ -118,10 +118,8 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
 
   try {
     child = spawn(
-      process.execPath,
+      "bun",
       [
-        "--import",
-        "tsx",
         "src/index.ts",
         "gateway",
         "--port",
@@ -218,15 +216,11 @@ const runCliJson = async (
 ): Promise<unknown> => {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", "src/index.ts", ...args],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawn("bun", ["src/index.ts", ...args], {
+    cwd: process.cwd(),
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
   child.stdout?.on("data", (d) => stdout.push(String(d)));

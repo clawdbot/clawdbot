@@ -6,6 +6,8 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
+import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   extractAssistantText,
   inferToolMetaFromArgs,
@@ -17,11 +19,7 @@ const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
 
-export type BlockReplyChunking = {
-  minChars: number;
-  maxChars: number;
-  breakPreference?: "paragraph" | "newline" | "sentence";
-};
+export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
@@ -176,6 +174,12 @@ export function subscribeEmbeddedPiSession(params: {
   };
 
   const blockChunking = params.blockReplyChunking;
+  const blockChunker = blockChunking
+    ? new EmbeddedBlockChunker(blockChunking)
+    : null;
+  // KNOWN: Provider streams are not strictly once-only or perfectly ordered.
+  // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
+  // Tests: `src/agents/pi-embedded-subscribe.test.ts` (e.g. late text_end cases).
   const shouldEmitToolResult = () =>
     typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
@@ -195,205 +199,6 @@ export function subscribeEmbeddedPiSession(params: {
     }
   };
 
-  type FenceSpan = {
-    start: number;
-    end: number;
-    openLine: string;
-    marker: string;
-    indent: string;
-  };
-
-  type FenceSplit = {
-    closeFenceLine: string;
-    reopenFenceLine: string;
-  };
-
-  type BreakResult = {
-    index: number;
-    fenceSplit?: FenceSplit;
-  };
-
-  const parseFenceSpans = (buffer: string): FenceSpan[] => {
-    const spans: FenceSpan[] = [];
-    let open:
-      | {
-          start: number;
-          markerChar: string;
-          markerLen: number;
-          openLine: string;
-          marker: string;
-          indent: string;
-        }
-      | undefined;
-    let offset = 0;
-    while (offset <= buffer.length) {
-      const nextNewline = buffer.indexOf("\n", offset);
-      const lineEnd = nextNewline === -1 ? buffer.length : nextNewline;
-      const line = buffer.slice(offset, lineEnd);
-      const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
-      if (match) {
-        const indent = match[1];
-        const marker = match[2];
-        const markerChar = marker[0];
-        const markerLen = marker.length;
-        if (!open) {
-          open = {
-            start: offset,
-            markerChar,
-            markerLen,
-            openLine: line,
-            marker,
-            indent,
-          };
-        } else if (
-          open.markerChar === markerChar &&
-          markerLen >= open.markerLen
-        ) {
-          const end = nextNewline === -1 ? buffer.length : nextNewline + 1;
-          spans.push({
-            start: open.start,
-            end,
-            openLine: open.openLine,
-            marker: open.marker,
-            indent: open.indent,
-          });
-          open = undefined;
-        }
-      }
-      if (nextNewline === -1) break;
-      offset = nextNewline + 1;
-    }
-    if (open) {
-      spans.push({
-        start: open.start,
-        end: buffer.length,
-        openLine: open.openLine,
-        marker: open.marker,
-        indent: open.indent,
-      });
-    }
-    return spans;
-  };
-
-  const findFenceSpanAt = (
-    spans: FenceSpan[],
-    index: number,
-  ): FenceSpan | undefined =>
-    spans.find((span) => index > span.start && index < span.end);
-
-  const isSafeBreak = (spans: FenceSpan[], index: number): boolean =>
-    !findFenceSpanAt(spans, index);
-
-  const pickSoftBreakIndex = (buffer: string): BreakResult => {
-    if (!blockChunking) return { index: -1 };
-    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
-    if (buffer.length < minChars) return { index: -1 };
-    const fenceSpans = parseFenceSpans(buffer);
-    const preference = blockChunking.breakPreference ?? "paragraph";
-
-    if (preference === "paragraph") {
-      let paragraphIdx = buffer.lastIndexOf("\n\n");
-      while (paragraphIdx >= minChars) {
-        if (isSafeBreak(fenceSpans, paragraphIdx)) {
-          return { index: paragraphIdx };
-        }
-        paragraphIdx = buffer.lastIndexOf("\n\n", paragraphIdx - 1);
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      let newlineIdx = buffer.lastIndexOf("\n");
-      while (newlineIdx >= minChars) {
-        if (isSafeBreak(fenceSpans, newlineIdx)) {
-          return { index: newlineIdx };
-        }
-        newlineIdx = buffer.lastIndexOf("\n", newlineIdx - 1);
-      }
-    }
-
-    if (preference !== "newline") {
-      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
-      let sentenceIdx = -1;
-      for (const match of matches) {
-        const at = match.index ?? -1;
-        if (at < minChars) continue;
-        const candidate = at + 1;
-        if (isSafeBreak(fenceSpans, candidate)) {
-          sentenceIdx = candidate;
-        }
-      }
-      if (sentenceIdx >= minChars) return { index: sentenceIdx };
-    }
-
-    return { index: -1 };
-  };
-
-  const pickBreakIndex = (buffer: string): BreakResult => {
-    if (!blockChunking) return { index: -1 };
-    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
-    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
-    if (buffer.length < minChars) return { index: -1 };
-    const window = buffer.slice(0, Math.min(maxChars, buffer.length));
-    const fenceSpans = parseFenceSpans(buffer);
-
-    const preference = blockChunking.breakPreference ?? "paragraph";
-    if (preference === "paragraph") {
-      let paragraphIdx = window.lastIndexOf("\n\n");
-      while (paragraphIdx >= minChars) {
-        if (isSafeBreak(fenceSpans, paragraphIdx)) {
-          return { index: paragraphIdx };
-        }
-        paragraphIdx = window.lastIndexOf("\n\n", paragraphIdx - 1);
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      let newlineIdx = window.lastIndexOf("\n");
-      while (newlineIdx >= minChars) {
-        if (isSafeBreak(fenceSpans, newlineIdx)) {
-          return { index: newlineIdx };
-        }
-        newlineIdx = window.lastIndexOf("\n", newlineIdx - 1);
-      }
-    }
-
-    if (preference !== "newline") {
-      const matches = window.matchAll(/[.!?](?=\s|$)/g);
-      let sentenceIdx = -1;
-      for (const match of matches) {
-        const at = match.index ?? -1;
-        if (at < minChars) continue;
-        const candidate = at + 1;
-        if (isSafeBreak(fenceSpans, candidate)) {
-          sentenceIdx = candidate;
-        }
-      }
-      if (sentenceIdx >= minChars) return { index: sentenceIdx };
-    }
-
-    for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window[i]) && isSafeBreak(fenceSpans, i)) {
-        return { index: i };
-      }
-    }
-
-    if (buffer.length >= maxChars) {
-      if (isSafeBreak(fenceSpans, maxChars)) return { index: maxChars };
-      const fence = findFenceSpanAt(fenceSpans, maxChars);
-      if (fence) {
-        return {
-          index: maxChars,
-          fenceSplit: {
-            closeFenceLine: `${fence.indent}${fence.marker}`,
-            reopenFenceLine: fence.openLine,
-          },
-        };
-      }
-      return { index: maxChars };
-    }
-    return { index: -1 };
-  };
-
   const emitBlockChunk = (text: string) => {
     // Strip any <thinking> tags that may have leaked into the output (e.g., from Gemini mimicking history)
     const strippedText = stripThinkingSegments(stripUnpairedThinkingTags(text));
@@ -411,59 +216,6 @@ export function subscribeEmbeddedPiSession(params: {
     });
   };
 
-  const drainBlockBuffer = (force: boolean) => {
-    if (!blockChunking) return;
-    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
-    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
-    if (blockBuffer.length < minChars && !force) return;
-    while (
-      blockBuffer.length >= minChars ||
-      (force && blockBuffer.length > 0)
-    ) {
-      const breakResult =
-        force && blockBuffer.length <= maxChars
-          ? pickSoftBreakIndex(blockBuffer)
-          : pickBreakIndex(blockBuffer);
-      if (breakResult.index <= 0) {
-        if (force) {
-          emitBlockChunk(blockBuffer);
-          blockBuffer = "";
-        }
-        return;
-      }
-      const breakIdx = breakResult.index;
-      let rawChunk = blockBuffer.slice(0, breakIdx);
-      if (rawChunk.trim().length === 0) {
-        blockBuffer = blockBuffer.slice(breakIdx).trimStart();
-        continue;
-      }
-      let nextBuffer = blockBuffer.slice(breakIdx);
-      const fenceSplit = breakResult.fenceSplit;
-      if (fenceSplit) {
-        const closeFence = rawChunk.endsWith("\n")
-          ? `${fenceSplit.closeFenceLine}\n`
-          : `\n${fenceSplit.closeFenceLine}\n`;
-        rawChunk = `${rawChunk}${closeFence}`;
-        const reopenFence = fenceSplit.reopenFenceLine.endsWith("\n")
-          ? fenceSplit.reopenFenceLine
-          : `${fenceSplit.reopenFenceLine}\n`;
-        nextBuffer = `${reopenFence}${nextBuffer}`;
-      }
-      emitBlockChunk(rawChunk);
-      if (fenceSplit) {
-        blockBuffer = nextBuffer;
-      } else {
-        const nextStart =
-          breakIdx < blockBuffer.length && /\s/.test(blockBuffer[breakIdx])
-            ? breakIdx + 1
-            : breakIdx;
-        blockBuffer = blockBuffer.slice(nextStart).trimStart();
-      }
-      if (blockBuffer.length < minChars && !force) return;
-      if (blockBuffer.length < maxChars && !force) return;
-    }
-  };
-
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -471,6 +223,7 @@ export function subscribeEmbeddedPiSession(params: {
     toolSummaryById.clear();
     deltaBuffer = "";
     blockBuffer = "";
+    blockChunker?.reset();
     lastStreamedAssistant = undefined;
     lastBlockReplyText = undefined;
     assistantTextBaseline = 0;
@@ -481,11 +234,14 @@ export function subscribeEmbeddedPiSession(params: {
       if (evt.type === "message_start") {
         const msg = (evt as AgentEvent & { message: AgentMessage }).message;
         if (msg?.role === "assistant") {
+          // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
+          // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
           // Start-of-message is a safer reset point than message_end: some providers
           // may deliver late text_end updates after message_end, which would
           // otherwise re-trigger block replies.
           deltaBuffer = "";
           blockBuffer = "";
+          blockChunker?.reset();
           lastStreamedAssistant = undefined;
           lastBlockReplyText = undefined;
           assistantTextBaseline = assistantTexts.length;
@@ -636,6 +392,8 @@ export function subscribeEmbeddedPiSession(params: {
               if (delta) {
                 chunk = delta;
               } else if (content) {
+                // KNOWN: Some providers resend full content on `text_end`.
+                // We only append a suffix (or nothing) to keep output monotonic.
                 // Providers may resend full content on text_end; append only the suffix.
                 if (content.startsWith(deltaBuffer)) {
                   chunk = content.slice(deltaBuffer.length);
@@ -648,7 +406,11 @@ export function subscribeEmbeddedPiSession(params: {
             }
             if (chunk) {
               deltaBuffer += chunk;
-              blockBuffer += chunk;
+              if (blockChunker) {
+                blockChunker.append(chunk);
+              } else {
+                blockBuffer += chunk;
+              }
             }
 
             const cleaned = params.enforceFinalTag
@@ -689,16 +451,17 @@ export function subscribeEmbeddedPiSession(params: {
               blockChunking &&
               blockReplyBreak === "text_end"
             ) {
-              drainBlockBuffer(false);
+              blockChunker?.drain({ force: false, emit: emitBlockChunk });
             }
 
             if (evtType === "text_end" && blockReplyBreak === "text_end") {
-              if (blockChunking && blockBuffer.length > 0) {
-                drainBlockBuffer(true);
+              if (blockChunker?.hasBuffered()) {
+                blockChunker.drain({ force: true, emit: emitBlockChunk });
+                blockChunker.reset();
               } else if (blockBuffer.length > 0) {
                 emitBlockChunk(blockBuffer);
+                blockBuffer = "";
               }
-              blockBuffer = "";
             }
           }
         }
@@ -731,12 +494,16 @@ export function subscribeEmbeddedPiSession(params: {
           assistantTextBaseline = assistantTexts.length;
 
           if (
-            (blockReplyBreak === "message_end" || blockBuffer.length > 0) &&
+            (blockReplyBreak === "message_end" ||
+              (blockChunker
+                ? blockChunker.hasBuffered()
+                : blockBuffer.length > 0)) &&
             text &&
             params.onBlockReply
           ) {
-            if (blockChunking && blockBuffer.length > 0) {
-              drainBlockBuffer(true);
+            if (blockChunker?.hasBuffered()) {
+              blockChunker.drain({ force: true, emit: emitBlockChunk });
+              blockChunker.reset();
             } else if (text !== lastBlockReplyText) {
               lastBlockReplyText = text;
               const { text: cleanedText, mediaUrls } =
@@ -751,6 +518,7 @@ export function subscribeEmbeddedPiSession(params: {
           }
           deltaBuffer = "";
           blockBuffer = "";
+          blockChunker?.reset();
           lastStreamedAssistant = undefined;
         }
       }
@@ -787,6 +555,10 @@ export function subscribeEmbeddedPiSession(params: {
         compactionInFlight = true;
         ensureCompactionPromise();
         log.debug(`embedded run compaction start: runId=${params.runId}`);
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start" },
+        });
       }
 
       if (evt.type === "auto_compaction_end") {
@@ -799,6 +571,10 @@ export function subscribeEmbeddedPiSession(params: {
         } else {
           maybeResolveCompactionWait();
         }
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry },
+        });
       }
 
       if (evt.type === "agent_end") {
@@ -828,6 +604,7 @@ export function subscribeEmbeddedPiSession(params: {
     assistantTexts,
     toolMetas,
     unsubscribe,
+    isCompacting: () => compactionInFlight || pendingCompactionRetry > 0,
     waitForCompactionRetry: () => {
       if (compactionInFlight || pendingCompactionRetry > 0) {
         ensureCompactionPromise();

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import { readSystemdUserLingerStatus } from "./systemd.js";
 import { runExec } from "../process/exec.js";
+import { readSystemdUserLingerStatus } from "./systemd.js";
 
 vi.mock("../process/exec.js", () => ({
   runExec: vi.fn(),

@@ -8,15 +8,16 @@ vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
 
-import { sendMessageWhatsApp } from "./outbound.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "./outbound.js";
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
+  const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
 
   beforeEach(() => {
     vi.clearAllMocks();
-    setActiveWebListener({ sendComposingTo, sendMessage });
+    setActiveWebListener({ sendComposingTo, sendMessage, sendPoll });
   });
 
   afterEach(() => {
@@ -136,5 +137,23 @@ describe("web outbound", () => {
       buf,
       "application/pdf",
     );
+  });
+
+  it("sends polls via active listener", async () => {
+    const result = await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
+      { verbose: false },
+    );
+    expect(result).toEqual({
+      messageId: "poll123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(sendPoll).toHaveBeenCalledWith("+1555", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 2,
+      durationHours: undefined,
+    });
   });
 });

@@ -47,8 +47,12 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Inbox listeners are detached on shutdown to avoid accumulating event handlers in tests/restarts.
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
-- **Allowlist**: `whatsapp.allowFrom` enforced for direct chats only.
-  - If `whatsapp.allowFrom` is empty, default allowlist = self number (self-chat mode).
+- **DM policy**: `whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
+  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`).
+  - Open: requires `whatsapp.allowFrom` to include `"*"`.
+  - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
+- **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).
+  - `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
@@ -69,6 +73,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Groups
 - Groups map to `whatsapp:group:<jid>` sessions.
+- Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `open`).
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
@@ -117,8 +122,11 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Logged-out => stop and require re-link.
 
 ## Config quick map
+- `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `whatsapp.allowFrom` (DM allowlist).
-- `whatsapp.groups` (group mention gating defaults/overrides)
+- `whatsapp.groupAllowFrom` (group sender allowlist).
+- `whatsapp.groupPolicy` (group policy).
+- `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)
@@ -136,7 +144,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
-- Troubleshooting guide: `docs/refactor/web-gateway-troubleshooting.md`.
+- Troubleshooting guide: `docs/troubleshooting.md`.
 
 ## Tests
 - `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)

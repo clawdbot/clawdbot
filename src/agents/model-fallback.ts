@@ -33,7 +33,10 @@ function buildAllowedModelKeys(
   cfg: ClawdbotConfig | undefined,
   defaultProvider: string,
 ): Set<string> | null {
-  const rawAllowlist = cfg?.agent?.allowedModels ?? [];
+  const rawAllowlist = (() => {
+    const modelMap = cfg?.agent?.models ?? {};
+    return Object.keys(modelMap);
+  })();
   if (rawAllowlist.length === 0) return null;
   const keys = new Set<string>();
   for (const raw of rawAllowlist) {
@@ -81,11 +84,28 @@ function resolveImageFallbackCandidates(params: {
 
   if (params.modelOverride?.trim()) {
     addRaw(params.modelOverride, false);
-  } else if (params.cfg?.agent?.imageModel?.trim()) {
-    addRaw(params.cfg.agent.imageModel, false);
+  } else {
+    const imageModel = params.cfg?.agent?.imageModel as
+      | { primary?: string }
+      | string
+      | undefined;
+    const primary =
+      typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
+    if (primary?.trim()) addRaw(primary, false);
   }
 
-  for (const raw of params.cfg?.agent?.imageModelFallbacks ?? []) {
+  const imageFallbacks = (() => {
+    const imageModel = params.cfg?.agent?.imageModel as
+      | { fallbacks?: string[] }
+      | string
+      | undefined;
+    if (imageModel && typeof imageModel === "object") {
+      return imageModel.fallbacks ?? [];
+    }
+    return [];
+  })();
+
+  for (const raw of imageFallbacks) {
     addRaw(raw, true);
   }
 
@@ -121,7 +141,16 @@ function resolveFallbackCandidates(params: {
 
   addCandidate({ provider, model }, false);
 
-  for (const raw of params.cfg?.agent?.modelFallbacks ?? []) {
+  const modelFallbacks = (() => {
+    const model = params.cfg?.agent?.model as
+      | { fallbacks?: string[] }
+      | string
+      | undefined;
+    if (model && typeof model === "object") return model.fallbacks ?? [];
+    return [];
+  })();
+
+  for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
       raw: String(raw ?? ""),
       defaultProvider: DEFAULT_PROVIDER,
@@ -224,7 +253,7 @@ export async function runWithImageModelFallback<T>(params: {
   });
   if (candidates.length === 0) {
     throw new Error(
-      "No image model configured. Set agent.imageModel or agent.imageModelFallbacks.",
+      "No image model configured. Set agent.imageModel.primary or agent.imageModel.fallbacks.",
     );
   }
 

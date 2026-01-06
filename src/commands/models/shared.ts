@@ -69,7 +69,8 @@ export function resolveModelTarget(params: {
 
 export function buildAllowlistSet(cfg: ClawdbotConfig): Set<string> {
   const allowed = new Set<string>();
-  for (const raw of cfg.agent?.allowedModels ?? []) {
+  const models = cfg.agent?.models ?? {};
+  for (const raw of Object.keys(models)) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (!parsed) continue;
     allowed.add(modelKey(parsed.provider, parsed.model));

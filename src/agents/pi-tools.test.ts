@@ -116,6 +116,36 @@ describe("createClawdbotCodingTools", () => {
     expect(slack.some((tool) => tool.name === "slack")).toBe(true);
   });
 
+  it("filters session tools for sub-agent sessions by default", () => {
+    const tools = createClawdbotCodingTools({ sessionKey: "subagent:test" });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("sessions_list")).toBe(false);
+    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("sessions_send")).toBe(false);
+    expect(names.has("sessions_spawn")).toBe(false);
+
+    expect(names.has("read")).toBe(true);
+    expect(names.has("bash")).toBe(true);
+    expect(names.has("process")).toBe(true);
+  });
+
+  it("supports allow-only sub-agent tool policy", () => {
+    const tools = createClawdbotCodingTools({
+      sessionKey: "subagent:test",
+      // Intentionally partial config; only fields used by pi-tools are provided.
+      config: {
+        agent: {
+          subagents: {
+            tools: {
+              allow: ["read"],
+            },
+          },
+        },
+      },
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["read"]);
+  });
+
   it("keeps read tool image metadata intact", async () => {
     const tools = createClawdbotCodingTools();
     const readTool = tools.find((tool) => tool.name === "read");

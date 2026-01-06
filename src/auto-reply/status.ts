@@ -56,6 +56,8 @@ const formatAge = (ms?: number | null) => {
 const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
+export const formatTokenCount = (value: number) => formatKTokens(value);
+
 const formatTokens = (
   total: number | null | undefined,
   contextTokens: number | null,
@@ -70,6 +72,11 @@ const formatTokens = (
   const ctxLabel = ctx ? formatKTokens(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
+
+export const formatContextUsageShort = (
+  total: number | null | undefined,
+  contextTokens: number | null | undefined,
+) => `Context ${formatTokens(total, contextTokens ?? null)}`;
 
 const readUsageFromSessionLog = (
   sessionId?: string,
@@ -210,6 +217,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry?.updatedAt
       ? `updated ${formatAge(now - entry.updatedAt)}`
       : "no activity",
+    typeof entry?.compactionCount === "number"
+      ? `compactions ${entry.compactionCount}`
+      : undefined,
     args.storePath ? `store ${shortenHomePath(args.storePath)}` : undefined,
   ]
     .filter(Boolean)
@@ -262,7 +272,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 export function buildHelpMessage(): string {
   return [
     "ℹ️ Help",
-    "Shortcuts: /new reset | /restart relink",
+    "Shortcuts: /new reset | /compact [instructions] | /restart relink",
     "Options: /think <level> | /verbose on|off | /elevated on|off | /model <id>",
   ].join("\n");
 }

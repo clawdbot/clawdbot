@@ -22,6 +22,7 @@ describe("buildStatusMessage", () => {
         contextTokens: 32_000,
         thinkingLevel: "low",
         verboseLevel: "on",
+        compactionCount: 2,
       },
       sessionKey: "main",
       sessionScope: "per-sender",
@@ -39,6 +40,7 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Runtime: direct");
     expect(text).toContain("Context: 16k/32k (50%)");
     expect(text).toContain("Session: main");
+    expect(text).toContain("compactions 2");
     expect(text).toContain("Web: linked");
     expect(text).toContain("heartbeat 45s");
     expect(text).toContain("thinking=medium");

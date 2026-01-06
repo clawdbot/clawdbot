@@ -1,6 +1,6 @@
 import {
   applyIdentityDefaults,
-  applyModelAliasDefaults,
+  applyModelDefaults,
   applySessionDefaults,
 } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
@@ -34,7 +34,7 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyModelAliasDefaults(
+    config: applyModelDefaults(
       applySessionDefaults(
         applyIdentityDefaults(validated.data as ClawdbotConfig),
       ),

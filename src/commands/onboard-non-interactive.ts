@@ -13,9 +13,12 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
-import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 import { healthCommand } from "./health.js";
-import { applyMinimaxConfig, setAnthropicApiKey } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  applyMinimaxConfig,
+  setAnthropicApiKey,
+} from "./onboard-auth.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -27,6 +30,7 @@ import type {
   OnboardMode,
   OnboardOptions,
 } from "./onboard-types.js";
+import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 
 export async function runNonInteractiveOnboarding(
   opts: OnboardOptions,
@@ -98,6 +102,11 @@ export async function runNonInteractiveOnboarding(
       return;
     }
     await setAnthropicApiKey(key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "anthropic:default",
+      provider: "anthropic",
+      mode: "api_key",
+    });
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
   } else if (

@@ -26,7 +26,10 @@ Status: external CLI integration. No daemon.
     enabled: true,
     cliPath: "imsg",
     dbPath: "~/Library/Messages/chat.db",
+    dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
+    groupPolicy: "open",
+    groupAllowFrom: ["chat_id:123"],
     includeAttachments: false,
     mediaMaxMb: 16,
     service: "auto",
@@ -37,6 +40,9 @@ Status: external CLI integration. No daemon.
 
 Notes:
 - `allowFrom` accepts handles (phone/email) or `chat_id:<id>` entries.
+- Default: `imessage.dmPolicy="pairing"` — unknown DM senders get a pairing code (approve via `clawdbot pairing approve --provider imessage <code>`). `"open"` requires `allowFrom=["*"]`.
+- `groupPolicy` controls group handling (`open|disabled|allowlist`).
+- `groupAllowFrom` accepts the same entries as `allowFrom`.
 - `service` defaults to `auto` (use `imessage` or `sms` to pin).
 - `region` is only used for SMS targeting.
 
@@ -55,7 +61,7 @@ imsg chats --limit 20
 
 ## Group chat behavior
 - Group messages set `ChatType=group`, `GroupSubject`, and `GroupMembers`.
-- Group activation respects `imessage.groups."*".requireMention` and `routing.groupChat.mentionPatterns`.
+- Group activation respects `imessage.groups."*".requireMention` and `routing.groupChat.mentionPatterns` (patterns are required to detect mentions on iMessage). When `imessage.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
 - Replies go back to the same `chat_id` (group or direct).
 
 ## Troubleshooting

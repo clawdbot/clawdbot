@@ -216,6 +216,17 @@ Retention:
 
 Each log line includes (at minimum) job id, status/error, timing, and a `summary` string (systemEvent text for main jobs, and the last agent text output for isolated jobs).
 
+## Compatibility policy (cron.add/cron.update)
+
+To keep older clients working, the Gateway applies **best-effort normalization** for `cron.add` and `cron.update`:
+- Accepts wrapped payloads under `data` or `job` and unwraps them.
+- Infers `schedule.kind` from `atMs`, `everyMs`, or `expr` if missing.
+- Infers `payload.kind` from `text` (systemEvent) or `message` (agentTurn) if missing.
+- Defaults `wakeMode` to `"next-heartbeat"` when omitted.
+- Defaults `sessionTarget` based on payload kind (`systemEvent` → `"main"`, `agentTurn` → `"isolated"`).
+
+Normalization is **compat-only**. New clients should send the full schema (including `kind`, `sessionTarget`, and `wakeMode`) to avoid ambiguity. Unknown fields are still rejected by schema validation.
+
 ## Gateway API
 
 New methods (names can be bikeshed; `cron.*` is suggested):
@@ -264,7 +275,7 @@ Add a `cron` command group (all commands should also support `--json` where sens
     - `--wake now|next-heartbeat`
   - payload flags (choose one):
     - `--system-event "<text>"`
-    - `--message "<agent message>" [--deliver] [--channel last|whatsapp|telegram|discord|signal|imessage] [--to <dest>]`
+    - `--message "<agent message>" [--deliver] [--channel last|whatsapp|telegram|discord|slack|signal|imessage] [--to <dest>]`
 
 - `clawdbot cron edit <id> ...` (patch-by-flags, non-interactive)
 - `clawdbot cron rm <id>`

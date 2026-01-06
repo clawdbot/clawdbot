@@ -227,6 +227,7 @@ export function listSessionsFromStore(params: {
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const activeMinutes =
     typeof opts.activeMinutes === "number" &&
     Number.isFinite(opts.activeMinutes)
@@ -238,6 +239,11 @@ export function listSessionsFromStore(params: {
       if (!includeGlobal && key === "global") return false;
       if (!includeUnknown && key === "unknown") return false;
       return true;
+    })
+    .filter(([key, entry]) => {
+      if (!spawnedBy) return true;
+      if (key === "unknown" || key === "global") return false;
+      return entry?.spawnedBy === spawnedBy;
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;

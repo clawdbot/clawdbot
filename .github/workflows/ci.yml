@@ -52,32 +52,21 @@ jobs:
           exit 1
 
       - name: Setup Node.js
-        if: matrix.runtime == 'node'
         uses: actions/setup-node@v4
         with:
           node-version: 24
           check-latest: true
 
       - name: Setup Bun
-        if: matrix.runtime == 'bun'
         uses: oven-sh/setup-bun@v2
         with:
-          # bun.sh downloads currently fail with:
-          # "Failed to list releases from GitHub: 401" -> "Unexpected HTTP response: 400"
-          bun-download-url: "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip"
-
-      - name: Setup Node.js (tooling for bun)
-        if: matrix.runtime == 'bun'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          check-latest: true
+          bun-version: latest
 
       - name: Runtime versions
         run: |
           node -v
           npm -v
-          if [ "${{ matrix.runtime }}" = "bun" ]; then bun -v; fi
+          bun -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"

@@ -12,7 +12,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: () => ({
-      agent: { model: "pi:opus", contextTokens: 32000 },
+      agent: {
+        model: { primary: "pi:opus" },
+        models: { "pi:opus": {} },
+        contextTokens: 32000,
+      },
     }),
   };
 });

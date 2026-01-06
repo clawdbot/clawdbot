@@ -1,20 +1,12 @@
 import { cancel, isCancel, multiselect } from "@clack/prompts";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
-
-import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
+import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import {
   type ModelScanResult,
   scanOpenRouterModels,
 } from "../../agents/model-scan.js";
-import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
-import { warn } from "../../globals.js";
+import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  buildAllowlistSet,
-  formatMs,
-  formatTokenK,
-  updateConfig,
-} from "./shared.js";
+import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
@@ -181,8 +173,17 @@ export async function modelsScanCommand(
     throw new Error("--concurrency must be > 0");
   }
 
-  const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
-  const storedKey = await authStorage.getApiKey("openrouter");
+  const cfg = loadConfig();
+  let storedKey: string | undefined;
+  try {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "openrouter",
+      cfg,
+    });
+    storedKey = resolved.apiKey;
+  } catch {
+    storedKey = undefined;
+  }
   const results = await scanOpenRouterModels({
     apiKey: storedKey ?? undefined,
     minParamB: minParams,
@@ -266,31 +267,47 @@ export async function modelsScanCommand(
     throw new Error("No image-capable models selected for image model.");
   }
 
-  const updated = await updateConfig((cfg) => {
+  const _updated = await updateConfig((cfg) => {
+    const nextModels = { ...cfg.agent?.models };
+    for (const entry of selected) {
+      if (!nextModels[entry]) nextModels[entry] = {};
+    }
+    for (const entry of selectedImages) {
+      if (!nextModels[entry]) nextModels[entry] = {};
+    }
+    const existingImageModel = cfg.agent?.imageModel as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+    const nextImageModel =
+      selectedImages.length > 0
+        ? {
+            ...(existingImageModel?.primary
+              ? { primary: existingImageModel.primary }
+              : undefined),
+            fallbacks: selectedImages,
+            ...(opts.setImage ? { primary: selectedImages[0] } : {}),
+          }
+        : cfg.agent?.imageModel;
+    const existingModel = cfg.agent?.model as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
     const agent = {
       ...cfg.agent,
-      modelFallbacks: selected,
-      ...(opts.setDefault ? { model: selected[0] } : {}),
-      ...(opts.setImage && selectedImages.length > 0
-        ? { imageModel: selectedImages[0] }
-        : {}),
+      model: {
+        ...(existingModel?.primary
+          ? { primary: existingModel.primary }
+          : undefined),
+        fallbacks: selected,
+        ...(opts.setDefault ? { primary: selected[0] } : {}),
+      },
+      ...(nextImageModel ? { imageModel: nextImageModel } : {}),
+      models: nextModels,
     } satisfies NonNullable<typeof cfg.agent>;
-    if (imageSorted.length > 0) {
-      agent.imageModelFallbacks = selectedImages;
-    }
     return {
       ...cfg,
       agent,
     };
   });
-
-  const allowlist = buildAllowlistSet(updated);
-  const allowlistMissing =
-    allowlist.size > 0 ? selected.filter((entry) => !allowlist.has(entry)) : [];
-  const allowlistMissingImages =
-    allowlist.size > 0
-      ? selectedImages.filter((entry) => !allowlist.has(entry))
-      : [];
 
   if (opts.json) {
     runtime.log(
@@ -301,42 +318,13 @@ export async function modelsScanCommand(
           setDefault: Boolean(opts.setDefault),
           setImage: Boolean(opts.setImage),
           results,
-          warnings:
-            allowlistMissing.length > 0 || allowlistMissingImages.length > 0
-              ? [
-                  ...(allowlistMissing.length > 0
-                    ? [
-                        `Selected models not in agent.allowedModels: ${allowlistMissing.join(", ")}`,
-                      ]
-                    : []),
-                  ...(allowlistMissingImages.length > 0
-                    ? [
-                        `Selected image models not in agent.allowedModels: ${allowlistMissingImages.join(", ")}`,
-                      ]
-                    : []),
-                ]
-              : [],
+          warnings: [],
         },
         null,
         2,
       ),
     );
     return;
-  }
-
-  if (allowlistMissing.length > 0) {
-    runtime.log(
-      warn(
-        `Warning: ${allowlistMissing.length} selected models are not in agent.allowedModels and will be ignored by fallback: ${allowlistMissing.join(", ")}`,
-      ),
-    );
-  }
-  if (allowlistMissingImages.length > 0) {
-    runtime.log(
-      warn(
-        `Warning: ${allowlistMissingImages.length} selected image models are not in agent.allowedModels and will be ignored by fallback: ${allowlistMissingImages.join(", ")}`,
-      ),
-    );
   }
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);

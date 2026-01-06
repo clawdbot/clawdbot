@@ -159,6 +159,8 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 
 Bundled mac app:
 - Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
+- To stop it cleanly, use `clawdbot gateway stop` (or `launchctl bootout gui/$UID/com.clawdbot.gateway`).
+- To restart, use `clawdbot gateway restart` (or `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`).
 
 ## Supervision (systemd user unit)
 Create `~/.config/systemd/user/clawdbot-gateway.service`:
@@ -182,10 +184,19 @@ Enable lingering (required so the user service survives logout/idle):
 ```
 sudo loginctl enable-linger youruser
 ```
-Requires sudo (writes `/var/lib/systemd/linger`).
+Onboarding runs this on Linux (may prompt for sudo; writes `/var/lib/systemd/linger`).
 Then enable the service:
 ```
 systemctl --user enable --now clawdbot-gateway.service
+```
+
+**Alternative (system service)** - for always-on or multi-user servers, you can
+install a systemd **system** unit instead of a user unit (no lingering needed).
+Create `/etc/systemd/system/clawdbot-gateway.service` (copy the unit above,
+switch `WantedBy=multi-user.target`, set `User=` + `WorkingDirectory=`), then:
+```
+sudo systemctl daemon-reload
+sudo systemctl enable --now clawdbot-gateway.service
 ```
 
 ## Supervision (Windows scheduled task)
@@ -208,6 +219,7 @@ systemctl --user enable --now clawdbot-gateway.service
 - `clawdbot gateway send --to <num> --message "hi" [--media-url ...]` — send via Gateway (idempotent).
 - `clawdbot gateway agent --message "hi" [--to ...]` — run an agent turn (waits for final by default).
 - `clawdbot gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
+- `clawdbot gateway stop|restart` — stop/restart the supervised gateway service (launchd/systemd/schtasks).
 - Gateway helper subcommands assume a running gateway on `--url`; they no longer auto-spawn one.
 
 ## Migration guidance

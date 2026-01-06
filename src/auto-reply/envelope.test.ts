@@ -19,12 +19,12 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toMatch(
-      /^\[WebChat user1 mac-mini 10\.0\.0\.5 2025-01-02T03:04\+00:00\{.+\}\] hello$/,
+    expect(body).toBe(
+      "[WebChat user1 mac-mini 10.0.0.5 2025-01-02T03:04Z] hello",
     );
   });
 
-  it("formats timestamps in local time (not UTC)", () => {
+  it("formats timestamps in UTC regardless of local timezone", () => {
     const originalTz = process.env.TZ;
     process.env.TZ = "America/Los_Angeles";
 
@@ -37,9 +37,7 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toBe(
-      "[WebChat 2025-01-01T19:04-08:00{America/Los_Angeles}] hello",
-    );
+    expect(body).toBe("[WebChat 2025-01-02T03:04Z] hello");
   });
 
   it("handles missing optional fields", () => {

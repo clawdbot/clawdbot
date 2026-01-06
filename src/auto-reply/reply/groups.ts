@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveProviderGroupRequireMention } from "../../config/group-policy.js";
 import type {
   GroupKeyResolution,
   SessionEntry,
@@ -53,38 +54,16 @@ export function resolveGroupRequireMention(params: {
   const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
   const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
-  if (surface === "telegram") {
-    if (groupId) {
-      const groupConfig = cfg.telegram?.groups?.[groupId];
-      if (typeof groupConfig?.requireMention === "boolean") {
-        return groupConfig.requireMention;
-      }
-    }
-    const groupDefault = cfg.telegram?.groups?.["*"]?.requireMention;
-    if (typeof groupDefault === "boolean") return groupDefault;
-    return true;
-  }
-  if (surface === "whatsapp") {
-    if (groupId) {
-      const groupConfig = cfg.whatsapp?.groups?.[groupId];
-      if (typeof groupConfig?.requireMention === "boolean") {
-        return groupConfig.requireMention;
-      }
-    }
-    const groupDefault = cfg.whatsapp?.groups?.["*"]?.requireMention;
-    if (typeof groupDefault === "boolean") return groupDefault;
-    return true;
-  }
-  if (surface === "imessage") {
-    if (groupId) {
-      const groupConfig = cfg.imessage?.groups?.[groupId];
-      if (typeof groupConfig?.requireMention === "boolean") {
-        return groupConfig.requireMention;
-      }
-    }
-    const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
-    if (typeof groupDefault === "boolean") return groupDefault;
-    return true;
+  if (
+    surface === "telegram" ||
+    surface === "whatsapp" ||
+    surface === "imessage"
+  ) {
+    return resolveProviderGroupRequireMention({
+      cfg,
+      surface,
+      groupId,
+    });
   }
   if (surface === "discord") {
     const guildEntry = resolveDiscordGuildEntry(
