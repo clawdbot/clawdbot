@@ -842,6 +842,30 @@ Select the model via `agent.model.primary` (provider/model).
 }
 ```
 
+### Z.AI (GLM-4.7) — provider alias support
+
+Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
+in your environment and reference the model by provider/model.
+
+```json5
+{
+  agent: {
+    model: "zai/glm-4.7",
+    allowedModels: ["zai/glm-4.7"]
+  }
+}
+```
+
+Notes:
+- `z.ai/*` and `z-ai/*` are accepted aliases and normalize to `zai/*`.
+- If `ZAI_API_KEY` is missing, requests to `zai/*` will fail with an auth error at runtime.
+- Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. The GLM Coding
+  Plan uses the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
+  The built-in `zai` provider uses the Coding endpoint. If you need the general
+  endpoint, define a custom provider in `models.providers` with the base URL
+  override (see the custom providers section above).
+- Use a fake placeholder in docs/configs; never commit real API keys.
+
 ### Local models (LM Studio) — recommended setup
 
 Best current local setup (what we’re running): **MiniMax M2.1** on a beefy Mac Studio
