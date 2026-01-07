@@ -400,6 +400,46 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
 
+  it("populates assistantTexts for non-streaming models with chunking enabled", () => {
+    // Regression test: Models like zai/glm-4.7 don't stream text_delta events.
+    // With block chunking enabled (the default), assistantTexts must still be
+    // populated from the message_end event, otherwise no response is delivered.
+    // Note: onBlockReply is NOT called here because blockReplyBreak defaults to
+    // "text_end" and chunker has no buffered content. The response is delivered
+    // via sendFinalReply which uses assistantTexts.
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      blockReplyChunking: { minChars: 50, maxChars: 200 }, // Chunking enabled
+    });
+
+    // Simulate non-streaming model: only message_start and message_end, no text_delta
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Response from non-streaming model" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    // The key assertion: assistantTexts must contain the response
+    // This is what sendFinalReply uses to deliver the response
+    expect(subscription.assistantTexts).toEqual([
+      "Response from non-streaming model",
+    ]);
+  });
+
   it("does not append when text_end content is a prefix of deltas", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
