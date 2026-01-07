@@ -192,7 +192,10 @@ function setWhatsAppDmPolicy(cfg: ClawdbotConfig, dmPolicy?: DmPolicy) {
   };
 }
 
-function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]) {
+function setWhatsAppAllowFrom(
+  cfg: ClawdbotConfig,
+  allowFrom?: string[],
+): ClawdbotConfig {
   return {
     ...cfg,
     whatsapp: {
@@ -205,7 +208,7 @@ function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]) {
 function setMessagesResponsePrefix(
   cfg: ClawdbotConfig,
   responsePrefix?: string,
-) {
+): ClawdbotConfig {
   return {
     ...cfg,
     messages: {
@@ -218,7 +221,7 @@ function setMessagesResponsePrefix(
 function setWhatsAppSelfChatMode(
   cfg: ClawdbotConfig,
   selfChatMode?: boolean,
-) {
+): ClawdbotConfig {
   return {
     ...cfg,
     whatsapp: {
