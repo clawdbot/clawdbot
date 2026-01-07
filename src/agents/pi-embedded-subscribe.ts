@@ -516,8 +516,13 @@ export function subscribeEmbeddedPiSession(params: {
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
-          const chunkingEnabled = Boolean(blockChunking);
-          if (!chunkingEnabled && !addedDuringMessage && text) {
+          const chunkerHasBuffered = blockChunker?.hasBuffered() ?? false;
+          // Add full text to assistantTexts at message_end if nothing was added during streaming
+          // AND the chunker won't drain (which would add entries via emitBlockChunk).
+          // This ensures models that don't stream deltas (e.g., zai/glm-4.7) still produce output.
+          // Previously, the condition `!chunkingEnabled` would skip this when chunking was enabled
+          // but the model didn't stream deltas, leaving assistantTexts empty.
+          if (!addedDuringMessage && !chunkerHasBuffered && text) {
             const last = assistantTexts.at(-1);
             if (!last || last !== text) assistantTexts.push(text);
           }
