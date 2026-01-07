@@ -508,6 +508,20 @@ export type MSTeamsWebhookConfig = {
   path?: string;
 };
 
+/** Channel-level config for MS Teams. */
+export type MSTeamsChannelConfig = {
+  /** Require @mention to respond. Default: true. */
+  requireMention?: boolean;
+};
+
+/** Team-level config for MS Teams. */
+export type MSTeamsTeamConfig = {
+  /** Default requireMention for channels in this team. */
+  requireMention?: boolean;
+  /** Per-channel overrides. Key is channel ID (e.g., "19:abc@thread.tacv2"). */
+  channels?: Record<string, MSTeamsChannelConfig>;
+};
+
 export type MSTeamsConfig = {
   /** If false, do not start the MS Teams provider. Default: true. */
   enabled?: boolean;
@@ -525,6 +539,10 @@ export type MSTeamsConfig = {
   allowFrom?: Array<string>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Default: require @mention to respond in channels/groups. */
+  requireMention?: boolean;
+  /** Per-team config. Key is team ID (groupId from Teams URL). */
+  teams?: Record<string, MSTeamsTeamConfig>;
 };
 
 export type IMessageConfig = {

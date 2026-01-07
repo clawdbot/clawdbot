@@ -808,7 +808,27 @@ Initial recommendation: support this type first; treat other attachment types as
 6. **Formatting limits**: Teams markdown is more limited than Slack; assume “plain text + links” for v1, and only later add Adaptive Cards.
 7. **Tenant/admin restrictions**: many orgs restrict custom app install or bot scopes. Expect setup friction; document it clearly.
 8. **Single-tenant default**: multi-tenant bot creation has a deprecation cutoff (2025-07-31); prefer single-tenant in config defaults and docs.
-9. **Incoming webhooks retirement**: Office 365 connectors / incoming webhooks retirement has moved to 2026-03-31; don’t rely on it as the primary integration surface.
+9. **Incoming webhooks retirement**: Office 365 connectors / incoming webhooks retirement has moved to 2026-03-31; don't rely on it as the primary integration surface.
+10. **Team ID format mismatch**: The `groupId` query param in Teams URLs (e.g., `075b1d78-...`) is **NOT** the team ID used by the Bot Framework. Teams sends the team's conversation thread ID via `activity.channelData.team.id`. To get the correct IDs from URLs:
+
+    **Team URL:**
+    ```
+    https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?groupId=...
+                                        └────────────────────────────┘
+                                        Team ID (URL-decode this)
+    ```
+
+    **Channel URL:**
+    ```
+    https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?groupId=...
+                                          └─────────────────────────┘
+                                          Channel ID (URL-decode this)
+    ```
+
+    **For config:**
+    - Team ID = path segment after `/team/` (URL-decoded)
+    - Channel ID = path segment after `/channel/` (URL-decoded)
+    - **Ignore** the `groupId` query parameter
 
 ---
 
@@ -952,6 +972,194 @@ To add RSC permissions to an already-installed app:
 - [Receive all channel messages with RSC](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-messages-with-rsc)
 - [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
 - [Teams app manifest schema](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/schema/manifest-schema)
+
+---
+
+## 10) Historical Message Access via Graph API Proxy
+
+### 10.1 Motivation
+
+On Discord, Clawdbot delivers an excellent UX: users can ask "what did we discuss a year ago?" and the bot can search the entire message history. Even more basically, it can read messages sent while the bot was offline, so users don't have to repeat themselves when the bot comes back online.
+
+Unfortunately, Teams lacks Discord's granular role-based permissions. To read any historical message via Graph API, you must request extremely broad permissions:
+
+| Permission | Type | Scope |
+|------------|------|-------|
+| `ChannelMessage.Read.All` | Application | Read ALL channel messages in the entire tenant |
+| `Chat.Read.All` | Application | Read ALL chats including DMs in the entire tenant |
+
+Both require admin consent and grant access to **everything** - there's no way to limit to specific channels at the permission level.
+
+This creates a trust decision for organizations:
+- **Opt out**: Don't grant these permissions. Bot only works in real-time (RSC). Messages sent while offline are lost.
+- **Opt in**: Grant broad permissions, gain powerful features (history search, offline catchup), but must trust the infrastructure completely.
+
+For organizations that opt in, the recommended architecture ensures the bot can only access what it's explicitly configured for, even though the underlying token has broader access.
+
+### 10.2 Architecture: Graph API Proxy Gateway
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Your Tenant                          │
+│                                                             │
+│  ┌─────────────┐     ┌──────────────┐     ┌─────────────┐  │
+│  │   Clawdbot  │────▶│  Graph Proxy │────▶│  Graph API  │  │
+│  │  (no token) │     │  (has token) │     │  (tenant)   │  │
+│  └─────────────┘     └──────────────┘     └─────────────┘  │
+│         │                   │                              │
+│         │                   ▼                              │
+│         │            ┌─────────────┐                       │
+│         │            │  Allowlist  │                       │
+│         │            │  Config     │                       │
+│         │            └─────────────┘                       │
+│         │                                                  │
+│         ▼                                                  │
+│  ┌─────────────┐                                           │
+│  │   Teams     │  (real-time via RSC webhook)              │
+│  └─────────────┘                                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key principle:** The Graph API token (with tenant-wide access) lives in a separate proxy service, never in Clawdbot itself. Clawdbot requests messages through the proxy, which enforces an allowlist before fetching.
+
+### 10.3 How It Works
+
+1. **Graph Proxy** is a small service (Cloud Function, MCP server, or microservice)
+2. It holds the `ChannelMessage.Read.All` / `Chat.Read.All` token
+3. Clawdbot requests: `GET /messages?team=X&channel=Y&since=timestamp`
+4. Proxy checks allowlist: "Is Clawdbot permitted to read channel Y?"
+5. If allowed → fetch from Graph API, return messages
+6. If denied → return 403 Forbidden, log the attempt
+
+### 10.4 Proxy Allowlist Config
+
+```yaml
+graph_proxy:
+  # Audit logging
+  log_all_requests: true
+
+  # Allowed teams/channels (explicit allowlist)
+  allowed:
+    - team: "075b1d78-d02e-42a1-8b3b-91724ce8fa64"
+      channels:
+        - "19:15bc31ae32f04f1c95a66921a98072e8@thread.tacv2"  # Zeno channel
+        # Backend and General NOT listed = no access even though token could read them
+
+  # Optional: rate limiting
+  rate_limit:
+    requests_per_minute: 60
+
+  # Optional: max history depth
+  max_history_days: 365
+```
+
+### 10.5 Security Benefits
+
+| Benefit | Description |
+|---------|-------------|
+| **Token isolation** | Clawdbot never sees the Graph API token |
+| **Explicit allowlist** | Only configured channels are accessible, despite broad token scope |
+| **Centralized audit** | All access attempts logged in one place |
+| **Defense in depth** | Code bugs in Clawdbot can't leak access to unauthorized channels |
+| **Revocation** | Disable proxy = instant cutoff, no token rotation needed in Clawdbot |
+
+### 10.6 Implementation Options
+
+1. **MCP Server** - Clawdbot calls it as a tool; fits naturally into the agent architecture
+2. **HTTP Microservice** - Simple REST API; can run as sidecar or separate deployment
+3. **Cloud Function** - Serverless; scales to zero when not in use; easy to deploy
+
+### 10.7 Example API Surface
+
+```
+GET  /api/messages?team={id}&channel={id}&since={timestamp}&limit={n}
+GET  /api/messages?team={id}&channel={id}&before={timestamp}&limit={n}
+GET  /api/search?team={id}&channel={id}&query={text}&limit={n}
+```
+
+All endpoints check allowlist before executing. Returns 403 if channel not in allowlist.
+
+### 10.8 Graph API Endpoints (Reference)
+
+The proxy would call these Microsoft Graph endpoints:
+
+```
+# List channel messages
+GET /teams/{team-id}/channels/{channel-id}/messages
+
+# List replies to a message
+GET /teams/{team-id}/channels/{channel-id}/messages/{message-id}/replies
+
+# Get messages in a chat (for group chats, not channels)
+GET /chats/{chat-id}/messages
+```
+
+See: [Microsoft Graph Messages API](https://learn.microsoft.com/en-us/graph/api/channel-list-messages)
+
+### 10.9 When to Use This
+
+| Scenario | Recommendation |
+|----------|----------------|
+| Small team, high trust | Maybe skip proxy, use config-based filtering in Clawdbot |
+| Enterprise, compliance-sensitive | Use proxy pattern for audit trail and access control |
+| Multi-tenant SaaS | Definitely use proxy; isolate customer tokens |
+| Personal/hobbyist use | Real-time RSC is probably sufficient |
+
+---
+
+## 11) Private Channels
+
+### 11.1 Bot Support in Private Channels
+
+Historically, Microsoft Teams **did not allow** bots in private channels. This has been gradually changing, but limitations remain.
+
+**Current state (late 2025):**
+
+| Feature | Standard Channels | Private Channels |
+|---------|-------------------|------------------|
+| Bot installation | ✅ Yes | ⚠️ Limited |
+| Real-time messages (webhook) | ✅ Yes | ⚠️ May not work |
+| RSC permissions | ✅ Yes | ⚠️ May behave differently |
+| @mentions | ✅ Yes | ⚠️ If bot is accessible |
+| Graph API history | ✅ Yes | ✅ Yes (with permissions) |
+
+### 11.2 Testing Private Channel Support
+
+To verify if your bot works in private channels:
+
+1. Create a private channel in a team where the bot is installed
+2. Try @mentioning the bot - see if it receives the message
+3. If RSC is enabled, try sending without @mention
+4. Check gateway logs for incoming activity
+
+### 11.3 Workarounds if Private Channels Don't Work
+
+If the bot can't receive real-time messages in private channels:
+
+1. **Use standard channels** for bot interactions
+2. **Use DMs** - users can always message the bot directly
+3. **Graph API Proxy** - can read private channel history if permissions are granted (requires `ChannelMessage.Read.All`)
+4. **Shared channels** - cross-tenant shared channels may have different behavior
+
+### 11.4 Graph API Access to Private Channels
+
+The Graph API **can** access private channel messages with `ChannelMessage.Read.All`, even if the bot can't receive real-time webhooks. This means the proxy pattern (Section 10) works for private channel history.
+
+```
+GET /teams/{team-id}/channels/{private-channel-id}/messages
+```
+
+The channel ID for private channels follows the same format: `19:xxx@thread.tacv2`
+
+### 11.5 Recommendations
+
+| Use Case | Recommendation |
+|----------|----------------|
+| Need real-time bot interaction | Use standard channels or DMs |
+| Need to search private channel history | Use Graph API Proxy |
+| Compliance/audit of private channels | Graph API with `ChannelMessage.Read.All` |
+
+**Note:** Microsoft continues to improve private channel support. Check the latest documentation if this is critical for your use case.
 
 ---
 

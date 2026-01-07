@@ -1092,6 +1092,18 @@ export const ClawdbotSchema = z.object({
       dmPolicy: DmPolicySchema.optional().default("pairing"),
       allowFrom: z.array(z.string()).optional(),
       textChunkLimit: z.number().int().positive().optional(),
+      requireMention: z.boolean().optional(),
+      teams: z
+        .record(
+          z.string(),
+          z.object({
+            requireMention: z.boolean().optional(),
+            channels: z
+              .record(z.string(), z.object({ requireMention: z.boolean().optional() }))
+              .optional(),
+          }),
+        )
+        .optional(),
     })
     .superRefine((value, ctx) => {
       if (value.dmPolicy !== "open") return;

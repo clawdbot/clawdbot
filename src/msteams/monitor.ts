@@ -57,6 +57,12 @@ type TeamsActivity = {
     type?: string;
     mentioned?: { id?: string; name?: string };
   }>;
+  /** Teams-specific channel data including team info */
+  channelData?: {
+    team?: { id?: string; name?: string };
+    channel?: { id?: string; name?: string };
+    tenant?: { id?: string };
+  };
 };
 
 type TeamsTurnContext = {
@@ -285,6 +291,34 @@ export async function monitorMSTeamsProvider(
           }
           return;
         }
+      }
+    }
+
+    // Check requireMention for channels and group chats
+    if (!isDirectMessage) {
+      const teamId = activity.channelData?.team?.id;
+      const channelId = conversationId;
+
+      // Resolution order: channel config > team config > global config > default (true)
+      const teamConfig = teamId ? msteamsCfg?.teams?.[teamId] : undefined;
+      const channelConfig = teamConfig?.channels?.[channelId];
+
+      const requireMention =
+        channelConfig?.requireMention ??
+        teamConfig?.requireMention ??
+        msteamsCfg?.requireMention ??
+        true;
+
+      const mentioned = wasBotMentioned(activity);
+
+      if (requireMention && !mentioned) {
+        log.debug("skipping message (mention required)", {
+          teamId,
+          channelId,
+          requireMention,
+          mentioned,
+        });
+        return;
       }
     }
 
