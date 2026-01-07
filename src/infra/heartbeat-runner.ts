@@ -27,8 +27,8 @@ import {
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
-import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
+import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
 
 type HeartbeatDeps = OutboundSendDeps & {

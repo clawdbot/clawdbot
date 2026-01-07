@@ -2,8 +2,8 @@ import type { CliDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -71,8 +71,12 @@ export async function sendCommand(
             to: opts.to,
             messageId: last?.messageId ?? "unknown",
             ...(last && "chatId" in last ? { chatId: last.chatId } : {}),
-            ...(last && "channelId" in last ? { channelId: last.channelId } : {}),
-            ...(last && "timestamp" in last ? { timestamp: last.timestamp } : {}),
+            ...(last && "channelId" in last
+              ? { channelId: last.channelId }
+              : {}),
+            ...(last && "timestamp" in last
+              ? { timestamp: last.timestamp }
+              : {}),
             mediaUrl: opts.media ?? null,
           },
           null,
