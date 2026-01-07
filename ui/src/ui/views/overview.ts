@@ -20,6 +20,7 @@ export type OverviewProps = {
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onRefresh: () => void;
+  onReconnect: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
@@ -84,7 +85,8 @@ export function renderOverview(props: OverviewProps) {
         </div>
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
-          <span class="muted">Reconnect to apply changes.</span>
+          <button class="btn" @click=${() => props.onReconnect()}>Reconnect</button>
+          <span class="muted">Reconnect to apply URL/password changes.</span>
         </div>
       </div>
 

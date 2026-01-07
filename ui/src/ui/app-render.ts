@@ -247,6 +247,7 @@ export function renderApp(state: AppViewState) {
                 state.applySettings({ ...state.settings, sessionKey: next });
               },
               onRefresh: () => state.loadOverview(),
+              onReconnect: () => state.connect(),
             })
           : nothing}
 

@@ -664,11 +664,19 @@ export class ClawdbotApp extends LitElement {
     if (!window.location.search) return;
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token")?.trim();
-    if (!token) return;
-    if (!this.settings.token) {
+    const password = params.get("password")?.trim();
+    let changed = false;
+    if (token && !this.settings.token) {
       this.applySettings({ ...this.settings, token });
+      params.delete("token");
+      changed = true;
     }
-    params.delete("token");
+    if (password) {
+      this.password = password;
+      params.delete("password");
+      changed = true;
+    }
+    if (!changed) return;
     const url = new URL(window.location.href);
     url.search = params.toString();
     window.history.replaceState({}, "", url.toString());
