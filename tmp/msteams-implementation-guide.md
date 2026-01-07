@@ -147,14 +147,36 @@ Before writing code, set up the Azure Bot resource. This gives you the credentia
 
 ### Step 1: Create Azure Bot
 
-1. Go to [Azure Portal](https://portal.azure.com) → Create a resource → Search "Azure Bot"
-2. Fill in basics:
-   - **Bot handle**: e.g., `clawdbot-msteams`
-   - **Subscription / Resource Group**: your choice
-   - **Pricing tier**: F0 (free) for dev, S1 for production
-   - **Type of App**: **Single Tenant** (recommended - multi-tenant deprecated after 2025-07-31)
-   - **Creation type**: "Create new Microsoft App ID"
-3. Click Create and wait for deployment
+1. Go to [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot) (direct link)
+
+2. **Basics tab - Project details:**
+
+   | Field | Value |
+   |-------|-------|
+   | **Bot handle** | Your bot name, e.g., `clawdbot-msteams` (must be unique) |
+   | **Subscription** | Select your Azure subscription |
+   | **Resource group** | Create new or use existing (e.g., `Bots`) |
+   | **New resource group location** | Choose nearest region (e.g., `West Europe`) |
+   | **Data residency** | **Regional** (recommended for GDPR compliance) or Global |
+   | **Region** | Same as resource group location |
+
+3. **Basics tab - Pricing:**
+
+   | Field | Value |
+   |-------|-------|
+   | **Pricing tier** | **Free** for dev/testing, Standard for production |
+
+4. **Basics tab - Microsoft App ID:**
+
+   | Field | Value |
+   |-------|-------|
+   | **Type of App** | **Single Tenant** (recommended - multi-tenant deprecated after 2025-07-31) |
+   | **Creation type** | **Create new Microsoft App ID** |
+   | **Service management reference** | Leave empty |
+
+   > **Note:** Single Tenant requires BotFramework SDK 4.15.0 or higher (we'll use 4.23+)
+
+5. Click **Review + create** → **Create** and wait for deployment (~1-2 minutes)
 
 ### Step 2: Get Credentials
 
