@@ -444,9 +444,13 @@ export async function monitorIMessageProvider(
   const abort = opts.abortSignal;
   const onAbort = () => {
     if (subscriptionId) {
-      void client.request("watch.unsubscribe", {
-        subscription: subscriptionId,
-      });
+      void client
+        .request("watch.unsubscribe", {
+          subscription: subscriptionId,
+        })
+        .catch(() => {
+          // Ignore disconnect errors during shutdown.
+        });
     }
     void client.stop();
   };
