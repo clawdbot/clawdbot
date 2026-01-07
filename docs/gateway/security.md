@@ -18,7 +18,7 @@ Your AI assistant can:
 - Execute arbitrary shell commands
 - Read/write files
 - Access network services
-- Send messages to anyone (if you give it WhatsApp access)
+- Send messages to anyone (if you give it WhatsApp or Matrix access)
 
 People who message you can:
 - Try to trick your AI into doing bad things
@@ -56,13 +56,13 @@ Details + files on disk: [Pairing](/start/pairing)
 
 Clawdbot has two separate “who can trigger me?” layers:
 
-- **DM allowlist** (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+- **DM allowlist** (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom` / `matrix.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
   - When `dmPolicy="pairing"`, approvals are written to `~/.clawdbot/credentials/<provider>-allowFrom.json` (merged with config allowlists).
 - **Group allowlist** (provider-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
-    - `whatsapp.groups`, `telegram.groups`, `imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
+    - `whatsapp.groups`, `telegram.groups`, `imessage.groups`, `matrix.rooms`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot *inside* a group session (WhatsApp/Telegram/Signal/iMessage).
-    - `discord.guilds` / `slack.channels`: per-surface allowlists + mention defaults.
+    - `discord.guilds` / `slack.channels` / `matrix.rooms`: per-surface allowlists + mention defaults.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/concepts/groups)
 

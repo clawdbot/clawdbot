@@ -1,5 +1,5 @@
 ---
-summary: "Routing rules per provider (WhatsApp, Telegram, Discord, web) and shared context"
+summary: "Routing rules per provider (WhatsApp, Telegram, Discord, Matrix, web) and shared context"
 read_when:
   - Changing provider routing or inbox behavior
 ---
@@ -9,7 +9,7 @@ Updated: 2026-01-06
 
 Goal: deterministic replies per provider, while supporting multi-agent + multi-account routing.
 
-- **Provider**: provider label (`whatsapp`, `webchat`, `telegram`, `discord`, `signal`, `imessage`, …). Routing is fixed: replies go back to the origin provider; the model doesn’t choose.
+- **Provider**: provider label (`whatsapp`, `webchat`, `telegram`, `discord`, `signal`, `imessage`, `matrix`, …). Routing is fixed: replies go back to the origin provider; the model doesn’t choose.
 - **AccountId**: provider account instance (e.g. WhatsApp account `"default"` vs `"work"`). Not every provider supports multi-account yet.
 - **AgentId**: one isolated “brain” (workspace + per-agent agentDir + per-agent session store).
 - **Reply context:** inbound replies include `ReplyToId`, `ReplyToBody`, and `ReplyToSender`, and the quoted context is appended to `Body` as a `[Replying to ...]` block.

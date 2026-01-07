@@ -44,7 +44,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Model/auth (Anthropic or OpenAI Codex OAuth recommended, API key optional, Minimax M2.1 via LM Studio)
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
-- Providers (Telegram, WhatsApp, Discord, Signal)
+- Providers (Telegram, WhatsApp, Discord, Signal, Matrix)
 - Daemon install (LaunchAgent / systemd user unit)
 - Health check
 - Skills (recommended)
@@ -96,6 +96,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - WhatsApp: optional QR login.
    - Telegram: bot token.
    - Discord: bot token.
+   - Matrix: homeserver + access token (Node-only for E2EE).
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
   - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve --provider <provider> <code>` or use allowlists.
@@ -106,7 +107,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Linux (and Windows via WSL2): systemd user unit
      - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
-   - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
+   - **Runtime selection:** Node (recommended; required for WhatsApp + Matrix E2EE) or Bun (faster, but incompatible with WhatsApp + Matrix).
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
@@ -221,5 +222,5 @@ Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
 
 - macOS app onboarding: [`docs/onboarding.md`](/start/onboarding)
 - Config reference: [`docs/configuration.md`](/gateway/configuration)
-- Providers: [`docs/whatsapp.md`](/providers/whatsapp), [`docs/telegram.md`](/providers/telegram), [`docs/discord.md`](/providers/discord), [`docs/signal.md`](/providers/signal), [`docs/imessage.md`](/providers/imessage)
+- Providers: [`docs/whatsapp.md`](/providers/whatsapp), [`docs/telegram.md`](/providers/telegram), [`docs/discord.md`](/providers/discord), [`docs/signal.md`](/providers/signal), [`docs/imessage.md`](/providers/imessage), [`docs/matrix.md`](/providers/matrix)
 - Skills: [`docs/skills.md`](/tools/skills), [`docs/skills-config.md`](/tools/skills-config)

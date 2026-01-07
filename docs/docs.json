@@ -210,6 +210,10 @@
       "destination": "/providers/location"
     },
     {
+      "source": "/matrix",
+      "destination": "/providers/matrix"
+    },
+    {
       "source": "/location-command",
       "destination": "/nodes/location-command"
     },
@@ -608,6 +612,7 @@
           "providers/grammy",
           "providers/discord",
           "providers/slack",
+          "providers/matrix",
           "providers/signal",
           "providers/imessage",
           "providers/location"

@@ -610,6 +610,12 @@ function shouldIncludeSlackTool(messageProvider?: string): boolean {
   return normalized === "slack" || normalized.startsWith("slack:");
 }
 
+function shouldIncludeMatrixTool(messageProvider?: string): boolean {
+  const normalized = normalizeMessageProvider(messageProvider);
+  if (!normalized) return false;
+  return normalized === "matrix" || normalized.startsWith("matrix:");
+}
+
 function shouldIncludeTelegramTool(messageProvider?: string): boolean {
   const normalized = normalizeMessageProvider(messageProvider);
   if (!normalized) return false;
@@ -704,11 +710,13 @@ export function createClawdbotCodingTools(options?: {
   ];
   const allowDiscord = shouldIncludeDiscordTool(options?.messageProvider);
   const allowSlack = shouldIncludeSlackTool(options?.messageProvider);
+  const allowMatrix = shouldIncludeMatrixTool(options?.messageProvider);
   const allowTelegram = shouldIncludeTelegramTool(options?.messageProvider);
   const allowWhatsApp = shouldIncludeWhatsAppTool(options?.messageProvider);
   const filtered = tools.filter((tool) => {
     if (tool.name === "discord") return allowDiscord;
     if (tool.name === "slack") return allowSlack;
+    if (tool.name === "matrix") return allowMatrix;
     if (tool.name === "telegram") return allowTelegram;
     if (tool.name === "whatsapp") return allowWhatsApp;
     return true;

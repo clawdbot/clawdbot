@@ -94,6 +94,37 @@ export type SlackForm = {
   channels: SlackChannelForm[];
 };
 
+export type MatrixActionForm = {
+  reactions: boolean;
+  messages: boolean;
+  pins: boolean;
+  memberInfo: boolean;
+  roomInfo: boolean;
+};
+
+export type MatrixForm = {
+  enabled: boolean;
+  homeserver: string;
+  userId: string;
+  accessToken: string;
+  password: string;
+  deviceId: string;
+  deviceName: string;
+  encryption: boolean;
+  autoJoin: "always" | "allowlist" | "off";
+  autoJoinAllowlist: string;
+  groupPolicy: "open" | "allowlist" | "disabled";
+  allowlistOnly: boolean;
+  dmEnabled: boolean;
+  dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
+  dmAllowFrom: string;
+  textChunkLimit: string;
+  mediaMaxMb: string;
+  replyToMode: "off" | "first" | "all";
+  threadReplies: "off" | "inbound" | "always";
+  actions: MatrixActionForm;
+};
+
 export const defaultDiscordActions: DiscordActionForm = {
   reactions: true,
   stickers: true,
@@ -118,6 +149,14 @@ export const defaultSlackActions: SlackActionForm = {
   pins: true,
   memberInfo: true,
   emojiList: true,
+};
+
+export const defaultMatrixActions: MatrixActionForm = {
+  reactions: true,
+  messages: true,
+  pins: true,
+  memberInfo: true,
+  roomInfo: true,
 };
 
 export type SignalForm = {
@@ -168,6 +207,7 @@ export type CronFormState = {
     | "telegram"
     | "discord"
     | "slack"
+    | "matrix"
     | "signal"
     | "imessage";
   to: string;

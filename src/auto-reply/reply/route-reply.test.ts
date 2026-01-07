@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageIMessage: vi.fn(async () => ({ messageId: "ok" })),
+  sendMessageMatrix: vi.fn(async () => ({ messageId: "mx1", roomId: "r1" })),
   sendMessageSignal: vi.fn(async () => ({ messageId: "t1" })),
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
@@ -14,6 +15,9 @@ vi.mock("../../discord/send.js", () => ({
 }));
 vi.mock("../../imessage/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
+}));
+vi.mock("../../matrix/send.js", () => ({
+  sendMessageMatrix: mocks.sendMessageMatrix,
 }));
 vi.mock("../../signal/send.js", () => ({
   sendMessageSignal: mocks.sendMessageSignal,
@@ -71,6 +75,24 @@ describe("routeReply", () => {
       "telegram:123",
       "hi",
       expect.objectContaining({ replyToMessageId: 123 }),
+    );
+  });
+
+  it("passes thread id to Matrix sends", async () => {
+    mocks.sendMessageMatrix.mockClear();
+    await routeReply({
+      payload: { text: "hi", replyToId: "$evt" },
+      channel: "matrix",
+      to: "room:!room",
+      threadId: "$thread",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
+      "room:!room",
+      "hi",
+      expect.objectContaining({ replyToId: "$evt", threadId: "$thread" }),
+    );
+  });
     );
   });
 

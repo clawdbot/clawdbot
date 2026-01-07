@@ -74,6 +74,7 @@ describe("resolveTextChunkLimit", () => {
     expect(resolveTextChunkLimit(undefined, "whatsapp")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "telegram")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "slack")).toBe(4000);
+    expect(resolveTextChunkLimit(undefined, "matrix")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "signal")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "imessage")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "discord")).toBe(2000);

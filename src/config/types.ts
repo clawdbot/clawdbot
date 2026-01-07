@@ -87,6 +87,7 @@ export type AgentElevatedAllowFromConfig = {
   slack?: Array<string | number>;
   signal?: Array<string | number>;
   imessage?: Array<string | number>;
+  matrix?: Array<string | number>;
   webchat?: Array<string | number>;
 };
 
@@ -213,6 +214,7 @@ export type HookMappingConfig = {
     | "telegram"
     | "discord"
     | "slack"
+    | "matrix"
     | "signal"
     | "imessage";
   to?: string;
@@ -526,43 +528,93 @@ export type SlackConfig = {
   accounts?: Record<string, SlackAccountConfig>;
 } & SlackAccountConfig;
 
+export type MatrixDmConfig = {
+  /** If false, ignore all incoming Matrix DMs. Default: true. */
+  enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
+  /** Allowlist for DM senders (Matrix user IDs). */
+  allowFrom?: Array<string | number>;
+};
+
+export type MatrixRoomConfig = {
+  /** If false, disable the bot in this room. (Alias for allow: false.) */
+  enabled?: boolean;
+  /** Legacy room allow toggle; prefer enabled. */
+  allow?: boolean;
+  /** Require mentioning the bot to trigger replies. */
+  requireMention?: boolean;
+  /** Reply to all messages without needing a mention. */
+  autoReply?: boolean;
+  /** Allowlist of users that can invoke the bot in this room. */
+  users?: Array<string | number>;
+  /** Optional skill filter for this room. */
+  skills?: string[];
+  /** Optional system prompt for this room. */
+  systemPrompt?: string;
+};
+
+export type MatrixActionConfig = {
+  reactions?: boolean;
+  messages?: boolean;
+  pins?: boolean;
+  memberInfo?: boolean;
+  roomInfo?: boolean;
+};
+
+export type MatrixConfig = {
+  /** If false, do not start the Matrix provider. Default: true. */
+  enabled?: boolean;
+  /** Matrix homeserver base URL (e.g. https://matrix.org). */
+  homeserver?: string;
+  /** Matrix user ID (e.g. @clawdbot:matrix.org). */
+  userId?: string;
+  /** Access token (preferred). */
+  accessToken?: string;
+  /** Password login (optional; generates access token at runtime). */
+  password?: string;
+  /** Optional device id override. */
+  deviceId?: string;
+  /** Optional device name override. */
+  deviceName?: string;
+  /** Optional store path for sync state. */
+  storePath?: string;
+  /** Optional store path for crypto state. */
+  cryptoStorePath?: string;
+  /** Enable end-to-end encryption (default: true). */
+  encryption?: boolean;
+  /** Auto-join room invites (always|allowlist|off). Default: always. */
+  autoJoin?: "always" | "allowlist" | "off";
+  /** Room allowlist for auto-join when autoJoin=allowlist. */
+  autoJoinAllowlist?: string[];
+  /**
+   * Controls how room messages are handled:
+   * - "open" (default): rooms bypass allowlists; mention-gating applies
+   * - "disabled": block all room messages
+   * - "allowlist": only allow rooms present in matrix.rooms
+   */
+  groupPolicy?: GroupPolicy;
+  /** Require allowlists for rooms + DMs unless explicitly disabled. */
+  allowlistOnly?: boolean;
+  /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
+  mediaMaxMb?: number;
+  /** Control reply threading when reply tags are present (off|first|all). */
+  replyToMode?: ReplyToMode;
+  /** Thread reply behavior (off|inbound|always). Default: inbound. */
+  threadReplies?: "off" | "inbound" | "always";
+  /** Initial sync limit (events per room). */
+  initialSyncLimit?: number;
+  /** Per-action tool gating (default: true for all). */
+  actions?: MatrixActionConfig;
+  dm?: MatrixDmConfig;
+  rooms?: Record<string, MatrixRoomConfig>;
+};
+
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start this Signal account. Default: true. */
-  enabled?: boolean;
-  /** Optional explicit E.164 account for signal-cli. */
-  account?: string;
-  /** Optional full base URL for signal-cli HTTP daemon. */
-  httpUrl?: string;
-  /** HTTP host for signal-cli daemon (default 127.0.0.1). */
-  httpHost?: string;
-  /** HTTP port for signal-cli daemon (default 8080). */
-  httpPort?: number;
-  /** signal-cli binary path (default: signal-cli). */
-  cliPath?: string;
-  /** Auto-start signal-cli daemon (default: true if httpUrl not set). */
-  autoStart?: boolean;
-  receiveMode?: "on-start" | "manual";
-  ignoreAttachments?: boolean;
-  ignoreStories?: boolean;
-  sendReadReceipts?: boolean;
-  /** Direct message access policy (default: pairing). */
-  dmPolicy?: DmPolicy;
-  allowFrom?: Array<string | number>;
-  /** Optional allowlist for Signal group senders (E.164). */
-  groupAllowFrom?: Array<string | number>;
-  /**
-   * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, no extra gating
-   * - "disabled": block all group messages
-   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-   */
-  groupPolicy?: GroupPolicy;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  mediaMaxMb?: number;
-};
 
 export type SignalConfig = {
   /** Optional per-account Signal configuration (multi-account). */
@@ -629,6 +681,7 @@ export type QueueModeByProvider = {
   telegram?: QueueMode;
   discord?: QueueMode;
   slack?: QueueMode;
+  matrix?: QueueMode;
   signal?: QueueMode;
   imessage?: QueueMode;
   webchat?: QueueMode;
@@ -1101,13 +1154,14 @@ export type ClawdbotConfig = {
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
-      /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|none). */
+      /** Delivery target (last|whatsapp|telegram|discord|slack|matrix|signal|imessage|none). */
       target?:
         | "last"
         | "whatsapp"
         | "telegram"
         | "discord"
         | "slack"
+        | "matrix"
         | "signal"
         | "imessage"
         | "none";
@@ -1198,6 +1252,7 @@ export type ClawdbotConfig = {
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
   slack?: SlackConfig;
+  matrix?: MatrixConfig;
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   cron?: CronConfig;

@@ -4,6 +4,7 @@ export type ProvidersStatusSnapshot = {
   telegram: TelegramStatus;
   discord?: DiscordStatus | null;
   slack?: SlackStatus | null;
+  matrix?: MatrixStatus | null;
   signal?: SignalStatus | null;
   imessage?: IMessageStatus | null;
 };
@@ -118,6 +119,26 @@ export type SlackStatus = {
   lastStopAt?: number | null;
   lastError?: string | null;
   probe?: SlackProbe | null;
+  lastProbeAt?: number | null;
+};
+
+export type MatrixProbe = {
+  ok: boolean;
+  status?: number | null;
+  error?: string | null;
+  elapsedMs?: number | null;
+  userId?: string | null;
+  deviceId?: string | null;
+};
+
+export type MatrixStatus = {
+  configured: boolean;
+  authSource?: string | null;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: MatrixProbe | null;
   lastProbeAt?: number | null;
 };
 
@@ -279,6 +300,7 @@ export type CronPayload =
         | "telegram"
         | "discord"
         | "slack"
+        | "matrix"
         | "signal"
         | "imessage";
       to?: string;

@@ -1,11 +1,11 @@
 ---
-summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/Slack/Signal/iMessage)"
+summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/Matrix)"
 read_when:
   - Changing group chat behavior or mention gating
 ---
 # Groups
 
-Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage.
+Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Matrix.
 
 ## Session keys
 - Group sessions use `agent:<agentId>:<provider>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
@@ -47,6 +47,10 @@ Control how group/room messages are handled per provider:
   slack: {
     groupPolicy: "allowlist",
     channels: { "#general": { allow: true } }
+  },
+  matrix: {
+    groupPolicy: "allowlist",
+    rooms: { "!roomid:example": { allow: true } }
   }
 }
 ```
@@ -62,6 +66,7 @@ Notes:
 - WhatsApp/Telegram/Signal/iMessage: use `groupAllowFrom` (fallback: explicit `allowFrom`).
 - Discord: allowlist uses `discord.guilds.<id>.channels`.
 - Slack: allowlist uses `slack.channels`.
+- Matrix: allowlist uses `matrix.rooms`.
 - Group DMs are controlled separately (`discord.dm.*`, `slack.dm.*`).
 - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
 
@@ -88,6 +93,12 @@ Group messages require a mention unless overridden per group. Defaults live per 
       "123": { requireMention: false }
     }
   },
+  matrix: {
+    rooms: {
+      "*": { requireMention: true },
+      "!roomid:example": { requireMention: false }
+    }
+  },
   routing: {
     groupChat: {
       mentionPatterns: ["@clawd", "clawdbot", "\\+15555550123"],
@@ -104,7 +115,7 @@ Notes:
 - Discord defaults live in `discord.guilds."*"` (overridable per guild/channel).
 
 ## Group allowlists
-When `whatsapp.groups`, `telegram.groups`, or `imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
+When `whatsapp.groups`, `telegram.groups`, `imessage.groups`, or `matrix.rooms` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
 ## Activation (owner-only)
 Group owners can toggle per-group activation:
@@ -127,6 +138,11 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - Prefer `chat_id:<id>` when routing or allowlisting.
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
+
+## Matrix specifics
+- Prefer room ids (`!roomid:server`) in allowlists and delivery targets.
+- DMs are detected from `m.direct` only; rooms not flagged there are treated as group rooms.
+- Thread replies stay in-thread when the inbound message is threaded (`matrix.threadReplies`).
 
 ## WhatsApp specifics
 See [`docs/group-messages.md`](/concepts/group-messages) for WhatsApp-only behavior (history injection, mention handling details).

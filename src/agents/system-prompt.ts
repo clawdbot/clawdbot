@@ -53,6 +53,7 @@ export function buildAgentSystemPrompt(params: {
     image: "Analyze an image with the configured image model",
     discord: "Send Discord reactions/messages and manage threads",
     slack: "Send Slack messages and manage channels",
+    matrix: "Send Matrix messages and manage reactions/pins",
     telegram: "Send Telegram reactions",
     whatsapp: "Send WhatsApp reactions",
   };
@@ -79,6 +80,7 @@ export function buildAgentSystemPrompt(params: {
     "image",
     "discord",
     "slack",
+    "matrix",
     "telegram",
     "whatsapp",
   ];

@@ -65,6 +65,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Discord](https://docs.clawd.bot/providers/discord)
 - [Signal](https://docs.clawd.bot/providers/signal)
 - [iMessage](https://docs.clawd.bot/providers/imessage)
+- [Matrix](https://docs.clawd.bot/providers/matrix)
 - [Location parsing](https://docs.clawd.bot/providers/location)
 - [WebChat](https://docs.clawd.bot/web/webchat)
 - [Webhooks](https://docs.clawd.bot/automation/webhook)

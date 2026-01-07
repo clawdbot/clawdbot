@@ -7,6 +7,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { sendMessageMatrix } from "../../matrix/send.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
@@ -26,6 +27,7 @@ export type OutboundSendDeps = {
   sendTelegram?: typeof sendMessageTelegram;
   sendDiscord?: typeof sendMessageDiscord;
   sendSlack?: typeof sendMessageSlack;
+  sendMatrix?: typeof sendMessageMatrix;
   sendSignal?: typeof sendMessageSignal;
   sendIMessage?: typeof sendMessageIMessage;
 };
@@ -35,6 +37,7 @@ export type OutboundDeliveryResult =
   | { provider: "telegram"; messageId: string; chatId: string }
   | { provider: "discord"; messageId: string; channelId: string }
   | { provider: "slack"; messageId: string; channelId: string }
+  | { provider: "matrix"; messageId: string; roomId: string }
   | { provider: "signal"; messageId: string; timestamp?: number }
   | { provider: "imessage"; messageId: string };
 
@@ -48,6 +51,7 @@ const providerCaps: Record<
   telegram: { chunker: chunkMarkdownText },
   discord: { chunker: null },
   slack: { chunker: null },
+  matrix: { chunker: null },
   signal: { chunker: chunkText },
   imessage: { chunker: chunkText },
 };
@@ -167,6 +171,17 @@ function createProviderHandler(params: {
         })),
       }),
     },
+    matrix: {
+      chunker: providerCaps.matrix.chunker,
+      sendText: async (text) => ({
+        provider: "matrix",
+        ...(await deps.sendMatrix(to, text)),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "matrix",
+        ...(await deps.sendMatrix(to, caption, { mediaUrl })),
+      }),
+    },
     signal: {
       chunker: providerCaps.signal.chunker,
       sendText: async (text) => ({
@@ -226,6 +241,7 @@ export async function deliverOutboundPayloads(params: {
     sendTelegram: params.deps?.sendTelegram ?? sendMessageTelegram,
     sendDiscord: params.deps?.sendDiscord ?? sendMessageDiscord,
     sendSlack: params.deps?.sendSlack ?? sendMessageSlack,
+    sendMatrix: params.deps?.sendMatrix ?? sendMessageMatrix,
     sendSignal: params.deps?.sendSignal ?? sendMessageSignal,
     sendIMessage: params.deps?.sendIMessage ?? sendMessageIMessage,
   };

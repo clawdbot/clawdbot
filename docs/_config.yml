@@ -1,5 +1,5 @@
 title: "CLAWDBOT Docs"
-description: "A TypeScript/Node gateway + macOS/iOS/Android companions for WhatsApp (web) and Telegram (bot)."
+description: "A TypeScript/Node gateway + macOS/iOS/Android companions for WhatsApp, Telegram, Discord, Slack, Signal, iMessage, and Matrix."
 markdown: kramdown
 highlighter: rouge
 

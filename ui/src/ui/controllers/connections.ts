@@ -3,12 +3,15 @@ import { parseList } from "../format";
 import type { ConfigSnapshot, ProvidersStatusSnapshot } from "../types";
 import {
   defaultDiscordActions,
+  defaultMatrixActions,
   defaultSlackActions,
   type DiscordActionForm,
   type DiscordForm,
   type DiscordGuildChannelForm,
   type DiscordGuildForm,
   type IMessageForm,
+  type MatrixActionForm,
+  type MatrixForm,
   type SlackActionForm,
   type SlackForm,
   type SignalForm,
@@ -39,6 +42,10 @@ export type ConnectionsState = {
   slackTokenLocked: boolean;
   slackAppTokenLocked: boolean;
   slackConfigStatus: string | null;
+  matrixForm: MatrixForm;
+  matrixSaving: boolean;
+  matrixAuthLocked: boolean;
+  matrixConfigStatus: string | null;
   signalForm: SignalForm;
   signalSaving: boolean;
   signalConfigStatus: string | null;
@@ -64,6 +71,7 @@ export async function loadProviders(state: ConnectionsState, probe: boolean) {
     state.discordTokenLocked = res.discord?.tokenSource === "env";
     state.slackTokenLocked = res.slack?.botTokenSource === "env";
     state.slackAppTokenLocked = res.slack?.appTokenSource === "env";
+    state.matrixAuthLocked = res.matrix?.authSource === "env";
   } catch (err) {
     state.providersError = String(err);
   } finally {
@@ -159,6 +167,21 @@ export function updateSlackForm(
     return;
   }
   state.slackForm = { ...state.slackForm, ...patch };
+}
+
+export function updateMatrixForm(
+  state: ConnectionsState,
+  patch: Partial<MatrixForm>,
+) {
+  if (patch.actions) {
+    state.matrixForm = {
+      ...state.matrixForm,
+      ...patch,
+      actions: { ...state.matrixForm.actions, ...patch.actions },
+    };
+    return;
+  }
+  state.matrixForm = { ...state.matrixForm, ...patch };
 }
 
 export function updateSignalForm(
@@ -539,6 +562,148 @@ export async function saveSlackConfig(state: ConnectionsState) {
     state.slackConfigStatus = String(err);
   } finally {
     state.slackSaving = false;
+  }
+}
+
+export async function saveMatrixConfig(state: ConnectionsState) {
+  if (!state.client || !state.connected) return;
+  if (state.matrixSaving) return;
+  state.matrixSaving = true;
+  state.matrixConfigStatus = null;
+  try {
+    const base = state.configSnapshot?.config ?? {};
+    const config = { ...base } as Record<string, unknown>;
+    const matrix = { ...(config.matrix ?? {}) } as Record<string, unknown>;
+    const form = state.matrixForm;
+
+    if (form.enabled) {
+      delete matrix.enabled;
+    } else {
+      matrix.enabled = false;
+    }
+
+    const homeserver = form.homeserver.trim();
+    if (homeserver) matrix.homeserver = homeserver;
+    else delete matrix.homeserver;
+
+    const userId = form.userId.trim();
+    if (userId) matrix.userId = userId;
+    else delete matrix.userId;
+
+    if (!state.matrixAuthLocked) {
+      const accessToken = form.accessToken.trim();
+      if (accessToken) matrix.accessToken = accessToken;
+      else delete matrix.accessToken;
+      const password = form.password.trim();
+      if (password) matrix.password = password;
+      else delete matrix.password;
+    }
+
+    const deviceId = form.deviceId.trim();
+    if (deviceId) matrix.deviceId = deviceId;
+    else delete matrix.deviceId;
+    const deviceName = form.deviceName.trim();
+    if (deviceName) matrix.deviceName = deviceName;
+    else delete matrix.deviceName;
+
+    if (form.encryption) {
+      delete matrix.encryption;
+    } else {
+      matrix.encryption = false;
+    }
+
+    if (form.autoJoin === "always") {
+      delete matrix.autoJoin;
+    } else {
+      matrix.autoJoin = form.autoJoin;
+    }
+    const autoJoinAllowlist = parseList(form.autoJoinAllowlist);
+    if (autoJoinAllowlist.length > 0) {
+      matrix.autoJoinAllowlist = autoJoinAllowlist;
+    } else {
+      delete matrix.autoJoinAllowlist;
+    }
+
+    if (form.groupPolicy === "open") {
+      delete matrix.groupPolicy;
+    } else {
+      matrix.groupPolicy = form.groupPolicy;
+    }
+    if (form.allowlistOnly) matrix.allowlistOnly = true;
+    else delete matrix.allowlistOnly;
+
+    const dm = { ...(matrix.dm ?? {}) } as Record<string, unknown>;
+    if (form.dmEnabled) {
+      delete dm.enabled;
+    } else {
+      dm.enabled = false;
+    }
+    if (form.dmPolicy === "pairing") {
+      delete dm.policy;
+    } else {
+      dm.policy = form.dmPolicy;
+    }
+    const dmAllowFrom = parseList(form.dmAllowFrom);
+    if (dmAllowFrom.length > 0) dm.allowFrom = dmAllowFrom;
+    else delete dm.allowFrom;
+    if (Object.keys(dm).length > 0) matrix.dm = dm;
+    else delete matrix.dm;
+
+    const textChunkLimit = Number.parseInt(form.textChunkLimit, 10);
+    if (Number.isFinite(textChunkLimit) && textChunkLimit > 0) {
+      matrix.textChunkLimit = textChunkLimit;
+    } else {
+      delete matrix.textChunkLimit;
+    }
+
+    const mediaMaxMb = Number.parseFloat(form.mediaMaxMb);
+    if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
+      matrix.mediaMaxMb = mediaMaxMb;
+    } else {
+      delete matrix.mediaMaxMb;
+    }
+
+    if (form.replyToMode === "off") {
+      delete matrix.replyToMode;
+    } else {
+      matrix.replyToMode = form.replyToMode;
+    }
+
+    if (form.threadReplies === "inbound") {
+      delete matrix.threadReplies;
+    } else {
+      matrix.threadReplies = form.threadReplies;
+    }
+
+    const actions: Partial<MatrixActionForm> = {};
+    const applyAction = (key: keyof MatrixActionForm) => {
+      const value = form.actions[key];
+      if (value !== defaultMatrixActions[key]) actions[key] = value;
+    };
+    applyAction("reactions");
+    applyAction("messages");
+    applyAction("pins");
+    applyAction("memberInfo");
+    applyAction("roomInfo");
+    if (Object.keys(actions).length > 0) {
+      matrix.actions = actions;
+    } else {
+      delete matrix.actions;
+    }
+
+    if (Object.keys(matrix).length > 0) {
+      config.matrix = matrix;
+    } else {
+      delete config.matrix;
+    }
+
+    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
+    await state.client.request("config.set", { raw });
+    state.matrixConfigStatus = "Saved. Restart gateway if needed.";
+  } catch (err) {
+    state.matrixConfigStatus = String(err);
+  } finally {
+    state.matrixSaving = false;
   }
 }
 

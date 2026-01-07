@@ -9,6 +9,7 @@ const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
   "telegram",
   "discord",
   "slack",
+  "matrix",
   "signal",
   "imessage",
   "webchat",

@@ -66,6 +66,7 @@ const GROUP_SURFACES = new Set([
   "whatsapp",
   "telegram",
   "discord",
+  "matrix",
   "signal",
   "imessage",
   "webchat",
@@ -121,6 +122,7 @@ export type SessionEntry = {
     | "telegram"
     | "discord"
     | "slack"
+    | "matrix"
     | "signal"
     | "imessage"
     | "webchat";

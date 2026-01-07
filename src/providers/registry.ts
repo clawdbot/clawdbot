@@ -3,6 +3,7 @@ export const CHAT_PROVIDER_ORDER = [
   "whatsapp",
   "discord",
   "slack",
+  "matrix",
   "signal",
   "imessage",
 ] as const;
@@ -51,6 +52,14 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
     docsPath: "/slack",
     docsLabel: "slack",
     blurb: "supported (Socket Mode).",
+  },
+  matrix: {
+    id: "matrix",
+    label: "Matrix",
+    selectionLabel: "Matrix (Client-Server)",
+    docsPath: "/matrix",
+    docsLabel: "matrix",
+    blurb: "Matrix user access token (client-server API).",
   },
   signal: {
     id: "signal",

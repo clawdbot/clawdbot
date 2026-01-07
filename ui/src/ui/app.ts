@@ -39,10 +39,12 @@ import type {
 } from "./types";
 import {
   defaultDiscordActions,
+  defaultMatrixActions,
   defaultSlackActions,
   type CronFormState,
   type DiscordForm,
   type IMessageForm,
+  type MatrixForm,
   type SlackForm,
   type SignalForm,
   type TelegramForm,
@@ -64,6 +66,7 @@ import {
   logoutWhatsApp,
   saveDiscordConfig,
   saveIMessageConfig,
+  saveMatrixConfig,
   saveSlackConfig,
   saveSignalConfig,
   saveTelegramConfig,
@@ -298,6 +301,31 @@ export class ClawdbotApp extends LitElement {
   @state() slackTokenLocked = false;
   @state() slackAppTokenLocked = false;
   @state() slackConfigStatus: string | null = null;
+  @state() matrixForm: MatrixForm = {
+    enabled: true,
+    homeserver: "",
+    userId: "",
+    accessToken: "",
+    password: "",
+    deviceId: "",
+    deviceName: "",
+    encryption: true,
+    autoJoin: "always",
+    autoJoinAllowlist: "",
+    groupPolicy: "open",
+    allowlistOnly: false,
+    dmEnabled: true,
+    dmPolicy: "pairing",
+    dmAllowFrom: "",
+    textChunkLimit: "",
+    mediaMaxMb: "",
+    replyToMode: "off",
+    threadReplies: "inbound",
+    actions: { ...defaultMatrixActions },
+  };
+  @state() matrixSaving = false;
+  @state() matrixAuthLocked = false;
+  @state() matrixConfigStatus: string | null = null;
   @state() signalForm: SignalForm = {
     enabled: true,
     account: "",
@@ -1061,6 +1089,12 @@ export class ClawdbotApp extends LitElement {
 
   async handleSlackSave() {
     await saveSlackConfig(this);
+    await loadConfig(this);
+    await loadProviders(this, true);
+  }
+
+  async handleMatrixSave() {
+    await saveMatrixConfig(this);
     await loadConfig(this);
     await loadProviders(this, true);
   }

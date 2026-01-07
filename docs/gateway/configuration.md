@@ -163,7 +163,7 @@ Optional agent identity used for defaults and UX. This is written by the macOS o
 
 If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
 - `messages.ackReaction` from `identity.emoji` (falls back to 👀)
-- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
+- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups across Telegram/Slack/Discord/Matrix/iMessage/WhatsApp)
 
 ```json5
 {
@@ -297,7 +297,7 @@ Notes:
 
 ### `routing.groupChat`
 
-Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
+Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Matrix, and iMessage group chats.
 
 **Mention types:**
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
@@ -376,7 +376,7 @@ Notes:
 - `"disabled"`: block all group/room messages.
 - `"allowlist"`: only allow groups/rooms that match the configured allowlist.
 - WhatsApp/Telegram/Signal/iMessage use `groupAllowFrom` (fallback: explicit `allowFrom`).
-- Discord/Slack use channel allowlists (`discord.guilds.*.channels`, `slack.channels`).
+- Discord/Slack/Matrix use channel/room allowlists (`discord.guilds.*.channels`, `slack.channels`, `matrix.rooms`).
 - Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
 
 ### Multi-agent routing (`routing.agents` + `routing.bindings`)
@@ -543,6 +543,7 @@ Controls how inbound messages behave when an agent run is already active.
         whatsapp: "collect",
         telegram: "collect",
         discord: "collect",
+        matrix: "collect",
         imessage: "collect",
         webchat: "collect"
       }
@@ -792,6 +793,56 @@ Slack action groups (gate `slack` tool actions):
 | pins | enabled | Pin/unpin/list |
 | memberInfo | enabled | Member info |
 | emojiList | enabled | Custom emoji list |
+
+### `matrix` (client-server)
+
+Matrix runs via the official `matrix-js-sdk` and requires **Node** for Rust crypto (E2EE on by default).
+
+```json5
+{
+  matrix: {
+    enabled: true,
+    homeserver: "https://matrix.example",
+    userId: "@clawdbot:example",
+    accessToken: "syt_...",
+    deviceId: "CLAWDBOT",
+    deviceName: "Clawdbot Gateway",
+    storePath: "~/.clawdbot/credentials/matrix/store",
+    cryptoStorePath: "~/.clawdbot/credentials/matrix/crypto",
+    encryption: true,
+    autoJoin: "always", // always | allowlist | off
+    autoJoinAllowlist: ["!roomid:example", "#ops:example"],
+    groupPolicy: "open", // open | allowlist | disabled
+    allowlistOnly: false,
+    dm: {
+      enabled: true,
+      policy: "pairing", // pairing | allowlist | open | disabled
+      allowFrom: ["@owner:example", "*"]
+    },
+    rooms: {
+      "*": { requireMention: true },
+      "!roomid:example": {
+        allow: true,
+        autoReply: false,
+        skills: ["docs"],
+        systemPrompt: "Short answers only."
+      }
+    },
+    replyToMode: "off", // off | first | all
+    threadReplies: "inbound", // inbound | always | off
+    textChunkLimit: 4000,
+    mediaMaxMb: 20
+  }
+}
+```
+
+Notes:
+- Matrix is **Node-only** (Bun unsupported).
+- Crypto state is in-memory on Node (no persistent IndexedDB store yet).
+- DMs are detected via `m.direct` only.
+- Media uploads are disabled in encrypted rooms (E2EE) for now.
+- `autoJoin="allowlist"` requires `autoJoinAllowlist`.
+
 ### `imessage` (imsg CLI)
 
 Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
@@ -883,7 +934,7 @@ Controls inbound/outbound prefixes and optional ack reactions.
 streaming, final replies) across providers unless already present.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
-on providers that support reactions (Slack/Discord/Telegram). Defaults to the
+on providers that support reactions (Slack/Discord/Telegram/Matrix). Defaults to the
 configured `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
 
 `ackReactionScope` controls when reactions fire:
@@ -1110,7 +1161,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Default:
   `30m`. Set `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
-- `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
+- `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `matrix`, `none`). Default: `last`.
 - `to`: optional recipient override (provider-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Overrides are sent verbatim; include a `Read HEARTBEAT.md if exists` line if you still want the file read.
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
@@ -1633,7 +1684,7 @@ Hot-applied (no full gateway restart):
 - `cron` (cron service restart + concurrency update)
 - `agent.heartbeat` (heartbeat runner restart)
 - `web` (WhatsApp web provider restart)
-- `telegram`, `discord`, `signal`, `imessage` (provider restarts)
+- `telegram`, `discord`, `signal`, `imessage`, `matrix` (provider restarts)
 - `agent`, `models`, `routing`, `messages`, `session`, `whatsapp`, `logging`, `skills`, `ui`, `talk`, `identity`, `wizard` (dynamic reads)
 
 Requires full Gateway restart:

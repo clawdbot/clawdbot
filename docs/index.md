@@ -12,7 +12,7 @@ read_when:
 </p>
 
 <p align="center">
-  <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
+  <strong>Any OS + WhatsApp/Telegram/Discord/Slack/Signal/iMessage/Matrix gateway for AI agents (Pi).</strong><br />
   Send a message, get an agent response — from your pocket.
 </p>
 
@@ -23,7 +23,7 @@ read_when:
   <a href="https://docs.clawd.bot/start/clawd">Clawd setup</a>
 </p>
 
-CLAWDBOT bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
+CLAWDBOT bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), Slack (Socket Mode / Bolt), Signal (signal-cli), iMessage (imsg CLI), and Matrix (matrix-js-sdk) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
 It’s built for [Clawd](https://clawd.me), a space lobster who needed a TARDIS.
 
 ## Start here
@@ -44,7 +44,7 @@ Remote access: https://docs.clawd.bot/web and https://docs.clawd.bot/gateway/tai
 ## How it works
 
 ```
-WhatsApp / Telegram / Discord
+WhatsApp / Telegram / Discord / Slack / Signal / Matrix / iMessage
         │
         ▼
   ┌───────────────────────────┐
@@ -78,6 +78,9 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 📱 **WhatsApp Integration** — Uses Baileys for WhatsApp Web protocol
 - ✈️ **Telegram Bot** — DMs + groups via grammY
 - 🎮 **Discord Bot** — DMs + guild channels via discord.js
+- 💼 **Slack Bot** — Socket Mode via Bolt
+- 📡 **Signal** — signal-cli integration
+- 🧩 **Matrix** — Matrix Client-Server API via matrix-js-sdk
 - 💬 **iMessage** — Local imsg CLI integration (macOS)
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
 - ⏱️ **Streaming + chunking** — Block streaming + Telegram draft streaming details ([/concepts/streaming](/concepts/streaming))
@@ -185,6 +188,7 @@ Example:
   - [Telegram](https://docs.clawd.bot/providers/telegram)
   - [Discord](https://docs.clawd.bot/providers/discord)
   - [iMessage](https://docs.clawd.bot/providers/imessage)
+  - [Matrix](https://docs.clawd.bot/providers/matrix)
   - [Groups](https://docs.clawd.bot/concepts/groups)
   - [WhatsApp group messages](https://docs.clawd.bot/concepts/group-messages)
   - [Media: images](https://docs.clawd.bot/nodes/images)

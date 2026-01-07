@@ -13,6 +13,8 @@ import {
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
 import { monitorIMessageProvider } from "../imessage/index.js";
+import { isBunRuntime, resolveMatrixConfig } from "../matrix/client.js";
+import { monitorMatrixProvider } from "../matrix/index.js";
 import type { createSubsystemLogger } from "../logging.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -65,6 +67,13 @@ export type SlackRuntimeStatus = {
   lastError?: string | null;
 };
 
+export type MatrixRuntimeStatus = {
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+};
+
 export type SignalRuntimeStatus = {
   running: boolean;
   lastStartAt?: number | null;
@@ -91,6 +100,7 @@ export type ProviderRuntimeSnapshot = {
   discordAccounts?: Record<string, DiscordRuntimeStatus>;
   slack: SlackRuntimeStatus;
   slackAccounts?: Record<string, SlackRuntimeStatus>;
+  matrix: MatrixRuntimeStatus;
   signal: SignalRuntimeStatus;
   signalAccounts?: Record<string, SignalRuntimeStatus>;
   imessage: IMessageRuntimeStatus;
@@ -105,12 +115,14 @@ type ProviderManagerOptions = {
   logTelegram: SubsystemLogger;
   logDiscord: SubsystemLogger;
   logSlack: SubsystemLogger;
+  logMatrix: SubsystemLogger;
   logSignal: SubsystemLogger;
   logIMessage: SubsystemLogger;
   whatsappRuntimeEnv: RuntimeEnv;
   telegramRuntimeEnv: RuntimeEnv;
   discordRuntimeEnv: RuntimeEnv;
   slackRuntimeEnv: RuntimeEnv;
+  matrixRuntimeEnv: RuntimeEnv;
   signalRuntimeEnv: RuntimeEnv;
   imessageRuntimeEnv: RuntimeEnv;
 };
@@ -126,6 +138,8 @@ export type ProviderManager = {
   stopDiscordProvider: (accountId?: string) => Promise<void>;
   startSlackProvider: (accountId?: string) => Promise<void>;
   stopSlackProvider: (accountId?: string) => Promise<void>;
+  startMatrixProvider: () => Promise<void>;
+  stopMatrixProvider: () => Promise<void>;
   startSignalProvider: (accountId?: string) => Promise<void>;
   stopSignalProvider: (accountId?: string) => Promise<void>;
   startIMessageProvider: (accountId?: string) => Promise<void>;
@@ -142,12 +156,14 @@ export function createProviderManager(
     logTelegram,
     logDiscord,
     logSlack,
+    logMatrix,
     logSignal,
     logIMessage,
     whatsappRuntimeEnv,
     telegramRuntimeEnv,
     discordRuntimeEnv,
     slackRuntimeEnv,
+    matrixRuntimeEnv,
     signalRuntimeEnv,
     imessageRuntimeEnv,
   } = opts;
@@ -158,12 +174,14 @@ export function createProviderManager(
   const slackAborts = new Map<string, AbortController>();
   const signalAborts = new Map<string, AbortController>();
   const imessageAborts = new Map<string, AbortController>();
+  let matrixAbort: AbortController | null = null;
   const whatsappTasks = new Map<string, Promise<unknown>>();
   const telegramTasks = new Map<string, Promise<unknown>>();
   const discordTasks = new Map<string, Promise<unknown>>();
   const slackTasks = new Map<string, Promise<unknown>>();
   const signalTasks = new Map<string, Promise<unknown>>();
   const imessageTasks = new Map<string, Promise<unknown>>();
+  let matrixTask: Promise<unknown> | null = null;
 
   const whatsappRuntimes = new Map<string, WebProviderStatus>();
   const defaultWhatsAppStatus = (): WebProviderStatus => ({
@@ -201,6 +219,12 @@ export function createProviderManager(
     lastStopAt: null,
     lastError: null,
   });
+  let matrixRuntime: MatrixRuntimeStatus = {
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+  };
   const defaultSignalStatus = (): SignalRuntimeStatus => ({
     running: false,
     lastStartAt: null,
@@ -754,7 +778,105 @@ export function createProviderManager(
     );
   };
 
+  const startMatrixProvider = async () => {
+    if (matrixTask) return;
+    const cfg = loadConfig();
+    if (!cfg.matrix) {
+      matrixRuntime = {
+        ...matrixRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      if (shouldLogVerbose()) {
+        logMatrix.debug("matrix provider not configured (no matrix config)");
+      }
+      return;
+    }
+    if (cfg.matrix?.enabled === false) {
+      matrixRuntime = {
+        ...matrixRuntime,
+        running: false,
+        lastError: "disabled",
+      };
+      if (shouldLogVerbose()) {
+        logMatrix.debug("matrix provider disabled (matrix.enabled=false)");
+      }
+      return;
+    }
+    if (isBunRuntime()) {
+      matrixRuntime = {
+        ...matrixRuntime,
+        running: false,
+        lastError: "bun unsupported",
+      };
+      logMatrix.error("matrix provider requires Node (bun runtime not supported)");
+      return;
+    }
+    const resolved = resolveMatrixConfig(cfg);
+    const hasAuth = Boolean(resolved.accessToken || resolved.password);
+    if (!resolved.homeserver || !resolved.userId || !hasAuth) {
+      matrixRuntime = {
+        ...matrixRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      if (shouldLogVerbose()) {
+        logMatrix.debug(
+          "matrix provider not configured (missing homeserver/userId/auth)",
+        );
+      }
+      return;
+    }
+    logMatrix.info(`starting provider (${resolved.userId})`);
+    matrixAbort = new AbortController();
+    matrixRuntime = {
+      ...matrixRuntime,
+      running: true,
+      lastStartAt: Date.now(),
+      lastError: null,
+    };
+    const task = monitorMatrixProvider({
+      runtime: matrixRuntimeEnv,
+      abortSignal: matrixAbort.signal,
+    })
+      .catch((err) => {
+        matrixRuntime = {
+          ...matrixRuntime,
+          lastError: formatError(err),
+        };
+        logMatrix.error(`provider exited: ${formatError(err)}`);
+      })
+      .finally(() => {
+        matrixAbort = null;
+        matrixTask = null;
+        matrixRuntime = {
+          ...matrixRuntime,
+          running: false,
+          lastStopAt: Date.now(),
+        };
+      });
+    matrixTask = task;
+  };
+
+  const stopMatrixProvider = async () => {
+    if (!matrixAbort && !matrixTask) return;
+    matrixAbort?.abort();
+    try {
+      await matrixTask;
+    } catch {
+      // ignore
+    }
+    matrixAbort = null;
+    matrixTask = null;
+    matrixRuntime = {
+      ...matrixRuntime,
+      running: false,
+      lastStopAt: Date.now(),
+    };
+  };
+
   const startSignalProvider = async (accountId?: string) => {
+
     const cfg = loadConfig();
     const accountIds = accountId ? [accountId] : listSignalAccountIds(cfg);
     if (!cfg.signal) {
@@ -1003,6 +1125,7 @@ export function createProviderManager(
     await startWhatsAppProvider();
     await startDiscordProvider();
     await startSlackProvider();
+    await startMatrixProvider();
     await startTelegramProvider();
     await startSignalProvider();
     await startIMessageProvider();
@@ -1149,6 +1272,7 @@ export function createProviderManager(
       discordAccounts,
       slack,
       slackAccounts,
+      matrix: { ...matrixRuntime },
       signal,
       signalAccounts,
       imessage,
@@ -1167,6 +1291,8 @@ export function createProviderManager(
     stopDiscordProvider,
     startSlackProvider,
     stopSlackProvider,
+    startMatrixProvider,
+    stopMatrixProvider,
     startSignalProvider,
     stopSignalProvider,
     startIMessageProvider,

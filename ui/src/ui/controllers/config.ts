@@ -6,12 +6,15 @@ import type {
 } from "../types";
 import {
   defaultDiscordActions,
+  defaultMatrixActions,
   defaultSlackActions,
   type DiscordActionForm,
   type DiscordForm,
   type DiscordGuildChannelForm,
   type DiscordGuildForm,
   type IMessageForm,
+  type MatrixActionForm,
+  type MatrixForm,
   type SlackChannelForm,
   type SlackForm,
   type SignalForm,
@@ -41,11 +44,13 @@ export type ConfigState = {
   telegramForm: TelegramForm;
   discordForm: DiscordForm;
   slackForm: SlackForm;
+  matrixForm: MatrixForm;
   signalForm: SignalForm;
   imessageForm: IMessageForm;
   telegramConfigStatus: string | null;
   discordConfigStatus: string | null;
   slackConfigStatus: string | null;
+  matrixConfigStatus: string | null;
   signalConfigStatus: string | null;
   imessageConfigStatus: string | null;
 };
@@ -112,6 +117,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   const telegram = (config.telegram ?? {}) as Record<string, unknown>;
   const discord = (config.discord ?? {}) as Record<string, unknown>;
   const slack = (config.slack ?? {}) as Record<string, unknown>;
+  const matrix = (config.matrix ?? {}) as Record<string, unknown>;
   const signal = (config.signal ?? {}) as Record<string, unknown>;
   const imessage = (config.imessage ?? {}) as Record<string, unknown>;
   const toList = (value: unknown) =>
@@ -332,6 +338,67 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
             },
           )
         : [],
+  };
+
+  const matrixDm = (matrix.dm ?? {}) as Record<string, unknown>;
+  const matrixActions =
+    (matrix.actions ?? {}) as Partial<Record<keyof typeof defaultMatrixActions, unknown>>;
+  const readMatrixAction = (key: keyof MatrixActionForm) =>
+    typeof matrixActions[key] === "boolean"
+      ? (matrixActions[key] as boolean)
+      : defaultMatrixActions[key];
+  state.matrixForm = {
+    enabled: typeof matrix.enabled === "boolean" ? matrix.enabled : true,
+    homeserver: typeof matrix.homeserver === "string" ? matrix.homeserver : "",
+    userId: typeof matrix.userId === "string" ? matrix.userId : "",
+    accessToken:
+      typeof matrix.accessToken === "string" ? matrix.accessToken : "",
+    password: typeof matrix.password === "string" ? matrix.password : "",
+    deviceId: typeof matrix.deviceId === "string" ? matrix.deviceId : "",
+    deviceName: typeof matrix.deviceName === "string" ? matrix.deviceName : "",
+    encryption:
+      typeof matrix.encryption === "boolean" ? matrix.encryption : true,
+    autoJoin:
+      matrix.autoJoin === "allowlist" || matrix.autoJoin === "off"
+        ? matrix.autoJoin
+        : "always",
+    autoJoinAllowlist: toList(matrix.autoJoinAllowlist),
+    groupPolicy:
+      matrix.groupPolicy === "allowlist" || matrix.groupPolicy === "disabled"
+        ? matrix.groupPolicy
+        : "open",
+    allowlistOnly:
+      typeof matrix.allowlistOnly === "boolean" ? matrix.allowlistOnly : false,
+    dmEnabled:
+      typeof matrixDm.enabled === "boolean" ? matrixDm.enabled : true,
+    dmPolicy:
+      matrixDm.policy === "allowlist" ||
+      matrixDm.policy === "open" ||
+      matrixDm.policy === "disabled"
+        ? matrixDm.policy
+        : "pairing",
+    dmAllowFrom: toList(matrixDm.allowFrom),
+    textChunkLimit:
+      typeof matrix.textChunkLimit === "number"
+        ? String(matrix.textChunkLimit)
+        : "",
+    mediaMaxMb:
+      typeof matrix.mediaMaxMb === "number" ? String(matrix.mediaMaxMb) : "",
+    replyToMode:
+      matrix.replyToMode === "first" || matrix.replyToMode === "all"
+        ? matrix.replyToMode
+        : "off",
+    threadReplies:
+      matrix.threadReplies === "off" || matrix.threadReplies === "always"
+        ? matrix.threadReplies
+        : "inbound",
+    actions: {
+      reactions: readMatrixAction("reactions"),
+      messages: readMatrixAction("messages"),
+      pins: readMatrixAction("pins"),
+      memberInfo: readMatrixAction("memberInfo"),
+      roomInfo: readMatrixAction("roomInfo"),
+    },
   };
 
   state.signalForm = {

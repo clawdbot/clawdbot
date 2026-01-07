@@ -496,6 +496,236 @@ extension ConnectionsSettings {
         }
     }
 
+    var matrixSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Authentication") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        self.gridLabel("Enabled")
+                        Toggle("", isOn: self.$store.matrixEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Homeserver")
+                        TextField("https://matrix.example", text: self.$store.matrixHomeserver)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("User ID")
+                        TextField("@clawdbot:example", text: self.$store.matrixUserId)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Access token")
+                        if self.showMatrixAccessToken {
+                            TextField("access token", text: self.$store.matrixAccessToken)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(self.isMatrixAuthLocked)
+                        } else {
+                            SecureField("access token", text: self.$store.matrixAccessToken)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(self.isMatrixAuthLocked)
+                        }
+                        Toggle("Show", isOn: self.$showMatrixAccessToken)
+                            .toggleStyle(.switch)
+                            .disabled(self.isMatrixAuthLocked)
+                    }
+                    GridRow {
+                        self.gridLabel("Password")
+                        if self.showMatrixPassword {
+                            TextField("password", text: self.$store.matrixPassword)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(self.isMatrixAuthLocked)
+                        } else {
+                            SecureField("password", text: self.$store.matrixPassword)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(self.isMatrixAuthLocked)
+                        }
+                        Toggle("Show", isOn: self.$showMatrixPassword)
+                            .toggleStyle(.switch)
+                            .disabled(self.isMatrixAuthLocked)
+                    }
+                    GridRow {
+                        self.gridLabel("Device ID")
+                        TextField("CLAWDBOT", text: self.$store.matrixDeviceId)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Device name")
+                        TextField("Clawdbot Gateway", text: self.$store.matrixDeviceName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("E2EE")
+                        Toggle("", isOn: self.$store.matrixEncryption)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                }
+            }
+
+            self.formSection("Access") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        self.gridLabel("Auto-join")
+                        Picker("", selection: self.$store.matrixAutoJoin) {
+                            Text("always").tag("always")
+                            Text("allowlist").tag("allowlist")
+                            Text("off").tag("off")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Auto-join allowlist")
+                        TextField("!roomid:example, #ops:example", text: self.$store.matrixAutoJoinAllowlist)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Group policy")
+                        Picker("", selection: self.$store.matrixGroupPolicy) {
+                            Text("open").tag("open")
+                            Text("allowlist").tag("allowlist")
+                            Text("disabled").tag("disabled")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Allowlist only")
+                        Toggle("", isOn: self.$store.matrixAllowlistOnly)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                }
+            }
+
+            self.formSection("DMs") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        self.gridLabel("DMs enabled")
+                        Toggle("", isOn: self.$store.matrixDmEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("DM policy")
+                        Picker("", selection: self.$store.matrixDmPolicy) {
+                            Text("pairing").tag("pairing")
+                            Text("allowlist").tag("allowlist")
+                            Text("open").tag("open")
+                            Text("disabled").tag("disabled")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Allow DMs from")
+                        TextField("@owner:example, *", text: self.$store.matrixDmAllowFrom)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+
+            self.formSection("Replies + limits") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        self.gridLabel("Reply to mode")
+                        Picker("", selection: self.$store.matrixReplyToMode) {
+                            Text("off").tag("off")
+                            Text("first").tag("first")
+                            Text("all").tag("all")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Thread replies")
+                        Picker("", selection: self.$store.matrixThreadReplies) {
+                            Text("inbound").tag("inbound")
+                            Text("always").tag("always")
+                            Text("off").tag("off")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Text chunk limit")
+                        TextField("4000", text: self.$store.matrixTextChunkLimit)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Media max MB")
+                        TextField("20", text: self.$store.matrixMediaMaxMb)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+
+            GroupBox("Tool actions") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        self.gridLabel("Reactions")
+                        Toggle("", isOn: self.$store.matrixActionReactions)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Messages")
+                        Toggle("", isOn: self.$store.matrixActionMessages)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Pins")
+                        Toggle("", isOn: self.$store.matrixActionPins)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Member info")
+                        Toggle("", isOn: self.$store.matrixActionMemberInfo)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Room info")
+                        Toggle("", isOn: self.$store.matrixActionRoomInfo)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if self.isMatrixAuthLocked {
+                Text("Matrix credentials set via MATRIX_ACCESS_TOKEN/MATRIX_PASSWORD env; config edits won’t override it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            self.configStatusMessage
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await self.store.saveMatrixConfig() }
+                } label: {
+                    if self.store.isSavingConfig {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.store.isSavingConfig)
+
+                Spacer()
+            }
+            .font(.caption)
+        }
+    }
+
     var signalSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             self.formSection("Connection") {

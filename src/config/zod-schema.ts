@@ -124,6 +124,7 @@ const QueueModeBySurfaceSchema = z
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
+    matrix: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
@@ -355,6 +356,68 @@ const SlackConfigSchema = SlackAccountSchema.extend({
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
 });
 
+const MatrixDmSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    policy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  })
+  .superRefine((value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.policy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'matrix.dm.policy="open" requires matrix.dm.allowFrom to include "*"',
+    });
+  });
+
+const MatrixRoomSchema = z.object({
+  enabled: z.boolean().optional(),
+  allow: z.boolean().optional(),
+  requireMention: z.boolean().optional(),
+  autoReply: z.boolean().optional(),
+  users: z.array(z.union([z.string(), z.number()])).optional(),
+  skills: z.array(z.string()).optional(),
+  systemPrompt: z.string().optional(),
+});
+
+const MatrixConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  homeserver: z.string().optional(),
+  userId: z.string().optional(),
+  accessToken: z.string().optional(),
+  password: z.string().optional(),
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
+  storePath: z.string().optional(),
+  cryptoStorePath: z.string().optional(),
+  encryption: z.boolean().optional(),
+  autoJoin: z.union([z.literal("always"), z.literal("allowlist"), z.literal("off")]).optional(),
+  autoJoinAllowlist: z.array(z.string()).optional(),
+  groupPolicy: GroupPolicySchema.optional().default("open"),
+  allowlistOnly: z.boolean().optional(),
+  textChunkLimit: z.number().int().positive().optional(),
+  mediaMaxMb: z.number().positive().optional(),
+  replyToMode: ReplyToModeSchema.optional(),
+  threadReplies: z
+    .union([z.literal("off"), z.literal("inbound"), z.literal("always")])
+    .optional(),
+  initialSyncLimit: z.number().int().positive().optional(),
+  actions: z
+    .object({
+      reactions: z.boolean().optional(),
+      messages: z.boolean().optional(),
+      pins: z.boolean().optional(),
+      memberInfo: z.boolean().optional(),
+      roomInfo: z.boolean().optional(),
+    })
+    .optional(),
+  dm: MatrixDmSchema.optional(),
+  rooms: z.record(z.string(), MatrixRoomSchema.optional()).optional(),
+});
+
 const SignalAccountSchemaBase = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -535,6 +598,7 @@ const HeartbeatSchema = z
         z.literal("telegram"),
         z.literal("discord"),
         z.literal("slack"),
+        z.literal("matrix"),
         z.literal("signal"),
         z.literal("imessage"),
         z.literal("none"),
@@ -738,6 +802,7 @@ const HookMappingSchema = z
         z.literal("telegram"),
         z.literal("discord"),
         z.literal("slack"),
+        z.literal("matrix"),
         z.literal("signal"),
         z.literal("imessage"),
       ])
@@ -1039,6 +1104,7 @@ export const ClawdbotSchema = z.object({
               telegram: z.array(z.union([z.string(), z.number()])).optional(),
               discord: z.array(z.union([z.string(), z.number()])).optional(),
               slack: z.array(z.union([z.string(), z.number()])).optional(),
+              matrix: z.array(z.union([z.string(), z.number()])).optional(),
               signal: z.array(z.union([z.string(), z.number()])).optional(),
               imessage: z.array(z.union([z.string(), z.number()])).optional(),
               webchat: z.array(z.union([z.string(), z.number()])).optional(),
@@ -1195,8 +1261,10 @@ export const ClawdbotSchema = z.object({
   telegram: TelegramConfigSchema.optional(),
   discord: DiscordConfigSchema.optional(),
   slack: SlackConfigSchema.optional(),
+  matrix: MatrixConfigSchema.optional(),
   signal: SignalConfigSchema.optional(),
   imessage: IMessageConfigSchema.optional(),
+
   bridge: z
     .object({
       enabled: z.boolean().optional(),

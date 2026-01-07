@@ -259,6 +259,27 @@ Notes:
 - `telegram.actions.*` gates Telegram tool actions.
 - The tool is only exposed when the current provider is Telegram.
 
+### `matrix`
+Send Matrix messages, reactions, and room metadata.
+
+Core actions:
+- `react` (`roomId`, `messageId`, `emoji`, optional `remove`)
+- `reactions` (`roomId`, `messageId`, optional `limit`)
+- `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyTo`, `threadId`)
+- `editMessage` (`roomId`, `messageId`, `content`)
+- `deleteMessage` (`roomId`, `messageId`, optional `reason`)
+- `readMessages` (`roomId`, optional `limit`, `before`, `after`)
+- `pinMessage`/`unpinMessage` (`roomId`, `messageId`)
+- `listPins` (`roomId`)
+- `memberInfo` (`userId`, optional `roomId`)
+- `roomInfo` (`roomId`)
+
+Notes:
+- `to` accepts `room:<id>`, `user:<id>`, or `#alias` (DMs require `m.direct`).
+- Reaction removal semantics: see [/tools/reactions](/tools/reactions).
+- `matrix.actions.*` gates Matrix tool actions.
+- The tool is only exposed when the current provider is Matrix.
+
 ## Parameters (common)
 
 Gateway-backed tools (`canvas`, `nodes`, `cron`):

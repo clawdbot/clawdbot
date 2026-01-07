@@ -16,6 +16,8 @@ import {
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
 import { type IMessageProbe, probeIMessage } from "../../imessage/probe.js";
+import { resolveMatrixAuth } from "../../matrix/client.js";
+import { type MatrixProbe, probeMatrix } from "../../matrix/probe.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -152,6 +154,71 @@ export const providersHandlers: GatewayRequestHandlers = {
       discordAccounts.find(
         (account) => account.accountId === defaultDiscordAccountId,
       ) ?? discordAccounts[0];
+
+    const matrixCfg = cfg.matrix;
+    const matrixEnabled = matrixCfg?.enabled !== false;
+    const envMatrixHomeserver = matrixEnabled
+      ? process.env.MATRIX_HOMESERVER?.trim()
+      : "";
+    const envMatrixUserId = matrixEnabled
+      ? process.env.MATRIX_USER_ID?.trim()
+      : "";
+    const envMatrixAccessToken = matrixEnabled
+      ? process.env.MATRIX_ACCESS_TOKEN?.trim()
+      : "";
+    const envMatrixPassword = matrixEnabled
+      ? process.env.MATRIX_PASSWORD?.trim()
+      : "";
+    const cfgMatrixHomeserver = matrixCfg?.homeserver?.trim() ?? "";
+    const cfgMatrixUserId = matrixCfg?.userId?.trim() ?? "";
+    const cfgMatrixAccessToken = matrixCfg?.accessToken?.trim() ?? "";
+    const cfgMatrixPassword = matrixCfg?.password?.trim() ?? "";
+    const matrixHomeserver = envMatrixHomeserver || cfgMatrixHomeserver;
+    const matrixUserId = envMatrixUserId || cfgMatrixUserId;
+    const matrixAccessToken = envMatrixAccessToken || cfgMatrixAccessToken;
+    const matrixPassword = envMatrixPassword || cfgMatrixPassword;
+    const matrixAuthSource =
+      envMatrixAccessToken || envMatrixPassword
+        ? "env"
+        : cfgMatrixAccessToken || cfgMatrixPassword
+          ? "config"
+          : "none";
+    const matrixConfigured =
+      matrixEnabled &&
+      Boolean(
+        matrixHomeserver &&
+          matrixUserId &&
+          (matrixAccessToken || matrixPassword),
+      );
+    let matrixProbe: MatrixProbe | undefined;
+    let matrixLastProbeAt: number | null = null;
+    if (probe && matrixConfigured) {
+      try {
+        const auth = matrixAccessToken
+          ? {
+              homeserver: matrixHomeserver,
+              userId: matrixUserId,
+              accessToken: matrixAccessToken,
+              deviceId: matrixCfg?.deviceId,
+            }
+          : await resolveMatrixAuth({ cfg });
+        matrixProbe = await probeMatrix({
+          homeserver: auth.homeserver,
+          accessToken: auth.accessToken,
+          userId: auth.userId,
+          deviceId: auth.deviceId,
+          timeoutMs,
+        });
+      } catch (err) {
+        matrixProbe = {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+          elapsedMs: 0,
+        };
+      }
+      matrixLastProbeAt = Date.now();
+    }
+
 
     const slackAccounts = await Promise.all(
       listSlackAccountIds(cfg).map(async (accountId) => {
@@ -364,6 +431,16 @@ export const providersHandlers: GatewayRequestHandlers = {
         },
         slackAccounts,
         slackDefaultAccountId: defaultSlackAccountId,
+        matrix: {
+          configured: matrixConfigured,
+          authSource: matrixAuthSource,
+          running: runtime.matrix.running,
+          lastStartAt: runtime.matrix.lastStartAt ?? null,
+          lastStopAt: runtime.matrix.lastStopAt ?? null,
+          lastError: runtime.matrix.lastError ?? null,
+          probe: matrixProbe,
+          lastProbeAt: matrixLastProbeAt,
+        },
         signal: {
           configured: defaultSignalAccount?.configured ?? false,
           baseUrl: defaultSignalAccount?.baseUrl ?? null,

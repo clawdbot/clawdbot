@@ -107,6 +107,24 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("routes matrix sends via matrix handler", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValue({ messageId: "mx1", roomId: "!room:example" });
+    const cfg: ClawdbotConfig = {};
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      provider: "matrix",
+      to: "room:!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { sendMatrix },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith("room:!room:example", "hello");
+    expect(results[0]).toMatchObject({ provider: "matrix", roomId: "!room:example" });
+  });
+
   it("normalizes payloads and drops empty entries", () => {
     const normalized = normalizeOutboundPayloads([
       { text: "hi" },

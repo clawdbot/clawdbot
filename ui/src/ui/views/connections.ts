@@ -6,6 +6,8 @@ import type {
   DiscordActionForm,
   DiscordForm,
   IMessageForm,
+  MatrixActionForm,
+  MatrixForm,
   SlackActionForm,
   SlackForm,
   SignalForm,
@@ -38,6 +40,14 @@ const slackActionOptions = [
   { key: "emojiList", label: "Emoji list" },
 ] satisfies Array<{ key: keyof SlackActionForm; label: string }>;
 
+const matrixActionOptions = [
+  { key: "reactions", label: "Reactions" },
+  { key: "messages", label: "Messages" },
+  { key: "pins", label: "Pins" },
+  { key: "memberInfo", label: "Member info" },
+  { key: "roomInfo", label: "Room info" },
+] satisfies Array<{ key: keyof MatrixActionForm; label: string }>;
+
 export type ConnectionsProps = {
   connected: boolean;
   loading: boolean;
@@ -61,6 +71,10 @@ export type ConnectionsProps = {
   slackAppTokenLocked: boolean;
   slackSaving: boolean;
   slackStatus: string | null;
+  matrixForm: MatrixForm;
+  matrixAuthLocked: boolean;
+  matrixSaving: boolean;
+  matrixStatus: string | null;
   signalForm: SignalForm;
   signalSaving: boolean;
   signalStatus: string | null;
@@ -77,6 +91,8 @@ export type ConnectionsProps = {
   onDiscordSave: () => void;
   onSlackChange: (patch: Partial<SlackForm>) => void;
   onSlackSave: () => void;
+  onMatrixChange: (patch: Partial<MatrixForm>) => void;
+  onMatrixSave: () => void;
   onSignalChange: (patch: Partial<SignalForm>) => void;
   onSignalSave: () => void;
   onIMessageChange: (patch: Partial<IMessageForm>) => void;
@@ -88,6 +104,7 @@ export function renderConnections(props: ConnectionsProps) {
   const telegram = props.snapshot?.telegram;
   const discord = props.snapshot?.discord ?? null;
   const slack = props.snapshot?.slack ?? null;
+  const matrix = props.snapshot?.matrix ?? null;
   const signal = props.snapshot?.signal ?? null;
   const imessage = props.snapshot?.imessage ?? null;
   const providerOrder: ProviderKey[] = [
@@ -95,6 +112,7 @@ export function renderConnections(props: ConnectionsProps) {
     "telegram",
     "discord",
     "slack",
+    "matrix",
     "signal",
     "imessage",
   ];
@@ -117,6 +135,7 @@ export function renderConnections(props: ConnectionsProps) {
           telegram,
           discord,
           slack,
+          matrix,
           signal,
           imessage,
         }),
@@ -158,6 +177,7 @@ type ProviderKey =
   | "telegram"
   | "discord"
   | "slack"
+  | "matrix"
   | "signal"
   | "imessage";
 
@@ -177,6 +197,8 @@ function providerEnabled(key: ProviderKey, props: ConnectionsProps) {
       return Boolean(snapshot.discord?.configured || snapshot.discord?.running);
     case "slack":
       return Boolean(snapshot.slack?.configured || snapshot.slack?.running);
+    case "matrix":
+      return Boolean(snapshot.matrix?.configured || snapshot.matrix?.running);
     case "signal":
       return Boolean(snapshot.signal?.configured || snapshot.signal?.running);
     case "imessage":
@@ -194,6 +216,7 @@ function renderProvider(
     telegram?: ProvidersStatusSnapshot["telegram"];
     discord?: ProvidersStatusSnapshot["discord"] | null;
     slack?: ProvidersStatusSnapshot["slack"] | null;
+    matrix?: ProvidersStatusSnapshot["matrix"] | null;
     signal?: ProvidersStatusSnapshot["signal"] | null;
     imessage?: ProvidersStatusSnapshot["imessage"] | null;
   },
@@ -1351,6 +1374,366 @@ function renderProvider(
               @click=${() => props.onSlackSave()}
             >
               ${props.slackSaving ? "Saving…" : "Save"}
+            </button>
+            <button class="btn" @click=${() => props.onRefresh(true)}>
+              Probe
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    case "matrix": {
+      const matrix = data.matrix;
+      return html`
+        <div class="card">
+          <div class="card-title">Matrix</div>
+          <div class="card-sub">Matrix client credentials and room policy.</div>
+
+          <div class="status-list" style="margin-top: 16px;">
+            <div>
+              <span class="label">Configured</span>
+              <span>${matrix?.configured ? "Yes" : "No"}</span>
+            </div>
+            <div>
+              <span class="label">Running</span>
+              <span>${matrix?.running ? "Yes" : "No"}</span>
+            </div>
+            <div>
+              <span class="label">User</span>
+              <span>${matrix?.probe?.userId ?? "n/a"}</span>
+            </div>
+            <div>
+              <span class="label">Device</span>
+              <span>${matrix?.probe?.deviceId ?? "n/a"}</span>
+            </div>
+            <div>
+              <span class="label">Last start</span>
+              <span>${matrix?.lastStartAt ? formatAgo(matrix.lastStartAt) : "n/a"}</span>
+            </div>
+            <div>
+              <span class="label">Last probe</span>
+              <span>${matrix?.lastProbeAt ? formatAgo(matrix.lastProbeAt) : "n/a"}</span>
+            </div>
+          </div>
+
+          ${matrix?.lastError
+            ? html`<div class="callout danger" style="margin-top: 12px;">
+                ${matrix.lastError}
+              </div>`
+            : nothing}
+
+          ${matrix?.probe
+            ? html`<div class="callout" style="margin-top: 12px;">
+                Probe ${matrix.probe.ok ? "ok" : "failed"} ·
+                ${matrix.probe.status ?? ""}
+                ${matrix.probe.error ?? ""}
+              </div>`
+            : nothing}
+
+          <div class="card-sub" style="margin-top: 16px;">Authentication</div>
+          <div class="form-grid" style="margin-top: 8px;">
+            <label class="field">
+              <span>Enabled</span>
+              <select
+                .value=${props.matrixForm.enabled ? "yes" : "no"}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    enabled: (e.target as HTMLSelectElement).value === "yes",
+                  })}
+              >
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Homeserver</span>
+              <input
+                .value=${props.matrixForm.homeserver}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    homeserver: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="https://matrix.example"
+              />
+            </label>
+            <label class="field">
+              <span>User ID</span>
+              <input
+                .value=${props.matrixForm.userId}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    userId: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="@clawdbot:example"
+              />
+            </label>
+            <label class="field">
+              <span>Access token</span>
+              <input
+                type="password"
+                .value=${props.matrixForm.accessToken}
+                ?disabled=${props.matrixAuthLocked}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    accessToken: (e.target as HTMLInputElement).value,
+                  })}
+              />
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input
+                type="password"
+                .value=${props.matrixForm.password}
+                ?disabled=${props.matrixAuthLocked}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    password: (e.target as HTMLInputElement).value,
+                  })}
+              />
+            </label>
+            <label class="field">
+              <span>Device ID</span>
+              <input
+                .value=${props.matrixForm.deviceId}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    deviceId: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="CLAWDBOT"
+              />
+            </label>
+            <label class="field">
+              <span>Device name</span>
+              <input
+                .value=${props.matrixForm.deviceName}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    deviceName: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="Clawdbot Gateway"
+              />
+            </label>
+            <label class="field">
+              <span>E2EE</span>
+              <select
+                .value=${props.matrixForm.encryption ? "yes" : "no"}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    encryption: (e.target as HTMLSelectElement).value === "yes",
+                  })}
+              >
+                <option value="yes">Enabled</option>
+                <option value="no">Disabled</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="card-sub" style="margin-top: 16px;">Access</div>
+          <div class="form-grid" style="margin-top: 8px;">
+            <label class="field">
+              <span>Auto-join</span>
+              <select
+                .value=${props.matrixForm.autoJoin}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    autoJoin: (e.target as HTMLSelectElement).value as
+                      | "always"
+                      | "allowlist"
+                      | "off",
+                  })}
+              >
+                <option value="always">Always</option>
+                <option value="allowlist">Allowlist</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Auto-join allowlist</span>
+              <input
+                .value=${props.matrixForm.autoJoinAllowlist}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    autoJoinAllowlist: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="!roomid:example, #ops:example"
+              />
+            </label>
+            <label class="field">
+              <span>Group policy</span>
+              <select
+                .value=${props.matrixForm.groupPolicy}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    groupPolicy: (e.target as HTMLSelectElement).value as
+                      | "open"
+                      | "allowlist"
+                      | "disabled",
+                  })}
+              >
+                <option value="open">Open</option>
+                <option value="allowlist">Allowlist</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Allowlist only</span>
+              <select
+                .value=${props.matrixForm.allowlistOnly ? "yes" : "no"}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    allowlistOnly: (e.target as HTMLSelectElement).value === "yes",
+                  })}
+              >
+                <option value="yes">Enabled</option>
+                <option value="no">Disabled</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>DMs enabled</span>
+              <select
+                .value=${props.matrixForm.dmEnabled ? "yes" : "no"}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    dmEnabled: (e.target as HTMLSelectElement).value === "yes",
+                  })}
+              >
+                <option value="yes">Enabled</option>
+                <option value="no">Disabled</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>DM policy</span>
+              <select
+                .value=${props.matrixForm.dmPolicy}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    dmPolicy: (e.target as HTMLSelectElement).value as
+                      | "pairing"
+                      | "allowlist"
+                      | "open"
+                      | "disabled",
+                  })}
+              >
+                <option value="pairing">Pairing</option>
+                <option value="allowlist">Allowlist</option>
+                <option value="open">Open</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Allow DMs from</span>
+              <input
+                .value=${props.matrixForm.dmAllowFrom}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    dmAllowFrom: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="@owner:example, *"
+              />
+            </label>
+          </div>
+
+          <div class="card-sub" style="margin-top: 16px;">Replies + limits</div>
+          <div class="form-grid" style="margin-top: 8px;">
+            <label class="field">
+              <span>Reply to mode</span>
+              <select
+                .value=${props.matrixForm.replyToMode}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    replyToMode: (e.target as HTMLSelectElement).value as
+                      | "off"
+                      | "first"
+                      | "all",
+                  })}
+              >
+                <option value="off">Off</option>
+                <option value="first">First</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Thread replies</span>
+              <select
+                .value=${props.matrixForm.threadReplies}
+                @change=${(e: Event) =>
+                  props.onMatrixChange({
+                    threadReplies: (e.target as HTMLSelectElement).value as
+                      | "off"
+                      | "inbound"
+                      | "always",
+                  })}
+              >
+                <option value="inbound">Inbound</option>
+                <option value="always">Always</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Text chunk limit</span>
+              <input
+                .value=${props.matrixForm.textChunkLimit}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    textChunkLimit: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="4000"
+              />
+            </label>
+            <label class="field">
+              <span>Media max MB</span>
+              <input
+                .value=${props.matrixForm.mediaMaxMb}
+                @input=${(e: Event) =>
+                  props.onMatrixChange({
+                    mediaMaxMb: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="20"
+              />
+            </label>
+          </div>
+
+          <div class="card-sub" style="margin-top: 16px;">Tool actions</div>
+          <div class="form-grid" style="margin-top: 8px;">
+            ${matrixActionOptions.map(
+              (action) => html`<label class="field">
+                <span>${action.label}</span>
+                <select
+                  .value=${props.matrixForm.actions[action.key] ? "yes" : "no"}
+                  @change=${(e: Event) =>
+                    props.onMatrixChange({
+                      actions: {
+                        ...props.matrixForm.actions,
+                        [action.key]: (e.target as HTMLSelectElement).value === "yes",
+                      },
+                    })}
+                >
+                  <option value="yes">Enabled</option>
+                  <option value="no">Disabled</option>
+                </select>
+              </label>`,
+            )}
+          </div>
+
+          ${props.matrixAuthLocked
+            ? html`<div class="callout" style="margin-top: 12px;">
+                MATRIX_ACCESS_TOKEN or MATRIX_PASSWORD is set in the environment. Config edits will not override it.
+              </div>`
+            : nothing}
+
+          ${props.matrixStatus
+            ? html`<div class="callout" style="margin-top: 12px;">
+                ${props.matrixStatus}
+              </div>`
+            : nothing}
+
+          <div class="row" style="margin-top: 14px;">
+            <button
+              class="btn primary"
+              ?disabled=${props.matrixSaving}
+              @click=${() => props.onMatrixSave()}
+            >
+              ${props.matrixSaving ? "Saving…" : "Save"}
             </button>
             <button class="btn" @click=${() => props.onRefresh(true)}>
               Probe

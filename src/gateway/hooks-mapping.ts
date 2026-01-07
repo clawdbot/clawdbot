@@ -24,6 +24,7 @@ export type HookMappingResolved = {
     | "telegram"
     | "discord"
     | "slack"
+    | "matrix"
     | "signal"
     | "imessage";
   to?: string;
@@ -64,6 +65,7 @@ export type HookAction =
         | "telegram"
         | "discord"
         | "slack"
+        | "matrix"
         | "signal"
         | "imessage";
       to?: string;

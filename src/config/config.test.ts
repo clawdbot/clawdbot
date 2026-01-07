@@ -217,6 +217,7 @@ describe("config identity defaults", () => {
               textChunkLimit: 1999,
               maxLinesPerMessage: 17,
             },
+            matrix: { enabled: true, textChunkLimit: 2888 },
             signal: { enabled: true, textChunkLimit: 2222 },
             imessage: { enabled: true, textChunkLimit: 1111 },
           },
@@ -233,6 +234,8 @@ describe("config identity defaults", () => {
       expect(cfg.whatsapp?.textChunkLimit).toBe(4444);
       expect(cfg.telegram?.textChunkLimit).toBe(3333);
       expect(cfg.discord?.textChunkLimit).toBe(1999);
+      expect(cfg.discord?.maxLinesPerMessage).toBe(17);
+      expect(cfg.matrix?.textChunkLimit).toBe(2888);
       expect(cfg.discord?.maxLinesPerMessage).toBe(17);
       expect(cfg.signal?.textChunkLimit).toBe(2222);
       expect(cfg.imessage?.textChunkLimit).toBe(1111);
@@ -901,6 +904,50 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("slack.dm.allowFrom");
+    }
+  });
+
+  it('rejects matrix.dm.policy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      matrix: { dm: { policy: "open", allowFrom: ["@user:example"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("matrix.dm.allowFrom");
+    }
+  });
+
+  it('accepts matrix.dm.policy="open" with allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      matrix: { dm: { policy: "open", allowFrom: ["*"] } },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.matrix?.dm?.policy).toBe("open");
+    }
+  });
+
+  it("defaults matrix.dm.policy to pairing when matrix section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ matrix: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.matrix?.dm?.policy).toBe("pairing");
+    }
+  });
+
+  it("accepts matrix.allowlistOnly flag", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ matrix: { allowlistOnly: true } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.matrix?.allowlistOnly).toBe(true);
     }
   });
 

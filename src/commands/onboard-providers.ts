@@ -344,6 +344,25 @@ function setSlackDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
+function setMatrixDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+  const allowFrom =
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.matrix?.dm?.allowFrom)
+      : undefined;
+  return {
+    ...cfg,
+    matrix: {
+      ...cfg.matrix,
+      dm: {
+        ...cfg.matrix?.dm,
+        enabled: cfg.matrix?.dm?.enabled ?? true,
+        policy: dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
+      },
+    },
+  };
+}
+
 function setSignalDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open"
@@ -446,6 +465,16 @@ async function maybeConfigureDmPolicies(params: {
       allowFromKey: "slack.dm.allowFrom",
     });
     if (policy !== current) cfg = setSlackDmPolicy(cfg, policy);
+  }
+  if (selection.includes("matrix")) {
+    const current = cfg.matrix?.dm?.policy ?? "pairing";
+    const policy = await selectPolicy({
+      label: "Matrix",
+      provider: "matrix",
+      policyKey: "matrix.dm.policy",
+      allowFromKey: "matrix.dm.allowFrom",
+    });
+    if (policy !== current) cfg = setMatrixDmPolicy(cfg, policy);
   }
   if (selection.includes("signal")) {
     const current = cfg.signal?.dmPolicy ?? "pairing";
@@ -741,6 +770,20 @@ type SetupProvidersOptions = {
   initialSelection?: ProviderChoice[];
 };
 
+async function noteMatrixTokenHelp(
+  prompter: WizardPrompter,
+): Promise<void> {
+  await prompter.note(
+    [
+      "Matrix uses a user access token (no bot token).",
+      "Provide matrix.homeserver + matrix.userId + matrix.accessToken.",
+      "Optional: set matrix.password to login at startup.",
+      `Docs: ${formatDocsLink("/providers/matrix", "providers/matrix")}`,
+    ].join("\n"),
+    "Matrix access token",
+  );
+}
+
 export async function setupProviders(
   cfg: ClawdbotConfig,
   runtime: RuntimeEnv,
@@ -760,9 +803,15 @@ export async function setupProviders(
   const discordEnv = Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
   const slackBotEnv = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
   const slackAppEnv = Boolean(process.env.SLACK_APP_TOKEN?.trim());
-  const telegramConfigured = listTelegramAccountIds(cfg).some((accountId) =>
-    Boolean(resolveTelegramAccount({ cfg, accountId }).token),
-  );
+  const matrixHomeserverEnv = Boolean(process.env.MATRIX_HOMESERVER?.trim());
+  const matrixUserIdEnv = Boolean(process.env.MATRIX_USER_ID?.trim());
+  const matrixAccessTokenEnv = Boolean(process.env.MATRIX_ACCESS_TOKEN?.trim());
+  const matrixPasswordEnv = Boolean(process.env.MATRIX_PASSWORD?.trim());
+  const telegramConfigured =
+    telegramEnv ||
+    listTelegramAccountIds(cfg).some((accountId) =>
+      Boolean(resolveTelegramAccount({ cfg, accountId }).token),
+    );
   const discordConfigured = listDiscordAccountIds(cfg).some((accountId) =>
     Boolean(resolveDiscordAccount({ cfg, accountId }).token),
   );
@@ -770,6 +819,14 @@ export async function setupProviders(
     const account = resolveSlackAccount({ cfg, accountId });
     return Boolean(account.botToken && account.appToken);
   });
+  const matrixConfigured = Boolean(
+    (matrixHomeserverEnv || cfg.matrix?.homeserver) &&
+      (matrixUserIdEnv || cfg.matrix?.userId) &&
+      (matrixAccessTokenEnv ||
+        matrixPasswordEnv ||
+        cfg.matrix?.accessToken ||
+        cfg.matrix?.password),
+  );
   const signalConfigured = listSignalAccountIds(cfg).some(
     (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
   );
@@ -796,6 +853,7 @@ export async function setupProviders(
       `WhatsApp (${waAccountLabel}): ${whatsappLinked ? "linked" : "not linked"}`,
       `Discord: ${discordConfigured ? "configured" : "needs token"}`,
       `Slack: ${slackConfigured ? "configured" : "needs tokens"}`,
+      `Matrix: ${matrixConfigured ? "configured" : "needs credentials"}`,
       `Signal: ${signalConfigured ? "configured" : "needs setup"}`,
       `iMessage: ${imessageConfigured ? "configured" : "needs setup"}`,
       `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
@@ -841,6 +899,12 @@ export async function setupProviders(
           value: meta.id,
           label: meta.selectionLabel,
           hint: slackConfigured ? "configured" : "needs tokens",
+        };
+      case "matrix":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: matrixConfigured ? "configured" : "needs credentials",
         };
       case "signal":
         return {
@@ -1338,6 +1402,134 @@ export async function setupProviders(
     }
   }
 
+  if (selection.includes("matrix")) {
+    let homeserver: string | null = null;
+    let userId: string | null = null;
+    let accessToken: string | null = null;
+    let password: string | null = null;
+    const envConfigured =
+      matrixHomeserverEnv &&
+      matrixUserIdEnv &&
+      (matrixAccessTokenEnv || matrixPasswordEnv);
+    const hasConfig =
+      Boolean(
+        cfg.matrix?.homeserver ||
+          cfg.matrix?.userId ||
+          cfg.matrix?.accessToken ||
+          cfg.matrix?.password,
+      );
+    if (!matrixConfigured) {
+      await noteMatrixTokenHelp(prompter);
+    }
+    if (envConfigured && !hasConfig) {
+      const keepEnv = await prompter.confirm({
+        message: "MATRIX_* env vars detected. Use env vars?",
+        initialValue: true,
+      });
+      if (keepEnv) {
+        next = {
+          ...next,
+          matrix: {
+            ...next.matrix,
+            enabled: true,
+          },
+        };
+      } else {
+        homeserver = String(
+          await prompter.text({
+            message: "Matrix homeserver (https://...)",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+        userId = String(
+          await prompter.text({
+            message: "Matrix user id (@user:server)",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+      }
+    } else if (hasConfig) {
+      const keep = await prompter.confirm({
+        message: "Matrix config already present. Keep it?",
+        initialValue: true,
+      });
+      if (keep) {
+        next = {
+          ...next,
+          matrix: {
+            ...next.matrix,
+            enabled: true,
+          },
+        };
+      } else {
+        homeserver = String(
+          await prompter.text({
+            message: "Matrix homeserver (https://...)",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+        userId = String(
+          await prompter.text({
+            message: "Matrix user id (@user:server)",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+      }
+    } else {
+      homeserver = String(
+        await prompter.text({
+          message: "Matrix homeserver (https://...)",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
+      userId = String(
+        await prompter.text({
+          message: "Matrix user id (@user:server)",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
+    }
+
+    if (homeserver && userId) {
+      const authMethod = (await prompter.select({
+        message: "Matrix auth method",
+        options: [
+          { value: "accessToken", label: "Access token (recommended)" },
+          { value: "password", label: "Password login" },
+        ],
+      })) as "accessToken" | "password";
+      if (authMethod === "accessToken") {
+        accessToken = String(
+          await prompter.text({
+            message: "Matrix access token",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+      } else {
+        password = String(
+          await prompter.text({
+            message: "Matrix password",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+      }
+    }
+
+    if (homeserver && userId && (accessToken || password)) {
+      next = {
+        ...next,
+        matrix: {
+          ...next.matrix,
+          enabled: true,
+          homeserver,
+          userId,
+          ...(accessToken ? { accessToken } : {}),
+          ...(password ? { password } : {}),
+        },
+      };
+    }
+  }
+
   if (selection.includes("signal")) {
     const signalOverride = accountOverrides.signal?.trim();
     const defaultSignalAccountId = resolveDefaultSignalAccountId(next);
@@ -1584,6 +1776,19 @@ export async function setupProviders(
         next = {
           ...next,
           slack: { ...next.slack, enabled: false },
+        };
+      }
+    }
+
+    if (!selection.includes("matrix") && matrixConfigured) {
+      const disable = await prompter.confirm({
+        message: "Disable Matrix provider?",
+        initialValue: false,
+      });
+      if (disable) {
+        next = {
+          ...next,
+          matrix: { ...next.matrix, enabled: false },
         };
       }
     }
