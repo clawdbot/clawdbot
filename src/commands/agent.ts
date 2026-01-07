@@ -22,11 +22,6 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import {
-  chunkMarkdownText,
-  chunkText,
-  resolveTextChunkLimit,
-} from "../auto-reply/chunk.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
@@ -49,9 +44,9 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 
 type AgentCommandOpts = {
@@ -259,8 +254,6 @@ export async function agentCommand(
   const skillsSnapshot = needsSkillsSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, { config: cfg })
     : sessionEntry?.skillsSnapshot;
-
-  const { token: telegramToken } = resolveTelegramToken(cfg);
 
   if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
     const current = sessionEntry ?? {
@@ -621,16 +614,6 @@ export async function agentCommand(
     return { payloads: [], meta: result.meta };
   }
 
-  const deliveryTextLimit =
-    deliveryProvider === "whatsapp" ||
-    deliveryProvider === "telegram" ||
-    deliveryProvider === "discord" ||
-    deliveryProvider === "slack" ||
-    deliveryProvider === "signal" ||
-    deliveryProvider === "imessage"
-      ? resolveTextChunkLimit(cfg, deliveryProvider)
-      : resolveTextChunkLimit(cfg, "whatsapp");
-
   for (const payload of payloads) {
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -648,154 +631,42 @@ export async function agentCommand(
     const media = mediaList;
     if (!text && media.length === 0) continue;
 
-    if (deliveryProvider === "whatsapp" && whatsappTarget) {
+    if (
+      deliveryProvider === "whatsapp" ||
+      deliveryProvider === "telegram" ||
+      deliveryProvider === "discord" ||
+      deliveryProvider === "slack" ||
+      deliveryProvider === "signal" ||
+      deliveryProvider === "imessage"
+    ) {
+      const target =
+        deliveryProvider === "whatsapp"
+          ? whatsappTarget
+          : deliveryProvider === "telegram"
+            ? telegramTarget
+            : deliveryProvider === "discord"
+              ? discordTarget
+              : deliveryProvider === "slack"
+                ? slackTarget
+                : deliveryProvider === "signal"
+                  ? signalTarget
+                  : imessageTarget;
+      if (!target) continue;
       try {
-        const primaryMedia = media[0];
-        await deps.sendMessageWhatsApp(whatsappTarget, text, {
-          verbose: false,
-          mediaUrl: primaryMedia,
+        await deliverOutboundPayloads({
+          cfg,
+          provider: deliveryProvider,
+          to: target,
+          payloads: [payload],
+          deps: {
+            sendWhatsApp: deps.sendMessageWhatsApp,
+            sendTelegram: deps.sendMessageTelegram,
+            sendDiscord: deps.sendMessageDiscord,
+            sendSlack: deps.sendMessageSlack,
+            sendSignal: deps.sendMessageSignal,
+            sendIMessage: deps.sendMessageIMessage,
+          },
         });
-        for (const extra of media.slice(1)) {
-          await deps.sendMessageWhatsApp(whatsappTarget, "", {
-            verbose: false,
-            mediaUrl: extra,
-          });
-        }
-      } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        logDeliveryError(err);
-      }
-      continue;
-    }
-
-    if (deliveryProvider === "telegram" && telegramTarget) {
-      try {
-        if (media.length === 0) {
-          for (const chunk of chunkMarkdownText(text, deliveryTextLimit)) {
-            await deps.sendMessageTelegram(telegramTarget, chunk, {
-              verbose: false,
-              token: telegramToken || undefined,
-            });
-          }
-        } else {
-          let first = true;
-          for (const url of media) {
-            const caption = first ? text : "";
-            first = false;
-            await deps.sendMessageTelegram(telegramTarget, caption, {
-              verbose: false,
-              mediaUrl: url,
-              token: telegramToken || undefined,
-            });
-          }
-        }
-      } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        logDeliveryError(err);
-      }
-    }
-
-    if (deliveryProvider === "discord" && discordTarget) {
-      try {
-        if (media.length === 0) {
-          await deps.sendMessageDiscord(discordTarget, text, {
-            token: process.env.DISCORD_BOT_TOKEN,
-          });
-        } else {
-          let first = true;
-          for (const url of media) {
-            const caption = first ? text : "";
-            first = false;
-            await deps.sendMessageDiscord(discordTarget, caption, {
-              token: process.env.DISCORD_BOT_TOKEN,
-              mediaUrl: url,
-            });
-          }
-        }
-      } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        logDeliveryError(err);
-      }
-    }
-
-    if (deliveryProvider === "slack" && slackTarget) {
-      try {
-        if (media.length === 0) {
-          await deps.sendMessageSlack(slackTarget, text);
-        } else {
-          let first = true;
-          for (const url of media) {
-            const caption = first ? text : "";
-            first = false;
-            await deps.sendMessageSlack(slackTarget, caption, {
-              mediaUrl: url,
-            });
-          }
-        }
-      } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        logDeliveryError(err);
-      }
-    }
-
-    if (deliveryProvider === "signal" && signalTarget) {
-      try {
-        if (media.length === 0) {
-          await deps.sendMessageSignal(signalTarget, text, {
-            maxBytes: cfg.signal?.mediaMaxMb
-              ? cfg.signal.mediaMaxMb * 1024 * 1024
-              : cfg.agent?.mediaMaxMb
-                ? cfg.agent.mediaMaxMb * 1024 * 1024
-                : undefined,
-          });
-        } else {
-          let first = true;
-          for (const url of media) {
-            const caption = first ? text : "";
-            first = false;
-            await deps.sendMessageSignal(signalTarget, caption, {
-              mediaUrl: url,
-              maxBytes: cfg.signal?.mediaMaxMb
-                ? cfg.signal.mediaMaxMb * 1024 * 1024
-                : cfg.agent?.mediaMaxMb
-                  ? cfg.agent.mediaMaxMb * 1024 * 1024
-                  : undefined,
-            });
-          }
-        }
-      } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        logDeliveryError(err);
-      }
-    }
-
-    if (deliveryProvider === "imessage" && imessageTarget) {
-      try {
-        if (media.length === 0) {
-          for (const chunk of chunkText(text, deliveryTextLimit)) {
-            await deps.sendMessageIMessage(imessageTarget, chunk, {
-              maxBytes: cfg.imessage?.mediaMaxMb
-                ? cfg.imessage.mediaMaxMb * 1024 * 1024
-                : cfg.agent?.mediaMaxMb
-                  ? cfg.agent.mediaMaxMb * 1024 * 1024
-                  : undefined,
-            });
-          }
-        } else {
-          let first = true;
-          for (const url of media) {
-            const caption = first ? text : "";
-            first = false;
-            await deps.sendMessageIMessage(imessageTarget, caption, {
-              mediaUrl: url,
-              maxBytes: cfg.imessage?.mediaMaxMb
-                ? cfg.imessage.mediaMaxMb * 1024 * 1024
-                : cfg.agent?.mediaMaxMb
-                  ? cfg.agent.mediaMaxMb * 1024 * 1024
-                  : undefined,
-            });
-          }
-        }
       } catch (err) {
         if (!bestEffortDeliver) throw err;
         logDeliveryError(err);

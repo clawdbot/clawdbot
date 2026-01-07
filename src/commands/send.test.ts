@@ -137,7 +137,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
-      expect.objectContaining({ token: "token-abc" }),
+      expect.objectContaining({ token: "token-abc", verbose: false }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
@@ -158,7 +158,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
-      expect.objectContaining({ token: "cfg-token" }),
+      expect.objectContaining({ token: "cfg-token", verbose: false }),
     );
   });
 
@@ -176,7 +176,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageDiscord).toHaveBeenCalledWith(
       "channel:chan",
       "hi",
-      expect.objectContaining({ token: "token-discord" }),
+      expect.objectContaining({ verbose: false }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
@@ -193,7 +193,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageSignal).toHaveBeenCalledWith(
       "+15551234567",
       "hi",
-      expect.objectContaining({ mediaUrl: undefined }),
+      expect.objectContaining({ maxBytes: undefined }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
@@ -209,11 +209,7 @@ describe("sendCommand", () => {
       deps,
       runtime,
     );
-    expect(deps.sendMessageSlack).toHaveBeenCalledWith(
-      "channel:C123",
-      "hi",
-      expect.objectContaining({ mediaUrl: undefined }),
-    );
+    expect(deps.sendMessageSlack).toHaveBeenCalledWith("channel:C123", "hi");
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
@@ -229,7 +225,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageIMessage).toHaveBeenCalledWith(
       "chat_id:42",
       "hi",
-      expect.objectContaining({ mediaUrl: undefined }),
+      expect.objectContaining({ maxBytes: undefined }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });

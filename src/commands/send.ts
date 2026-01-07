@@ -2,8 +2,9 @@ import type { CliDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveTelegramToken } from "../telegram/token.js";
 
 export async function sendCommand(
   opts: {
@@ -19,7 +20,8 @@ export async function sendCommand(
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const provider = (opts.provider ?? "whatsapp").toLowerCase();
+  const providerRaw = (opts.provider ?? "whatsapp").toLowerCase();
+  const provider = providerRaw === "imsg" ? "imessage" : providerRaw;
 
   if (opts.dryRun) {
     runtime.log(
@@ -28,131 +30,41 @@ export async function sendCommand(
     return;
   }
 
-  if (provider === "telegram") {
-    const { token } = resolveTelegramToken(loadConfig());
-    const result = await deps.sendMessageTelegram(opts.to, opts.message, {
-      token: token || undefined,
-      mediaUrl: opts.media,
+  if (
+    provider === "telegram" ||
+    provider === "discord" ||
+    provider === "slack" ||
+    provider === "signal" ||
+    provider === "imessage"
+  ) {
+    const results = await deliverOutboundPayloads({
+      cfg: loadConfig(),
+      provider,
+      to: opts.to,
+      payloads: [{ text: opts.message, mediaUrl: opts.media }],
+      deps: {
+        sendWhatsApp: deps.sendMessageWhatsApp,
+        sendTelegram: deps.sendMessageTelegram,
+        sendDiscord: deps.sendMessageDiscord,
+        sendSlack: deps.sendMessageSlack,
+        sendSignal: deps.sendMessageSignal,
+        sendIMessage: deps.sendMessageIMessage,
+      },
     });
-    runtime.log(
-      success(
-        `✅ Sent via telegram. Message ID: ${result.messageId} (chat ${result.chatId})`,
-      ),
-    );
+    const last = results.at(-1);
+    const summary = formatDirectSendSummary(provider, last);
+    runtime.log(success(summary));
     if (opts.json) {
       runtime.log(
         JSON.stringify(
           {
-            provider: "telegram",
+            provider,
             via: "direct",
             to: opts.to,
-            chatId: result.chatId,
-            messageId: result.messageId,
-            mediaUrl: opts.media ?? null,
-          },
-          null,
-          2,
-        ),
-      );
-    }
-    return;
-  }
-
-  if (provider === "discord") {
-    const result = await deps.sendMessageDiscord(opts.to, opts.message, {
-      token: process.env.DISCORD_BOT_TOKEN,
-      mediaUrl: opts.media,
-    });
-    runtime.log(
-      success(
-        `✅ Sent via discord. Message ID: ${result.messageId} (channel ${result.channelId})`,
-      ),
-    );
-    if (opts.json) {
-      runtime.log(
-        JSON.stringify(
-          {
-            provider: "discord",
-            via: "direct",
-            to: opts.to,
-            channelId: result.channelId,
-            messageId: result.messageId,
-            mediaUrl: opts.media ?? null,
-          },
-          null,
-          2,
-        ),
-      );
-    }
-    return;
-  }
-
-  if (provider === "slack") {
-    const result = await deps.sendMessageSlack(opts.to, opts.message, {
-      mediaUrl: opts.media,
-    });
-    runtime.log(
-      success(
-        `✅ Sent via slack. Message ID: ${result.messageId} (channel ${result.channelId})`,
-      ),
-    );
-    if (opts.json) {
-      runtime.log(
-        JSON.stringify(
-          {
-            provider: "slack",
-            via: "direct",
-            to: opts.to,
-            channelId: result.channelId,
-            messageId: result.messageId,
-            mediaUrl: opts.media ?? null,
-          },
-          null,
-          2,
-        ),
-      );
-    }
-    return;
-  }
-
-  if (provider === "signal") {
-    const result = await deps.sendMessageSignal(opts.to, opts.message, {
-      mediaUrl: opts.media,
-    });
-    runtime.log(success(`✅ Sent via signal. Message ID: ${result.messageId}`));
-    if (opts.json) {
-      runtime.log(
-        JSON.stringify(
-          {
-            provider: "signal",
-            via: "direct",
-            to: opts.to,
-            messageId: result.messageId,
-            mediaUrl: opts.media ?? null,
-          },
-          null,
-          2,
-        ),
-      );
-    }
-    return;
-  }
-
-  if (provider === "imessage" || provider === "imsg") {
-    const result = await deps.sendMessageIMessage(opts.to, opts.message, {
-      mediaUrl: opts.media,
-    });
-    runtime.log(
-      success(`✅ Sent via iMessage. Message ID: ${result.messageId}`),
-    );
-    if (opts.json) {
-      runtime.log(
-        JSON.stringify(
-          {
-            provider: "imessage",
-            via: "direct",
-            to: opts.to,
-            messageId: result.messageId,
+            messageId: last?.messageId ?? "unknown",
+            ...(last && "chatId" in last ? { chatId: last.chatId } : {}),
+            ...(last && "channelId" in last ? { channelId: last.channelId } : {}),
+            ...(last && "timestamp" in last ? { timestamp: last.timestamp } : {}),
             mediaUrl: opts.media ?? null,
           },
           null,
@@ -205,4 +117,29 @@ export async function sendCommand(
       ),
     );
   }
+}
+
+function formatDirectSendSummary(
+  provider: string,
+  result: OutboundDeliveryResult | undefined,
+): string {
+  if (!result) {
+    return `✅ Sent via ${provider}. Message ID: unknown`;
+  }
+  if (result.provider === "telegram") {
+    return `✅ Sent via telegram. Message ID: ${result.messageId} (chat ${result.chatId})`;
+  }
+  if (result.provider === "discord") {
+    return `✅ Sent via discord. Message ID: ${result.messageId} (channel ${result.channelId})`;
+  }
+  if (result.provider === "slack") {
+    return `✅ Sent via slack. Message ID: ${result.messageId} (channel ${result.channelId})`;
+  }
+  if (result.provider === "signal") {
+    return `✅ Sent via signal. Message ID: ${result.messageId}`;
+  }
+  if (result.provider === "imessage") {
+    return `✅ Sent via iMessage. Message ID: ${result.messageId}`;
+  }
+  return `✅ Sent via ${provider}. Message ID: ${result.messageId}`;
 }

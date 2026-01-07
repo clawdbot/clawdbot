@@ -1,4 +1,3 @@
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
@@ -16,57 +15,24 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
-import { sendMessageDiscord } from "../discord/send.js";
-import { sendMessageIMessage } from "../imessage/send.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { sendMessageSignal } from "../signal/send.js";
-import { sendMessageSlack } from "../slack/send.js";
-import { sendMessageTelegram } from "../telegram/send.js";
-import { normalizeE164 } from "../utils.js";
 import { getActiveWebListener } from "../web/active-listener.js";
-import { sendMessageWhatsApp } from "../web/outbound.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import type { OutboundSendDeps } from "./outbound/deliver.js";
+import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
 
-export type HeartbeatTarget =
-  | "last"
-  | "whatsapp"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "signal"
-  | "imessage"
-  | "none";
-
-export type HeartbeatDeliveryTarget = {
-  provider:
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "none";
-  to?: string;
-  reason?: string;
-};
-
-type HeartbeatDeps = {
+type HeartbeatDeps = OutboundSendDeps & {
   runtime?: RuntimeEnv;
-  sendWhatsApp?: typeof sendMessageWhatsApp;
-  sendTelegram?: typeof sendMessageTelegram;
-  sendDiscord?: typeof sendMessageDiscord;
-  sendSlack?: typeof sendMessageSlack;
-  sendSignal?: typeof sendMessageSignal;
-  sendIMessage?: typeof sendMessageIMessage;
   getQueueSize?: (lane?: string) => number;
   nowMs?: () => number;
   webAuthExists?: () => Promise<boolean>;
@@ -191,83 +157,6 @@ async function resolveWhatsAppReadiness(
   return { ok: true, reason: "ok" };
 }
 
-export function resolveHeartbeatDeliveryTarget(params: {
-  cfg: ClawdbotConfig;
-  entry?: SessionEntry;
-}): HeartbeatDeliveryTarget {
-  const { cfg, entry } = params;
-  const rawTarget = cfg.agent?.heartbeat?.target;
-  const target: HeartbeatTarget =
-    rawTarget === "whatsapp" ||
-    rawTarget === "telegram" ||
-    rawTarget === "discord" ||
-    rawTarget === "slack" ||
-    rawTarget === "signal" ||
-    rawTarget === "imessage" ||
-    rawTarget === "none" ||
-    rawTarget === "last"
-      ? rawTarget
-      : "last";
-  if (target === "none") {
-    return { provider: "none", reason: "target-none" };
-  }
-
-  const explicitTo =
-    typeof cfg.agent?.heartbeat?.to === "string" &&
-    cfg.agent.heartbeat.to.trim()
-      ? cfg.agent.heartbeat.to.trim()
-      : undefined;
-
-  const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== "webchat"
-      ? entry.lastProvider
-      : undefined;
-  const lastTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
-
-  const provider:
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | undefined =
-    target === "last"
-      ? lastProvider
-      : target === "whatsapp" ||
-          target === "telegram" ||
-          target === "discord" ||
-          target === "slack" ||
-          target === "signal" ||
-          target === "imessage"
-        ? target
-        : undefined;
-
-  const to =
-    explicitTo ||
-    (provider && lastProvider === provider ? lastTo : undefined) ||
-    (target === "last" ? lastTo : undefined);
-
-  if (!provider || !to) {
-    return { provider: "none", reason: "no-target" };
-  }
-
-  if (provider !== "whatsapp") {
-    return { provider, to };
-  }
-
-  const rawAllow = cfg.whatsapp?.allowFrom ?? [];
-  if (rawAllow.includes("*")) return { provider, to };
-  const allowFrom = rawAllow
-    .map((val) => normalizeE164(val))
-    .filter((val) => val.length > 1);
-  if (allowFrom.length === 0) return { provider, to };
-
-  const normalized = normalizeE164(to);
-  if (allowFrom.includes(normalized)) return { provider, to: normalized };
-  return { provider, to: allowFrom[0], reason: "allowFrom-fallback" };
-}
-
 async function restoreHeartbeatUpdatedAt(params: {
   storePath: string;
   sessionKey: string;
@@ -307,123 +196,6 @@ function normalizeHeartbeatReply(
     finalText = `${responsePrefix} ${finalText}`;
   }
   return { shouldSkip: false, text: finalText, hasMedia };
-}
-
-async function deliverHeartbeatReply(params: {
-  provider:
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage";
-  to: string;
-  text: string;
-  mediaUrls: string[];
-  textLimit: number;
-  deps: Required<
-    Pick<
-      HeartbeatDeps,
-      | "sendWhatsApp"
-      | "sendTelegram"
-      | "sendDiscord"
-      | "sendSlack"
-      | "sendSignal"
-      | "sendIMessage"
-    >
-  >;
-}) {
-  const { provider, to, text, mediaUrls, deps, textLimit } = params;
-  if (provider === "whatsapp") {
-    if (mediaUrls.length === 0) {
-      for (const chunk of chunkText(text, textLimit)) {
-        await deps.sendWhatsApp(to, chunk, { verbose: false });
-      }
-      return;
-    }
-    let first = true;
-    for (const url of mediaUrls) {
-      const caption = first ? text : "";
-      first = false;
-      await deps.sendWhatsApp(to, caption, { verbose: false, mediaUrl: url });
-    }
-    return;
-  }
-
-  if (provider === "signal") {
-    if (mediaUrls.length === 0) {
-      for (const chunk of chunkText(text, textLimit)) {
-        await deps.sendSignal(to, chunk);
-      }
-      return;
-    }
-    let first = true;
-    for (const url of mediaUrls) {
-      const caption = first ? text : "";
-      first = false;
-      await deps.sendSignal(to, caption, { mediaUrl: url });
-    }
-    return;
-  }
-
-  if (provider === "imessage") {
-    if (mediaUrls.length === 0) {
-      for (const chunk of chunkText(text, textLimit)) {
-        await deps.sendIMessage(to, chunk);
-      }
-      return;
-    }
-    let first = true;
-    for (const url of mediaUrls) {
-      const caption = first ? text : "";
-      first = false;
-      await deps.sendIMessage(to, caption, { mediaUrl: url });
-    }
-    return;
-  }
-
-  if (provider === "telegram") {
-    if (mediaUrls.length === 0) {
-      for (const chunk of chunkText(text, textLimit)) {
-        await deps.sendTelegram(to, chunk, { verbose: false });
-      }
-      return;
-    }
-    let first = true;
-    for (const url of mediaUrls) {
-      const caption = first ? text : "";
-      first = false;
-      await deps.sendTelegram(to, caption, { verbose: false, mediaUrl: url });
-    }
-    return;
-  }
-
-  if (provider === "slack") {
-    if (mediaUrls.length === 0) {
-      for (const chunk of chunkText(text, textLimit)) {
-        await deps.sendSlack(to, chunk);
-      }
-      return;
-    }
-    let first = true;
-    for (const url of mediaUrls) {
-      const caption = first ? text : "";
-      first = false;
-      await deps.sendSlack(to, caption, { mediaUrl: url });
-    }
-    return;
-  }
-  // provider is "discord" here
-  if (mediaUrls.length === 0) {
-    await deps.sendDiscord(to, text, { verbose: false });
-    return;
-  }
-  let first = true;
-  for (const url of mediaUrls) {
-    const caption = first ? text : "";
-    first = false;
-    await deps.sendDiscord(to, caption, { verbose: false, mediaUrl: url });
-  }
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -541,22 +313,17 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    const deps = {
-      sendWhatsApp: opts.deps?.sendWhatsApp ?? sendMessageWhatsApp,
-      sendTelegram: opts.deps?.sendTelegram ?? sendMessageTelegram,
-      sendDiscord: opts.deps?.sendDiscord ?? sendMessageDiscord,
-      sendSlack: opts.deps?.sendSlack ?? sendMessageSlack,
-      sendSignal: opts.deps?.sendSignal ?? sendMessageSignal,
-      sendIMessage: opts.deps?.sendIMessage ?? sendMessageIMessage,
-    };
-    const textLimit = resolveTextChunkLimit(cfg, delivery.provider);
-    await deliverHeartbeatReply({
+    await deliverOutboundPayloads({
+      cfg,
       provider: delivery.provider,
       to: delivery.to,
-      text: normalized.text,
-      mediaUrls,
-      textLimit,
-      deps,
+      payloads: [
+        {
+          text: normalized.text,
+          mediaUrls,
+        },
+      ],
+      deps: opts.deps,
     });
 
     emitHeartbeatEvent({
