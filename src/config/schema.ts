@@ -96,6 +96,9 @@ const FIELD_LABELS: Record<string, string> = {
   "agent.model.fallbacks": "Model Fallbacks",
   "agent.imageModel.primary": "Image Model",
   "agent.imageModel.fallbacks": "Image Model Fallbacks",
+  "agent.observationMasking.enabled": "Observation Masking (Experimental)",
+  "agent.observationMasking.keepLast": "Observation Masking Window",
+  "agent.observationMasking.placeholder": "Observation Masking Placeholder",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
   "commands.useAccessGroups": "Use Access Groups",
@@ -143,6 +146,12 @@ const FIELD_HELP: Record<string, string> = {
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agent.imageModel.fallbacks":
     "Ordered fallback image models (provider/model).",
+  "agent.observationMasking.enabled":
+    "Experimental: mask older tool results in LLM context to reduce token usage.",
+  "agent.observationMasking.keepLast":
+    "Number of most recent tool result observations to keep unmasked (default: 1).",
+  "agent.observationMasking.placeholder":
+    "Placeholder text to use for masked tool results.",
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
@@ -173,6 +182,8 @@ const FIELD_HELP: Record<string, string> = {
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
   "gateway.controlUi.basePath": "/clawdbot",
+  "agent.observationMasking.placeholder":
+    "Previous observation omitted for brevity.",
 };
 
 const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];

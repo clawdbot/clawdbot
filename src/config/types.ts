@@ -850,6 +850,15 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
+export type ObservationMaskingConfig = {
+  /** Enable experimental observation masking for tool results in LLM context. */
+  enabled?: boolean;
+  /** Keep the most recent N tool result observations unmasked (default: 1). */
+  keepLast?: number;
+  /** Placeholder text used for masked observations. */
+  placeholder?: string;
+};
+
 export type ClawdbotConfig = {
   auth?: AuthConfig;
   env?: {
@@ -895,6 +904,8 @@ export type ClawdbotConfig = {
     userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
+    /** Experimental: mask older tool results in LLM context to reduce token use. */
+    observationMasking?: ObservationMaskingConfig;
     /** Default thinking level when no /think directive is present. */
     thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
     /** Default verbose level when no /verbose directive is present. */

@@ -10,8 +10,12 @@ import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
   createAgentSession,
+  createEventBus,
   discoverAuthStorage,
+  discoverExtensions,
   discoverModels,
+  type ExtensionFactory,
+  type LoadedExtension,
   SessionManager,
   SettingsManager,
   type Skill,
@@ -47,6 +51,10 @@ import {
   resolveAuthProfileOrder,
 } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
+import {
+  createObservationMaskingExtension,
+  resolveObservationMaskingOptions,
+} from "./observation-masking.js";
 import {
   buildBootstrapContextFiles,
   ensureSessionHeader,
@@ -416,6 +424,50 @@ function resolvePromptSkills(
     .filter((skill): skill is Skill => Boolean(skill));
 }
 
+type ObservationMaskingExtensionBundle = {
+  eventBus: ReturnType<typeof createEventBus>;
+  extensions: ExtensionFactory[];
+  preloadedExtensions?: LoadedExtension[];
+};
+
+async function buildObservationMaskingExtensionBundle(params: {
+  config?: ClawdbotConfig;
+  workspaceDir: string;
+  agentDir: string;
+}): Promise<ObservationMaskingExtensionBundle | null> {
+  const options = resolveObservationMaskingOptions(params.config);
+  if (!options) return null;
+
+  const eventBus = createEventBus();
+  let preloadedExtensions: LoadedExtension[] | undefined;
+
+  try {
+    const discovered = await discoverExtensions(
+      eventBus,
+      params.workspaceDir,
+      params.agentDir,
+    );
+    if (discovered.errors.length > 0) {
+      log.warn(
+        `observation masking: ${discovered.errors.length} extension(s) failed to load`,
+      );
+    }
+    if (discovered.extensions.length > 0) {
+      preloadedExtensions = discovered.extensions;
+    }
+  } catch (err) {
+    log.warn(
+      `observation masking: extension discovery failed: ${describeUnknownError(err)}`,
+    );
+  }
+
+  return {
+    eventBus,
+    extensions: [createObservationMaskingExtension(options)],
+    preloadedExtensions,
+  };
+}
+
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
   sessionKey?: string;
@@ -583,6 +635,13 @@ export async function compactEmbeddedPiSession(params: {
           tools,
           sandboxEnabled: !!sandbox?.enabled,
         });
+        const observationMasking = await buildObservationMaskingExtensionBundle(
+          {
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            agentDir,
+          },
+        );
 
         const { session } = await createAgentSession({
           cwd: resolvedWorkspace,
@@ -594,6 +653,9 @@ export async function compactEmbeddedPiSession(params: {
           systemPrompt,
           tools: builtInTools,
           customTools,
+          eventBus: observationMasking?.eventBus,
+          preloadedExtensions: observationMasking?.preloadedExtensions,
+          extensions: observationMasking?.extensions,
           sessionManager,
           settingsManager,
           skills: promptSkills,
@@ -892,6 +954,12 @@ export async function runEmbeddedPiAgent(params: {
             tools,
             sandboxEnabled: !!sandbox?.enabled,
           });
+          const observationMasking =
+            await buildObservationMaskingExtensionBundle({
+              config: params.config,
+              workspaceDir: resolvedWorkspace,
+              agentDir,
+            });
 
           const { session } = await createAgentSession({
             cwd: resolvedWorkspace,
@@ -905,6 +973,9 @@ export async function runEmbeddedPiAgent(params: {
             tools: builtInTools,
             // Custom clawdbot tools (browser, canvas, nodes, cron, etc.)
             customTools,
+            eventBus: observationMasking?.eventBus,
+            preloadedExtensions: observationMasking?.preloadedExtensions,
+            extensions: observationMasking?.extensions,
             sessionManager,
             settingsManager,
             skills: promptSkills,

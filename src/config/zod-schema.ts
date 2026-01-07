@@ -513,6 +513,13 @@ export const ClawdbotSchema = z.object({
       skipBootstrap: z.boolean().optional(),
       userTimezone: z.string().optional(),
       contextTokens: z.number().int().positive().optional(),
+      observationMasking: z
+        .object({
+          enabled: z.boolean().optional(),
+          keepLast: z.number().int().min(0).optional(),
+          placeholder: z.string().optional(),
+        })
+        .optional(),
       tools: z
         .object({
           allow: z.array(z.string()).optional(),
