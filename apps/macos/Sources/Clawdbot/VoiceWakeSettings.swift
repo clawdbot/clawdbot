@@ -1,15 +1,18 @@
 import AppKit
 import AVFoundation
 import Observation
+import SwabbleKit
 import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct VoiceWakeSettings: View {
     @Bindable var state: AppState
+    let isActive: Bool
     @State private var testState: VoiceWakeTestState = .idle
     @State private var tester = VoiceWakeTester()
     @State private var isTesting = false
+    @State private var testTimeoutTask: Task<Void, Never>?
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var meterLevel: Double = 0
@@ -101,8 +104,22 @@ struct VoiceWakeSettings: View {
             guard !self.isPreview else { return }
             Task { await self.restartMeter() }
         }
+        .onChange(of: self.isActive) { _, active in
+            guard !self.isPreview else { return }
+            if !active {
+                self.tester.stop()
+                self.isTesting = false
+                self.testState = .idle
+                self.testTimeoutTask?.cancel()
+                Task { await self.meter.stop() }
+            }
+        }
         .onDisappear {
             guard !self.isPreview else { return }
+            self.tester.stop()
+            self.isTesting = false
+            self.testState = .idle
+            self.testTimeoutTask?.cancel()
             Task { await self.meter.stop() }
         }
     }
@@ -205,13 +222,23 @@ struct VoiceWakeSettings: View {
             return
         }
         if self.isTesting {
-            self.tester.stop()
+            self.tester.finalize()
             self.isTesting = false
-            self.testState = .idle
+            self.testState = .finalizing
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if self.testState == .finalizing {
+                    self.tester.stop()
+                    self.testState = .failed("Stopped")
+                }
+            }
+            self.testTimeoutTask?.cancel()
             return
         }
 
         let triggers = self.sanitizedTriggers()
+        self.tester.stop()
+        self.testTimeoutTask?.cancel()
         self.isTesting = true
         self.testState = .requesting
         Task { @MainActor in
@@ -225,18 +252,31 @@ struct VoiceWakeSettings: View {
                             self.testState = newState
                             if case .detected = newState { self.isTesting = false }
                             if case .failed = newState { self.isTesting = false }
+                            if case .detected = newState { self.testTimeoutTask?.cancel() }
+                            if case .failed = newState { self.testTimeoutTask?.cancel() }
                         }
                     })
-                try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
-                if self.isTesting {
-                    self.tester.stop()
-                    self.testState = .failed("Timeout: no trigger heard")
-                    self.isTesting = false
+                self.testTimeoutTask?.cancel()
+                self.testTimeoutTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    if self.isTesting {
+                        self.tester.stop()
+                        if case let .hearing(text) = self.testState,
+                           let command = Self.textOnlyCommand(from: text, triggers: triggers)
+                        {
+                            self.testState = .detected(command)
+                        } else {
+                            self.testState = .failed("Timeout: no trigger heard")
+                        }
+                        self.isTesting = false
+                    }
                 }
             } catch {
                 self.tester.stop()
                 self.testState = .failed(error.localizedDescription)
                 self.isTesting = false
+                self.testTimeoutTask?.cancel()
             }
         }
     }
@@ -313,6 +353,44 @@ struct VoiceWakeSettings: View {
     private func sanitizedTriggers() -> [String] {
         sanitizeVoiceWakeTriggers(self.state.swabbleTriggerWords)
     }
+
+    private static func textOnlyCommand(from transcript: String, triggers: [String]) -> String? {
+        guard !transcript.isEmpty else { return nil }
+        let normalized = normalizeToken(transcript)
+        guard !normalized.isEmpty else { return nil }
+        guard startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
+        guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
+        let trimmed = WakeWordGate.stripWake(text: transcript, triggers: triggers)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
+        let tokens = transcript
+            .split(whereSeparator: { $0.isWhitespace })
+            .map { normalizeToken(String($0)) }
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return false }
+        for trigger in triggers {
+            let triggerTokens = trigger
+                .split(whereSeparator: { $0.isWhitespace })
+                .map { normalizeToken(String($0)) }
+                .filter { !$0.isEmpty }
+            guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
+            if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func normalizeToken(_ token: String) -> String {
+        token
+            .trimmingCharacters(in: Self.whitespaceAndPunctuation)
+            .lowercased()
+    }
+
+    private static let whitespaceAndPunctuation = CharacterSet.whitespacesAndNewlines
+        .union(.punctuationCharacters)
 
     private var micPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -506,7 +584,7 @@ struct VoiceWakeSettings: View {
 #if DEBUG
 struct VoiceWakeSettings_Previews: PreviewProvider {
     static var previews: some View {
-        VoiceWakeSettings(state: .preview)
+        VoiceWakeSettings(state: .preview, isActive: true)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
     }
 }
@@ -519,7 +597,7 @@ extension VoiceWakeSettings {
         state.voicePushToTalkEnabled = true
         state.swabbleTriggerWords = ["Claude", "Hey"]
 
-        let view = VoiceWakeSettings(state: state)
+        let view = VoiceWakeSettings(state: state, isActive: true)
         view.availableMics = [AudioInputDevice(uid: "mic-1", name: "Built-in")]
         view.availableLocales = [Locale(identifier: "en_US")]
         view.meterLevel = 0.42

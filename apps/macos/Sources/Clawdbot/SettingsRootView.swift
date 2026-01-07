@@ -31,7 +31,7 @@ struct SettingsRootView: View {
                     .tabItem { Label("Connections", systemImage: "link") }
                     .tag(SettingsTab.connections)
 
-                VoiceWakeSettings(state: self.state)
+                VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
                     .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
                     .tag(SettingsTab.voiceWake)
 

@@ -128,6 +128,7 @@ actor VoiceWakeRuntime {
 
             self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
             self.recognitionRequest?.shouldReportPartialResults = true
+            self.recognitionRequest?.taskHint = .dictation
             guard let request = self.recognitionRequest else { return }
 
             // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
@@ -217,6 +218,7 @@ actor VoiceWakeRuntime {
     private func configureSession(localeID: String?) {
         let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
         self.recognizer = SFSpeechRecognizer(locale: locale)
+        self.recognizer?.defaultTaskHint = .dictation
     }
 
     private func handleRecognition(_ update: RecognitionUpdate, config: RuntimeConfig) async {
@@ -271,10 +273,21 @@ actor VoiceWakeRuntime {
                 return
             }
             await self.beginCapture(command: match.command, triggerEndTime: match.triggerEndTime, config: config)
+        } else if update.isFinal {
+            let trimmed = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
+            if WakeWordGate.matchesTextOnly(text: transcript, triggers: config.triggers),
+               Self.startsWithTrigger(transcript: transcript, triggers: config.triggers),
+               !trimmed.isEmpty
+            {
+                if let cooldown = cooldownUntil, now < cooldown {
+                    return
+                }
+                await self.beginCapture(command: trimmed, triggerEndTime: nil, config: config)
+            }
         }
     }
 
-    private func beginCapture(command: String, triggerEndTime: TimeInterval, config: RuntimeConfig) async {
+    private func beginCapture(command: String, triggerEndTime: TimeInterval?, config: RuntimeConfig) async {
         self.listeningState = .voiceWake
         self.isCapturing = true
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
@@ -471,6 +484,34 @@ actor VoiceWakeRuntime {
         }
         return text
     }
+
+    private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
+        let tokens = transcript
+            .split(whereSeparator: { $0.isWhitespace })
+            .map { normalizeToken(String($0)) }
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return false }
+        for trigger in triggers {
+            let triggerTokens = trigger
+                .split(whereSeparator: { $0.isWhitespace })
+                .map { normalizeToken(String($0)) }
+                .filter { !$0.isEmpty }
+            guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
+            if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func normalizeToken(_ token: String) -> String {
+        token
+            .trimmingCharacters(in: Self.whitespaceAndPunctuation)
+            .lowercased()
+    }
+
+    private static let whitespaceAndPunctuation = CharacterSet.whitespacesAndNewlines
+        .union(.punctuationCharacters)
 
     private static func commandAfterTrigger(
         transcript: String,
