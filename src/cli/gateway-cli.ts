@@ -20,6 +20,7 @@ import {
 } from "../gateway/ws-logging.js";
 import { setVerbose } from "../globals.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { onSignal, removeSignalListener } from "../infra/process-signals.js";
 import { createSubsystemLogger } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDefaultDeps } from "./deps.js";
@@ -134,9 +135,9 @@ async function runGatewayLoop(params: {
   let restartResolver: (() => void) | null = null;
 
   const cleanupSignals = () => {
-    process.removeListener("SIGTERM", onSigterm);
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGUSR1", onSigusr1);
+    removeSignalListener("SIGTERM", onSigterm);
+    removeSignalListener("SIGINT", onSigint);
+    removeSignalListener("SIGUSR1", onSigusr1);
   };
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -182,9 +183,9 @@ async function runGatewayLoop(params: {
   const onSigint = () => request("stop", "SIGINT");
   const onSigusr1 = () => request("restart", "SIGUSR1");
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
+  onSignal("SIGTERM", onSigterm);
+  onSignal("SIGINT", onSigint);
+  onSignal("SIGUSR1", onSigusr1);
 
   try {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

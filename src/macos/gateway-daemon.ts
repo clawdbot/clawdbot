@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import process from "node:process";
 
+import { onSignal, removeSignalListener } from "../infra/process-signals.js";
+
 declare const __CLAWDBOT_VERSION__: string;
 
 const BUNDLED_VERSION =
@@ -101,9 +103,9 @@ async function main() {
   let restartResolver: (() => void) | null = null;
 
   const cleanupSignals = () => {
-    process.removeListener("SIGTERM", onSigterm);
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGUSR1", onSigusr1);
+    removeSignalListener("SIGTERM", onSigterm);
+    removeSignalListener("SIGINT", onSigint);
+    removeSignalListener("SIGUSR1", onSigusr1);
   };
 
   const request = (action: "stop" | "restart", signal: string) => {
@@ -153,9 +155,9 @@ async function main() {
   const onSigint = () => request("stop", "SIGINT");
   const onSigusr1 = () => request("restart", "SIGUSR1");
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
+  onSignal("SIGTERM", onSigterm);
+  onSignal("SIGINT", onSigint);
+  onSignal("SIGUSR1", onSigusr1);
 
   try {
     // eslint-disable-next-line no-constant-condition

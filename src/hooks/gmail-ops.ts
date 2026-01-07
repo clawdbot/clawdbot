@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-
 import {
   type ClawdbotConfig,
   CONFIG_PATH_CLAWDBOT,
@@ -9,6 +8,7 @@ import {
   validateConfigObject,
   writeConfigFile,
 } from "../config/config.js";
+import { onSignal } from "../infra/process-signals.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -333,8 +333,8 @@ export async function runGmailService(opts: GmailRunOptions) {
     child.kill("SIGTERM");
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  onSignal("SIGINT", shutdown);
+  onSignal("SIGTERM", shutdown);
 
   child.on("exit", () => {
     if (shuttingDown) return;

@@ -39,6 +39,7 @@ import {
 } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { onceSignal, removeSignalListener } from "../infra/process-signals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
@@ -971,7 +972,7 @@ export async function monitorWebProvider(
   const handleSigint = () => {
     sigintStop = true;
   };
-  process.once("SIGINT", handleSigint);
+  onceSignal("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
 
@@ -1666,7 +1667,7 @@ export async function monitorWebProvider(
   status.lastEventAt = Date.now();
   emitStatus();
 
-  process.removeListener("SIGINT", handleSigint);
+  removeSignalListener("SIGINT", handleSigint);
 }
 
 export { DEFAULT_WEB_MEDIA_BYTES };

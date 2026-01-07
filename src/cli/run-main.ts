@@ -5,6 +5,10 @@ import { loadDotEnv } from "../infra/dotenv.js";
 import { normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
+import {
+  onUncaughtException,
+  onUnhandledRejection,
+} from "../infra/process-signals.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
 
@@ -24,7 +28,7 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
-  process.on("unhandledRejection", (reason, _promise) => {
+  onUnhandledRejection((reason: unknown, _promise: Promise<unknown>) => {
     console.error(
       "[clawdbot] Unhandled promise rejection:",
       reason instanceof Error ? (reason.stack ?? reason.message) : reason,
@@ -32,7 +36,7 @@ export async function runCli(argv: string[] = process.argv) {
     process.exit(1);
   });
 
-  process.on("uncaughtException", (error) => {
+  onUncaughtException((error: Error) => {
     console.error(
       "[clawdbot] Uncaught exception:",
       error.stack ?? error.message,

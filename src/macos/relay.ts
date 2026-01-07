@@ -48,11 +48,14 @@ async function main() {
   const { isUnhandledRejectionHandled } = await import(
     "../infra/unhandled-rejections.js"
   );
+  const { onUnhandledRejection, onUncaughtException } = await import(
+    "../infra/process-signals.js"
+  );
 
   const { buildProgram } = await import("../cli/program.js");
   const program = buildProgram();
 
-  process.on("unhandledRejection", (reason, _promise) => {
+  onUnhandledRejection((reason: unknown, _promise: Promise<unknown>) => {
     if (isUnhandledRejectionHandled(reason)) return;
     console.error(
       "[clawdbot] Unhandled promise rejection:",
@@ -61,7 +64,7 @@ async function main() {
     process.exit(1);
   });
 
-  process.on("uncaughtException", (error) => {
+  onUncaughtException((error: Error) => {
     console.error(
       "[clawdbot] Uncaught exception:",
       error.stack ?? error.message,
