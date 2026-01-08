@@ -131,16 +131,94 @@ export async function runOnboardingWizard(
     flow = "advanced";
   }
 
+  const quickstartGateway = (() => {
+    const hasExisting =
+      typeof baseConfig.gateway?.port === "number" ||
+      baseConfig.gateway?.bind !== undefined ||
+      baseConfig.gateway?.auth?.mode !== undefined ||
+      baseConfig.gateway?.auth?.token !== undefined ||
+      baseConfig.gateway?.auth?.password !== undefined ||
+      baseConfig.gateway?.tailscale?.mode !== undefined;
+
+    const bindRaw = baseConfig.gateway?.bind;
+    const bind =
+      bindRaw === "loopback" ||
+      bindRaw === "lan" ||
+      bindRaw === "tailnet" ||
+      bindRaw === "auto"
+        ? bindRaw
+        : "loopback";
+
+    let authMode: GatewayAuthChoice = "off";
+    if (
+      baseConfig.gateway?.auth?.mode === "token" ||
+      baseConfig.gateway?.auth?.mode === "password"
+    ) {
+      authMode = baseConfig.gateway.auth.mode;
+    } else if (baseConfig.gateway?.auth?.token) {
+      authMode = "token";
+    } else if (baseConfig.gateway?.auth?.password) {
+      authMode = "password";
+    }
+
+    const tailscaleRaw = baseConfig.gateway?.tailscale?.mode;
+    const tailscaleMode =
+      tailscaleRaw === "off" ||
+      tailscaleRaw === "serve" ||
+      tailscaleRaw === "funnel"
+        ? tailscaleRaw
+        : "off";
+
+    return {
+      hasExisting,
+      port: resolveGatewayPort(baseConfig),
+      bind,
+      authMode,
+      tailscaleMode,
+      token: baseConfig.gateway?.auth?.token,
+      password: baseConfig.gateway?.auth?.password,
+      tailscaleResetOnExit: baseConfig.gateway?.tailscale?.resetOnExit ?? false,
+    };
+  })();
+
   if (flow === "quickstart") {
+    const formatBind = (value: "loopback" | "lan" | "tailnet" | "auto") => {
+      if (value === "loopback") return "Loopback (127.0.0.1)";
+      if (value === "lan") return "LAN";
+      if (value === "tailnet") return "Tailnet";
+      return "Auto";
+    };
+    const formatAuth = (value: GatewayAuthChoice) => {
+      if (value === "off") return "Off (loopback only)";
+      if (value === "token") return "Token";
+      return "Password";
+    };
+    const formatTailscale = (value: "off" | "serve" | "funnel") => {
+      if (value === "off") return "Off";
+      if (value === "serve") return "Serve";
+      return "Funnel";
+    };
+    const quickstartLines = quickstartGateway.hasExisting
+      ? [
+          "Keeping your current gateway settings:",
+          `Gateway port: ${quickstartGateway.port}`,
+          `Gateway bind: ${formatBind(quickstartGateway.bind)}`,
+          `Gateway auth: ${formatAuth(quickstartGateway.authMode)}`,
+          `Tailscale exposure: ${formatTailscale(
+            quickstartGateway.tailscaleMode,
+          )}`,
+          "Direct to chat providers.",
+        ]
+      : [
+          `Gateway port: ${DEFAULT_GATEWAY_PORT}`,
+          "Gateway bind: Loopback (127.0.0.1)",
+          "Gateway auth: Off (loopback only)",
+          "Tailscale exposure: Off",
+          "Direct to chat providers.",
+        ];
     await prompter.note(
-      [
-        "Gateway port: 18789",
-        "Gateway bind: Loopback (127.0.0.1)",
-        "Gateway auth: Off (loopback only)",
-        "Tailscale exposure: Off",
-        "Direct to chat providers.",
-      ].join("\n"),
-      "QuickStart defaults",
+      quickstartLines.join("\n"),
+      "QuickStart",
     );
   }
 
@@ -240,7 +318,7 @@ export async function runOnboardingWizard(
 
   const port =
     flow === "quickstart"
-      ? DEFAULT_GATEWAY_PORT
+      ? quickstartGateway.port
       : Number.parseInt(
           String(
             await prompter.text({
@@ -255,7 +333,7 @@ export async function runOnboardingWizard(
 
   let bind = (
     flow === "quickstart"
-      ? "loopback"
+      ? quickstartGateway.bind
       : ((await prompter.select({
           message: "Gateway bind",
           options: [
@@ -269,7 +347,7 @@ export async function runOnboardingWizard(
 
   let authMode = (
     flow === "quickstart"
-      ? "off"
+      ? quickstartGateway.authMode
       : ((await prompter.select({
           message: "Gateway auth",
           options: [
@@ -290,7 +368,7 @@ export async function runOnboardingWizard(
 
   const tailscaleMode = (
     flow === "quickstart"
-      ? "off"
+      ? quickstartGateway.tailscaleMode
       : ((await prompter.select({
           message: "Tailscale exposure",
           options: [
@@ -309,7 +387,8 @@ export async function runOnboardingWizard(
         })) as "off" | "serve" | "funnel")
   ) as "off" | "serve" | "funnel";
 
-  let tailscaleResetOnExit = false;
+  let tailscaleResetOnExit =
+    flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(
       [
@@ -350,19 +429,26 @@ export async function runOnboardingWizard(
 
   let gatewayToken: string | undefined;
   if (authMode === "token") {
-    const tokenInput = await prompter.text({
-      message: "Gateway token (blank to generate)",
-      placeholder: "Needed for multi-machine or non-loopback access",
-      initialValue: randomToken(),
-    });
-    gatewayToken = String(tokenInput).trim() || randomToken();
+    if (flow === "quickstart" && quickstartGateway.token) {
+      gatewayToken = quickstartGateway.token;
+    } else {
+      const tokenInput = await prompter.text({
+        message: "Gateway token (blank to generate)",
+        placeholder: "Needed for multi-machine or non-loopback access",
+        initialValue: quickstartGateway.token ?? randomToken(),
+      });
+      gatewayToken = String(tokenInput).trim() || randomToken();
+    }
   }
 
   if (authMode === "password") {
-    const password = await prompter.text({
-      message: "Gateway password",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
+    const password =
+      flow === "quickstart" && quickstartGateway.password
+        ? quickstartGateway.password
+        : await prompter.text({
+            message: "Gateway password",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          });
     nextConfig = {
       ...nextConfig,
       gateway: {
