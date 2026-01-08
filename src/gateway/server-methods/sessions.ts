@@ -485,6 +485,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       for (const candidate of resolveSessionTranscriptCandidates(
         sessionId,
         storePath,
+        entry?.sessionFile,
         target.agentId,
       )) {
         if (!fs.existsSync(candidate)) continue;
@@ -559,6 +560,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const filePath = resolveSessionTranscriptCandidates(
       sessionId,
       storePath,
+      entry?.sessionFile,
       target.agentId,
     ).find((candidate) => fs.existsSync(candidate));
     if (!filePath) {

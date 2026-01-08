@@ -128,4 +128,26 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
+
+  it("hydrates password from URL params and strips it", async () => {
+    const app = mountApp("/ui/overview?password=sekret");
+    await app.updateComplete;
+
+    expect(app.password).toBe("sekret");
+    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.search).toBe("");
+  });
+
+  it("strips auth params even when settings already set", async () => {
+    localStorage.setItem(
+      "clawdbot.control.settings.v1",
+      JSON.stringify({ token: "existing-token" }),
+    );
+    const app = mountApp("/ui/overview?token=abc123");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("existing-token");
+    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.search).toBe("");
+  });
 });

@@ -1,3 +1,4 @@
+import ClawdbotProtocol
 import SwiftUI
 
 struct CronJobEditor: View {

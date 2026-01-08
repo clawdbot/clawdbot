@@ -147,7 +147,7 @@ export async function resolveGatewayProgramArguments(params: {
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
 }): Promise<GatewayProgramArgs> {
-  const gatewayArgs = ["gateway-daemon", "--port", String(params.port)];
+  const gatewayArgs = ["gateway", "--port", String(params.port)];
   const execPath = process.execPath;
   const runtime = params.runtime ?? "auto";
 

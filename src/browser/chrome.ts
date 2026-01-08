@@ -41,6 +41,16 @@ function exists(filePath: string) {
   }
 }
 
+function findFirstExecutable(
+  candidates: Array<BrowserExecutable>,
+): BrowserExecutable | null {
+  for (const candidate of candidates) {
+    if (exists(candidate.path)) return candidate;
+  }
+
+  return null;
+}
+
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
@@ -78,11 +88,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
   ];
 
-  for (const candidate of candidates) {
-    if (exists(candidate.path)) return candidate;
-  }
-
-  return null;
+  return findFirstExecutable(candidates);
 }
 
 export function findChromeExecutableLinux(): BrowserExecutable | null {
@@ -95,15 +101,78 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chrome", path: "/usr/bin/chrome" },
   ];
 
-  for (const candidate of candidates) {
-    if (exists(candidate.path)) return candidate;
-  }
-
-  return null;
+  return findFirstExecutable(candidates);
 }
 
-function resolveBrowserExecutable(
+export function findChromeExecutableWindows(): BrowserExecutable | null {
+  const localAppData = process.env.LOCALAPPDATA ?? "";
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  // Must use bracket notation: variable name contains parentheses
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+
+  const joinWin = path.win32.join;
+  const candidates: Array<BrowserExecutable> = [];
+
+  if (localAppData) {
+    // Chrome Canary (user install)
+    candidates.push({
+      kind: "canary",
+      path: joinWin(
+        localAppData,
+        "Google",
+        "Chrome SxS",
+        "Application",
+        "chrome.exe",
+      ),
+    });
+    // Chromium (user install)
+    candidates.push({
+      kind: "chromium",
+      path: joinWin(localAppData, "Chromium", "Application", "chrome.exe"),
+    });
+    // Chrome (user install)
+    candidates.push({
+      kind: "chrome",
+      path: joinWin(
+        localAppData,
+        "Google",
+        "Chrome",
+        "Application",
+        "chrome.exe",
+      ),
+    });
+  }
+
+  // Chrome (system install, 64-bit)
+  candidates.push({
+    kind: "chrome",
+    path: joinWin(
+      programFiles,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    ),
+  });
+  // Chrome (system install, 32-bit on 64-bit Windows)
+  candidates.push({
+    kind: "chrome",
+    path: joinWin(
+      programFilesX86,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    ),
+  });
+
+  return findFirstExecutable(candidates);
+}
+
+export function resolveBrowserExecutableForPlatform(
   resolved: ResolvedBrowserConfig,
+  platform: NodeJS.Platform,
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
     if (!exists(resolved.executablePath)) {
@@ -114,9 +183,16 @@ function resolveBrowserExecutable(
     return { kind: "custom", path: resolved.executablePath };
   }
 
-  if (process.platform === "darwin") return findChromeExecutableMac();
-  if (process.platform === "linux") return findChromeExecutableLinux();
+  if (platform === "darwin") return findChromeExecutableMac();
+  if (platform === "linux") return findChromeExecutableLinux();
+  if (platform === "win32") return findChromeExecutableWindows();
   return null;
+}
+
+function resolveBrowserExecutable(
+  resolved: ResolvedBrowserConfig,
+): BrowserExecutable | null {
+  return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
 export function resolveClawdUserDataDir(
@@ -445,7 +521,7 @@ export async function launchClawdChrome(
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
     throw new Error(
-      "No supported browser found (Chrome/Chromium on macOS or Linux).",
+      "No supported browser found (Chrome/Chromium on macOS, Linux, or Windows).",
     );
   }
 

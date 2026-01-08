@@ -169,7 +169,9 @@ export async function createWaSocket(
           const status = getStatusCode(lastDisconnect?.error);
           if (status === DisconnectReason.loggedOut) {
             console.error(
-              danger("WhatsApp session logged out. Run: clawdbot login"),
+              danger(
+                "WhatsApp session logged out. Run: clawdbot providers login",
+              ),
             );
           }
         }
@@ -454,7 +456,7 @@ export async function pickProvider(
   const hasWeb = await webAuthExists(authDir);
   if (!hasWeb) {
     throw new Error(
-      "No WhatsApp Web session found. Run `clawdbot login --verbose` to link.",
+      "No WhatsApp Web session found. Run `clawdbot providers login --verbose` to link.",
     );
   }
   return choice;

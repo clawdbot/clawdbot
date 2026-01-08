@@ -9,6 +9,6 @@ import Testing
     }
 
     @Test func policyUsesSlowSafetyInterval() {
-        #expect(NodePairingReconcilePolicy.activeIntervalMs >= 10_000)
+        #expect(NodePairingReconcilePolicy.activeIntervalMs >= 10000)
     }
 }

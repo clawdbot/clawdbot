@@ -101,8 +101,14 @@ echo ""
 docker compose -f "$COMPOSE_FILE" run --rm clawdbot-cli onboard
 
 echo ""
-echo "==> WhatsApp login (QR will print in this terminal)"
-docker compose -f "$COMPOSE_FILE" run --rm clawdbot-cli login
+echo "==> Provider setup (optional)"
+echo "WhatsApp (QR):"
+echo "  docker compose -f $COMPOSE_FILE run --rm clawdbot-cli providers login"
+echo "Telegram (bot token):"
+echo "  docker compose -f $COMPOSE_FILE run --rm clawdbot-cli providers add --provider telegram --token <token>"
+echo "Discord (bot token):"
+echo "  docker compose -f $COMPOSE_FILE run --rm clawdbot-cli providers add --provider discord --token <token>"
+echo "Docs: https://docs.clawd.bot/providers"
 
 echo ""
 echo "==> Starting gateway"

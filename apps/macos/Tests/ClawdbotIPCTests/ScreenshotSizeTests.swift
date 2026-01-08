@@ -19,4 +19,3 @@ struct ScreenshotSizeTests {
         #expect(ScreenshotSize.readPNGSize(data: Data("nope".utf8)) == nil)
     }
 }
-

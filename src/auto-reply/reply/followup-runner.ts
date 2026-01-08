@@ -5,21 +5,33 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
-import { extractReplyToTag } from "./reply-tags.js";
+import {
+  applyReplyThreading,
+  filterMessagingToolDuplicates,
+  shouldSuppressMessagingToolReplies,
+} from "./reply-payloads.js";
+import {
+  createReplyToModeFilter,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
+  typingMode: TypingMode;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -30,6 +42,7 @@ export function createFollowupRunner(params: {
   const {
     opts,
     typing,
+    typingMode,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -37,6 +50,11 @@ export function createFollowupRunner(params: {
     defaultModel,
     agentCfgContextTokens,
   } = params;
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat: opts?.isHeartbeat === true,
+  });
 
   /**
    * Sends followup payloads, routing to the originating channel if set.
@@ -71,7 +89,7 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
-      await typing.startTypingOnText(payload.text);
+      await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {
@@ -99,6 +117,7 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    await typingSignals.signalRunStart();
     try {
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
@@ -118,6 +137,7 @@ export function createFollowupRunner(params: {
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               messageProvider: queued.run.messageProvider,
+              agentAccountId: queued.run.agentAccountId,
               sessionFile: queued.run.sessionFile,
               workspaceDir: queued.run.workspaceDir,
               config: queued.run.config,
@@ -169,24 +189,33 @@ export function createFollowupRunner(params: {
         if (stripped.shouldSkip && !hasMedia) return [];
         return [{ ...payload, text: stripped.text }];
       });
+      const replyToChannel =
+        queued.originatingChannel ??
+        (queued.run.messageProvider?.toLowerCase() as
+          | OriginatingChannelType
+          | undefined);
+      const applyReplyToMode = createReplyToModeFilter(
+        resolveReplyToMode(queued.run.config, replyToChannel),
+      );
 
-      const replyTaggedPayloads: ReplyPayload[] = sanitizedPayloads
-        .map((payload) => {
-          const { cleaned, replyToId } = extractReplyToTag(payload.text);
-          return {
-            ...payload,
-            text: cleaned ? cleaned : undefined,
-            replyToId: replyToId ?? payload.replyToId,
-          };
-        })
-        .filter(
-          (payload) =>
-            payload.text ||
-            payload.mediaUrl ||
-            (payload.mediaUrls && payload.mediaUrls.length > 0),
-        );
+      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
+        payloads: sanitizedPayloads,
+        applyReplyToMode,
+      });
 
-      if (replyTaggedPayloads.length === 0) return;
+      const dedupedPayloads = filterMessagingToolDuplicates({
+        payloads: replyTaggedPayloads,
+        sentTexts: runResult.messagingToolSentTexts ?? [],
+      });
+      const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
+        messageProvider: queued.run.messageProvider,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        originatingTo: queued.originatingTo,
+        accountId: queued.run.agentAccountId,
+      });
+      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
+
+      if (finalPayloads.length === 0) return;
 
       if (autoCompactionCompleted) {
         const count = await incrementCompactionCount({
@@ -197,7 +226,7 @@ export function createFollowupRunner(params: {
         });
         if (queued.run.verboseLevel === "on") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          replyTaggedPayloads.unshift({
+          finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,
           });
         }
@@ -251,7 +280,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(replyTaggedPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, queued);
     } finally {
       typing.markRunComplete();
     }

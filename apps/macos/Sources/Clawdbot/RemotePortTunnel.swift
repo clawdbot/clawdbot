@@ -41,8 +41,8 @@ final class RemotePortTunnel {
     static func create(
         remotePort: Int,
         preferredLocalPort: UInt16? = nil,
-        allowRemoteUrlOverride: Bool = true
-    ) async throws -> RemotePortTunnel {
+        allowRemoteUrlOverride: Bool = true) async throws -> RemotePortTunnel
+    {
         let settings = CommandResolver.connectionSettings()
         guard settings.mode == .remote, let parsed = CommandResolver.parseSSHTarget(settings.target) else {
             throw NSError(
@@ -53,7 +53,10 @@ final class RemotePortTunnel {
 
         let localPort = try await Self.findPort(preferred: preferredLocalPort)
         let sshHost = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remotePortOverride = allowRemoteUrlOverride ? Self.resolveRemotePortOverride(for: sshHost) : nil
+        let remotePortOverride =
+            allowRemoteUrlOverride && remotePort == GatewayEnvironment.gatewayPort()
+            ? Self.resolveRemotePortOverride(for: sshHost)
+            : nil
         let resolvedRemotePort = remotePortOverride ?? remotePort
         if let override = remotePortOverride {
             Self.logger.info(
@@ -131,9 +134,42 @@ final class RemotePortTunnel {
     }
 
     private static func resolveRemotePortOverride(for sshHost: String) -> Int? {
-        let trimmed = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return ClawdbotConfigFile.remoteGatewayPort(matchingHost: trimmed)
+        let root = ClawdbotConfigFile.loadDict()
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let urlRaw = remote["url"] as? String
+        else {
+            return nil
+        }
+        let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), let port = url.port else {
+            return nil
+        }
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return nil
+        }
+        let sshKey = Self.hostKey(sshHost)
+        let urlKey = Self.hostKey(host)
+        guard !sshKey.isEmpty, !urlKey.isEmpty else { return nil }
+        guard sshKey == urlKey else {
+            Self.logger.debug(
+                "remote url host mismatch sshHost=\(sshHost, privacy: .public) urlHost=\(host, privacy: .public)")
+            return nil
+        }
+        return port
+    }
+
+    private static func hostKey(_ host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.contains(":") { return trimmed }
+        let digits = CharacterSet(charactersIn: "0123456789.")
+        if trimmed.rangeOfCharacter(from: digits.inverted) == nil {
+            return trimmed
+        }
+        return trimmed.split(separator: ".").first.map(String.init) ?? trimmed
     }
 
     private static func findPort(preferred: UInt16?) async throws -> UInt16 {

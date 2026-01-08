@@ -42,11 +42,14 @@ Text + native (when enabled):
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
-- `/model <name>`
-- `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`)
+- `/model <name>` (or `/<alias>` from `agent.models.*.alias`)
+- `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 
 Text-only:
-- `/compact [instructions]`
+- `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
+
+Notes:
+- Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
 
 ## Surface notes
 

@@ -35,7 +35,7 @@ struct CronJobEditorSmokeTests {
                 thinking: "low",
                 timeoutSeconds: 120,
                 deliver: true,
-                channel: "whatsapp",
+                provider: "whatsapp",
                 to: "+15551234567",
                 bestEffortDeliver: true),
             isolation: CronIsolation(postToMainPrefix: "Cron"),

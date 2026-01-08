@@ -24,9 +24,13 @@ export function registerModelsCli(program: Command) {
   const models = program
     .command("models")
     .description("Model discovery, scanning, and configuration")
-    .option("--json", "Output JSON (alias for `models status --json`)", false)
     .option(
-      "--plain",
+      "--status-json",
+      "Output JSON (alias for `models status --json`)",
+      false,
+    )
+    .option(
+      "--status-plain",
       "Plain output (alias for `models status --plain`)",
       false,
     );
@@ -252,6 +256,7 @@ export function registerModelsCli(program: Command) {
     .option("--max-candidates <n>", "Max fallback candidates", "6")
     .option("--timeout <ms>", "Per-probe timeout in ms")
     .option("--concurrency <n>", "Probe concurrency")
+    .option("--no-probe", "Skip live probes; list free candidates only")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
     .option("--set-default", "Set agent.model to the first selection", false)
@@ -272,7 +277,13 @@ export function registerModelsCli(program: Command) {
 
   models.action(async (opts) => {
     try {
-      await modelsStatusCommand(opts ?? {}, defaultRuntime);
+      await modelsStatusCommand(
+        {
+          json: Boolean(opts?.statusJson),
+          plain: Boolean(opts?.statusPlain),
+        },
+        defaultRuntime,
+      );
     } catch (err) {
       defaultRuntime.error(String(err));
       defaultRuntime.exit(1);

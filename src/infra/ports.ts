@@ -1,14 +1,16 @@
 import net from "node:net";
-import {
-  danger,
-  info,
-  logVerbose,
-  shouldLogVerbose,
-  warn,
-} from "../globals.js";
+import { danger, info, shouldLogVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
-import { runExec } from "../process/exec.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { defaultRuntime } from "../runtime.js";
+import { formatPortDiagnostics } from "./ports-format.js";
+import { inspectPortUsage } from "./ports-inspect.js";
+import type {
+  PortListener,
+  PortListenerKind,
+  PortUsage,
+  PortUsageStatus,
+} from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -29,20 +31,9 @@ function isErrno(err: unknown): err is NodeJS.ErrnoException {
 export async function describePortOwner(
   port: number,
 ): Promise<string | undefined> {
-  // Best-effort process info for a listening port (macOS/Linux).
-  try {
-    const { stdout } = await runExec("lsof", [
-      "-i",
-      `tcp:${port}`,
-      "-sTCP:LISTEN",
-      "-nP",
-    ]);
-    const trimmed = stdout.trim();
-    if (trimmed) return trimmed;
-  } catch (err) {
-    logVerbose(`lsof unavailable: ${String(err)}`);
-  }
-  return undefined;
+  const diagnostics = await inspectPortUsage(port);
+  if (diagnostics.listeners.length === 0) return undefined;
+  return formatPortDiagnostics(diagnostics).join("\n");
 }
 
 export async function ensurePortAvailable(port: number): Promise<void> {
@@ -111,3 +102,10 @@ export async function handlePortError(
 }
 
 export { PortInUseError };
+export type { PortListener, PortListenerKind, PortUsage, PortUsageStatus };
+export {
+  buildPortHints,
+  classifyPortListener,
+  formatPortDiagnostics,
+} from "./ports-format.js";
+export { inspectPortUsage } from "./ports-inspect.js";

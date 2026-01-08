@@ -45,7 +45,7 @@ struct SettingsViewSmokeTests {
                 thinking: "low",
                 timeoutSeconds: 30,
                 deliver: true,
-                channel: "sms",
+                provider: "sms",
                 to: "+15551234567",
                 bestEffortDeliver: true),
             isolation: CronIsolation(postToMainPrefix: "[cron] "),
@@ -150,7 +150,7 @@ struct SettingsViewSmokeTests {
 
     @Test func voiceWakeSettingsBuildsBody() {
         let state = AppState(preview: true)
-        let view = VoiceWakeSettings(state: state)
+        let view = VoiceWakeSettings(state: state, isActive: false)
         _ = view.body
     }
 

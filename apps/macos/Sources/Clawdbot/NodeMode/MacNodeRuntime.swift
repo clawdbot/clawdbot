@@ -5,8 +5,16 @@ import Foundation
 
 actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
-    @MainActor private let screenRecorder = ScreenRecordService()
-    @MainActor private let locationService = MacNodeLocationService()
+    private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
+    private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
+
+    init(
+        makeMainActorServices: @escaping () async -> any MacNodeRuntimeMainActorServices = {
+            await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
+        })
+    {
+        self.makeMainActorServices = makeMainActorServices
+    }
 
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
@@ -212,7 +220,8 @@ actor MacNodeRuntime {
             ClawdbotLocationGetParams()
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
-        let status = await self.locationService.authorizationStatus()
+        let services = await self.mainActorServices()
+        let status = await services.locationAuthorizationStatus()
         if status != .authorizedAlways {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -222,11 +231,11 @@ actor MacNodeRuntime {
                     message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
         }
         do {
-            let location = try await self.locationService.currentLocation(
+            let location = try await services.currentLocation(
                 desiredAccuracy: desired,
                 maxAgeMs: params.maxAgeMs,
                 timeoutMs: params.timeoutMs)
-            let isPrecise = await self.locationService.accuracyAuthorization() == .fullAccuracy
+            let isPrecise = await services.locationAccuracyAuthorization() == .fullAccuracy
             let payload = ClawdbotLocationPayload(
                 lat: location.coordinate.latitude,
                 lon: location.coordinate.longitude,
@@ -265,7 +274,8 @@ actor MacNodeRuntime {
                 code: .invalidRequest,
                 message: "INVALID_REQUEST: screen format must be mp4")
         }
-        let res = try await self.screenRecorder.record(
+        let services = await self.mainActorServices()
+        let res = try await services.recordScreen(
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
             fps: params.fps,
@@ -289,6 +299,13 @@ actor MacNodeRuntime {
             screenIndex: params.screenIndex,
             hasAudio: res.hasAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
+        if let cachedMainActorServices { return cachedMainActorServices }
+        let services = await self.makeMainActorServices()
+        self.cachedMainActorServices = services
+        return services
     }
 
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {

@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decorateClawdProfile,
   findChromeExecutableMac,
+  findChromeExecutableWindows,
   isChromeReachable,
+  resolveBrowserExecutableForPlatform,
   stopClawdChrome,
 } from "./chrome.js";
 import {
@@ -135,6 +137,7 @@ describe("browser chrome profile decoration", () => {
 
 describe("browser chrome helpers", () => {
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -152,6 +155,57 @@ describe("browser chrome helpers", () => {
   it("returns null when no Chrome candidate exists", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableMac()).toBeNull();
+    exists.mockRestore();
+  });
+
+  it("picks the first existing Chrome candidate on Windows", () => {
+    vi.stubEnv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local");
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) => String(p).includes("Chrome SxS"));
+    const exe = findChromeExecutableWindows();
+    expect(exe?.kind).toBe("canary");
+    expect(exe?.path).toMatch(/Chrome SxS/);
+    exists.mockRestore();
+  });
+
+  it("finds Chrome in Program Files on Windows", () => {
+    const marker = path.win32.join("Program Files", "Google", "Chrome");
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) => String(p).includes(marker));
+    const exe = findChromeExecutableWindows();
+    expect(exe?.kind).toBe("chrome");
+    expect(exe?.path).toMatch(/chrome\.exe$/);
+    exists.mockRestore();
+  });
+
+  it("returns null when no Chrome candidate exists on Windows", () => {
+    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    expect(findChromeExecutableWindows()).toBeNull();
+    exists.mockRestore();
+  });
+
+  it("resolves Windows executables without LOCALAPPDATA", () => {
+    vi.stubEnv("LOCALAPPDATA", "");
+    vi.stubEnv("ProgramFiles", "C:\\Program Files");
+    vi.stubEnv("ProgramFiles(x86)", "C:\\Program Files (x86)");
+    const marker = path.win32.join(
+      "Program Files",
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    );
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) => String(p).includes(marker));
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+    expect(exe?.kind).toBe("chrome");
+    expect(exe?.path).toMatch(/chrome\.exe$/);
     exists.mockRestore();
   });
 

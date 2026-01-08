@@ -24,9 +24,16 @@ Use `sessions_spawn`:
 Tool params:
 - `task` (required)
 - `label?` (optional)
+- `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
 - `cleanup?` (`delete|keep`, default `keep`)
+
+Allowlist:
+- `routing.agents.<agentId>.subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+
+Discovery:
+- Use `agents_list` to see which agent ids are currently allowed for `sessions_spawn`.
 
 Auto-archive:
 - Sub-agent sessions are automatically archived after `agent.subagents.archiveAfterMinutes` (default: 60).

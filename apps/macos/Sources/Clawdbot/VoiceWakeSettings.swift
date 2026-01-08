@@ -2,19 +2,24 @@ import AppKit
 import AVFoundation
 import Observation
 import Speech
+import SwabbleKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct VoiceWakeSettings: View {
     @Bindable var state: AppState
+    let isActive: Bool
     @State private var testState: VoiceWakeTestState = .idle
     @State private var tester = VoiceWakeTester()
     @State private var isTesting = false
+    @State private var testTimeoutTask: Task<Void, Never>?
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var meterLevel: Double = 0
     @State private var meterError: String?
     private let meter = MicLevelMonitor()
+    @State private var micObserver = AudioInputDeviceObserver()
+    @State private var micRefreshTask: Task<Void, Never>?
     @State private var availableLocales: [Locale] = []
     private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 240
@@ -97,12 +102,39 @@ struct VoiceWakeSettings: View {
             guard !self.isPreview else { return }
             await self.restartMeter()
         }
+        .onAppear {
+            guard !self.isPreview else { return }
+            self.startMicObserver()
+        }
         .onChange(of: self.state.voiceWakeMicID) { _, _ in
             guard !self.isPreview else { return }
+            self.updateSelectedMicName()
             Task { await self.restartMeter() }
+        }
+        .onChange(of: self.isActive) { _, active in
+            guard !self.isPreview else { return }
+            if !active {
+                self.tester.stop()
+                self.isTesting = false
+                self.testState = .idle
+                self.testTimeoutTask?.cancel()
+                self.micRefreshTask?.cancel()
+                self.micRefreshTask = nil
+                Task { await self.meter.stop() }
+                self.micObserver.stop()
+            } else {
+                self.startMicObserver()
+            }
         }
         .onDisappear {
             guard !self.isPreview else { return }
+            self.tester.stop()
+            self.isTesting = false
+            self.testState = .idle
+            self.testTimeoutTask?.cancel()
+            self.micRefreshTask?.cancel()
+            self.micRefreshTask = nil
+            self.micObserver.stop()
             Task { await self.meter.stop() }
         }
     }
@@ -205,13 +237,23 @@ struct VoiceWakeSettings: View {
             return
         }
         if self.isTesting {
-            self.tester.stop()
+            self.tester.finalize()
             self.isTesting = false
-            self.testState = .idle
+            self.testState = .finalizing
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if self.testState == .finalizing {
+                    self.tester.stop()
+                    self.testState = .failed("Stopped")
+                }
+            }
+            self.testTimeoutTask?.cancel()
             return
         }
 
         let triggers = self.sanitizedTriggers()
+        self.tester.stop()
+        self.testTimeoutTask?.cancel()
         self.isTesting = true
         self.testState = .requesting
         Task { @MainActor in
@@ -225,18 +267,31 @@ struct VoiceWakeSettings: View {
                             self.testState = newState
                             if case .detected = newState { self.isTesting = false }
                             if case .failed = newState { self.isTesting = false }
+                            if case .detected = newState { self.testTimeoutTask?.cancel() }
+                            if case .failed = newState { self.testTimeoutTask?.cancel() }
                         }
                     })
-                try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
-                if self.isTesting {
-                    self.tester.stop()
-                    self.testState = .failed("Timeout: no trigger heard")
-                    self.isTesting = false
+                self.testTimeoutTask?.cancel()
+                self.testTimeoutTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    if self.isTesting {
+                        self.tester.stop()
+                        if case let .hearing(text) = self.testState,
+                           let command = Self.textOnlyCommand(from: text, triggers: triggers)
+                        {
+                            self.testState = .detected(command)
+                        } else {
+                            self.testState = .failed("Timeout: no trigger heard")
+                        }
+                        self.isTesting = false
+                    }
                 }
             } catch {
                 self.tester.stop()
                 self.testState = .failed(error.localizedDescription)
                 self.isTesting = false
+                self.testTimeoutTask?.cancel()
             }
         }
     }
@@ -314,6 +369,14 @@ struct VoiceWakeSettings: View {
         sanitizeVoiceWakeTriggers(self.state.swabbleTriggerWords)
     }
 
+    private static func textOnlyCommand(from transcript: String, triggers: [String]) -> String? {
+        VoiceWakeTextUtils.textOnlyCommand(
+            transcript: transcript,
+            triggers: triggers,
+            minCommandLength: 1,
+            trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
+    }
+
     private var micPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -322,12 +385,25 @@ struct VoiceWakeSettings: View {
                     .frame(width: self.fieldLabelWidth, alignment: .leading)
                 Picker("Microphone", selection: self.$state.voiceWakeMicID) {
                     Text("System default").tag("")
+                    if self.isSelectedMicUnavailable {
+                        Text(self.state.voiceWakeMicName.isEmpty ? "Unavailable" : self.state.voiceWakeMicName)
+                            .tag(self.state.voiceWakeMicID)
+                    }
                     ForEach(self.availableMics) { mic in
                         Text(mic.name).tag(mic.uid)
                     }
                 }
                 .labelsHidden()
                 .frame(width: self.controlWidth)
+            }
+            if self.isSelectedMicUnavailable {
+                HStack(spacing: 10) {
+                    Color.clear.frame(width: self.fieldLabelWidth, height: 1)
+                    Text("Disconnected (using System default)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             if self.loadingMics {
                 ProgressView().controlSize(.small)
@@ -421,15 +497,58 @@ struct VoiceWakeSettings: View {
     }
 
     @MainActor
-    private func loadMicsIfNeeded() async {
-        guard self.availableMics.isEmpty, !self.loadingMics else { return }
+    private func loadMicsIfNeeded(force: Bool = false) async {
+        guard force || self.availableMics.isEmpty, !self.loadingMics else { return }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],
             mediaType: .audio,
             position: .unspecified)
-        self.availableMics = discovery.devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        let aliveUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
+        let connectedDevices = discovery.devices.filter(\.isConnected)
+        let devices = aliveUIDs.isEmpty
+            ? connectedDevices
+            : connectedDevices.filter { aliveUIDs.contains($0.uniqueID) }
+        self.availableMics = devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        self.updateSelectedMicName()
         self.loadingMics = false
+    }
+
+    private var isSelectedMicUnavailable: Bool {
+        let selected = self.state.voiceWakeMicID
+        guard !selected.isEmpty else { return false }
+        return !self.availableMics.contains(where: { $0.uid == selected })
+    }
+
+    @MainActor
+    private func updateSelectedMicName() {
+        let selected = self.state.voiceWakeMicID
+        if selected.isEmpty {
+            self.state.voiceWakeMicName = ""
+            return
+        }
+        if let match = self.availableMics.first(where: { $0.uid == selected }) {
+            self.state.voiceWakeMicName = match.name
+        }
+    }
+
+    private func startMicObserver() {
+        self.micObserver.start {
+            Task { @MainActor in
+                self.scheduleMicRefresh()
+            }
+        }
+    }
+
+    @MainActor
+    private func scheduleMicRefresh() {
+        self.micRefreshTask?.cancel()
+        self.micRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self.loadMicsIfNeeded(force: true)
+            await self.restartMeter()
+        }
     }
 
     @MainActor
@@ -506,7 +625,7 @@ struct VoiceWakeSettings: View {
 #if DEBUG
 struct VoiceWakeSettings_Previews: PreviewProvider {
     static var previews: some View {
-        VoiceWakeSettings(state: .preview)
+        VoiceWakeSettings(state: .preview, isActive: true)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
     }
 }
@@ -519,7 +638,7 @@ extension VoiceWakeSettings {
         state.voicePushToTalkEnabled = true
         state.swabbleTriggerWords = ["Claude", "Hey"]
 
-        let view = VoiceWakeSettings(state: state)
+        let view = VoiceWakeSettings(state: state, isActive: true)
         view.availableMics = [AudioInputDevice(uid: "mic-1", name: "Built-in")]
         view.availableLocales = [Locale(identifier: "en_US")]
         view.meterLevel = 0.42

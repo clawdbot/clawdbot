@@ -21,6 +21,8 @@ Clawdbot uses **auth profiles** for both API keys and OAuth tokens.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy import-only OAuth file: `~/.clawdbot/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
 
+More detail: [/concepts/oauth](/concepts/oauth)
+
 Credential types:
 - `type: "api_key"` → `{ provider, key }`
 - `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` for some providers)

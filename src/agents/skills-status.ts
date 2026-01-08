@@ -45,12 +45,14 @@ export type SkillStatusEntry = {
   eligible: boolean;
   requirements: {
     bins: string[];
+    anyBins: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
     bins: string[];
+    anyBins: string[];
     env: string[];
     config: string[];
     os: string[];
@@ -149,11 +151,16 @@ function buildSkillStatus(
   const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
 
   const requiredBins = entry.clawdbot?.requires?.bins ?? [];
+  const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
   const requiredEnv = entry.clawdbot?.requires?.env ?? [];
   const requiredConfig = entry.clawdbot?.requires?.config ?? [];
   const requiredOs = entry.clawdbot?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => !hasBinary(bin));
+  const missingAnyBins =
+    requiredAnyBins.length > 0 && !requiredAnyBins.some((bin) => hasBinary(bin))
+      ? requiredAnyBins
+      : [];
   const missingOs =
     requiredOs.length > 0 && !requiredOs.includes(process.platform)
       ? requiredOs
@@ -181,9 +188,10 @@ function buildSkillStatus(
     .map((check) => check.path);
 
   const missing = always
-    ? { bins: [], env: [], config: [], os: [] }
+    ? { bins: [], anyBins: [], env: [], config: [], os: [] }
     : {
         bins: missingBins,
+        anyBins: missingAnyBins,
         env: missingEnv,
         config: missingConfig,
         os: missingOs,
@@ -193,6 +201,7 @@ function buildSkillStatus(
     !blockedByAllowlist &&
     (always ||
       (missing.bins.length === 0 &&
+        missing.anyBins.length === 0 &&
         missing.env.length === 0 &&
         missing.config.length === 0 &&
         missing.os.length === 0));
@@ -213,6 +222,7 @@ function buildSkillStatus(
     eligible,
     requirements: {
       bins: requiredBins,
+      anyBins: requiredAnyBins,
       env: requiredEnv,
       config: requiredConfig,
       os: requiredOs,

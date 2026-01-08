@@ -31,7 +31,41 @@ Example hook config (enable Gmail preset mapping):
 }
 ```
 
-To customize payload handling, add `hooks.mappings` or a JS/TS transform module
+To deliver the Gmail summary to a chat surface, override the preset with a mapping
+that sets `deliver` + optional `provider`/`to`:
+
+```json5
+{
+  hooks: {
+    enabled: true,
+    token: "CLAWDBOT_HOOK_TOKEN",
+    presets: ["gmail"],
+    mappings: [
+      {
+        match: { path: "gmail" },
+        action: "agent",
+        wakeMode: "now",
+        name: "Gmail",
+        sessionKey: "hook:gmail:{{messages[0].id}}",
+        messageTemplate:
+          "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
+        model: "openai/gpt-5.2-mini",
+        deliver: true,
+        provider: "last"
+        // to: "+15551234567"
+      }
+    ]
+  }
+}
+```
+
+If you want a fixed channel, set `provider` + `to`. Otherwise `provider: "last"`
+uses the last delivery route (falls back to WhatsApp).
+
+To force a cheaper model for Gmail runs, set `model` in the mapping
+(`provider/model` or alias). If you enforce `agent.models`, include it there.
+
+To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
 under `hooks.transformsDir` (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).
 
 ## Wizard (recommended)

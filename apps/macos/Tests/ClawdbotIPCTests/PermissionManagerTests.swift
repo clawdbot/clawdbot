@@ -1,6 +1,6 @@
-import Testing
 import ClawdbotIPC
 import CoreLocation
+import Testing
 @testable import Clawdbot
 
 @Suite(.serialized)

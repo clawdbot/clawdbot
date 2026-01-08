@@ -29,4 +29,3 @@ struct AnthropicOAuthCodeStateTests {
         #expect(parsed == .init(code: "abcDEF1234", state: "stateXYZ9876"))
     }
 }
-

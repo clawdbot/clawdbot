@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
@@ -18,10 +22,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { hasNonzeroUsage } from "../agents/usage.js";
-import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-} from "../agents/workspace.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
@@ -35,8 +36,8 @@ import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
   resolveSessionKey,
-  resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -56,6 +57,10 @@ import {
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import {
+  normalizeMessageProvider,
+  resolveMessageProvider,
+} from "../utils/message-provider.js";
 import { normalizeE164 } from "../utils.js";
 
 type AgentCommandOpts = {
@@ -176,7 +181,9 @@ export async function agentCommand(
 
   const cfg = loadConfig();
   const agentCfg = cfg.agent;
-  const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const sessionAgentId = resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
+  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
@@ -386,7 +393,7 @@ export async function agentCommand(
       catalog: catalogForThinking,
     });
   }
-  const sessionFile = resolveSessionTranscriptPath(sessionId);
+  const sessionFile = resolveSessionFilePath(sessionId, sessionEntry);
 
   const startedAt = Date.now();
   let lifecycleEnded = false;
@@ -395,13 +402,10 @@ export async function agentCommand(
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const messageProvider =
-      opts.messageProvider?.trim().toLowerCase() ||
-      (() => {
-        const raw = opts.provider?.trim().toLowerCase();
-        if (!raw) return undefined;
-        return raw === "imsg" ? "imessage" : raw;
-      })();
+    const messageProvider = resolveMessageProvider(
+      opts.messageProvider,
+      opts.provider,
+    );
     const fallbackResult = await runWithModelFallback({
       cfg,
       provider,
@@ -426,6 +430,7 @@ export async function agentCommand(
           lane: opts.lane,
           abortSignal: opts.abortSignal,
           extraSystemPrompt: opts.extraSystemPrompt,
+          agentDir,
           onAgentEvent: (evt) => {
             if (
               evt.stream === "lifecycle" &&
@@ -514,9 +519,8 @@ export async function agentCommand(
   const payloads = result.payloads ?? [];
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryProviderRaw = (opts.provider ?? "whatsapp").toLowerCase();
   const deliveryProvider =
-    deliveryProviderRaw === "imsg" ? "imessage" : deliveryProviderRaw;
+    normalizeMessageProvider(opts.provider) ?? "whatsapp";
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;

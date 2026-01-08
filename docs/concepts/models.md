@@ -12,42 +12,91 @@ See [`docs/model-failover.md`](/concepts/model-failover) for how auth profiles r
 Goal: give clear model visibility + control (configured vs available), plus scan tooling
 that prefers tool-call + image-capable models and maintains ordered fallbacks.
 
+## How Clawdbot models work (quick explainer)
+
+Clawdbot selects models in this order:
+1) The configured **primary** model (`agent.model.primary`).
+2) If it fails, fallbacks in `agent.model.fallbacks` (in order).
+3) Auth failover happens **inside** the provider first (see [/concepts/model-failover](/concepts/model-failover)).
+
+Key pieces:
+- `provider/model` is the canonical model id (e.g. `anthropic/claude-opus-4-5`).
+- `agent.models` is the **allowlist/catalog** of models Clawdbot can use, with optional aliases and provider params.
+- `agent.imageModel` is only used when the primary model **can’t** accept images.
+- `models.providers` lets you add custom providers + models (written to `models.json`).
+- `/model <id>` switches the active model for the current session; `/model list` shows what’s allowed.
+
+Related:
+- Context limits are model-specific; long sessions may trigger compaction. See [/concepts/compaction](/concepts/compaction).
+
 ## Model recommendations
 
-Through testing, we’ve found [Claude Opus 4.5](https://www.anthropic.com/claude/opus) is the most useful general-purpose model for anything coding-related. We suggest [GPT-5.2-Codex](https://developers.openai.com/codex/models) for coding and sub-agents. For personal assistant work, nothing comes close to Opus. If you’re going all-in on Claude, we recommend the [Claude Max $200 subscription](https://www.anthropic.com/pricing/).
+- [Claude Opus 4.5](https://www.anthropic.com/claude/opus): default primary for assistant + general work. It’s pricey and cap-prone, so consider the [Claude Max $200 subscription](https://www.anthropic.com/pricing/) if you live here.
+- [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): default fallback when Opus caps out. Similar behavior with fewer limit headaches.
+- [GPT-5.2-Codex](https://developers.openai.com/codex/models): recommended for coding and sub-agents. Prefer the [Codex CLI](https://developers.openai.com/codex/cli) if you want the strongest feel.
+
+Suggested stacks:
+- Assistant-first: Opus 4.5 primary → Sonnet 4.5 fallback.
+- Agentic coding: Opus 4.5 primary → GPT-5.2-Codex for sub-agents → Sonnet 4.5 fallback.
 
 ## Model discussions (community notes)
 
-Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “what people reported,” not guarantees.
+Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “reported by users,” not a benchmark.
 
 **Reported working well**
-- [Claude Opus 4.5](https://www.anthropic.com/claude/opus): best quality, but expensive and easy to hit limits.
-- [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): solid fallback when Opus caps out.
-- [GLM](https://www.zhipuai.cn/en/): used as a worker model under orchestration.
-- [MiniMax M2.1](https://platform.minimax.io/docs/guides/models-intro): “good enough” fallback for grunt tasks.
-- “Temu-Sonnet” (community shorthand) for MiniMax quality vs Claude Sonnet.
-- [Gemini 3 Pro](https://deepmind.google/en/models/gemini/pro/): some users said it maps Clawdbot structure well.
+- [Claude Opus 4.5](https://www.anthropic.com/claude/opus): best overall quality in Clawdbot, especially for “assistant” work. Tradeoff is cost and hitting usage limits quickly.
+- [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): common fallback when Opus caps out. Similar behavior with fewer limit headaches.
+- [Gemini 3 Pro](https://deepmind.google/en/models/gemini/pro/): some users felt it maps well to Clawdbot’s structure. Vibe was “fits the framework” more than “best at everything.”
+- [GLM](https://www.zhipuai.cn/en/): used successfully as a worker model under orchestration. Seen as strong for delegated/secondary tasks, not the primary brain.
+- [MiniMax M2.1](https://platform.minimax.io/docs/guides/models-intro): “good enough” for grunt work or a cheap fallback. Community nickname was “Temu-Sonnet,” i.e. usable but not Sonnet-level polish.
 
 **Mixed / unclear**
-- [Antigravity](https://blog.google/technology/ai/google-ai-updates-november-2025/) (Claude Opus access): some reported extra Opus quota, pricing/limits unclear.
+- [Antigravity](https://blog.google/technology/ai/google-ai-updates-november-2025/) (Claude Opus access): some reported extra Opus quota. Pricing/limits were unclear, so the value is hard to predict.
 
 **Reported weak in Clawdbot**
-- [GPT-5.2-Codex](https://developers.openai.com/codex/models) inside Clawdbot: considered rough for conversation or assistant tasks.
-- [Grok](https://docs.x.ai/docs/models/grok-4): tried, abandoned.
-
-**Tooling note**
-- [Codex CLI](https://developers.openai.com/codex/cli) felt stronger than embedded use.
+- [GPT-5.2-Codex](https://developers.openai.com/codex/models) inside Clawdbot: reported as rough for conversation/assistant tasks when embedded. Same notes said Codex felt stronger via the [Codex CLI](https://developers.openai.com/codex/cli) than embedded use.
+- [Grok](https://docs.x.ai/docs/models/grok-4): people tried it and then abandoned it. No strong upside showed up in the notes.
 
 **Theme**
 - Token burn feels higher than expected in long sessions; people suspect context buildup + tool outputs. Pruning/compaction helps. Check session logs before blaming providers. See [/concepts/session](/concepts/session) and [/concepts/model-failover](/concepts/model-failover).
+
+Want a tailored stack? Share whether you’re using Clawdbot or Clawdis and your main workload (agentic coding vs “assistant” work), and we can suggest a primary + fallback set based on these reports.
 
 ## Models CLI
 
 See [/cli](/cli) for the full command tree and CLI flags.
 
+### CLI output (list + status)
+
+`clawdbot models list` (default) prints a table with these columns:
+- `Model`: `provider/model` key (truncated in TTY).
+- `Input`: `text` or `text+image`.
+- `Ctx`: context window in K tokens (from the model registry).
+- `Local`: `yes/no` when the provider base URL is local.
+- `Auth`: `yes/no` when the provider has usable auth.
+- `Tags`: origin + role hints.
+
+Common tags:
+- `default` — resolved default model.
+- `fallback#N` — `agent.model.fallbacks` order.
+- `image` — `agent.imageModel.primary`.
+- `img-fallback#N` — `agent.imageModel.fallbacks` order.
+- `configured` — present in `agent.models`.
+- `alias:<name>` — alias from `agent.models.*.alias`.
+- `missing` — referenced in config but not found in the registry.
+
+Output formats:
+- `--plain`: prints only `provider/model` keys (one per line).
+- `--json`: `{ count, models: [{ key, name, input, contextWindow, local, available, tags, missing }] }`.
+
+`clawdbot models status` prints the resolved defaults, fallbacks, image model, aliases,
+and an **Auth overview** section showing which providers have profiles/env/models.json keys.
+`--plain` prints the resolved default model only; `--json` returns a structured object for tooling.
+
 ## Config changes
 
 - `agent.models` (configured model catalog + aliases).
+- `agent.models.*.params` (provider-specific API params passed through to requests).
 - `agent.model.primary` + `agent.model.fallbacks`.
 - `agent.imageModel.primary` + `agent.imageModel.fallbacks` (optional).
 - `auth.profiles` + `auth.order` for per-provider auth failover.

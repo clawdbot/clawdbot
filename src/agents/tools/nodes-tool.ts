@@ -10,6 +10,7 @@ import {
   parseCameraSnapPayload,
   writeBase64ToFile,
 } from "../../cli/nodes-camera.js";
+import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
@@ -148,6 +149,19 @@ const NodesToolSchema = Type.Union([
       ]),
     ),
   }),
+  Type.Object({
+    action: Type.Literal("run"),
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+    node: Type.String(),
+    command: Type.Array(Type.String()),
+    cwd: Type.Optional(Type.String()),
+    env: Type.Optional(Type.Array(Type.String())),
+    commandTimeoutMs: Type.Optional(Type.Number()),
+    invokeTimeoutMs: Type.Optional(Type.Number()),
+    needsScreenRecording: Type.Optional(Type.Boolean()),
+  }),
 ]);
 
 export function createNodesTool(): AnyAgentTool {
@@ -155,7 +169,7 @@ export function createNodesTool(): AnyAgentTool {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -474,6 +488,50 @@ export function createNodesTool(): AnyAgentTool {
               desiredAccuracy,
               timeoutMs: locationTimeoutMs,
             },
+            idempotencyKey: crypto.randomUUID(),
+          })) as { payload?: unknown };
+          return jsonResult(raw?.payload ?? {});
+        }
+        case "run": {
+          const node = readStringParam(params, "node", { required: true });
+          const nodeId = await resolveNodeId(gatewayOpts, node);
+          const commandRaw = params.command;
+          if (!commandRaw) {
+            throw new Error(
+              "command required (argv array, e.g. ['echo', 'Hello'])",
+            );
+          }
+          if (!Array.isArray(commandRaw)) {
+            throw new Error(
+              "command must be an array of strings (argv), e.g. ['echo', 'Hello']",
+            );
+          }
+          const command = commandRaw.map((c) => String(c));
+          if (command.length === 0) {
+            throw new Error("command must not be empty");
+          }
+          const cwd =
+            typeof params.cwd === "string" && params.cwd.trim()
+              ? params.cwd.trim()
+              : undefined;
+          const env = parseEnvPairs(params.env);
+          const commandTimeoutMs = parseTimeoutMs(params.commandTimeoutMs);
+          const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
+          const needsScreenRecording =
+            typeof params.needsScreenRecording === "boolean"
+              ? params.needsScreenRecording
+              : undefined;
+          const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            nodeId,
+            command: "system.run",
+            params: {
+              command,
+              cwd,
+              env,
+              timeoutMs: commandTimeoutMs,
+              needsScreenRecording,
+            },
+            timeoutMs: invokeTimeoutMs,
             idempotencyKey: crypto.randomUUID(),
           })) as { payload?: unknown };
           return jsonResult(raw?.payload ?? {});

@@ -1,7 +1,7 @@
-@testable import ClawdbotChatUI
 import ClawdbotKit
 import Foundation
 import Testing
+@testable import ClawdbotChatUI
 
 private struct TimeoutError: Error, CustomStringConvertible {
     let label: String
@@ -118,20 +118,20 @@ private final class TestChatTransport: @unchecked Sendable, ClawdbotChatTranspor
     }
 }
 
-private extension TestChatTransportState {
-    func setHistoryCallCount(_ v: Int) {
+extension TestChatTransportState {
+    fileprivate func setHistoryCallCount(_ v: Int) {
         self.historyCallCount = v
     }
 
-    func setSessionsCallCount(_ v: Int) {
+    fileprivate func setSessionsCallCount(_ v: Int) {
         self.sessionsCallCount = v
     }
 
-    func sentRunIdsAppend(_ v: String) {
+    fileprivate func sentRunIdsAppend(_ v: String) {
         self.sentRunIds.append(v)
     }
 
-    func abortedRunIdsAppend(_ v: String) {
+    fileprivate func abortedRunIdsAppend(_ v: String) {
         self.abortedRunIds.append(v)
     }
 }
@@ -177,7 +177,9 @@ private extension TestChatTransportState {
                     ts: Int(Date().timeIntervalSince1970 * 1000),
                     data: ["text": AnyCodable("streaming…")])))
 
-        try await waitUntil("assistant stream visible") { await MainActor.run { vm.streamingAssistantText == "streaming…" } }
+        try await waitUntil("assistant stream visible") {
+            await MainActor.run { vm.streamingAssistantText == "streaming…" }
+        }
 
         transport.emit(
             .agent(
@@ -206,7 +208,9 @@ private extension TestChatTransportState {
                     errorMessage: nil)))
 
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
-        try await waitUntil("history refresh") { await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) } }
+        try await waitUntil("history refresh") {
+            await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
@@ -247,7 +251,9 @@ private extension TestChatTransportState {
                         "args": AnyCodable(["x": 1]),
                     ])))
 
-        try await waitUntil("streaming active") { await MainActor.run { vm.streamingAssistantText == "external stream" } }
+        try await waitUntil("streaming active") {
+            await MainActor.run { vm.streamingAssistantText == "external stream" }
+        }
         try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
 
         transport.emit(
@@ -436,7 +442,9 @@ private extension TestChatTransportState {
                     ts: Int(Date().timeIntervalSince1970 * 1000),
                     data: ["text": AnyCodable("external stream")])))
 
-        try await waitUntil("streaming active") { await MainActor.run { vm.streamingAssistantText == "external stream" } }
+        try await waitUntil("streaming active") {
+            await MainActor.run { vm.streamingAssistantText == "external stream" }
+        }
 
         transport.emit(
             .chat(

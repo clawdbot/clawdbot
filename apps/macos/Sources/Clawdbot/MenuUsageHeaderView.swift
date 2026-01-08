@@ -42,4 +42,3 @@ struct MenuUsageHeaderView: View {
         return "\(self.count) providers"
     }
 }
-

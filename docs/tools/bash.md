@@ -8,6 +8,8 @@ read_when:
 # Bash tool
 
 Run shell commands in the workspace. Supports foreground + background execution via `process`.
+If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
+Background sessions are scoped per agent; `process` only sees sessions from the same agent.
 
 ## Parameters
 

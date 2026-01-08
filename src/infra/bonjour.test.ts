@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const createService = vi.fn();
 const shutdown = vi.fn();
+const registerUnhandledRejectionHandler = vi.fn();
 
 const logWarn = vi.fn();
 const logDebug = vi.fn();
@@ -38,6 +39,14 @@ vi.mock("@homebridge/ciao", () => {
   };
 });
 
+vi.mock("./unhandled-rejections.js", () => {
+  return {
+    registerUnhandledRejectionHandler: (
+      handler: (reason: unknown) => boolean,
+    ) => registerUnhandledRejectionHandler(handler),
+  };
+});
+
 const { startGatewayBonjourAdvertiser } = await import("./bonjour.js");
 
 describe("gateway bonjour advertiser", () => {
@@ -60,6 +69,7 @@ describe("gateway bonjour advertiser", () => {
 
     createService.mockReset();
     shutdown.mockReset();
+    registerUnhandledRejectionHandler.mockReset();
     logWarn.mockReset();
     logDebug.mockReset();
     getLoggerInfo.mockReset();
@@ -175,6 +185,51 @@ describe("gateway bonjour advertiser", () => {
     ]);
 
     await started.stop();
+  });
+
+  it("cleans up unhandled rejection handler after shutdown", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    const order: string[] = [];
+    shutdown.mockImplementation(async () => {
+      order.push("shutdown");
+    });
+
+    createService.mockImplementation((options: Record<string, unknown>) => {
+      return {
+        advertise,
+        destroy,
+        serviceState: "announced",
+        on: vi.fn(),
+        getFQDN: () =>
+          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getHostname: () => asString(options.hostname, "unknown"),
+        getPort: () => Number(options.port ?? -1),
+      };
+    });
+
+    const cleanup = vi.fn(() => {
+      order.push("cleanup");
+    });
+    registerUnhandledRejectionHandler.mockImplementation(() => cleanup);
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+      bridgePort: 18790,
+    });
+
+    await started.stop();
+
+    expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["shutdown", "cleanup"]);
   });
 
   it("logs advertise failures and retries via watchdog", async () => {

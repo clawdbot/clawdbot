@@ -31,6 +31,39 @@ describe("createClawdbotCodingTools", () => {
     expect(parameters.required ?? []).toContain("action");
   });
 
+  it("flattens anyOf-of-literals to enum for provider compatibility", () => {
+    const tools = createClawdbotCodingTools();
+    const browser = tools.find((tool) => tool.name === "browser");
+    expect(browser).toBeDefined();
+
+    const parameters = browser?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const action = parameters.properties?.action as
+      | {
+          type?: unknown;
+          enum?: unknown[];
+          anyOf?: unknown[];
+        }
+      | undefined;
+
+    expect(action?.type).toBe("string");
+    expect(action?.anyOf).toBeUndefined();
+    expect(Array.isArray(action?.enum)).toBe(true);
+    expect(action?.enum).toContain("act");
+
+    const format = parameters.properties?.format as
+      | {
+          type?: unknown;
+          enum?: unknown[];
+          anyOf?: unknown[];
+        }
+      | undefined;
+    expect(format?.type).toBe("string");
+    expect(format?.anyOf).toBeUndefined();
+    expect(format?.enum).toEqual(["aria", "ai"]);
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway"];

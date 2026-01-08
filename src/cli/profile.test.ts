@@ -72,10 +72,11 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+    const expectedStateDir = path.join("/home/peter", ".clawdbot-dev");
     expect(env.CLAWDBOT_PROFILE).toBe("dev");
-    expect(env.CLAWDBOT_STATE_DIR).toBe("/home/peter/.clawdbot-dev");
+    expect(env.CLAWDBOT_STATE_DIR).toBe(expectedStateDir);
     expect(env.CLAWDBOT_CONFIG_PATH).toBe(
-      path.join("/home/peter/.clawdbot-dev", "clawdbot.json"),
+      path.join(expectedStateDir, "clawdbot.json"),
     );
     expect(env.CLAWDBOT_GATEWAY_PORT).toBe("19001");
   });

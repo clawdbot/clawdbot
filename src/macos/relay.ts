@@ -59,21 +59,14 @@ async function main() {
 
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
-  const { isUnhandledRejectionHandled } = await import(
+  const { installUnhandledRejectionHandler } = await import(
     "../infra/unhandled-rejections.js"
   );
 
   const { buildProgram } = await import("../cli/program.js");
   const program = buildProgram();
 
-  process.on("unhandledRejection", (reason, _promise) => {
-    if (isUnhandledRejectionHandled(reason)) return;
-    console.error(
-      "[clawdbot] Unhandled promise rejection:",
-      reason instanceof Error ? (reason.stack ?? reason.message) : reason,
-    );
-    process.exit(1);
-  });
+  installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
     console.error(

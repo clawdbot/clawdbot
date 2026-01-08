@@ -110,8 +110,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         guard let insertIndex = self.findInsertIndex(in: menu) else { return }
         let width = self.initialWidth(for: menu)
-
-        guard self.isControlChannelConnected else { return }
+        let isConnected = self.isControlChannelConnected
 
         var cursor = insertIndex
         var headerView: NSView?
@@ -132,7 +131,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             headerItem.tag = self.tag
             headerItem.isEnabled = false
             let hosted = self.makeHostedView(
-                rootView: AnyView(MenuSessionsHeaderView(count: rows.count, statusText: nil)),
+                rootView: AnyView(MenuSessionsHeaderView(
+                    count: rows.count,
+                    statusText: isConnected ? nil : "Gateway disconnected")),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
@@ -163,16 +164,29 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             let headerItem = NSMenuItem()
             headerItem.tag = self.tag
             headerItem.isEnabled = false
+            let statusText = isConnected
+                ? (self.cachedErrorText ?? "Loading sessions…")
+                : "Gateway disconnected"
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: 0,
-                    statusText: self.cachedErrorText ?? "Loading sessions…")),
+                    statusText: statusText)),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
             headerView = hosted
             menu.insertItem(headerItem, at: cursor)
             cursor += 1
+
+            if !isConnected {
+                menu.insertItem(
+                    self.makeMessageItem(
+                        text: "Connect the gateway to see sessions",
+                        symbolName: "bolt.slash",
+                        width: width),
+                    at: cursor)
+                cursor += 1
+            }
         }
 
         cursor = self.insertUsageSection(into: menu, at: cursor, width: width)
@@ -253,7 +267,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         let rows = self.usageRows
         let errorText = self.cachedUsageErrorText
 
-        if rows.isEmpty && errorText == nil {
+        if rows.isEmpty, errorText == nil {
             return cursor
         }
 

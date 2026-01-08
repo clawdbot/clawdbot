@@ -51,13 +51,6 @@ clawdbot nodes canvas snapshot --node <idOrNameOrIp> --format png
 clawdbot nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
-Simple shortcut (auto-picks a single connected node if possible):
-
-```bash
-clawdbot canvas snapshot --format png
-clawdbot canvas snapshot --format jpg --max-width 1200 --quality 0.9
-```
-
 ## Photos + videos (node camera)
 
 Photos (`jpg`):

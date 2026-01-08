@@ -7,7 +7,7 @@ export function createTelegramTool(): AnyAgentTool {
   return {
     label: "Telegram",
     name: "telegram",
-    description: "Manage Telegram reactions.",
+    description: "Send messages and manage reactions on Telegram.",
     parameters: TelegramToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

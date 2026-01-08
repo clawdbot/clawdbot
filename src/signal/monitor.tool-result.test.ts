@@ -73,6 +73,7 @@ beforeEach(() => {
 
 describe("monitorSignalProvider tool results", () => {
   it("sends tool summaries with responsePrefix", async () => {
+    const abortController = new AbortController();
     replyMock.mockImplementation(async (_ctx, opts) => {
       await opts?.onToolResult?.({ text: "tool update" });
       return { text: "final reply" };
@@ -93,11 +94,13 @@ describe("monitorSignalProvider tool results", () => {
         event: "receive",
         data: JSON.stringify(payload),
       });
+      abortController.abort();
     });
 
     await monitorSignalProvider({
       autoStart: false,
       baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
     });
 
     await flush();
@@ -112,6 +115,7 @@ describe("monitorSignalProvider tool results", () => {
       ...config,
       signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
     };
+    const abortController = new AbortController();
 
     streamMock.mockImplementation(async ({ onEvent }) => {
       const payload = {
@@ -128,11 +132,13 @@ describe("monitorSignalProvider tool results", () => {
         event: "receive",
         data: JSON.stringify(payload),
       });
+      abortController.abort();
     });
 
     await monitorSignalProvider({
       autoStart: false,
       baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
     });
 
     await flush();
@@ -150,6 +156,7 @@ describe("monitorSignalProvider tool results", () => {
       ...config,
       signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
     };
+    const abortController = new AbortController();
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
@@ -176,15 +183,48 @@ describe("monitorSignalProvider tool results", () => {
           envelope: { ...payload.envelope, timestamp: 2 },
         }),
       });
+      abortController.abort();
     });
 
     await monitorSignalProvider({
       autoStart: false,
       baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
     });
 
     await flush();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconnects after stream errors until aborted", async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    let calls = 0;
+
+    streamMock.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("stream dropped");
+      }
+      abortController.abort();
+    });
+
+    try {
+      const monitorPromise = monitorSignalProvider({
+        autoStart: false,
+        baseUrl: "http://127.0.0.1:8080",
+        abortSignal: abortController.signal,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await monitorPromise;
+
+      expect(streamMock).toHaveBeenCalledTimes(2);
+    } finally {
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

@@ -38,6 +38,15 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: () => ({ session: {} }),
   };
 });
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", pid: 1234 }),
+  }),
+}));
 
 import { statusCommand } from "./status.js";
 
@@ -69,6 +78,9 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("Active sessions"))).toBe(true);
     expect(logs.some((l) => l.includes("Default model"))).toBe(true);
     expect(logs.some((l) => l.includes("tokens:"))).toBe(true);
+    expect(logs.some((l) => l.includes("Daemon:"))).toBe(true);
+    expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
+    expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
     expect(
       logs.some((l) => l.includes("flags:") && l.includes("verbose:on")),
     ).toBe(true);

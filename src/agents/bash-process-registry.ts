@@ -18,6 +18,7 @@ export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 export interface ProcessSession {
   id: string;
   command: string;
+  scopeKey?: string;
   child?: ChildProcessWithoutNullStreams;
   pid?: number;
   startedAt: number;
@@ -38,6 +39,7 @@ export interface ProcessSession {
 export interface FinishedSession {
   id: string;
   command: string;
+  scopeKey?: string;
   startedAt: number;
   endedAt: number;
   cwd?: string;
@@ -126,6 +128,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   finishedSessions.set(session.id, {
     id: session.id,
     command: session.command,
+    scopeKey: session.scopeKey,
     startedAt: session.startedAt,
     endedAt: Date.now(),
     cwd: session.cwd,

@@ -5,6 +5,7 @@ import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
+import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { providersHandlers } from "./server-methods/providers.js";
@@ -17,6 +18,7 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
@@ -24,6 +26,7 @@ import { wizardHandlers } from "./server-methods/wizard.js";
 
 const handlers: GatewayRequestHandlers = {
   ...connectHandlers,
+  ...logsHandlers,
   ...voicewakeHandlers,
   ...healthHandlers,
   ...providersHandlers,
@@ -37,6 +40,7 @@ const handlers: GatewayRequestHandlers = {
   ...skillsHandlers,
   ...sessionsHandlers,
   ...systemHandlers,
+  ...updateHandlers,
   ...nodeHandlers,
   ...sendHandlers,
   ...usageHandlers,

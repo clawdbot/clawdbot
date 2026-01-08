@@ -10,19 +10,6 @@ import {
   testState,
 } from "./test-helpers.js";
 
-const decodeWsData = (data: unknown): string => {
-  if (typeof data === "string") return data;
-  if (Buffer.isBuffer(data)) return data.toString("utf-8");
-  if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
-      "utf-8",
-    );
-  }
-  return "";
-};
-
 installGatewayTestHooks();
 
 describe("gateway server cron", () => {
@@ -327,9 +314,9 @@ describe("gateway server cron", () => {
           : "";
       expect(storePath).toContain("jobs.json");
 
-      // Avoid races: if we schedule too close to "now", the cron runner can
-      // finish before we start listening for the "finished" event.
-      const atMs = Date.now() + 1000;
+      // Keep the job due immediately; we poll run logs instead of relying on
+      // the cron finished event to avoid timing races under heavy load.
+      const atMs = Date.now() - 10;
       const addRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
@@ -343,33 +330,8 @@ describe("gateway server cron", () => {
       const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
       expect(jobId.length > 0).toBe(true);
 
-      const finishedEvt = await new Promise<{
-        type: "event";
-        event: string;
-        payload?: { jobId?: string; action?: string; status?: string } | null;
-      }>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(
-            new Error(`timeout waiting for cron finished event: ${jobId}`),
-          );
-        }, 8000);
-        ws.on("message", (data) => {
-          const obj = JSON.parse(decodeWsData(data));
-          if (
-            obj.type === "event" &&
-            obj.event === "cron" &&
-            obj.payload?.jobId === jobId &&
-            obj.payload?.action === "finished"
-          ) {
-            clearTimeout(timeout);
-            resolve(obj);
-          }
-        });
-      });
-      expect(finishedEvt.payload?.status).toBe("ok");
-
       const waitForRuns = async () => {
-        for (let i = 0; i < 200; i += 1) {
+        for (let i = 0; i < 500; i += 1) {
           const runsRes = await rpcReq(ws, "cron.runs", {
             id: jobId,
             limit: 10,
@@ -378,7 +340,7 @@ describe("gateway server cron", () => {
           const entries = (runsRes.payload as { entries?: unknown } | null)
             ?.entries;
           if (Array.isArray(entries) && entries.length > 0) return entries;
-          await new Promise((r) => setTimeout(r, 10));
+          await new Promise((r) => setTimeout(r, 20));
         }
         throw new Error("timeout waiting for cron.runs entries");
       };

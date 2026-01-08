@@ -68,7 +68,7 @@ ssh -N remote-gateway &
 ### Step 5: Restart Clawdbot.app
 
 ```bash
-killall Clawdbot
+# Quit Clawdbot.app (⌘Q), then reopen:
 open /path/to/Clawdbot.app
 ```
 

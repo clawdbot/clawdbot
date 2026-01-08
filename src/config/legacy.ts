@@ -60,6 +60,11 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "agent.imageModelFallbacks was replaced by agent.imageModel.fallbacks (run `clawdbot doctor` to migrate).",
   },
+  {
+    path: ["gateway", "token"],
+    message:
+      "gateway.token is ignored; use gateway.auth.token instead (run `clawdbot doctor` to migrate).",
+  },
 ];
 
 const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
@@ -152,6 +157,34 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       if (Object.keys(routing as Record<string, unknown>).length === 0) {
         delete raw.routing;
       }
+    },
+  },
+  {
+    id: "gateway.token->gateway.auth.token",
+    describe: "Move gateway.token to gateway.auth.token",
+    apply: (raw, changes) => {
+      const gateway = raw.gateway;
+      if (!gateway || typeof gateway !== "object") return;
+      const token = (gateway as Record<string, unknown>).token;
+      if (token === undefined) return;
+
+      const gatewayObj = gateway as Record<string, unknown>;
+      const auth =
+        gatewayObj.auth && typeof gatewayObj.auth === "object"
+          ? (gatewayObj.auth as Record<string, unknown>)
+          : {};
+      if (auth.token === undefined) {
+        auth.token = token;
+        if (!auth.mode) auth.mode = "token";
+        changes.push("Moved gateway.token → gateway.auth.token.");
+      } else {
+        changes.push("Removed gateway.token (gateway.auth.token already set).");
+      }
+      delete gatewayObj.token;
+      if (Object.keys(auth).length > 0) {
+        gatewayObj.auth = auth;
+      }
+      raw.gateway = gatewayObj;
     },
   },
   {

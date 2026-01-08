@@ -28,74 +28,61 @@ import {
   readStringParam,
 } from "./common.js";
 
-const BrowserActSchema = Type.Union([
-  Type.Object({
-    kind: Type.Literal("click"),
-    ref: Type.String(),
-    targetId: Type.Optional(Type.String()),
-    doubleClick: Type.Optional(Type.Boolean()),
-    button: Type.Optional(Type.String()),
-    modifiers: Type.Optional(Type.Array(Type.String())),
+const BROWSER_ACT_KINDS = [
+  "click",
+  "type",
+  "press",
+  "hover",
+  "drag",
+  "select",
+  "fill",
+  "resize",
+  "wait",
+  "evaluate",
+  "close",
+] as const;
+
+type BrowserActKind = (typeof BROWSER_ACT_KINDS)[number];
+
+// NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
+// because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
+// The discriminator (kind) determines which properties are relevant; runtime validates.
+const BrowserActSchema = Type.Object({
+  kind: Type.Unsafe<BrowserActKind>({
+    type: "string",
+    enum: [...BROWSER_ACT_KINDS],
   }),
-  Type.Object({
-    kind: Type.Literal("type"),
-    ref: Type.String(),
-    text: Type.String(),
-    targetId: Type.Optional(Type.String()),
-    submit: Type.Optional(Type.Boolean()),
-    slowly: Type.Optional(Type.Boolean()),
-  }),
-  Type.Object({
-    kind: Type.Literal("press"),
-    key: Type.String(),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("hover"),
-    ref: Type.String(),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("drag"),
-    startRef: Type.String(),
-    endRef: Type.String(),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("select"),
-    ref: Type.String(),
-    values: Type.Array(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("fill"),
-    fields: Type.Array(Type.Record(Type.String(), Type.Unknown())),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("resize"),
-    width: Type.Number(),
-    height: Type.Number(),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("wait"),
-    timeMs: Type.Optional(Type.Number()),
-    text: Type.Optional(Type.String()),
-    textGone: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("evaluate"),
-    fn: Type.String(),
-    ref: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("close"),
-    targetId: Type.Optional(Type.String()),
-  }),
-]);
+  // Common fields
+  targetId: Type.Optional(Type.String()),
+  ref: Type.Optional(Type.String()),
+  // click
+  doubleClick: Type.Optional(Type.Boolean()),
+  button: Type.Optional(Type.String()),
+  modifiers: Type.Optional(Type.Array(Type.String())),
+  // type
+  text: Type.Optional(Type.String()),
+  submit: Type.Optional(Type.Boolean()),
+  slowly: Type.Optional(Type.Boolean()),
+  // press
+  key: Type.Optional(Type.String()),
+  // drag
+  startRef: Type.Optional(Type.String()),
+  endRef: Type.Optional(Type.String()),
+  // select
+  values: Type.Optional(Type.Array(Type.String())),
+  // fill - use permissive array of objects
+  fields: Type.Optional(
+    Type.Array(Type.Object({}, { additionalProperties: true })),
+  ),
+  // resize
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
+  // wait
+  timeMs: Type.Optional(Type.Number()),
+  textGone: Type.Optional(Type.String()),
+  // evaluate
+  fn: Type.Optional(Type.String()),
+});
 
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),

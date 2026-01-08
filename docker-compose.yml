@@ -35,4 +35,5 @@ services:
       - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
     stdin_open: true
     tty: true
+    init: true
     entrypoint: ["node", "dist/index.js"]

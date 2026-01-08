@@ -36,6 +36,10 @@
     "otter": {
       "version": "1.0.0",
       "installedAt": 1767714704384
+    },
+    "icloud-findmy": {
+      "version": "1.0.0",
+      "installedAt": 1767826270493
     }
   }
 }

@@ -170,7 +170,7 @@ import Testing
         let url = URL(string: "ws://example.invalid")!
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
-            configProvider: { (url, cfg.snapshotToken()) },
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
 
         _ = try await conn.request(method: "status", params: nil)
@@ -186,7 +186,7 @@ import Testing
         let url = URL(string: "ws://example.invalid")!
         let cfg = ConfigSource(token: "a")
         let conn = GatewayConnection(
-            configProvider: { (url, cfg.snapshotToken()) },
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
 
         _ = try await conn.request(method: "status", params: nil)
@@ -203,7 +203,7 @@ import Testing
         let url = URL(string: "ws://example.invalid")!
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
-            configProvider: { (url, cfg.snapshotToken()) },
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
 
         async let r1: Data = conn.request(method: "status", params: nil)
@@ -218,7 +218,7 @@ import Testing
         let url = URL(string: "ws://example.invalid")!
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
-            configProvider: { (url, cfg.snapshotToken()) },
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
 
         _ = try await conn.request(method: "status", params: nil)
@@ -239,7 +239,7 @@ import Testing
         let url = URL(string: "ws://example.invalid")!
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
-            configProvider: { (url, cfg.snapshotToken()) },
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
 
         let stream = await conn.subscribe(bufferingNewest: 10)

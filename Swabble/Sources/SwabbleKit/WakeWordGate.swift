@@ -13,7 +13,7 @@ public struct WakeWordSegment: Sendable, Equatable {
         self.range = range
     }
 
-    public var end: TimeInterval { self.start + self.duration }
+    public var end: TimeInterval { start + duration }
 }
 
 public struct WakeWordGateConfig: Sendable, Equatable {
@@ -62,10 +62,10 @@ public enum WakeWordGate {
         segments: [WakeWordSegment],
         config: WakeWordGateConfig)
     -> WakeWordGateMatch? {
-        let triggerTokens = self.normalizeTriggers(config.triggers)
+        let triggerTokens = normalizeTriggers(config.triggers)
         guard !triggerTokens.isEmpty else { return nil }
 
-        let tokens = self.normalizeSegments(segments)
+        let tokens = normalizeSegments(segments)
         guard !tokens.isEmpty else { return nil }
 
         var best: (index: Int, triggerEnd: TimeInterval, gap: TimeInterval)?
@@ -89,7 +89,7 @@ public enum WakeWordGate {
         }
 
         guard let best else { return nil }
-        let command = self.commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
+        let command = commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
             .trimmingCharacters(in: Self.whitespaceAndPunctuation)
         guard command.count >= config.minCommandLength else { return nil }
         return WakeWordGateMatch(triggerEndTime: best.triggerEnd, postGap: best.gap, command: command)
@@ -111,7 +111,7 @@ public enum WakeWordGate {
         }
 
         let text = segments
-            .filter { $0.start >= threshold && !self.normalizeToken($0.text).isEmpty }
+            .filter { $0.start >= threshold && !normalizeToken($0.text).isEmpty }
             .map(\.text)
             .joined(separator: " ")
         return text.trimmingCharacters(in: Self.whitespaceAndPunctuation)
@@ -121,7 +121,7 @@ public enum WakeWordGate {
         guard !text.isEmpty else { return false }
         let normalized = text.lowercased()
         for trigger in triggers {
-            let token = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation).lowercased()
+            let token = trigger.trimmingCharacters(in: whitespaceAndPunctuation).lowercased()
             if token.isEmpty { continue }
             if normalized.contains(token) { return true }
         }
@@ -131,11 +131,11 @@ public enum WakeWordGate {
     public static func stripWake(text: String, triggers: [String]) -> String {
         var out = text
         for trigger in triggers {
-            let token = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
+            let token = trigger.trimmingCharacters(in: whitespaceAndPunctuation)
             guard !token.isEmpty else { continue }
             out = out.replacingOccurrences(of: token, with: "", options: [.caseInsensitive])
         }
-        return out.trimmingCharacters(in: self.whitespaceAndPunctuation)
+        return out.trimmingCharacters(in: whitespaceAndPunctuation)
     }
 
     private static func normalizeTriggers(_ triggers: [String]) -> [TriggerTokens] {
@@ -143,7 +143,7 @@ public enum WakeWordGate {
         for trigger in triggers {
             let tokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { self.normalizeToken(String($0)) }
+                .map { normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             if tokens.isEmpty { continue }
             output.append(TriggerTokens(tokens: tokens))
@@ -153,7 +153,7 @@ public enum WakeWordGate {
 
     private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [Token] {
         segments.compactMap { segment in
-            let normalized = self.normalizeToken(segment.text)
+            let normalized = normalizeToken(segment.text)
             guard !normalized.isEmpty else { return nil }
             return Token(
                 normalized: normalized,
@@ -166,7 +166,7 @@ public enum WakeWordGate {
 
     private static func normalizeToken(_ token: String) -> String {
         token
-            .trimmingCharacters(in: self.whitespaceAndPunctuation)
+            .trimmingCharacters(in: whitespaceAndPunctuation)
             .lowercased()
     }
 

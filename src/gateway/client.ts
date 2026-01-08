@@ -36,6 +36,17 @@ export type GatewayClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
+  1000: "normal closure",
+  1006: "abnormal closure (no close frame)",
+  1008: "policy violation",
+  1012: "service restart",
+};
+
+export function describeGatewayCloseCode(code: number): string | undefined {
+  return GATEWAY_CLOSE_CODE_HINTS[code];
+}
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;

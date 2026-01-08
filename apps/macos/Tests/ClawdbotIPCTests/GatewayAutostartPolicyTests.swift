@@ -29,4 +29,3 @@ struct GatewayAutostartPolicyTests {
             attachExistingOnly: false))
     }
 }
-

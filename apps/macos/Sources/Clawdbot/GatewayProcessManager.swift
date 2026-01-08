@@ -70,7 +70,7 @@ final class GatewayProcessManager {
     func ensureLaunchAgentEnabledIfNeeded() async {
         guard !CommandResolver.connectionModeIsRemote() else { return }
         guard !AppStateStore.attachExistingGatewayOnly else { return }
-        let enabled = await GatewayLaunchAgentManager.status()
+        let enabled = await GatewayLaunchAgentManager.isLoaded()
         guard !enabled else { return }
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()

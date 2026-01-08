@@ -13,6 +13,7 @@ let voiceWakeSendChimeKey = "clawdbot.voiceWakeSendChime"
 let showDockIconKey = "clawdbot.showDockIcon"
 let defaultVoiceWakeTriggers = ["clawd", "claude"]
 let voiceWakeMicKey = "clawdbot.voiceWakeMicID"
+let voiceWakeMicNameKey = "clawdbot.voiceWakeMicName"
 let voiceWakeLocaleKey = "clawdbot.voiceWakeLocaleID"
 let voiceWakeAdditionalLocalesKey = "clawdbot.voiceWakeAdditionalLocaleIDs"
 let voicePushToTalkEnabledKey = "clawdbot.voicePushToTalkEnabled"

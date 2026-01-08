@@ -100,6 +100,10 @@ final class AppState {
         }
     }
 
+    var voiceWakeMicName: String {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.voiceWakeMicName, forKey: voiceWakeMicNameKey) } }
+    }
+
     var voiceWakeLocaleID: String {
         didSet {
             self.ifNotPreview {
@@ -229,6 +233,7 @@ final class AppState {
         }
         self.showDockIcon = UserDefaults.standard.bool(forKey: showDockIconKey)
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
+        self.voiceWakeMicName = UserDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
         self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
@@ -583,6 +588,7 @@ extension AppState {
         state.iconAnimationsEnabled = true
         state.showDockIcon = true
         state.voiceWakeMicID = "BuiltInMic"
+        state.voiceWakeMicName = "Built-in Microphone"
         state.voiceWakeLocaleID = Locale.current.identifier
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false

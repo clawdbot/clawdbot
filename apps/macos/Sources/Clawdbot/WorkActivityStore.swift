@@ -1,4 +1,5 @@
 import ClawdbotKit
+import ClawdbotProtocol
 import Foundation
 import Observation
 import SwiftUI
@@ -53,7 +54,7 @@ final class WorkActivityStore {
         phase: String,
         name: String?,
         meta: String?,
-        args: [String: AnyCodable]?)
+        args: [String: ClawdbotProtocol.AnyCodable]?)
     {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
@@ -211,7 +212,7 @@ final class WorkActivityStore {
     private static func buildLabel(
         name: String?,
         meta: String?,
-        args: [String: AnyCodable]?) -> String
+        args: [String: ClawdbotProtocol.AnyCodable]?) -> String
     {
         let wrappedArgs = self.wrapToolArgs(args)
         let display = ToolDisplayRegistry.resolve(name: name ?? "tool", args: wrappedArgs, meta: meta)
@@ -221,17 +222,17 @@ final class WorkActivityStore {
         return display.label
     }
 
-    private static func wrapToolArgs(_ args: [String: AnyCodable]?) -> ClawdbotKit.AnyCodable? {
+    private static func wrapToolArgs(_ args: [String: ClawdbotProtocol.AnyCodable]?) -> ClawdbotKit.AnyCodable? {
         guard let args else { return nil }
         let converted: [String: Any] = args.mapValues { self.unwrapJSONValue($0.value) }
         return ClawdbotKit.AnyCodable(converted)
     }
 
     private static func unwrapJSONValue(_ value: Any) -> Any {
-        if let dict = value as? [String: AnyCodable] {
+        if let dict = value as? [String: ClawdbotProtocol.AnyCodable] {
             return dict.mapValues { self.unwrapJSONValue($0.value) }
         }
-        if let array = value as? [AnyCodable] {
+        if let array = value as? [ClawdbotProtocol.AnyCodable] {
             return array.map { self.unwrapJSONValue($0.value) }
         }
         if let dict = value as? [String: Any] {

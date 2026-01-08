@@ -16,12 +16,11 @@ enum GatewayAgentChannel: String, CaseIterable, Sendable {
     func shouldDeliver(_ isLast: Bool) -> Bool {
         switch self {
         case .webchat:
-            return false
+            false
         case .last:
-            return isLast
+            isLast
         case .whatsapp, .telegram:
-            return true
+            true
         }
     }
 }
-

@@ -29,8 +29,8 @@ struct UsageRow: Identifiable {
     let error: String?
 
     var titleText: String {
-        if let plan, !plan.isEmpty { return "\(displayName) (\(plan))" }
-        return displayName
+        if let plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
+        return self.displayName
     }
 
     var remainingPercent: Int? {
@@ -107,4 +107,3 @@ enum UsageLoader {
         return try JSONDecoder().decode(GatewayUsageSummary.self, from: data)
     }
 }
-

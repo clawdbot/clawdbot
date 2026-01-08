@@ -49,11 +49,11 @@ describe("brew helpers", () => {
   it("includes Linuxbrew bin/sbin in path candidates", () => {
     const env: NodeJS.ProcessEnv = { HOMEBREW_PREFIX: "/custom/prefix" };
     const dirs = resolveBrewPathDirs({ homeDir: "/home/test", env });
-    expect(dirs).toContain("/custom/prefix/bin");
-    expect(dirs).toContain("/custom/prefix/sbin");
+    expect(dirs).toContain(path.join("/custom/prefix", "bin"));
+    expect(dirs).toContain(path.join("/custom/prefix", "sbin"));
     expect(dirs).toContain("/home/linuxbrew/.linuxbrew/bin");
     expect(dirs).toContain("/home/linuxbrew/.linuxbrew/sbin");
-    expect(dirs).toContain("/home/test/.linuxbrew/bin");
-    expect(dirs).toContain("/home/test/.linuxbrew/sbin");
+    expect(dirs).toContain(path.join("/home/test", ".linuxbrew", "bin"));
+    expect(dirs).toContain(path.join("/home/test", ".linuxbrew", "sbin"));
   });
 });

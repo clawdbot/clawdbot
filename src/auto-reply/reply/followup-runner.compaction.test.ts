@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 
@@ -30,18 +30,6 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 import { createFollowupRunner } from "./followup-runner.js";
-
-function createTyping(): TypingController {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
-}
 
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
@@ -75,7 +63,8 @@ describe("createFollowupRunner compaction", () => {
 
     const runner = createFollowupRunner({
       opts: { onBlockReply },
-      typing: createTyping(),
+      typing: createMockTypingController(),
+      typingMode: "instant",
       sessionEntry,
       sessionStore,
       sessionKey: "main",

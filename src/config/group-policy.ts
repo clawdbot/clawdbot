@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
 
 export type GroupPolicyProvider = "whatsapp" | "telegram" | "imessage";
@@ -18,10 +19,22 @@ type ProviderGroups = Record<string, ProviderGroupConfig>;
 function resolveProviderGroups(
   cfg: ClawdbotConfig,
   provider: GroupPolicyProvider,
+  accountId?: string | null,
 ): ProviderGroups | undefined {
   if (provider === "whatsapp") return cfg.whatsapp?.groups;
-  if (provider === "telegram") return cfg.telegram?.groups;
-  if (provider === "imessage") return cfg.imessage?.groups;
+  const normalizedAccountId = normalizeAccountId(accountId);
+  if (provider === "telegram") {
+    return (
+      cfg.telegram?.accounts?.[normalizedAccountId]?.groups ??
+      cfg.telegram?.groups
+    );
+  }
+  if (provider === "imessage") {
+    return (
+      cfg.imessage?.accounts?.[normalizedAccountId]?.groups ??
+      cfg.imessage?.groups
+    );
+  }
   return undefined;
 }
 
@@ -29,9 +42,10 @@ export function resolveProviderGroupPolicy(params: {
   cfg: ClawdbotConfig;
   provider: GroupPolicyProvider;
   groupId?: string | null;
+  accountId?: string | null;
 }): ProviderGroupPolicy {
   const { cfg, provider } = params;
-  const groups = resolveProviderGroups(cfg, provider);
+  const groups = resolveProviderGroups(cfg, provider, params.accountId);
   const allowlistEnabled = Boolean(groups && Object.keys(groups).length > 0);
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId && groups ? groups[normalizedId] : undefined;
@@ -56,6 +70,7 @@ export function resolveProviderGroupRequireMention(params: {
   cfg: ClawdbotConfig;
   provider: GroupPolicyProvider;
   groupId?: string | null;
+  accountId?: string | null;
   requireMentionOverride?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {

@@ -22,11 +22,12 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  focusMode: boolean;
+  isToolOutputExpanded: (id: string) => boolean;
+  onToolOutputToggle: (id: string, expanded: boolean) => void;
   onRefresh: () => void;
-  onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onNewSession: () => void;
 };
 
 export function renderChat(props: ChatProps) {
@@ -66,14 +67,6 @@ export function renderChat(props: ChatProps) {
         </div>
         <div class="chat-header__right">
           <div class="muted">Thinking: ${props.thinkingLevel ?? "inherit"}</div>
-          <button
-            class="btn ${props.focusMode ? "active" : ""}"
-            @click=${props.onToggleFocusMode}
-            aria-pressed=${props.focusMode}
-            title="Toggle focus mode (hide header + sidebar)"
-          >
-            Focus
-          </button>
         </div>
       </div>
 
@@ -98,10 +91,11 @@ export function renderChat(props: ChatProps) {
                 content: [{ type: "text", text: item.text }],
                 timestamp: item.startedAt,
               },
+              props,
               { streaming: true },
             );
           }
-          return renderMessage(item.message);
+          return renderMessage(item.message, props);
         })}
       </div>
 
@@ -124,6 +118,13 @@ export function renderChat(props: ChatProps) {
         </label>
         <div class="row chat-compose__actions">
           <button
+            class="btn"
+            ?disabled=${!props.connected || props.sending}
+            @click=${props.onNewSession}
+          >
+            New session
+          </button>
+          <button
             class="btn primary"
             ?disabled=${!props.connected || props.sending}
             @click=${props.onSend}
@@ -141,12 +142,30 @@ type ChatItem =
   | { kind: "stream"; key: string; text: string; startedAt: number }
   | { kind: "reading-indicator"; key: string };
 
+const CHAT_HISTORY_RENDER_LIMIT = 200;
+
 function buildChatItems(props: ChatProps): ChatItem[] {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  for (let i = 0; i < history.length; i++) {
-    items.push({ kind: "message", key: messageKey(history[i], i), message: history[i] });
+  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
+  if (historyStart > 0) {
+    items.push({
+      kind: "message",
+      key: "chat:history:notice",
+      message: {
+        role: "system",
+        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
+        timestamp: Date.now(),
+      },
+    });
+  }
+  for (let i = historyStart; i < history.length; i++) {
+    items.push({
+      kind: "message",
+      key: messageKey(history[i], i),
+      message: history[i],
+    });
   }
   for (let i = 0; i < tools.length; i++) {
     items.push({
@@ -270,7 +289,11 @@ function renderReadingIndicator() {
   `;
 }
 
-function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
+function renderMessage(
+  message: unknown,
+  props?: Pick<ChatProps, "isToolOutputExpanded" | "onToolOutputToggle">,
+  opts?: { streaming?: boolean },
+) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const toolCards = extractToolCards(message);
@@ -297,6 +320,12 @@ function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
     typeof m.timestamp === "number" ? new Date(m.timestamp).toLocaleTimeString() : "";
   const klass = role === "assistant" ? "assistant" : role === "user" ? "user" : "other";
   const who = role === "assistant" ? "Assistant" : role === "user" ? "You" : role;
+  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  const toolCardBase =
+    toolCallId ||
+    (typeof m.id === "string" ? m.id : "") ||
+    (typeof m.messageId === "string" ? m.messageId : "") ||
+    (typeof m.timestamp === "number" ? String(m.timestamp) : "tool-card");
   return html`
     <div class="chat-line ${klass}">
       <div class="chat-msg">
@@ -304,7 +333,15 @@ function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
           ${markdown
             ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
             : nothing}
-          ${toolCards.map((card) => renderToolCard(card))}
+          ${toolCards.map((card, index) =>
+            renderToolCard(card, {
+              id: `${toolCardBase}:${index}`,
+              expanded: props?.isToolOutputExpanded
+                ? props.isToolOutputExpanded(`${toolCardBase}:${index}`)
+                : false,
+              onToggle: props?.onToolOutputToggle,
+            }),
+          )}
         </div>
         <div class="chat-stamp mono">
           ${who}${timestamp ? html` · ${timestamp}` : nothing}
@@ -378,19 +415,49 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-function renderToolCard(card: ToolCard) {
+function renderToolCard(
+  card: ToolCard,
+  opts?: {
+    id: string;
+    expanded: boolean;
+    onToggle?: (id: string, expanded: boolean) => void;
+  },
+) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
+  const hasOutput = typeof card.text === "string" && card.text.length > 0;
+  const expanded = opts?.expanded ?? false;
+  const id = opts?.id ?? `${card.name}-${Math.random()}`;
   return html`
     <div class="chat-tool-card">
       <div class="chat-tool-card__title">${display.emoji} ${display.label}</div>
       ${detail
         ? html`<div class="chat-tool-card__detail">${detail}</div>`
         : nothing}
-      ${card.text
-        ? html`<div class="chat-tool-card__output chat-text">
-            ${unsafeHTML(toSanitizedMarkdownHtml(card.text))}
-          </div>`
+      ${hasOutput
+        ? html`
+            <details
+              class="chat-tool-card__details"
+              ?open=${expanded}
+              @toggle=${(e: Event) => {
+                if (!opts?.onToggle) return;
+                const target = e.currentTarget as HTMLDetailsElement;
+                opts.onToggle(id, target.open);
+              }}
+            >
+              <summary class="chat-tool-card__summary">
+                ${expanded ? "Hide output" : "Show output"}
+                <span class="chat-tool-card__summary-meta">
+                  (${card.text?.length ?? 0} chars)
+                </span>
+              </summary>
+              ${expanded
+                ? html`<div class="chat-tool-card__output chat-text">
+                    ${unsafeHTML(toSanitizedMarkdownHtml(card.text ?? ""))}
+                  </div>`
+                : nothing}
+            </details>
+          `
         : nothing}
     </div>
   `;

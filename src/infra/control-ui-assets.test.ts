@@ -51,9 +51,10 @@ describe("control UI assets helpers", () => {
   });
 
   it("resolves dist control-ui index path for dist argv1", () => {
-    const argv1 = path.join("/tmp", "pkg", "dist", "index.js");
+    const argv1 = path.resolve("/tmp", "pkg", "dist", "index.js");
+    const distDir = path.dirname(argv1);
     expect(resolveControlUiDistIndexPath(argv1)).toBe(
-      path.join("/tmp", "pkg", "dist", "control-ui", "index.html"),
+      path.join(distDir, "control-ui", "index.html"),
     );
   });
 });

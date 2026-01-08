@@ -98,16 +98,30 @@ Note: legacy Claude/Codex/Gemini/Opencode paths have been removed; Pi is the onl
 Runtime requirement: **Node ≥ 22**.
 
 ```bash
-# From source (recommended while the npm package is still settling)
-pnpm install
-pnpm build
-pnpm link --global
+# Recommended: global install (npm/pnpm)
+npm install -g clawdbot@latest
+# or: pnpm add -g clawdbot@latest
+
+# Onboard + install the daemon (launchd/systemd user service)
+clawdbot onboard --install-daemon
 
 # Pair WhatsApp Web (shows QR)
-clawdbot login
+clawdbot providers login
 
-# Run the Gateway (leave running)
+# Gateway runs via daemon after onboarding; manual run is still possible:
 clawdbot gateway --port 18789
+```
+
+From source (development):
+
+```bash
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
+pnpm install
+pnpm ui:install
+pnpm ui:build
+pnpm build
+pnpm clawdbot onboard --install-daemon
 ```
 
 Multi-instance quickstart (optional):
@@ -149,6 +163,7 @@ Example:
   - [Docs hubs (all pages linked)](https://docs.clawd.bot/start/hubs)
   - [FAQ](https://docs.clawd.bot/start/faq) ← *common questions answered*
   - [Configuration](https://docs.clawd.bot/gateway/configuration)
+  - [Configuration examples](https://docs.clawd.bot/gateway/configuration-examples)
   - [Slash commands](https://docs.clawd.bot/tools/slash-commands)
   - [Multi-agent routing](https://docs.clawd.bot/concepts/multi-agent)
   - [Updating / rollback](https://docs.clawd.bot/install/updating)

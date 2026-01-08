@@ -10,8 +10,7 @@ struct ConfigStoreTests {
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { true },
             loadLocal: { localHit = true; return ["local": true] },
-            loadRemote: { remoteHit = true; return ["remote": true] }
-        ))
+            loadRemote: { remoteHit = true; return ["remote": true] }))
 
         let result = await ConfigStore.load()
 
@@ -27,8 +26,7 @@ struct ConfigStoreTests {
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { false },
             loadLocal: { localHit = true; return ["local": true] },
-            loadRemote: { remoteHit = true; return ["remote": true] }
-        ))
+            loadRemote: { remoteHit = true; return ["remote": true] }))
 
         let result = await ConfigStore.load()
 
@@ -44,8 +42,7 @@ struct ConfigStoreTests {
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { true },
             saveLocal: { _ in localHit = true },
-            saveRemote: { _ in remoteHit = true }
-        ))
+            saveRemote: { _ in remoteHit = true }))
 
         try await ConfigStore.save(["remote": true])
 
@@ -60,8 +57,7 @@ struct ConfigStoreTests {
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { false },
             saveLocal: { _ in localHit = true },
-            saveRemote: { _ in remoteHit = true }
-        ))
+            saveRemote: { _ in remoteHit = true }))
 
         try await ConfigStore.save(["local": true])
 

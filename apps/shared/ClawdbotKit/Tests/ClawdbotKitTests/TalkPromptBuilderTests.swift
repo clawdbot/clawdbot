@@ -13,4 +13,3 @@ final class TalkPromptBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Assistant speech interrupted at 1.2s."))
     }
 }
-

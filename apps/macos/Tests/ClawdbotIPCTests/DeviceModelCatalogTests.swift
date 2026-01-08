@@ -5,8 +5,10 @@ import Testing
 struct DeviceModelCatalogTests {
     @Test
     func symbolPrefersModelIdentifierPrefixes() {
-        #expect(DeviceModelCatalog.symbol(deviceFamily: "iPad", modelIdentifier: "iPad16,6", friendlyName: nil) == "ipad")
-        #expect(DeviceModelCatalog.symbol(deviceFamily: "iPhone", modelIdentifier: "iPhone17,3", friendlyName: nil) == "iphone")
+        #expect(DeviceModelCatalog
+            .symbol(deviceFamily: "iPad", modelIdentifier: "iPad16,6", friendlyName: nil) == "ipad")
+        #expect(DeviceModelCatalog
+            .symbol(deviceFamily: "iPhone", modelIdentifier: "iPhone17,3", friendlyName: nil) == "iphone")
     }
 
     @Test

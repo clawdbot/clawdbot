@@ -80,7 +80,8 @@ import UniformTypeIdentifiers
             }
 
             let encoded = NSMutableData()
-            guard let dest = CGImageDestinationCreateWithData(encoded, UTType.jpeg.identifier as CFString, 1, nil) else {
+            guard let dest = CGImageDestinationCreateWithData(encoded, UTType.jpeg.identifier as CFString, 1, nil)
+            else {
                 throw NSError(domain: "JPEGTranscoderTests", code: 9)
             }
             CGImageDestinationAddImage(dest, img, nil)

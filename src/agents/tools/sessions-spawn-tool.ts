@@ -9,6 +9,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
@@ -22,6 +23,7 @@ import {
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
+  agentId: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
@@ -46,6 +48,7 @@ export function createSessionsSpawnTool(opts?: {
       const params = args as Record<string, unknown>;
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
+      const requestedAgentId = readStringParam(params, "agentId");
       const model = readStringParam(params, "model");
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete"
@@ -96,7 +99,33 @@ export function createSessionsSpawnTool(opts?: {
       const requesterAgentId = normalizeAgentId(
         parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
-      const childSessionKey = `agent:${requesterAgentId}:subagent:${crypto.randomUUID()}`;
+      const targetAgentId = requestedAgentId
+        ? normalizeAgentId(requestedAgentId)
+        : requesterAgentId;
+      if (targetAgentId !== requesterAgentId) {
+        const allowAgents =
+          resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
+          [];
+        const allowAny = allowAgents.some((value) => value.trim() === "*");
+        const normalizedTargetId = targetAgentId.toLowerCase();
+        const allowSet = new Set(
+          allowAgents
+            .filter((value) => value.trim() && value.trim() !== "*")
+            .map((value) => normalizeAgentId(value).toLowerCase()),
+        );
+        if (!allowAny && !allowSet.has(normalizedTargetId)) {
+          const allowedText = allowAny
+            ? "*"
+            : allowSet.size > 0
+              ? Array.from(allowSet).join(", ")
+              : "none";
+          return jsonResult({
+            status: "forbidden",
+            error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+          });
+        }
+      }
+      const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
       if (opts?.sandboxed === true) {
         try {
           await callGateway({

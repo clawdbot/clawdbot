@@ -1,3 +1,4 @@
+import type { ChatProviderId } from "../providers/registry.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
@@ -15,13 +16,7 @@ export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "tailnet" | "auto";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
-export type ProviderChoice =
-  | "whatsapp"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "signal"
-  | "imessage";
+export type ProviderChoice = ChatProviderId;
 
 export type OnboardOptions = {
   mode?: OnboardMode;

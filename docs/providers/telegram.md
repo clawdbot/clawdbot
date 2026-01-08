@@ -5,7 +5,7 @@ read_when:
 ---
 # Telegram (Bot API)
 
-Updated: 2026-01-07
+Updated: 2026-01-08
 
 Status: production-ready for bot DMs + groups via grammY. Long-polling by default; webhook optional.
 
@@ -15,8 +15,17 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 - DMs share the agent's main session; groups stay isolated (`telegram:group:<chatId>`).
 
 ## Setup (fast path)
-1) Create a bot with @BotFather and copy the token.
-2) Configure the token (env or config). Example:
+### 1) Create a bot token (BotFather)
+1) Open Telegram and chat with **@BotFather**.
+2) Run `/newbot`, then follow the prompts (name + username ending in `bot`).
+3) Copy the token and store it safely.
+
+Optional BotFather settings:
+- `/setjoingroups` — allow/deny adding the bot to groups.
+- `/setprivacy` — control whether the bot sees all group messages.
+
+### 2) Configure the token (env or config)
+Example:
 
 ```json5
 {
@@ -29,14 +38,46 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 }
 ```
 
+Multi-account support: use `telegram.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
 3) Start the gateway. Telegram starts when a `telegram` config section exists and a token is resolved.
 4) DM access defaults to pairing. Approve the code when the bot is first contacted.
-5) For groups: add the bot, disable privacy mode (or make it admin), then set `telegram.groups` to control mention gating + allowlists.
+5) For groups: add the bot, decide privacy/admin behavior (below), then set `telegram.groups` to control mention gating + allowlists.
+
+## Token + privacy + permissions (Telegram side)
+
+### Token creation (BotFather)
+- `/newbot` creates the bot and returns the token (keep it secret).
+- If a token leaks, revoke/regenerate it via @BotFather and update your config.
+
+### Group message visibility (Privacy Mode)
+Telegram bots default to **Privacy Mode**, which limits which group messages they receive.
+If your bot must see *all* group messages, you have two options:
+- Disable privacy mode with `/setprivacy` **or**
+- Add the bot as a group **admin** (admin bots receive all messages).
+
+**Note:** When you toggle privacy mode, Telegram requires removing + re‑adding the bot
+to each group for the change to take effect.
+
+### Group permissions (admin rights)
+Admin status is set inside the group (Telegram UI). Admin bots always receive all
+group messages, so use admin if you need full visibility.
 
 ## How it works (behavior)
 - Inbound messages are normalized into the shared provider envelope with reply context and media placeholders.
 - Group replies require a mention by default (native @mention or `routing.groupChat.mentionPatterns`).
 - Replies always route back to the same Telegram chat.
+- Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agent.maxConcurrent`.
+
+## Formatting (Telegram HTML)
+- Outbound Telegram text uses `parse_mode: "HTML"` (Telegram’s supported tag subset).
+- Markdown-ish input is rendered into **Telegram-safe HTML** (bold/italic/strike/code/links); block elements are flattened to text with newlines/bullets.
+- Raw HTML from models is escaped to avoid Telegram parse errors.
+- If Telegram rejects the HTML payload, Clawdbot retries the same message as plain text.
+
+## Limits
+- Outbound text is chunked to `telegram.textChunkLimit` (default 4000).
+- Media downloads/uploads are capped by `telegram.mediaMaxMb` (default 5).
 
 ## Group activation modes
 
@@ -138,7 +179,16 @@ Telegram supports optional threaded replies via tags:
 - `[[reply_to:<id>]]` -- reply to a specific message id.
 
 Controlled by `telegram.replyToMode`:
-- `off` (default), `first`, `all`.
+- `first` (default), `all`, `off`.
+
+## Audio messages (voice vs file)
+Telegram distinguishes **voice notes** (round bubble) from **audio files** (metadata card).
+Clawdbot defaults to audio files for backward compatibility.
+
+To force a voice note bubble in agent replies, include this tag anywhere in the reply:
+- `[[audio_as_voice]]` — send audio as a voice note instead of a file.
+
+The tag is stripped from the delivered text. Other providers ignore this tag.
 
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.
@@ -162,10 +212,14 @@ Reasoning stream (Telegram only):
 - If `telegram.streamMode` is `off`, reasoning stream is disabled.
 More context: [Streaming + chunking](/concepts/streaming).
 
-## Agent tool (reactions)
+## Retry policy
+Outbound Telegram API calls retry on transient network/429 errors with exponential backoff and jitter. Configure via `telegram.retry`. See [Retry policy](/concepts/retry).
+
+## Agent tool (messages + reactions)
+- Tool: `telegram` with `sendMessage` action (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`).
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- Tool gating: `telegram.actions.reactions` (default: enabled).
+- Tool gating: `telegram.actions.reactions` and `telegram.actions.sendMessage` (default: enabled).
 
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
@@ -182,7 +236,7 @@ More context: [Streaming + chunking](/concepts/streaming).
 - If `telegram.groups` is set, the group must be listed or use `"*"`
 - Check Privacy Settings in @BotFather → "Group Privacy" should be **OFF**
 - Verify bot is actually a member (not just an admin with no read access)
-- Check gateway logs: `journalctl --user -u clawdbot -f` (look for "skipping group message")
+- Check gateway logs: `clawdbot logs --follow` (look for "skipping group message")
 
 **Bot responds to mentions but not `/activation always`:**
 - The `/activation` command updates session state but doesn't persist to config
@@ -211,15 +265,17 @@ Provider options:
   - `telegram.groups.<id>.enabled`: disable the group when `false`.
   - `telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
   - `telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-- `telegram.replyToMode`: `off | first | all`.
+- `telegram.replyToMode`: `off | first | all` (default: `first`).
 - `telegram.textChunkLimit`: outbound chunk size (chars).
 - `telegram.streamMode`: `off | partial | block` (draft streaming).
 - `telegram.mediaMaxMb`: inbound/outbound media cap (MB).
+- `telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `telegram.webhookUrl`: enable webhook mode.
 - `telegram.webhookSecret`: webhook secret (optional).
 - `telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
 - `telegram.actions.reactions`: gate Telegram tool reactions.
+- `telegram.actions.sendMessage`: gate Telegram tool message sends.
 
 Related global options:
 - `routing.groupChat.mentionPatterns` (mention gating patterns).

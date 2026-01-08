@@ -1,8 +1,11 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  applyGoogleTurnOrderingFix,
   buildEmbeddedSandboxInfo,
+  createSystemPromptOverride,
   splitSdkTools,
 } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -100,5 +103,78 @@ describe("splitSdkTools", () => {
       "write",
     ]);
     expect(customTools.map((tool) => tool.name)).toEqual(["browser"]);
+  });
+});
+
+describe("createSystemPromptOverride", () => {
+  it("returns the override prompt regardless of default prompt", () => {
+    const override = createSystemPromptOverride("OVERRIDE");
+    expect(override("DEFAULT")).toBe("OVERRIDE");
+  });
+
+  it("returns an empty string for blank overrides", () => {
+    const override = createSystemPromptOverride("  \n  ");
+    expect(override("DEFAULT")).toBe("");
+  });
+});
+
+describe("applyGoogleTurnOrderingFix", () => {
+  const makeAssistantFirst = () =>
+    [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "bash", arguments: {} },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+  it("prepends a bootstrap once and records a marker for Google models", () => {
+    const sessionManager = SessionManager.inMemory();
+    const warn = vi.fn();
+    const input = makeAssistantFirst();
+    const first = applyGoogleTurnOrderingFix({
+      messages: input,
+      modelApi: "google-generative-ai",
+      sessionManager,
+      sessionId: "session:1",
+      warn,
+    });
+    expect(first.messages[0]?.role).toBe("user");
+    expect(first.messages[1]?.role).toBe("assistant");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(
+      sessionManager
+        .getEntries()
+        .some(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "google-turn-ordering-bootstrap",
+        ),
+    ).toBe(true);
+
+    applyGoogleTurnOrderingFix({
+      messages: input,
+      modelApi: "google-generative-ai",
+      sessionManager,
+      sessionId: "session:1",
+      warn,
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips non-Google models", () => {
+    const sessionManager = SessionManager.inMemory();
+    const warn = vi.fn();
+    const input = makeAssistantFirst();
+    const result = applyGoogleTurnOrderingFix({
+      messages: input,
+      modelApi: "openai",
+      sessionManager,
+      sessionId: "session:2",
+      warn,
+    });
+    expect(result.messages).toBe(input);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,6 @@ import {
   discoverAuthStorage,
   discoverModels,
 } from "@mariozechner/pi-coding-agent";
-import chalk from "chalk";
 
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import {
@@ -36,6 +35,11 @@ import {
   shouldEnableShellEnvFallback,
 } from "../../infra/shell-env.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  colorize,
+  isRich as isRichTerminal,
+  theme,
+} from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import {
   DEFAULT_MODEL,
@@ -52,43 +56,35 @@ const LOCAL_PAD = 5;
 const AUTH_PAD = 5;
 
 const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
-  Boolean(
-    process.stdout.isTTY && chalk.level > 0 && !opts?.json && !opts?.plain,
-  );
+  Boolean(isRichTerminal() && !opts?.json && !opts?.plain);
 
 const pad = (value: string, size: number) => value.padEnd(size);
 
-const colorize = (
-  rich: boolean,
-  color: (value: string) => string,
-  value: string,
-) => (rich ? color(value) : value);
-
 const formatKey = (key: string, rich: boolean) =>
-  colorize(rich, chalk.yellow, key);
+  colorize(rich, theme.warn, key);
 
 const formatValue = (value: string, rich: boolean) =>
-  colorize(rich, chalk.white, value);
+  colorize(rich, theme.info, value);
 
 const formatKeyValue = (
   key: string,
   value: string,
   rich: boolean,
-  valueColor: (value: string) => string = chalk.white,
+  valueColor: (value: string) => string = theme.info,
 ) => `${formatKey(key, rich)}=${colorize(rich, valueColor, value)}`;
 
-const formatSeparator = (rich: boolean) => colorize(rich, chalk.gray, " | ");
+const formatSeparator = (rich: boolean) => colorize(rich, theme.muted, " | ");
 
 const formatTag = (tag: string, rich: boolean) => {
   if (!rich) return tag;
-  if (tag === "default") return chalk.greenBright(tag);
-  if (tag === "image") return chalk.magentaBright(tag);
-  if (tag === "configured") return chalk.cyan(tag);
-  if (tag === "missing") return chalk.red(tag);
-  if (tag.startsWith("fallback#")) return chalk.yellow(tag);
-  if (tag.startsWith("img-fallback#")) return chalk.yellowBright(tag);
-  if (tag.startsWith("alias:")) return chalk.blue(tag);
-  return chalk.gray(tag);
+  if (tag === "default") return theme.success(tag);
+  if (tag === "image") return theme.accentBright(tag);
+  if (tag === "configured") return theme.accent(tag);
+  if (tag === "missing") return theme.error(tag);
+  if (tag.startsWith("fallback#")) return theme.warn(tag);
+  if (tag.startsWith("img-fallback#")) return theme.warn(tag);
+  if (tag.startsWith("alias:")) return theme.accentDim(tag);
+  return theme.muted(tag);
 };
 
 const truncate = (value: string, max: number) => {
@@ -450,7 +446,7 @@ function printModelTable(
     pad("Auth", AUTH_PAD),
     "Tags",
   ].join(" ");
-  runtime.log(rich ? chalk.bold(header) : header);
+  runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
     const keyLabel = pad(truncate(row.key, MODEL_PAD), MODEL_PAD);
@@ -470,26 +466,30 @@ function printModelTable(
 
     const coloredInput = colorize(
       rich,
-      row.input.includes("image") ? chalk.magenta : chalk.white,
+      row.input.includes("image") ? theme.accentBright : theme.info,
       inputLabel,
     );
     const coloredLocal = colorize(
       rich,
-      row.local === null ? chalk.gray : row.local ? chalk.green : chalk.gray,
+      row.local === null
+        ? theme.muted
+        : row.local
+          ? theme.success
+          : theme.muted,
       localLabel,
     );
     const coloredAuth = colorize(
       rich,
       row.available === null
-        ? chalk.gray
+        ? theme.muted
         : row.available
-          ? chalk.green
-          : chalk.red,
+          ? theme.success
+          : theme.error,
       authLabel,
     );
 
     const line = [
-      rich ? chalk.cyan(keyLabel) : keyLabel,
+      rich ? theme.accent(keyLabel) : keyLabel,
       coloredInput,
       ctxLabel,
       coloredLocal,
@@ -762,71 +762,72 @@ export async function modelsStatusCommand(
   }
 
   const rich = isRich(opts);
-  const label = (value: string) => colorize(rich, chalk.cyan, value.padEnd(14));
+  const label = (value: string) =>
+    colorize(rich, theme.accent, value.padEnd(14));
   const displayDefault =
     rawModel && rawModel !== resolvedLabel
       ? `${resolvedLabel} (from ${rawModel})`
       : resolvedLabel;
 
   runtime.log(
-    `${label("Config")}${colorize(rich, chalk.gray, ":")} ${colorize(rich, chalk.white, CONFIG_PATH_CLAWDBOT)}`,
+    `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, CONFIG_PATH_CLAWDBOT)}`,
   );
   runtime.log(
-    `${label("Agent dir")}${colorize(rich, chalk.gray, ":")} ${colorize(
+    `${label("Agent dir")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
-      chalk.white,
+      theme.info,
       shortenHomePath(agentDir),
     )}`,
   );
   runtime.log(
-    `${label("Default")}${colorize(rich, chalk.gray, ":")} ${colorize(
+    `${label("Default")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
-      chalk.green,
+      theme.success,
       displayDefault,
     )}`,
   );
   runtime.log(
     `${label(`Fallbacks (${fallbacks.length || 0})`)}${colorize(
       rich,
-      chalk.gray,
+      theme.muted,
       ":",
     )} ${colorize(
       rich,
-      fallbacks.length ? chalk.yellow : chalk.gray,
+      fallbacks.length ? theme.warn : theme.muted,
       fallbacks.length ? fallbacks.join(", ") : "-",
     )}`,
   );
   runtime.log(
-    `${label("Image model")}${colorize(rich, chalk.gray, ":")} ${colorize(
+    `${label("Image model")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
-      imageModel ? chalk.magenta : chalk.gray,
+      imageModel ? theme.accentBright : theme.muted,
       imageModel || "-",
     )}`,
   );
   runtime.log(
     `${label(`Image fallbacks (${imageFallbacks.length || 0})`)}${colorize(
       rich,
-      chalk.gray,
+      theme.muted,
       ":",
     )} ${colorize(
       rich,
-      imageFallbacks.length ? chalk.magentaBright : chalk.gray,
+      imageFallbacks.length ? theme.accentBright : theme.muted,
       imageFallbacks.length ? imageFallbacks.join(", ") : "-",
     )}`,
   );
   runtime.log(
     `${label(`Aliases (${Object.keys(aliases).length || 0})`)}${colorize(
       rich,
-      chalk.gray,
+      theme.muted,
       ":",
     )} ${colorize(
       rich,
-      Object.keys(aliases).length ? chalk.cyan : chalk.gray,
+      Object.keys(aliases).length ? theme.accent : theme.muted,
       Object.keys(aliases).length
         ? Object.entries(aliases)
             .map(([alias, target]) =>
               rich
-                ? `${chalk.blue(alias)} ${chalk.gray("->")} ${chalk.white(
+                ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(
                     target,
                   )}`
                 : `${alias} -> ${target}`,
@@ -838,41 +839,41 @@ export async function modelsStatusCommand(
   runtime.log(
     `${label(`Configured models (${allowed.length || 0})`)}${colorize(
       rich,
-      chalk.gray,
+      theme.muted,
       ":",
     )} ${colorize(
       rich,
-      allowed.length ? chalk.white : chalk.gray,
+      allowed.length ? theme.info : theme.muted,
       allowed.length ? allowed.join(", ") : "all",
     )}`,
   );
 
   runtime.log("");
-  runtime.log(colorize(rich, chalk.bold, "Auth overview"));
+  runtime.log(colorize(rich, theme.heading, "Auth overview"));
   runtime.log(
-    `${label("Auth store")}${colorize(rich, chalk.gray, ":")} ${colorize(
+    `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
-      chalk.white,
+      theme.info,
       shortenHomePath(resolveAuthStorePathForDisplay()),
     )}`,
   );
   runtime.log(
-    `${label("Shell env")}${colorize(rich, chalk.gray, ":")} ${colorize(
+    `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
-      shellFallbackEnabled ? chalk.green : chalk.gray,
+      shellFallbackEnabled ? theme.success : theme.muted,
       shellFallbackEnabled ? "on" : "off",
     )}${
       applied.length
-        ? colorize(rich, chalk.gray, ` (applied: ${applied.join(", ")})`)
+        ? colorize(rich, theme.muted, ` (applied: ${applied.join(", ")})`)
         : ""
     }`,
   );
   runtime.log(
     `${label(
       `Providers w/ OAuth (${providersWithOauth.length || 0})`,
-    )}${colorize(rich, chalk.gray, ":")} ${colorize(
+    )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
-      providersWithOauth.length ? chalk.white : chalk.gray,
+      providersWithOauth.length ? theme.info : theme.muted,
       providersWithOauth.length ? providersWithOauth.join(", ") : "-",
     )}`,
   );
@@ -883,9 +884,9 @@ export async function modelsStatusCommand(
     bits.push(
       formatKeyValue(
         "effective",
-        `${colorize(rich, chalk.magenta, entry.effective.kind)}:${colorize(
+        `${colorize(rich, theme.accentBright, entry.effective.kind)}:${colorize(
           rich,
-          chalk.gray,
+          theme.muted,
           entry.effective.detail,
         )}`,
         rich,
@@ -930,6 +931,6 @@ export async function modelsStatusCommand(
         ),
       );
     }
-    runtime.log(`- ${chalk.bold(entry.provider)} ${bits.join(separator)}`);
+    runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
   }
 }

@@ -1,0 +1,54 @@
+diff --git a/dist/agent.d.ts b/dist/agent.d.ts
+index fcfb19924ef6ce233aa55795e3687ce23938c5a6..a63daea868c5b3b7f7bb9272576c65c6ad95da8a 100644
+--- a/dist/agent.d.ts
++++ b/dist/agent.d.ts
+@@ -38,6 +38,10 @@ export interface AgentOptions {
+      * Useful for expiring tokens (e.g., GitHub Copilot OAuth).
+      */
+     getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
++    /**
++     * Extra params to pass to the provider API (e.g., Z.AI GLM thinking mode params).
++     */
++    extraParams?: Record<string, unknown>;
+     /**
+      * Custom token budgets for thinking levels (token-based providers only).
+      */
+@@ -56,6 +60,8 @@ export declare class Agent {
+     streamFn: StreamFn;
+     private _sessionId?;
+     getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
++    /** Extra params to pass to the provider API. */
++    extraParams?: Record<string, unknown>;
+     private runningPrompt?;
+     private resolveRunningPrompt?;
+     private _thinkingBudgets?;
+diff --git a/dist/agent.js b/dist/agent.js
+index 34ceb4ddcbc53d83edd82d774a76d9bf469b42f3..ecd8b7641c71523296890e11ac0cf0855a0dadd5 100644
+--- a/dist/agent.js
++++ b/dist/agent.js
+@@ -33,6 +33,7 @@ export class Agent {
+     streamFn;
+     _sessionId;
+     getApiKey;
++    extraParams;
+     runningPrompt;
+     resolveRunningPrompt;
+     _thinkingBudgets;
+@@ -45,6 +46,8 @@ export class Agent {
+         this.streamFn = opts.streamFn || streamSimple;
+         this._sessionId = opts.sessionId;
+         this.getApiKey = opts.getApiKey;
++        // PATCH: Support extraParams for provider-specific features (e.g., GLM-4.7 thinking mode)
++        this.extraParams = opts.extraParams;
+         this._thinkingBudgets = opts.thinkingBudgets;
+     }
+     /**
+@@ -225,6 +228,8 @@ export class Agent {
+             convertToLlm: this.convertToLlm,
+             transformContext: this.transformContext,
+             getApiKey: this.getApiKey,
++            // PATCH: Pass extraParams through to stream function
++            extraParams: this.extraParams,
+             getSteeringMessages: async () => {
+                 if (this.steeringMode === "one-at-a-time") {
+                     if (this.steeringQueue.length > 0) {

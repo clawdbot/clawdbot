@@ -317,7 +317,7 @@ describe("partial reply gating", () => {
       undefined,
       {},
     );
-    expect(allowed).toEqual({ text: "ok" });
+    expect(allowed).toMatchObject({ text: "ok", audioAsVoice: false });
     expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
   });
 });
@@ -330,6 +330,7 @@ describe("typing controller idle", () => {
       startTypingLoop: vi.fn(async () => {}),
       startTypingOnText: vi.fn(async () => {}),
       refreshTypingTtl: vi.fn(),
+      isActive: vi.fn(() => false),
       markRunComplete: vi.fn(),
       markDispatchIdle,
       cleanup: vi.fn(),

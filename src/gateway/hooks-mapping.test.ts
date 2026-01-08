@@ -38,6 +38,30 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("passes model override from mapping", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "demo",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          model: "openai/gpt-4.1-mini",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: { messages: [{ subject: "Hello" }] },
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action.kind === "agent") {
+      expect(result.action.model).toBe("openai/gpt-4.1-mini");
+    }
+  });
+
   it("runs transform module", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-hooks-"));
     const modPath = path.join(dir, "transform.mjs");

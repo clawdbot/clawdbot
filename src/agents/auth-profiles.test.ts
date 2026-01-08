@@ -13,6 +13,40 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 
+const HOME_ENV_KEYS = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
+type HomeEnvSnapshot = Record<
+  (typeof HOME_ENV_KEYS)[number],
+  string | undefined
+>;
+
+const snapshotHomeEnv = (): HomeEnvSnapshot => ({
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+  HOMEDRIVE: process.env.HOMEDRIVE,
+  HOMEPATH: process.env.HOMEPATH,
+});
+
+const restoreHomeEnv = (snapshot: HomeEnvSnapshot) => {
+  for (const key of HOME_ENV_KEYS) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+};
+
+const setTempHome = (tempHome: string) => {
+  process.env.HOME = tempHome;
+  if (process.platform === "win32") {
+    process.env.USERPROFILE = tempHome;
+    const root = path.parse(tempHome).root;
+    process.env.HOMEDRIVE = root.replace(/\\$/, "");
+    process.env.HOMEPATH = tempHome.slice(root.length - 1);
+  }
+};
+
 describe("resolveAuthProfileOrder", () => {
   const store: AuthProfileStore = {
     version: 1,
@@ -347,12 +381,12 @@ describe("external CLI credential sync", () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-cli-sync-"),
     );
-    const originalHome = process.env.HOME;
+    const originalHome = snapshotHomeEnv();
 
     try {
       // Create a temp home with Claude CLI credentials
       const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
-      process.env.HOME = tempHome;
+      setTempHome(tempHome);
 
       // Create Claude CLI credentials
       const claudeDir = path.join(tempHome, ".claude");
@@ -400,7 +434,7 @@ describe("external CLI credential sync", () => {
         (store.profiles[CLAUDE_CLI_PROFILE_ID] as { expires: number }).expires,
       ).toBeGreaterThan(Date.now());
     } finally {
-      process.env.HOME = originalHome;
+      restoreHomeEnv(originalHome);
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -409,11 +443,11 @@ describe("external CLI credential sync", () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-codex-sync-"),
     );
-    const originalHome = process.env.HOME;
+    const originalHome = snapshotHomeEnv();
 
     try {
       const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
-      process.env.HOME = tempHome;
+      setTempHome(tempHome);
 
       // Create Codex CLI credentials
       const codexDir = path.join(tempHome, ".codex");
@@ -444,7 +478,7 @@ describe("external CLI credential sync", () => {
         (store.profiles[CODEX_CLI_PROFILE_ID] as { access: string }).access,
       ).toBe("codex-access-token");
     } finally {
-      process.env.HOME = originalHome;
+      restoreHomeEnv(originalHome);
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -453,11 +487,11 @@ describe("external CLI credential sync", () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-no-overwrite-"),
     );
-    const originalHome = process.env.HOME;
+    const originalHome = snapshotHomeEnv();
 
     try {
       const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
-      process.env.HOME = tempHome;
+      setTempHome(tempHome);
 
       // Create Claude CLI credentials
       const claudeDir = path.join(tempHome, ".claude");
@@ -498,7 +532,7 @@ describe("external CLI credential sync", () => {
       );
       expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
     } finally {
-      process.env.HOME = originalHome;
+      restoreHomeEnv(originalHome);
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -507,11 +541,11 @@ describe("external CLI credential sync", () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-"),
     );
-    const originalHome = process.env.HOME;
+    const originalHome = snapshotHomeEnv();
 
     try {
       const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
-      process.env.HOME = tempHome;
+      setTempHome(tempHome);
 
       const claudeDir = path.join(tempHome, ".claude");
       fs.mkdirSync(claudeDir, { recursive: true });
@@ -548,7 +582,7 @@ describe("external CLI credential sync", () => {
         (store.profiles[CLAUDE_CLI_PROFILE_ID] as { access: string }).access,
       ).toBe("store-access");
     } finally {
-      process.env.HOME = originalHome;
+      restoreHomeEnv(originalHome);
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -557,11 +591,11 @@ describe("external CLI credential sync", () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-codex-refresh-sync-"),
     );
-    const originalHome = process.env.HOME;
+    const originalHome = snapshotHomeEnv();
 
     try {
       const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
-      process.env.HOME = tempHome;
+      setTempHome(tempHome);
 
       const codexDir = path.join(tempHome, ".codex");
       fs.mkdirSync(codexDir, { recursive: true });
@@ -596,7 +630,7 @@ describe("external CLI credential sync", () => {
         (store.profiles[CODEX_CLI_PROFILE_ID] as { refresh: string }).refresh,
       ).toBe("new-refresh");
     } finally {
-      process.env.HOME = originalHome;
+      restoreHomeEnv(originalHome);
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });

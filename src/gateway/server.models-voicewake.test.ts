@@ -17,6 +17,44 @@ import {
 installGatewayTestHooks();
 
 describe("gateway server models + voicewake", () => {
+  const setTempHome = (homeDir: string) => {
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    const prevHomeDrive = process.env.HOMEDRIVE;
+    const prevHomePath = process.env.HOMEPATH;
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    if (process.platform === "win32") {
+      const parsed = path.parse(homeDir);
+      process.env.HOMEDRIVE = parsed.root.replace(/\\$/, "");
+      process.env.HOMEPATH = homeDir.slice(Math.max(parsed.root.length - 1, 0));
+    }
+    return () => {
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
+      if (prevUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = prevUserProfile;
+      }
+      if (process.platform === "win32") {
+        if (prevHomeDrive === undefined) {
+          delete process.env.HOMEDRIVE;
+        } else {
+          process.env.HOMEDRIVE = prevHomeDrive;
+        }
+        if (prevHomePath === undefined) {
+          delete process.env.HOMEPATH;
+        } else {
+          process.env.HOMEPATH = prevHomePath;
+        }
+      }
+    };
+  };
+
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 15_000 },
@@ -24,8 +62,7 @@ describe("gateway server models + voicewake", () => {
       const homeDir = await fs.mkdtemp(
         path.join(os.tmpdir(), "clawdbot-home-"),
       );
-      const prevHome = process.env.HOME;
-      process.env.HOME = homeDir;
+      const restoreHome = setTempHome(homeDir);
 
       const { server, ws } = await startServerWithClient();
       await connectOk(ws);
@@ -72,18 +109,13 @@ describe("gateway server models + voicewake", () => {
       ws.close();
       await server.close();
 
-      if (prevHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = prevHome;
-      }
+      restoreHome();
     },
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
-    const prevHome = process.env.HOME;
-    process.env.HOME = homeDir;
+    const restoreHome = setTempHome(homeDir);
 
     bridgeSendEvent.mockClear();
     bridgeListConnected.mockReturnValue([{ nodeId: "n1" }]);
@@ -124,11 +156,7 @@ describe("gateway server models + voicewake", () => {
     ws.close();
     await server.close();
 
-    if (prevHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = prevHome;
-    }
+    restoreHome();
   });
 
   test("models.list returns model catalog", async () => {

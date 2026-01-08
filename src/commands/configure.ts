@@ -21,6 +21,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -34,6 +35,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { theme } from "../terminal/theme.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import {
@@ -88,6 +90,27 @@ type WizardSection =
 type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
+};
+
+const startOscSpinner = (label: string) => {
+  const spin = spinner();
+  spin.start(theme.accent(label));
+  const osc = createCliProgress({
+    label,
+    indeterminate: true,
+    enabled: true,
+    fallback: "none",
+  });
+  return {
+    update: (message: string) => {
+      spin.message(theme.accent(message));
+      osc.setLabel(message);
+    },
+    stop: (message: string) => {
+      osc.done();
+      spin.stop(message);
+    },
+  };
 };
 
 async function promptGatewayConfig(
@@ -283,8 +306,7 @@ async function promptAuthConfig(
       "Browser will open. Paste the code shown after login (code#state).",
       "Anthropic OAuth",
     );
-    const spin = spinner();
-    spin.start("Waiting for authorization…");
+    const spin = startOscSpinner("Waiting for authorization…");
     let oauthCreds: OAuthCredentials | null = null;
     try {
       oauthCreds = await loginAnthropic(
@@ -341,21 +363,20 @@ async function promptAuthConfig(
           ].join("\n"),
       "OpenAI Codex OAuth",
     );
-    const spin = spinner();
-    spin.start("Starting OAuth flow…");
+    const spin = startOscSpinner("Starting OAuth flow…");
     let manualCodePromise: Promise<string> | undefined;
     try {
       const creds = await loginOpenAICodex({
         onAuth: async ({ url }) => {
           if (isRemote) {
-            spin.message("OAuth URL ready (see below)…");
+            spin.update("OAuth URL ready (see below)…");
             runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
             manualCodePromise = text({
               message: "Paste the redirect URL (or authorization code)",
               validate: (value) => (value?.trim() ? undefined : "Required"),
             }).then((value) => String(guardCancel(value, runtime)));
           } else {
-            spin.message("Complete sign-in in browser…");
+            spin.update("Complete sign-in in browser…");
             await openUrl(url);
             runtime.log(`Open: ${url}`);
           }
@@ -372,7 +393,7 @@ async function promptAuthConfig(
           );
           return String(code);
         },
-        onProgress: (msg) => spin.message(msg),
+        onProgress: (msg) => spin.update(msg),
       });
       spin.stop("OpenAI OAuth complete");
       if (creds) {
@@ -429,8 +450,7 @@ async function promptAuthConfig(
           ].join("\n"),
       "Google Antigravity OAuth",
     );
-    const spin = spinner();
-    spin.start("Starting OAuth flow…");
+    const spin = startOscSpinner("Starting OAuth flow…");
     let oauthCreds: OAuthCredentials | null = null;
     try {
       oauthCreds = await loginAntigravityVpsAware(
@@ -439,12 +459,12 @@ async function promptAuthConfig(
             spin.stop("OAuth URL ready");
             runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
           } else {
-            spin.message("Complete sign-in in browser…");
+            spin.update("Complete sign-in in browser…");
             await openUrl(url);
             runtime.log(`Open: ${url}`);
           }
         },
-        (msg) => spin.message(msg),
+        (msg) => spin.update(msg),
       );
       spin.stop("Antigravity OAuth complete");
       if (oauthCreds) {

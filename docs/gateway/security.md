@@ -128,12 +128,13 @@ Consider running your AI on a separate phone number from your personal one:
 - Personal number: Your conversations stay private
 - Bot number: AI handles these, with appropriate boundaries
 
-### 4. Read-Only Mode (Future)
+### 4. Read-Only Mode (Today, via sandbox + tools)
 
-We're considering a `readOnlyMode` flag that prevents the AI from:
-- Writing files outside a sandbox
-- Executing shell commands
-- Sending messages
+You can already build a read-only profile by combining:
+- `sandbox.workspaceAccess: "ro"` (or `"none"` for no workspace access)
+- tool allow/deny lists that block `write`, `edit`, `bash`, `process`, etc.
+
+We may add a single `readOnlyMode` flag later to simplify this configuration.
 
 ## Sandboxing (recommended)
 
@@ -152,6 +153,79 @@ Also consider agent workspace access inside the sandbox:
 - `workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 
 Important: `agent.elevated` is an explicit escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
+
+## Per-agent access profiles (multi-agent)
+
+With multi-agent routing, each agent can have its own sandbox + tool policy:
+use this to give **full access**, **read-only**, or **no access** per agent.
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for full details
+and precedence rules.
+
+Common use cases:
+- Personal agent: full access, no sandbox
+- Family/work agent: sandboxed + read-only tools
+- Public agent: sandboxed + no filesystem/shell tools
+
+### Example: full access (no sandbox)
+
+```json5
+{
+  routing: {
+    agents: {
+      personal: {
+        workspace: "~/clawd-personal",
+        sandbox: { mode: "off" }
+      }
+    }
+  }
+}
+```
+
+### Example: read-only tools + read-only workspace
+
+```json5
+{
+  routing: {
+    agents: {
+      family: {
+        workspace: "~/clawd-family",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceAccess: "ro"
+        },
+        tools: {
+          allow: ["read"],
+          deny: ["write", "edit", "bash", "process", "browser"]
+        }
+      }
+    }
+  }
+}
+```
+
+### Example: no filesystem/shell access (provider messaging allowed)
+
+```json5
+{
+  routing: {
+    agents: {
+      public: {
+        workspace: "~/clawd-public",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceAccess: "none"
+        },
+        tools: {
+          allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "whatsapp", "telegram", "slack", "discord", "gateway"],
+          deny: ["read", "write", "edit", "bash", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
+        }
+      }
+    }
+  }
+}
+```
 
 ## What to Tell Your AI
 

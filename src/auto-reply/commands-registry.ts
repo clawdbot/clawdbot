@@ -148,6 +148,16 @@ export function buildCommandText(commandName: string, args?: string): string {
   return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
 }
 
+export function normalizeCommandBody(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("/")) return trimmed;
+  const match = trimmed.match(/^\/([^\s:]+)\s*:(.*)$/);
+  if (!match) return trimmed;
+  const [, command, rest] = match;
+  const normalizedRest = rest.trimStart();
+  return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+}
+
 export function getCommandDetection(): { exact: Set<string>; regex: RegExp } {
   if (cachedDetection) return cachedDetection;
   const exact = new Set<string>();
@@ -160,9 +170,9 @@ export function getCommandDetection(): { exact: Set<string>; regex: RegExp } {
       const escaped = escapeRegExp(normalized);
       if (!escaped) continue;
       if (command.acceptsArgs) {
-        patterns.push(`${escaped}(?:\\s+.+)?`);
+        patterns.push(`${escaped}(?:\\s+.+|\\s*:\\s*.*)?`);
       } else {
-        patterns.push(escaped);
+        patterns.push(`${escaped}(?:\\s*:\\s*)?`);
       }
     }
   }

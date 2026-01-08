@@ -70,7 +70,7 @@ struct GatewayDiscoveryModelTests {
             "tailnetDns": "  peters-mac-studio-1.ts.net  ",
             "sshPort": " 2222 ",
             "gatewayPort": " 18799 ",
-            "cliPath": " /opt/clawdbot "
+            "cliPath": " /opt/clawdbot ",
         ])
         #expect(parsed.lanHost == "studio.local")
         #expect(parsed.tailnetDns == "peters-mac-studio-1.ts.net")
@@ -84,7 +84,7 @@ struct GatewayDiscoveryModelTests {
             "lanHost": "  ",
             "tailnetDns": "\n",
             "gatewayPort": "nope",
-            "sshPort": "nope"
+            "sshPort": "nope",
         ])
         #expect(parsed.lanHost == nil)
         #expect(parsed.tailnetDns == nil)

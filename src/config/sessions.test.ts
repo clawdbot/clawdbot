@@ -8,6 +8,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveSessionKey,
+  resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
   updateLastRoute,
 } from "./sessions.js";
@@ -137,7 +138,9 @@ describe("sessions", () => {
       { CLAWDBOT_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
       () => "/home/ignored",
     );
-    expect(dir).toBe("/custom/state/agents/main/sessions");
+    expect(dir).toBe(
+      path.join(path.resolve("/custom/state"), "agents", "main", "sessions"),
+    );
   });
 
   it("falls back to CLAWDIS_STATE_DIR for session transcripts dir", () => {
@@ -145,6 +148,31 @@ describe("sessions", () => {
       { CLAWDIS_STATE_DIR: "/legacy/state" } as NodeJS.ProcessEnv,
       () => "/home/ignored",
     );
-    expect(dir).toBe("/legacy/state/agents/main/sessions");
+    expect(dir).toBe(
+      path.join(path.resolve("/legacy/state"), "agents", "main", "sessions"),
+    );
+  });
+
+  it("includes topic ids in session transcript filenames", () => {
+    const prev = process.env.CLAWDBOT_STATE_DIR;
+    process.env.CLAWDBOT_STATE_DIR = "/custom/state";
+    try {
+      const sessionFile = resolveSessionTranscriptPath("sess-1", "main", 123);
+      expect(sessionFile).toBe(
+        path.join(
+          path.resolve("/custom/state"),
+          "agents",
+          "main",
+          "sessions",
+          "sess-1-topic-123.jsonl",
+        ),
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      } else {
+        process.env.CLAWDBOT_STATE_DIR = prev;
+      }
+    }
   });
 });

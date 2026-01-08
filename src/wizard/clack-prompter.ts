@@ -11,7 +11,8 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-
+import { createCliProgress } from "../cli/progress.js";
+import { theme } from "../terminal/theme.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
@@ -74,10 +75,22 @@ export function createClackPrompter(): WizardPrompter {
       ),
     progress: (label: string): WizardProgress => {
       const spin = spinner();
-      spin.start(label);
+      spin.start(theme.accent(label));
+      const osc = createCliProgress({
+        label,
+        indeterminate: true,
+        enabled: true,
+        fallback: "none",
+      });
       return {
-        update: (message) => spin.message(message),
-        stop: (message) => spin.stop(message),
+        update: (message) => {
+          spin.message(theme.accent(message));
+          osc.setLabel(message);
+        },
+        stop: (message) => {
+          osc.done();
+          spin.stop(message);
+        },
       };
     },
   };

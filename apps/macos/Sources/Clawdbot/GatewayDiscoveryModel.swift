@@ -208,9 +208,15 @@ final class GatewayDiscoveryModel {
         return merged
     }
 
-    static func parseGatewayTXT(_ txt: [String: String])
-        -> (lanHost: String?, tailnetDns: String?, sshPort: Int, gatewayPort: Int?, cliPath: String?)
-    {
+    struct GatewayTXT: Equatable {
+        var lanHost: String?
+        var tailnetDns: String?
+        var sshPort: Int
+        var gatewayPort: Int?
+        var cliPath: String?
+    }
+
+    static func parseGatewayTXT(_ txt: [String: String]) -> GatewayTXT {
         var lanHost: String?
         var tailnetDns: String?
         var sshPort = 22
@@ -242,7 +248,12 @@ final class GatewayDiscoveryModel {
             cliPath = trimmed.isEmpty ? nil : trimmed
         }
 
-        return (lanHost, tailnetDns, sshPort, gatewayPort, cliPath)
+        return GatewayTXT(
+            lanHost: lanHost,
+            tailnetDns: tailnetDns,
+            sshPort: sshPort,
+            gatewayPort: gatewayPort,
+            cliPath: cliPath)
     }
 
     static func buildSSHTarget(user: String, host: String, port: Int) -> String {

@@ -4,6 +4,40 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildStatusMessage } from "./status.js";
 
+const HOME_ENV_KEYS = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
+type HomeEnvSnapshot = Record<
+  (typeof HOME_ENV_KEYS)[number],
+  string | undefined
+>;
+
+const snapshotHomeEnv = (): HomeEnvSnapshot => ({
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+  HOMEDRIVE: process.env.HOMEDRIVE,
+  HOMEPATH: process.env.HOMEPATH,
+});
+
+const restoreHomeEnv = (snapshot: HomeEnvSnapshot) => {
+  for (const key of HOME_ENV_KEYS) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+};
+
+const setTempHome = (tempHome: string) => {
+  process.env.HOME = tempHome;
+  if (process.platform === "win32") {
+    process.env.USERPROFILE = tempHome;
+    const root = path.parse(tempHome).root;
+    process.env.HOMEDRIVE = root.replace(/\\$/, "");
+    process.env.HOMEPATH = tempHome.slice(root.length - 1);
+  }
+};
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -43,6 +77,29 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Verbose: off");
     expect(text).toContain("Elevated: on");
     expect(text).toContain("Queue: collect");
+  });
+
+  it("prefers model overrides over last-run model", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "override-1",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(text).toContain("🧠 Model: openai/gpt-4.1-mini");
   });
 
   it("handles missing agent config gracefully", () => {
@@ -113,8 +170,8 @@ describe("buildStatusMessage", () => {
 
   it("prefers cached prompt tokens from the session log", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-status-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = dir;
+    const previousHome = snapshotHomeEnv();
+    setTempHome(dir);
     try {
       vi.resetModules();
       const { buildStatusMessage: buildStatusMessageDynamic } = await import(
@@ -172,7 +229,7 @@ describe("buildStatusMessage", () => {
 
       expect(text).toContain("Context: 1.0k/32k");
     } finally {
-      process.env.HOME = previousHome;
+      restoreHomeEnv(previousHome);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

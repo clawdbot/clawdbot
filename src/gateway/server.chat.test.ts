@@ -327,6 +327,67 @@ describe("gateway server chat", () => {
     await server.close();
   });
 
+  test("chat.history prefers sessionFile when set", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+
+    const forkedPath = path.join(dir, "sess-forked.jsonl");
+    await fs.writeFile(
+      forkedPath,
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "from-fork" }],
+          timestamp: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "from-default" }],
+          timestamp: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            sessionFile: forkedPath,
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      sessionKey: "main",
+    });
+    expect(res.ok).toBe(true);
+    const messages = res.payload?.messages ?? [];
+    expect(messages.length).toBe(1);
+    const first = messages[0] as { content?: { text?: string }[] };
+    expect(first.content?.[0]?.text).toBe("from-fork");
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.history defaults thinking to low for reasoning-capable models", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [

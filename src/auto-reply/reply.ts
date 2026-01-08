@@ -25,13 +25,17 @@ import {
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
-import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
-import { shouldHandleTextCommands } from "./commands-registry.js";
+import {
+  listChatCommands,
+  shouldHandleTextCommands,
+} from "./commands-registry.js";
+import { buildInboundMediaNote } from "./media-note.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
@@ -62,6 +66,10 @@ import {
   prependSystemEvents,
 } from "./reply/session-updates.js";
 import { createTypingController } from "./reply/typing.js";
+import {
+  createTypingSignaler,
+  resolveTypingMode,
+} from "./reply/typing-mode.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
@@ -312,7 +320,18 @@ export async function getReplyFromConfig(
     rawDrop: undefined,
     hasQueueOptions: false,
   });
-  let parsedDirectives = parseInlineDirectives(rawBody);
+  const reservedCommands = new Set(
+    listChatCommands().flatMap((cmd) =>
+      cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
+    ),
+  );
+  const configuredAliases = Object.values(cfg.agent?.models ?? {})
+    .map((entry) => entry.alias?.trim())
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
+  let parsedDirectives = parseInlineDirectives(rawBody, {
+    modelAliases: configuredAliases,
+  });
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
@@ -451,6 +470,17 @@ export async function getReplyFromConfig(
       isGroup,
     })
   ) {
+    const currentThinkLevel =
+      (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+    const currentVerboseLevel =
+      (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+      (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    const currentReasoningLevel =
+      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    const currentElevatedLevel =
+      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
     const directiveReply = await handleDirectiveOnly({
       cfg,
       directives,
@@ -470,6 +500,10 @@ export async function getReplyFromConfig(
       model,
       initialModelLabel,
       formatModelSwitchEvent,
+      currentThinkLevel,
+      currentVerboseLevel,
+      currentReasoningLevel,
+      currentElevatedLevel,
     });
     typing.cleanup();
     return directiveReply;
@@ -580,7 +614,17 @@ export async function getReplyFromConfig(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
-  const shouldEagerType = (!isGroupChat || wasMentioned) && !isHeartbeat;
+  const typingMode = resolveTypingMode({
+    configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
+    isGroupChat,
+    wasMentioned,
+    isHeartbeat,
+  });
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat,
+  });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat &&
       (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -646,6 +690,11 @@ export async function getReplyFromConfig(
     isNewSession,
     prefixedBodyBase,
   });
+  const threadStarterBody = ctx.ThreadStarterBody?.trim();
+  const threadStarterNote =
+    isNewSession && threadStarterBody
+      ? `[Thread starter - for context]\n${threadStarterBody}`
+      : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -661,13 +710,11 @@ export async function getReplyFromConfig(
   systemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = transcribedText
-    ? [prefixedBodyBase, `Transcript:\n${transcribedText}`]
+    ? [threadStarterNote, prefixedBodyBase, `Transcript:\n${transcribedText}`]
         .filter(Boolean)
         .join("\n\n")
-    : prefixedBodyBase;
-  const mediaNote = ctx.MediaPath?.length
-    ? `[media attached: ${ctx.MediaPath}${ctx.MediaType ? ` (${ctx.MediaType})` : ""}${ctx.MediaUrl ? ` | ${ctx.MediaUrl}` : ""}]`
-    : undefined;
+    : [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, add a line like: MEDIA:https://example.com/image.jpg (no spaces). Keep caption in the text body."
     : undefined;
@@ -689,12 +736,12 @@ export async function getReplyFromConfig(
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionTranscriptPath(sessionIdFinal);
+  const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = transcribedText
-    ? [baseBodyFinal, `Transcript:\n${transcribedText}`]
+    ? [threadStarterNote, baseBodyFinal, `Transcript:\n${transcribedText}`]
         .filter(Boolean)
         .join("\n\n")
-    : baseBodyFinal;
+    : [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase]
         .filter(Boolean)
@@ -744,6 +791,7 @@ export async function getReplyFromConfig(
       sessionId: sessionIdFinal,
       sessionKey,
       messageProvider: sessionCtx.Provider?.trim().toLowerCase() || undefined,
+      agentAccountId: sessionCtx.AccountId,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -769,8 +817,8 @@ export async function getReplyFromConfig(
     },
   };
 
-  if (shouldEagerType) {
-    await typing.startTypingLoop();
+  if (typingSignals.shouldStartImmediately) {
+    await typingSignals.signalRunStart();
   }
 
   return runReplyAgent({
@@ -797,6 +845,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     sessionCtx,
     shouldInjectGroupIntro,
+    typingMode,
   });
 }
 
@@ -808,8 +857,18 @@ async function stageSandboxMedia(params: {
   workspaceDir: string;
 }) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
-  const rawPath = ctx.MediaPath?.trim();
-  if (!rawPath || !sessionKey) return;
+  const hasPathsArray =
+    Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths
+    : undefined;
+  const rawPaths =
+    pathsFromArray && pathsFromArray.length > 0
+      ? pathsFromArray
+      : ctx.MediaPath?.trim()
+        ? [ctx.MediaPath.trim()]
+        : [];
+  if (rawPaths.length === 0 || !sessionKey) return;
 
   const sandbox = await ensureSandboxWorkspaceForSession({
     config: cfg,
@@ -818,44 +877,83 @@ async function stageSandboxMedia(params: {
   });
   if (!sandbox) return;
 
-  let source = rawPath;
-  if (source.startsWith("file://")) {
-    try {
-      source = fileURLToPath(source);
-    } catch {
-      return;
+  const resolveAbsolutePath = (value: string): string | null => {
+    let resolved = value.trim();
+    if (!resolved) return null;
+    if (resolved.startsWith("file://")) {
+      try {
+        resolved = fileURLToPath(resolved);
+      } catch {
+        return null;
+      }
     }
-  }
-  if (!path.isAbsolute(source)) return;
-
-  const originalMediaPath = ctx.MediaPath;
-  const originalMediaUrl = ctx.MediaUrl;
+    if (!path.isAbsolute(resolved)) return null;
+    return resolved;
+  };
 
   try {
-    const fileName = path.basename(source);
-    if (!fileName) return;
     const destDir = path.join(sandbox.workspaceDir, "media", "inbound");
     await fs.mkdir(destDir, { recursive: true });
-    const dest = path.join(destDir, fileName);
-    await fs.copyFile(source, dest);
 
-    const relative = path.posix.join("media", "inbound", fileName);
-    ctx.MediaPath = relative;
-    sessionCtx.MediaPath = relative;
+    const usedNames = new Set<string>();
+    const staged = new Map<string, string>(); // absolute source -> relative sandbox path
 
-    if (originalMediaUrl) {
-      let normalizedUrl = originalMediaUrl;
-      if (normalizedUrl.startsWith("file://")) {
-        try {
-          normalizedUrl = fileURLToPath(normalizedUrl);
-        } catch {
-          normalizedUrl = originalMediaUrl;
-        }
+    for (const raw of rawPaths) {
+      const source = resolveAbsolutePath(raw);
+      if (!source) continue;
+      if (staged.has(source)) continue;
+
+      const baseName = path.basename(source);
+      if (!baseName) continue;
+      const parsed = path.parse(baseName);
+      let fileName = baseName;
+      let suffix = 1;
+      while (usedNames.has(fileName)) {
+        fileName = `${parsed.name}-${suffix}${parsed.ext}`;
+        suffix += 1;
       }
-      if (normalizedUrl === originalMediaPath || normalizedUrl === source) {
-        ctx.MediaUrl = relative;
-        sessionCtx.MediaUrl = relative;
+      usedNames.add(fileName);
+
+      const dest = path.join(destDir, fileName);
+      await fs.copyFile(source, dest);
+      const relative = path.posix.join("media", "inbound", fileName);
+      staged.set(source, relative);
+    }
+
+    const rewriteIfStaged = (value: string | undefined): string | undefined => {
+      const raw = value?.trim();
+      if (!raw) return value;
+      const abs = resolveAbsolutePath(raw);
+      if (!abs) return value;
+      const mapped = staged.get(abs);
+      return mapped ?? value;
+    };
+
+    const nextMediaPaths = hasPathsArray
+      ? rawPaths.map((p) => rewriteIfStaged(p) ?? p)
+      : undefined;
+    if (nextMediaPaths) {
+      ctx.MediaPaths = nextMediaPaths;
+      sessionCtx.MediaPaths = nextMediaPaths;
+      ctx.MediaPath = nextMediaPaths[0];
+      sessionCtx.MediaPath = nextMediaPaths[0];
+    } else {
+      const rewritten = rewriteIfStaged(ctx.MediaPath);
+      if (rewritten && rewritten !== ctx.MediaPath) {
+        ctx.MediaPath = rewritten;
+        sessionCtx.MediaPath = rewritten;
       }
+    }
+
+    if (Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0) {
+      const nextUrls = ctx.MediaUrls.map((u) => rewriteIfStaged(u) ?? u);
+      ctx.MediaUrls = nextUrls;
+      sessionCtx.MediaUrls = nextUrls;
+    }
+    const rewrittenUrl = rewriteIfStaged(ctx.MediaUrl);
+    if (rewrittenUrl && rewrittenUrl !== ctx.MediaUrl) {
+      ctx.MediaUrl = rewrittenUrl;
+      sessionCtx.MediaUrl = rewrittenUrl;
     }
   } catch (err) {
     logVerbose(`Failed to stage inbound media for sandbox: ${String(err)}`);

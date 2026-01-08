@@ -21,6 +21,11 @@ import {
 
 installGatewayTestHooks();
 
+function expectProviders(call: Record<string, unknown>, provider: string) {
+  expect(call.provider).toBe(provider);
+  expect(call.messageProvider).toBe(provider);
+}
+
 describe("gateway server agent", () => {
   test("agent falls back to allowFrom when lastTo is stale", async () => {
     testState.allowFrom = ["+436769770569"];
@@ -57,7 +62,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("whatsapp");
+    expectProviders(call, "whatsapp");
     expect(call.to).toBe("+436769770569");
     expect(call.sessionId).toBe("sess-main-stale");
 
@@ -137,7 +142,8 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("whatsapp");
+    expectProviders(call, "whatsapp");
+    expect(call.messageProvider).toBe("whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -181,7 +187,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("telegram");
+    expectProviders(call, "telegram");
     expect(call.to).toBe("123");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -225,7 +231,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("discord");
+    expectProviders(call, "discord");
     expect(call.to).toBe("channel:discord-123");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -269,7 +275,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("signal");
+    expectProviders(call, "signal");
     expect(call.to).toBe("+15551234567");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -314,7 +320,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("whatsapp");
+    expectProviders(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);

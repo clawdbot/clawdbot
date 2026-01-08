@@ -1,5 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type {
+  GatewayAuthConfig,
+  GatewayTailscaleMode,
+} from "../config/config.js";
 export type ResolvedGatewayAuthMode = "none" | "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -96,6 +100,29 @@ function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
     isLoopbackAddress(req.socket?.remoteAddress) &&
     hasTailscaleProxyHeaders(req)
   );
+}
+
+export function resolveGatewayAuth(params: {
+  authConfig?: GatewayAuthConfig | null;
+  env?: NodeJS.ProcessEnv;
+  tailscaleMode?: GatewayTailscaleMode;
+}): ResolvedGatewayAuth {
+  const authConfig = params.authConfig ?? {};
+  const env = params.env ?? process.env;
+  const token = authConfig.token ?? env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
+  const password =
+    authConfig.password ?? env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
+  const mode: ResolvedGatewayAuth["mode"] =
+    authConfig.mode ?? (password ? "password" : token ? "token" : "none");
+  const allowTailscale =
+    authConfig.allowTailscale ??
+    (params.tailscaleMode === "serve" && mode !== "password");
+  return {
+    mode,
+    token,
+    password,
+    allowTailscale,
+  };
 }
 
 export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {

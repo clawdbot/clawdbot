@@ -8,6 +8,7 @@ import {
   isSafeFenceBreak,
   parseFenceSpans,
 } from "../markdown/fences.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
 export type TextChunkProvider =
   | "whatsapp"
@@ -31,15 +32,44 @@ const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Record<TextChunkProvider, number> = {
 export function resolveTextChunkLimit(
   cfg: ClawdbotConfig | undefined,
   provider?: TextChunkProvider,
+  accountId?: string | null,
 ): number {
   const providerOverride = (() => {
     if (!provider) return undefined;
-    if (provider === "whatsapp") return cfg?.whatsapp?.textChunkLimit;
-    if (provider === "telegram") return cfg?.telegram?.textChunkLimit;
-    if (provider === "discord") return cfg?.discord?.textChunkLimit;
-    if (provider === "slack") return cfg?.slack?.textChunkLimit;
-    if (provider === "signal") return cfg?.signal?.textChunkLimit;
-    if (provider === "imessage") return cfg?.imessage?.textChunkLimit;
+    const normalizedAccountId = normalizeAccountId(accountId);
+    if (provider === "whatsapp") {
+      return cfg?.whatsapp?.textChunkLimit;
+    }
+    if (provider === "telegram") {
+      return (
+        cfg?.telegram?.accounts?.[normalizedAccountId]?.textChunkLimit ??
+        cfg?.telegram?.textChunkLimit
+      );
+    }
+    if (provider === "discord") {
+      return (
+        cfg?.discord?.accounts?.[normalizedAccountId]?.textChunkLimit ??
+        cfg?.discord?.textChunkLimit
+      );
+    }
+    if (provider === "slack") {
+      return (
+        cfg?.slack?.accounts?.[normalizedAccountId]?.textChunkLimit ??
+        cfg?.slack?.textChunkLimit
+      );
+    }
+    if (provider === "signal") {
+      return (
+        cfg?.signal?.accounts?.[normalizedAccountId]?.textChunkLimit ??
+        cfg?.signal?.textChunkLimit
+      );
+    }
+    if (provider === "imessage") {
+      return (
+        cfg?.imessage?.accounts?.[normalizedAccountId]?.textChunkLimit ??
+        cfg?.imessage?.textChunkLimit
+      );
+    }
     return undefined;
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {

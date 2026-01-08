@@ -1,36 +1,154 @@
 import { spawnSync } from "node:child_process";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_SYSTEMD_SERVICE_NAME,
+} from "../daemon/constants.js";
 
-const DEFAULT_LAUNCHD_LABEL = "com.clawdbot.mac";
-const DEFAULT_SYSTEMD_UNIT = "clawdbot-gateway.service";
+export type RestartAttempt = {
+  ok: boolean;
+  method: "launchctl" | "systemd" | "supervisor";
+  detail?: string;
+  tried?: string[];
+};
 
-export function triggerClawdbotRestart():
-  | "launchctl"
-  | "systemd"
-  | "supervisor" {
+const SPAWN_TIMEOUT_MS = 2000;
+
+function formatSpawnDetail(result: {
+  error?: unknown;
+  status?: number | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+}): string {
+  const clean = (value: string | Buffer | null | undefined) => {
+    const text =
+      typeof value === "string" ? value : value ? value.toString() : "";
+    return text.replace(/\s+/g, " ").trim();
+  };
+  if (result.error) {
+    if (result.error instanceof Error) return result.error.message;
+    if (typeof result.error === "string") return result.error;
+    try {
+      return JSON.stringify(result.error);
+    } catch {
+      return "unknown error";
+    }
+  }
+  const stderr = clean(result.stderr);
+  if (stderr) return stderr;
+  const stdout = clean(result.stdout);
+  if (stdout) return stdout;
+  if (typeof result.status === "number") return `exit ${result.status}`;
+  return "unknown error";
+}
+
+function normalizeSystemdUnit(raw?: string): string {
+  const unit = raw?.trim();
+  if (!unit) return `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
+  return unit.endsWith(".service") ? unit : `${unit}.service`;
+}
+
+export function triggerClawdbotRestart(): RestartAttempt {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return { ok: true, method: "supervisor", detail: "test mode" };
+  }
+  const tried: string[] = [];
   if (process.platform !== "darwin") {
     if (process.platform === "linux") {
-      const unit = process.env.CLAWDBOT_SYSTEMD_UNIT || DEFAULT_SYSTEMD_UNIT;
-      const userRestart = spawnSync("systemctl", ["--user", "restart", unit], {
-        stdio: "ignore",
+      const unit = normalizeSystemdUnit(process.env.CLAWDBOT_SYSTEMD_UNIT);
+      const userArgs = ["--user", "restart", unit];
+      tried.push(`systemctl ${userArgs.join(" ")}`);
+      const userRestart = spawnSync("systemctl", userArgs, {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
       });
       if (!userRestart.error && userRestart.status === 0) {
-        return "systemd";
+        return { ok: true, method: "systemd", tried };
       }
-      const systemRestart = spawnSync("systemctl", ["restart", unit], {
-        stdio: "ignore",
+      const systemArgs = ["restart", unit];
+      tried.push(`systemctl ${systemArgs.join(" ")}`);
+      const systemRestart = spawnSync("systemctl", systemArgs, {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
       });
       if (!systemRestart.error && systemRestart.status === 0) {
-        return "systemd";
+        return { ok: true, method: "systemd", tried };
       }
-      return "systemd";
+      const detail = [
+        `user: ${formatSpawnDetail(userRestart)}`,
+        `system: ${formatSpawnDetail(systemRestart)}`,
+      ].join("; ");
+      return { ok: false, method: "systemd", detail, tried };
     }
-    return "supervisor";
+    return {
+      ok: false,
+      method: "supervisor",
+      detail: "unsupported platform restart",
+    };
   }
 
-  const label = process.env.CLAWDBOT_LAUNCHD_LABEL || DEFAULT_LAUNCHD_LABEL;
+  const label =
+    process.env.CLAWDBOT_LAUNCHD_LABEL || GATEWAY_LAUNCH_AGENT_LABEL;
   const uid =
     typeof process.getuid === "function" ? process.getuid() : undefined;
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;
-  spawnSync("launchctl", ["kickstart", "-k", target], { stdio: "ignore" });
-  return "launchctl";
+  const args = ["kickstart", "-k", target];
+  tried.push(`launchctl ${args.join(" ")}`);
+  const res = spawnSync("launchctl", args, {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
+  if (!res.error && res.status === 0) {
+    return { ok: true, method: "launchctl", tried };
+  }
+  return {
+    ok: false,
+    method: "launchctl",
+    detail: formatSpawnDetail(res),
+    tried,
+  };
+}
+
+export type ScheduledRestart = {
+  ok: boolean;
+  pid: number;
+  signal: "SIGUSR1";
+  delayMs: number;
+  reason?: string;
+  mode: "emit" | "signal";
+};
+
+export function scheduleGatewaySigusr1Restart(opts?: {
+  delayMs?: number;
+  reason?: string;
+}): ScheduledRestart {
+  const delayMsRaw =
+    typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
+      ? Math.floor(opts.delayMs)
+      : 2000;
+  const delayMs = Math.min(Math.max(delayMsRaw, 0), 60_000);
+  const reason =
+    typeof opts?.reason === "string" && opts.reason.trim()
+      ? opts.reason.trim().slice(0, 200)
+      : undefined;
+  const pid = process.pid;
+  const hasListener = process.listenerCount("SIGUSR1") > 0;
+  setTimeout(() => {
+    try {
+      if (hasListener) {
+        process.emit("SIGUSR1");
+      } else {
+        process.kill(pid, "SIGUSR1");
+      }
+    } catch {
+      /* ignore */
+    }
+  }, delayMs);
+  return {
+    ok: true,
+    pid,
+    signal: "SIGUSR1",
+    delayMs,
+    reason,
+    mode: hasListener ? "emit" : "signal",
+  };
 }

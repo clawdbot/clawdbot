@@ -17,10 +17,10 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 ## Deep diagnostics
 - Creds on disk: `ls -l ~/.clawdbot/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
 - Session store: `ls -l ~/.clawdbot/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`.
-- Relink flow: `clawdbot logout && clawdbot login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Note: the QR login flow auto-restarts once for status 515 after pairing.)
+- Relink flow: `clawdbot providers logout && clawdbot providers login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Note: the QR login flow auto-restarts once for status 515 after pairing.)
 
 ## When something fails
-- `logged out` or status 409–515 → relink with `clawdbot logout` then `clawdbot login`.
+- `logged out` or status 409–515 → relink with `clawdbot providers logout` then `clawdbot providers login`.
 - Gateway unreachable → start it: `clawdbot gateway --port 18789` (use `--force` if the port is busy).
 - No inbound messages → confirm linked phone is online and the sender is allowed (`whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`whatsapp.groups`, `routing.groupChat.mentionPatterns`).
 

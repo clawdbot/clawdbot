@@ -2,11 +2,12 @@ import Foundation
 
 extension ProcessInfo {
     var isPreview: Bool {
-        self.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        guard let raw = getenv("XCODE_RUNNING_FOR_PREVIEWS") else { return false }
+        return String(cString: raw) == "1"
     }
 
     var isNixMode: Bool {
-        if self.environment["CLAWDBOT_NIX_MODE"] == "1" { return true }
+        if let raw = getenv("CLAWDBOT_NIX_MODE"), String(cString: raw) == "1" { return true }
         return UserDefaults.standard.bool(forKey: "clawdbot.nixMode")
     }
 

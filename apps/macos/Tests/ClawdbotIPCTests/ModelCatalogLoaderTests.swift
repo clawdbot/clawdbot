@@ -51,4 +51,3 @@ struct ModelCatalogLoaderTests {
         #expect(choices.isEmpty)
     }
 }
-

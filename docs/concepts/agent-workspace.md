@@ -37,6 +37,19 @@ file creation:
 { agent: { skipBootstrap: true } }
 ```
 
+## Legacy workspace folders
+
+Older installs may have created `~/clawdis` or `~/clawdbot`. Keeping multiple
+workspace directories around can cause confusing auth or state drift, because
+only one workspace is active at a time.
+
+**Recommendation:** keep a single active workspace. If you no longer use the
+legacy folders, archive or move them to Trash (for example `trash ~/clawdis`).
+If you intentionally keep multiple workspaces, make sure
+`agent.workspace` points to the active one.
+
+`clawdbot doctor` warns when it detects legacy workspace directories.
+
 ## Workspace file map (what each file means)
 
 These are the standard files Clawdbot expects inside the workspace:
@@ -139,6 +152,19 @@ Option B: GitHub CLI (`gh`)
 ```bash
 gh auth login
 gh repo create clawd-workspace --private --source . --remote origin --push
+```
+
+Option C: GitLab web UI
+
+1. Create a new **private** repository on GitLab.
+2. Do not initialize with a README (avoids merge conflicts).
+3. Copy the HTTPS remote URL.
+4. Add the remote and push:
+
+```bash
+git branch -M main
+git remote add origin <https-url>
+git push -u origin main
 ```
 
 ### 3) Ongoing updates

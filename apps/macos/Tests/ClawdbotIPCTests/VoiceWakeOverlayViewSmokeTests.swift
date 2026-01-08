@@ -26,4 +26,3 @@ struct VoiceWakeOverlayViewSmokeTests {
         _ = view.body
     }
 }
-

@@ -141,6 +141,43 @@ describe("context-pruning", () => {
     expect(toolText(findToolResult(next, "t4"))).toContain("w".repeat(20_000));
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
   });
+
+  it("never prunes tool results before the first user message", () => {
+    const settings = computeEffectiveSettings({
+      mode: "aggressive",
+      keepLastAssistants: 0,
+      hardClear: { placeholder: "[cleared]" },
+    });
+    if (!settings) throw new Error("expected settings");
+
+    const messages: AgentMessage[] = [
+      makeAssistant("bootstrap tool calls"),
+      makeToolResult({
+        toolCallId: "t0",
+        toolName: "read",
+        text: "x".repeat(20_000),
+      }),
+      makeAssistant("greeting"),
+      makeUser("u1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "bash",
+        text: "y".repeat(20_000),
+      }),
+    ];
+
+    const next = pruneContextMessages({
+      messages,
+      settings,
+      ctx: { model: { contextWindow: 1000 } } as unknown as ExtensionContext,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1000,
+    });
+
+    expect(toolText(findToolResult(next, "t0"))).toBe("x".repeat(20_000));
+    expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
+  });
+
   it("mode aggressive clears eligible tool results before cutoff", () => {
     const messages: AgentMessage[] = [
       makeUser("u1"),

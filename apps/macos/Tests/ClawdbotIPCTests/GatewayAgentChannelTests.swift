@@ -21,4 +21,3 @@ import Testing
         #expect(GatewayAgentChannel(raw: "unknown") == .last)
     }
 }
-

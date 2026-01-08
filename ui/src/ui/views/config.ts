@@ -8,6 +8,8 @@ export type ConfigProps = {
   issues: unknown[];
   loading: boolean;
   saving: boolean;
+  applying: boolean;
+  updating: boolean;
   connected: boolean;
   schema: unknown | null;
   schemaLoading: boolean;
@@ -19,6 +21,8 @@ export type ConfigProps = {
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
   onReload: () => void;
   onSave: () => void;
+  onApply: () => void;
+  onUpdate: () => void;
 };
 
 export function renderConfig(props: ConfigProps) {
@@ -34,6 +38,12 @@ export function renderConfig(props: ConfigProps) {
     props.connected &&
     !props.saving &&
     (props.formMode === "raw" ? true : canSaveForm);
+  const canApply =
+    props.connected &&
+    !props.applying &&
+    !props.updating &&
+    (props.formMode === "raw" ? true : canSaveForm);
+  const canUpdate = props.connected && !props.applying && !props.updating;
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
@@ -67,12 +77,27 @@ export function renderConfig(props: ConfigProps) {
           >
             ${props.saving ? "Saving…" : "Save"}
           </button>
+          <button
+            class="btn"
+            ?disabled=${!canApply}
+            @click=${props.onApply}
+          >
+            ${props.applying ? "Applying…" : "Apply & Restart"}
+          </button>
+          <button
+            class="btn"
+            ?disabled=${!canUpdate}
+            @click=${props.onUpdate}
+          >
+            ${props.updating ? "Updating…" : "Update & Restart"}
+          </button>
         </div>
       </div>
 
       <div class="muted" style="margin-top: 10px;">
-        Writes to <span class="mono">~/.clawdbot/clawdbot.json</span>. Some changes
-        require a gateway restart.
+        Writes to <span class="mono">~/.clawdbot/clawdbot.json</span>. Apply &
+        Update restart the gateway and will ping the last active session when it
+        comes back.
       </div>
 
       ${props.formMode === "form"

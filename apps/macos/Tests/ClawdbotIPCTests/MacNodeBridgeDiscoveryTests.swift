@@ -138,7 +138,7 @@ private func waitForListenerReady(_ listener: NWListener, timeoutSeconds: Double
                     switch state {
                     case .ready:
                         finish(.success(()))
-                    case .failed(let err):
+                    case let .failed(err):
                         finish(.failure(err))
                     case .cancelled:
                         finish(.failure(ListenerTimeoutError()))

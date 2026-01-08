@@ -13,6 +13,7 @@ read_when:
 ## Where it shows up
 - `/status` in chats: adds a short “Usage” line (only if available).
 - CLI: `clawdbot status --usage` prints a full per-provider breakdown.
+- CLI: `clawdbot providers list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
 - macOS menu bar: “Usage” section under Context (only if available).
 
 ## Providers + credentials
@@ -24,4 +25,3 @@ read_when:
 - **z.ai**: API key via env/config/auth store.
 
 Usage is hidden if no matching OAuth/API credentials exist.
-

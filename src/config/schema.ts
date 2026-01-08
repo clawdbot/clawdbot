@@ -108,11 +108,22 @@ const FIELD_LABELS: Record<string, string> = {
   "telegram.botToken": "Telegram Bot Token",
   "telegram.dmPolicy": "Telegram DM Policy",
   "telegram.streamMode": "Telegram Stream Mode",
+  "telegram.retry.attempts": "Telegram Retry Attempts",
+  "telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
+  "telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
+  "telegram.retry.jitter": "Telegram Retry Jitter",
   "whatsapp.dmPolicy": "WhatsApp DM Policy",
+  "whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
   "signal.dmPolicy": "Signal DM Policy",
   "imessage.dmPolicy": "iMessage DM Policy",
   "discord.dm.policy": "Discord DM Policy",
+  "discord.retry.attempts": "Discord Retry Attempts",
+  "discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
+  "discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
+  "discord.retry.jitter": "Discord Retry Jitter",
+  "discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "slack.dm.policy": "Slack DM Policy",
+  "slack.allowBots": "Slack Allow Bot Messages",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
   "slack.appToken": "Slack App Token",
@@ -131,6 +142,8 @@ const FIELD_HELP: Record<string, string> = {
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
     "Debounce window (ms) before applying config changes.",
+  "slack.allowBots":
+    "Allow bot-authored messages to trigger Slack replies (default: false).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order":
     "Ordered auth profile IDs per provider (used for automatic failover).",
@@ -158,14 +171,34 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
   "telegram.streamMode":
     "Draft streaming mode for Telegram replies (off | partial | block). Requires private topics + sendMessageDraft.",
+  "telegram.retry.attempts":
+    "Max retry attempts for outbound Telegram API calls (default: 3).",
+  "telegram.retry.minDelayMs":
+    "Minimum retry delay in ms for Telegram outbound calls.",
+  "telegram.retry.maxDelayMs":
+    "Maximum retry delay cap in ms for Telegram outbound calls.",
+  "telegram.retry.jitter":
+    "Jitter factor (0-1) applied to Telegram retry delays.",
   "whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
+  "whatsapp.selfChatMode":
+    "Same-phone setup (bot uses your personal WhatsApp number). Suppresses pairing replies for outbound DMs.",
   "signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires signal.allowFrom=["*"].',
   "imessage.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires imessage.allowFrom=["*"].',
   "discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires discord.dm.allowFrom=["*"].',
+  "discord.retry.attempts":
+    "Max retry attempts for outbound Discord API calls (default: 3).",
+  "discord.retry.minDelayMs":
+    "Minimum retry delay in ms for Discord outbound calls.",
+  "discord.retry.maxDelayMs":
+    "Maximum retry delay cap in ms for Discord outbound calls.",
+  "discord.retry.jitter":
+    "Jitter factor (0-1) applied to Discord retry delays.",
+  "discord.maxLinesPerMessage":
+    "Soft max line count per Discord message (default: 17).",
   "slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
 };

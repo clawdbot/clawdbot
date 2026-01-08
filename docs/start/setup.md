@@ -46,7 +46,7 @@ pnpm clawdbot setup
 4) Link surfaces (example: WhatsApp):
 
 ```bash
-clawdbot login
+clawdbot providers login
 ```
 
 5) Sanity check:
@@ -56,7 +56,7 @@ clawdbot health
 ```
 
 If onboarding is still WIP/broken on your build:
-- Run `clawdbot setup`, then `clawdbot login`, then start the Gateway manually (`clawdbot gateway`).
+- Run `clawdbot setup`, then `clawdbot providers login`, then start the Gateway manually (`clawdbot gateway`).
 
 ## Bleeding edge workflow (Gateway in a terminal)
 

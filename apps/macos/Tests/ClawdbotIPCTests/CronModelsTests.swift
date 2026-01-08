@@ -12,7 +12,7 @@ struct CronModelsTests {
     }
 
     @Test func scheduleEveryEncodesAndDecodesWithAnchor() throws {
-        let schedule = CronSchedule.every(everyMs: 5_000, anchorMs: 10_000)
+        let schedule = CronSchedule.every(everyMs: 5000, anchorMs: 10000)
         let data = try JSONEncoder().encode(schedule)
         let decoded = try JSONDecoder().decode(CronSchedule.self, from: data)
         #expect(decoded == schedule)
@@ -31,7 +31,7 @@ struct CronModelsTests {
             thinking: "low",
             timeoutSeconds: 15,
             deliver: true,
-            channel: "whatsapp",
+            provider: "whatsapp",
             to: "+15551234567",
             bestEffortDeliver: false)
         let data = try JSONEncoder().encode(payload)

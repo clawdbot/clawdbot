@@ -795,6 +795,31 @@ public struct ConfigSetParams: Codable, Sendable {
     }
 }
 
+public struct ConfigApplyParams: Codable, Sendable {
+    public let raw: String
+    public let sessionkey: String?
+    public let note: String?
+    public let restartdelayms: Int?
+
+    public init(
+        raw: String,
+        sessionkey: String?,
+        note: String?,
+        restartdelayms: Int?
+    ) {
+        self.raw = raw
+        self.sessionkey = sessionkey
+        self.note = note
+        self.restartdelayms = restartdelayms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case raw
+        case sessionkey = "sessionKey"
+        case note
+        case restartdelayms = "restartDelayMs"
+    }
+}
+
 public struct ConfigSchemaParams: Codable, Sendable {
 }
 
@@ -1392,6 +1417,60 @@ public struct CronRunLogEntry: Codable, Sendable {
     }
 }
 
+public struct LogsTailParams: Codable, Sendable {
+    public let cursor: Int?
+    public let limit: Int?
+    public let maxbytes: Int?
+
+    public init(
+        cursor: Int?,
+        limit: Int?,
+        maxbytes: Int?
+    ) {
+        self.cursor = cursor
+        self.limit = limit
+        self.maxbytes = maxbytes
+    }
+    private enum CodingKeys: String, CodingKey {
+        case cursor
+        case limit
+        case maxbytes = "maxBytes"
+    }
+}
+
+public struct LogsTailResult: Codable, Sendable {
+    public let file: String
+    public let cursor: Int
+    public let size: Int
+    public let lines: [String]
+    public let truncated: Bool?
+    public let reset: Bool?
+
+    public init(
+        file: String,
+        cursor: Int,
+        size: Int,
+        lines: [String],
+        truncated: Bool?,
+        reset: Bool?
+    ) {
+        self.file = file
+        self.cursor = cursor
+        self.size = size
+        self.lines = lines
+        self.truncated = truncated
+        self.reset = reset
+    }
+    private enum CodingKeys: String, CodingKey {
+        case file
+        case cursor
+        case size
+        case lines
+        case truncated
+        case reset
+    }
+}
+
 public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?
@@ -1501,6 +1580,31 @@ public struct ChatEvent: Codable, Sendable {
         case errormessage = "errorMessage"
         case usage
         case stopreason = "stopReason"
+    }
+}
+
+public struct UpdateRunParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let note: String?
+    public let restartdelayms: Int?
+    public let timeoutms: Int?
+
+    public init(
+        sessionkey: String?,
+        note: String?,
+        restartdelayms: Int?,
+        timeoutms: Int?
+    ) {
+        self.sessionkey = sessionkey
+        self.note = note
+        self.restartdelayms = restartdelayms
+        self.timeoutms = timeoutms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case note
+        case restartdelayms = "restartDelayMs"
+        case timeoutms = "timeoutMs"
     }
 }
 

@@ -229,7 +229,7 @@ actor BridgeServer {
                 error: BridgeRPCError(code: "FORBIDDEN", message: "Method not allowed"))
         }
 
-        let params: [String: AnyCodable]?
+        let params: [String: ClawdbotProtocol.AnyCodable]?
         if let json = req.paramsJSON?.trimmingCharacters(in: .whitespacesAndNewlines), !json.isEmpty {
             guard let data = json.data(using: .utf8) else {
                 return BridgeRPCResponse(
@@ -238,7 +238,7 @@ actor BridgeServer {
                     error: BridgeRPCError(code: "INVALID_REQUEST", message: "paramsJSON not UTF-8"))
             }
             do {
-                params = try JSONDecoder().decode([String: AnyCodable].self, from: data)
+                params = try JSONDecoder().decode([String: ClawdbotProtocol.AnyCodable].self, from: data)
             } catch {
                 return BridgeRPCResponse(
                     id: req.id,
@@ -360,16 +360,16 @@ actor BridgeServer {
             "reason \(reason)",
         ].compactMap(\.self).joined(separator: " · ")
 
-        var params: [String: AnyCodable] = [
-            "text": AnyCodable(summary),
-            "instanceId": AnyCodable(nodeId),
-            "host": AnyCodable(host),
-            "mode": AnyCodable("node"),
-            "reason": AnyCodable(reason),
-            "tags": AnyCodable(tags),
+        var params: [String: ClawdbotProtocol.AnyCodable] = [
+            "text": ClawdbotProtocol.AnyCodable(summary),
+            "instanceId": ClawdbotProtocol.AnyCodable(nodeId),
+            "host": ClawdbotProtocol.AnyCodable(host),
+            "mode": ClawdbotProtocol.AnyCodable("node"),
+            "reason": ClawdbotProtocol.AnyCodable(reason),
+            "tags": ClawdbotProtocol.AnyCodable(tags),
         ]
-        if let ip { params["ip"] = AnyCodable(ip) }
-        if let version { params["version"] = AnyCodable(version) }
+        if let ip { params["ip"] = ClawdbotProtocol.AnyCodable(ip) }
+        if let version { params["version"] = ClawdbotProtocol.AnyCodable(version) }
         await GatewayConnection.shared.sendSystemEvent(params)
     }
 

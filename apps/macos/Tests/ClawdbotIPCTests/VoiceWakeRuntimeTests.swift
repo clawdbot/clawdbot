@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import SwabbleKit
+import Testing
 @testable import Clawdbot
 
 @Suite struct VoiceWakeRuntimeTests {

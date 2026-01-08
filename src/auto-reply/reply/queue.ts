@@ -50,6 +50,7 @@ export type FollowupRun = {
     sessionId: string;
     sessionKey?: string;
     messageProvider?: string;
+    agentAccountId?: string;
     sessionFile: string;
     workspaceDir: string;
     config: ClawdbotConfig;

@@ -9,6 +9,10 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import {
+  DuplicateAgentDirError,
+  findDuplicateAgentDirs,
+} from "./agent-dirs.js";
+import {
   applyIdentityDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
@@ -59,6 +63,20 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
 };
 
+function warnOnConfigMiskeys(
+  raw: unknown,
+  logger: Pick<typeof console, "warn">,
+): void {
+  if (!raw || typeof raw !== "object") return;
+  const gateway = (raw as Record<string, unknown>).gateway;
+  if (!gateway || typeof gateway !== "object") return;
+  if ("token" in (gateway as Record<string, unknown>)) {
+    logger.warn(
+      'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
+    );
+  }
+}
+
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
   if (deps.configPath) return deps.configPath;
   return resolveConfigPath(deps.env, resolveStateDir(deps.env, deps.homedir));
@@ -106,6 +124,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
+      warnOnConfigMiskeys(parsed, deps.logger);
       if (typeof parsed !== "object" || parsed === null) return {};
       const validated = ClawdbotSchema.safeParse(parsed);
       if (!validated.success) {
@@ -125,6 +144,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         ),
       );
 
+      const duplicates = findDuplicateAgentDirs(cfg, {
+        env: deps.env,
+        homedir: deps.homedir,
+      });
+      if (duplicates.length > 0) {
+        throw new DuplicateAgentDirError(duplicates);
+      }
+
       const enabled =
         shouldEnableShellEnvFallback(deps.env) ||
         cfg.env?.shellEnv?.enabled === true;
@@ -142,6 +169,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       return cfg;
     } catch (err) {
+      if (err instanceof DuplicateAgentDirError) {
+        deps.logger.error(err.message);
+        throw err;
+      }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
       return {};
     }

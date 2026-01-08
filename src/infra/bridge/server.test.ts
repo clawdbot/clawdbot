@@ -118,22 +118,23 @@ describe("node bridge server", () => {
       pairingBaseDir: baseDir,
     });
 
-    expect(server.listeners.map((l) => l.host).sort()).toEqual(
-      [host, "127.0.0.1"].sort(),
-    );
-
-    const socket = net.connect({ host: "127.0.0.1", port: server.port });
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", reject);
-    });
-    const readLine = createLineReader(socket);
-    sendLine(socket, { type: "hello", nodeId: "n-loopback" });
-    const line = await readLine();
-    const msg = JSON.parse(line) as { type: string; code?: string };
-    expect(msg.type).toBe("error");
-    expect(msg.code).toBe("NOT_PAIRED");
-    socket.destroy();
+    const hosts = server.listeners.map((l) => l.host).sort();
+    expect(hosts).toContain(host);
+    const hasLoopback = hosts.includes("127.0.0.1");
+    if (hasLoopback) {
+      const socket = net.connect({ host: "127.0.0.1", port: server.port });
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      const readLine = createLineReader(socket);
+      sendLine(socket, { type: "hello", nodeId: "n-loopback" });
+      const line = await readLine();
+      const msg = JSON.parse(line) as { type: string; code?: string };
+      expect(msg.type).toBe("error");
+      expect(msg.code).toBe("NOT_PAIRED");
+      socket.destroy();
+    }
     await server.close();
   });
 

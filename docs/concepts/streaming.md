@@ -36,6 +36,7 @@ Legend:
 - `agent.blockStreamingBreak`: `"text_end"` or `"message_end"`.
 - `agent.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
 - Provider hard cap: `*.textChunkLimit` (e.g., `whatsapp.textChunkLimit`).
+- Discord soft cap: `discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 
 **Boundary semantics:**
 - `text_end`: stream blocks as soon as chunker emits; flush on each `text_end`.

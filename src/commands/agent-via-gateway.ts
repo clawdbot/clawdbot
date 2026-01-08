@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
+import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -7,6 +8,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { agentCommand } from "./agent.js";
 
 type AgentGatewayResult = {
@@ -85,12 +87,6 @@ function parseTimeoutSeconds(opts: {
   return raw;
 }
 
-function normalizeProvider(raw?: string): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
-  return normalized === "imsg" ? "imessage" : normalized;
-}
-
 function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
@@ -127,29 +123,37 @@ export async function agentViaGatewayCommand(
     sessionId: opts.sessionId,
   });
 
-  const provider = normalizeProvider(opts.provider) ?? "whatsapp";
+  const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
-  const response = await callGateway<GatewayAgentResponse>({
-    method: "agent",
-    params: {
-      message: body,
-      to: opts.to,
-      sessionId: opts.sessionId,
-      sessionKey,
-      thinking: opts.thinking,
-      deliver: Boolean(opts.deliver),
-      provider,
-      timeout: timeoutSeconds,
-      lane: opts.lane,
-      extraSystemPrompt: opts.extraSystemPrompt,
-      idempotencyKey,
+  const response = await withProgress(
+    {
+      label: "Waiting for agent reply…",
+      indeterminate: true,
+      enabled: opts.json !== true,
     },
-    expectFinal: true,
-    timeoutMs: gatewayTimeoutMs,
-    clientName: "cli",
-    mode: "cli",
-  });
+    async () =>
+      await callGateway<GatewayAgentResponse>({
+        method: "agent",
+        params: {
+          message: body,
+          to: opts.to,
+          sessionId: opts.sessionId,
+          sessionKey,
+          thinking: opts.thinking,
+          deliver: Boolean(opts.deliver),
+          provider,
+          timeout: timeoutSeconds,
+          lane: opts.lane,
+          extraSystemPrompt: opts.extraSystemPrompt,
+          idempotencyKey,
+        },
+        expectFinal: true,
+        timeoutMs: gatewayTimeoutMs,
+        clientName: "cli",
+        mode: "cli",
+      }),
+  );
 
   if (opts.json) {
     runtime.log(JSON.stringify(response, null, 2));

@@ -22,6 +22,7 @@ describe("pi tool definition adapter", () => {
       status: "error",
       tool: "boom",
     });
-    expect(JSON.stringify(result.details)).toContain("nope");
+    expect(result.details).toMatchObject({ error: "nope" });
+    expect(JSON.stringify(result.details)).not.toContain("\n    at ");
   });
 });

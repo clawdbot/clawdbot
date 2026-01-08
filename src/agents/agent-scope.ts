@@ -27,6 +27,9 @@ export function resolveAgentConfig(
       workspace?: string;
       agentDir?: string;
       model?: string;
+      subagents?: {
+        allowAgents?: string[];
+      };
       sandbox?: {
         mode?: "off" | "non-main" | "all";
         workspaceAccess?: "none" | "ro" | "rw";
@@ -55,6 +58,10 @@ export function resolveAgentConfig(
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model: typeof entry.model === "string" ? entry.model : undefined,
+    subagents:
+      typeof entry.subagents === "object" && entry.subagents
+        ? entry.subagents
+        : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };

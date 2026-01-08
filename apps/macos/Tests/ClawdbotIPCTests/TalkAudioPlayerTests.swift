@@ -84,13 +84,13 @@ private func makeWav16Mono(sampleRate: UInt32, samples: Int) -> Data {
     return data
 }
 
-private extension Data {
-    mutating func appendLEUInt16(_ value: UInt16) {
+extension Data {
+    fileprivate mutating func appendLEUInt16(_ value: UInt16) {
         var v = value.littleEndian
         Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }
 
-    mutating func appendLEUInt32(_ value: UInt32) {
+    fileprivate mutating func appendLEUInt32(_ value: UInt32) {
         var v = value.littleEndian
         Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }

@@ -12,7 +12,7 @@ import Testing
             "null": NSNull(),
         ]
 
-        let data = try JSONEncoder().encode(Clawdbot.AnyCodable(payload))
+        let data = try JSONEncoder().encode(ClawdbotProtocol.AnyCodable(payload))
         let obj = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(obj["tags"] as? [String] == ["node", "ios"])

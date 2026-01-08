@@ -84,6 +84,52 @@
   box-shadow: 0 12px 0 -8px rgba(0, 0, 0, 0.18);
 }
 
+.showcase-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.showcase-preview {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: min(420px, 80vw);
+  padding: 8px;
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
+  border: 1px solid color-mix(in oklab, var(--frame-border) 30%, transparent);
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, 10px) scale(0.98);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 20;
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease;
+}
+
+.showcase-preview img {
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--frame-border) 25%, transparent);
+  box-shadow: none;
+}
+
+.showcase-link:hover .showcase-preview,
+.showcase-link:focus-within .showcase-preview {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 6px) scale(1);
+}
+
+@media (hover: none) {
+  .showcase-preview {
+    display: none;
+  }
+}
+
 .markdown code {
   font-family: var(--font-body);
   font-size: 0.95em;

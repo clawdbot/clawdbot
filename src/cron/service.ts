@@ -44,6 +44,7 @@ export type CronServiceDeps = {
 };
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") throw new Error("cron job name is required");
@@ -393,11 +394,13 @@ export class CronService {
     const nextAt = this.nextWakeAtMs();
     if (!nextAt) return;
     const delay = Math.max(nextAt - this.deps.nowMs(), 0);
+    // Avoid TimeoutOverflowWarning when a job is far in the future.
+    const clampedDelay = Math.min(delay, MAX_TIMEOUT_MS);
     this.timer = setTimeout(() => {
       void this.onTimer().catch((err) => {
         this.deps.log.error({ err: String(err) }, "cron: timer tick failed");
       });
-    }, delay);
+    }, clampedDelay);
     this.timer.unref?.();
   }
 

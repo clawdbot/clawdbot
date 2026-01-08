@@ -19,4 +19,3 @@ import Testing
         #expect(high.quality == 1.0)
     }
 }
-

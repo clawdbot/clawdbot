@@ -16,6 +16,26 @@ If you change the CLI code, update this doc.
 - `--profile <name>`: isolate state under `~/.clawdbot-<name>`.
 - `-V`, `--version`, `-v`: print version and exit.
 
+## Output styling
+
+- ANSI colors and progress indicators only render in TTY sessions.
+- OSC-8 hyperlinks render as clickable links in supported terminals; otherwise we fall back to plain URLs.
+- `--json` (and `--plain` where supported) disables styling for clean output.
+- Long-running commands show a progress indicator (OSC 9;4 when supported).
+
+## Color palette
+
+Clawdbot uses a lobster palette for CLI output. Source of truth: `src/terminal/theme.ts`.
+
+- `accent` (#FF5A2D): headings, provider labels, primary highlights.
+- `accentBright` (#FF7A3D): command names, emphasis.
+- `accentDim` (#D14A22): secondary highlight text.
+- `info` (#FF8A5B): informational values.
+- `success` (#2FBF71): success states.
+- `warn` (#FFB020): warnings, fallbacks, attention.
+- `error` (#E23D2D): errors, failures.
+- `muted` (#8B7F77): de-emphasis, metadata.
+
 ## Command tree
 
 ```
@@ -23,10 +43,18 @@ clawdbot [--dev] [--profile <name>] <command>
   setup
   onboard
   configure (alias: config)
-  update
   doctor
-  login
-  logout
+  providers
+    list
+    status
+    add
+    remove
+    login
+    logout
+  skills
+    list
+    info
+    check
   send
   poll
   agent
@@ -41,12 +69,6 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
-    wake
-    send
-    agent
-    stop
-    restart
-  gateway-daemon
   models
     list
     status
@@ -82,13 +104,6 @@ clawdbot [--dev] [--profile <name>] <command>
     canvas snapshot
     screen record
     location get
-  canvas
-    snapshot
-    present
-    hide
-    navigate
-    eval
-    a2ui push|reset
   browser
     status
     start
@@ -123,8 +138,6 @@ clawdbot [--dev] [--profile <name>] <command>
   pairing
     list
     approve
-  telegram
-    pairing list|approve
   docs
   dns
     setup
@@ -144,6 +157,8 @@ Options:
 - `--remote-url <url>`: remote Gateway URL.
 - `--remote-token <token>`: remote Gateway token.
 
+Wizard auto-runs when any wizard flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
+
 ### `onboard`
 Interactive wizard to set up gateway, workspace, and skills.
 
@@ -151,7 +166,7 @@ Options:
 - `--workspace <dir>`
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--auth-choice <oauth|openai-codex|antigravity|apiKey|minimax|skip>`
+- `--auth-choice <oauth|claude-cli|openai-codex|codex-cli|antigravity|apiKey|minimax|skip>`
 - `--anthropic-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto>`
@@ -172,31 +187,75 @@ Options:
 ### `configure` / `config`
 Interactive configuration wizard (models, providers, skills, gateway).
 
-### `update`
-Audit and modernize the local configuration.
-
 ### `doctor`
-Health checks + quick fixes.
+Health checks + quick fixes (config + gateway + legacy services).
 
 Options:
 - `--no-workspace-suggestions`: disable workspace memory hints.
+- `--yes`: accept defaults without prompting (headless).
+- `--non-interactive`: skip prompts; apply safe migrations only.
+- `--deep`: scan system services for extra gateway installs.
 
-## Auth + provider helpers
+## Provider helpers
 
-### `login`
-Link a WhatsApp Web account via QR.
+### `providers`
+Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
 
-Options:
+Subcommands:
+- `providers list`: show configured chat providers and auth profiles (Claude Code + Codex CLI OAuth sync included).
+- `providers status`: check gateway reachability and provider health (`--probe` to verify credentials; use `status --deep` for local-only probes).
+- `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
+- `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
+- `providers login`: interactive provider login (WhatsApp Web only).
+- `providers logout`: log out of a provider session (WhatsApp Web only).
+
+Common options:
+- `--provider <name>`: `whatsapp|telegram|discord|slack|signal|imessage`
+- `--account <id>`: provider account id (default `default`)
+- `--name <label>`: display name for the account
+
+`providers login` options:
+- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
+- `--account <id>`
 - `--verbose`
-- `--provider <provider>` (default `whatsapp`)
+
+`providers logout` options:
+- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
 - `--account <id>`
 
-### `logout`
-Clear cached WhatsApp Web credentials.
+`providers list` options:
+- `--no-usage`: skip provider usage/quota snapshots (OAuth/API-backed only).
+- `--json`: output JSON (includes usage unless `--no-usage` is set).
+
+OAuth sync sources:
+- `~/.claude/.credentials.json` → `anthropic:claude-cli`
+- `~/.codex/auth.json` → `openai-codex:codex-cli`
+
+More detail: [/concepts/oauth](/concepts/oauth)
+
+Examples:
+```bash
+clawdbot providers add --provider telegram --account alerts --name "Alerts Bot" --token $TELEGRAM_BOT_TOKEN
+clawdbot providers add --provider discord --account work --name "Work Bot" --token $DISCORD_BOT_TOKEN
+clawdbot providers remove --provider discord --account work --delete
+clawdbot providers status --probe
+clawdbot status --deep
+```
+
+### `skills`
+List and inspect available skills plus readiness info.
+
+Subcommands:
+- `skills list`: list skills (default when no subcommand).
+- `skills info <name>`: show details for one skill.
+- `skills check`: summary of ready vs missing requirements.
 
 Options:
-- `--provider <provider>`
-- `--account <id>`
+- `--eligible`: show only ready skills.
+- `--json`: output JSON (no styling).
+- `-v`, `--verbose`: include missing requirements detail.
+
+Tip: use `npx clawdhub` to search, install, and sync skills.
 
 ### `pairing`
 Approve DM pairing requests across providers.
@@ -204,13 +263,6 @@ Approve DM pairing requests across providers.
 Subcommands:
 - `pairing list --provider <telegram|signal|imessage|discord|slack|whatsapp> [--json]`
 - `pairing approve --provider <...> <code> [--notify]`
-
-### `telegram pairing`
-Telegram-only pairing helper.
-
-Subcommands:
-- `telegram pairing list [--json]`
-- `telegram pairing approve <code> [--no-notify]`
 
 ### `hooks gmail`
 Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
@@ -284,13 +336,20 @@ List configured agents.
 
 Options:
 - `--json`
+- `--bindings`
 
 #### `agents add [name]`
-Add a new isolated agent. If `--workspace` is omitted, runs the guided wizard.
+Add a new isolated agent. Runs the guided wizard unless flags (or `--non-interactive`) are passed; `--workspace` is required in non-interactive mode.
 
 Options:
 - `--workspace <dir>`
+- `--model <id>`
+- `--agent-dir <dir>`
+- `--bind <provider[:accountId]>` (repeatable)
+- `--non-interactive`
 - `--json`
+
+Binding specs use `provider[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
 
 #### `agents delete <id>`
 Delete an agent and prune its workspace + state.
@@ -359,8 +418,33 @@ Options:
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 
-### `gateway-daemon`
-Run the Gateway as a long-lived daemon (same options as `gateway`, minus `--allow-unconfigured` and `--force`).
+### `daemon`
+Manage the Gateway service (launchd/systemd/schtasks).
+
+Subcommands:
+- `daemon status` (probes the Gateway RPC by default)
+- `daemon install` (service install)
+- `daemon uninstall`
+- `daemon start`
+- `daemon stop`
+- `daemon restart`
+
+Notes:
+- `daemon status` probes the Gateway RPC by default using the daemon’s resolved port/config (override with `--url/--token/--password`).
+- `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
+- `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans).
+- `daemon status` prints which config path the CLI uses vs which config the daemon likely uses (service env), plus the resolved probe target URL.
+- `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
+- `daemon install` options: `--port`, `--runtime`, `--token`, `--force`.
+
+### `logs`
+Tail Gateway file logs via RPC.
+
+Examples:
+```bash
+clawdbot logs --follow
+clawdbot logs --limit 200
+```
 
 ### `gateway <subcommand>`
 Gateway RPC helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for each).
@@ -369,11 +453,10 @@ Subcommands:
 - `gateway call <method> [--params <json>]`
 - `gateway health`
 - `gateway status`
-- `gateway wake --text <text> [--mode now|next-heartbeat]`
-- `gateway send --to <jidOrPhone> --message <text> [--media-url <url>] [--gif-playback] [--idempotency-key <key>]`
-- `gateway agent --message <text> [--to <jidOrPhone>] [--session-id <id>] [--thinking <level>] [--deliver] [--timeout-seconds <n>] [--idempotency-key <key>]`
-- `gateway stop`
-- `gateway restart`
+
+Common RPCs:
+- `config.apply` (validate + write config + restart + wake)
+- `update.run` (run update + restart + wake)
 
 ## Models
 
@@ -453,10 +536,10 @@ Manage scheduled jobs (Gateway RPC). See [/automation/cron-jobs](/automation/cro
 
 Subcommands:
 - `cron status [--json]`
-- `cron list [--all] [--json]`
-- `cron add` (requires `--name` and exactly one of `--at` | `--every` | `--cron`, and exactly one payload of `--system-event` | `--message`)
+- `cron list [--all] [--json]` (table output by default; use `--json` for raw)
+- `cron add` (alias: `create`; requires `--name` and exactly one of `--at` | `--every` | `--cron`, and exactly one payload of `--system-event` | `--message`)
 - `cron edit <id>` (patch fields)
-- `cron rm <id>`
+- `cron rm <id>` (aliases: `remove`, `delete`)
 - `cron enable <id>`
 - `cron disable <id>`
 - `cron runs --id <id> [--limit <n>]`
@@ -490,26 +573,16 @@ Camera:
 
 Canvas + screen:
 - `nodes canvas snapshot --node <id|name|ip> [--format png|jpg|jpeg] [--max-width <px>] [--quality <0-1>] [--invoke-timeout <ms>]`
+- `nodes canvas present --node <id|name|ip> [--target <urlOrPath>] [--x <px>] [--y <px>] [--width <px>] [--height <px>] [--invoke-timeout <ms>]`
+- `nodes canvas hide --node <id|name|ip> [--invoke-timeout <ms>]`
+- `nodes canvas navigate <url> --node <id|name|ip> [--invoke-timeout <ms>]`
+- `nodes canvas eval [<js>] --node <id|name|ip> [--js <code>] [--invoke-timeout <ms>]`
+- `nodes canvas a2ui push --node <id|name|ip> (--jsonl <path> | --text <text>) [--invoke-timeout <ms>]`
+- `nodes canvas a2ui reset --node <id|name|ip> [--invoke-timeout <ms>]`
 - `nodes screen record --node <id|name|ip> [--screen <index>] [--duration <ms|10s>] [--fps <n>] [--no-audio] [--out <path>] [--invoke-timeout <ms>]`
 
 Location:
 - `nodes location get --node <id|name|ip> [--max-age <ms>] [--accuracy <coarse|balanced|precise>] [--location-timeout <ms>] [--invoke-timeout <ms>]`
-
-## Canvas
-
-Canvas RPC helper (top-level wrapper for `node.invoke`). See [/platforms/mac/canvas](/platforms/mac/canvas).
-
-Common options:
-- `--url`, `--token`, `--timeout`, `--json`
-
-Subcommands:
-- `canvas snapshot [--node <id|name|ip>] [--format png|jpg] [--max-width <px>] [--quality <0-1>]`
-- `canvas present [--node <id|name|ip>] [--target <urlOrPath>] [--x <px>] [--y <px>] [--width <px>] [--height <px>]`
-- `canvas hide [--node <id|name|ip>]`
-- `canvas navigate <url> [--node <id|name|ip>]`
-- `canvas eval [<js>] [--js <code>] [--node <id|name|ip>]`
-- `canvas a2ui push (--jsonl <path> | --text <text>) [--node <id|name|ip>]`
-- `canvas a2ui reset [--node <id|name|ip>]`
 
 ## Browser
 

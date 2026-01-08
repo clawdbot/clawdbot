@@ -714,6 +714,7 @@ class TalkModeManager(
             systemTtsPendingId = null
           }
 
+          @Suppress("OVERRIDE_DEPRECATION")
           @Deprecated("Deprecated in Java")
           override fun onError(utteranceId: String?) {
             if (utteranceId == null) return

@@ -1,4 +1,8 @@
 import {
+  findDuplicateAgentDirs,
+  formatDuplicateAgentDirError,
+} from "./agent-dirs.js";
+import {
   applyIdentityDefaults,
   applyModelDefaults,
   applySessionDefaults,
@@ -30,6 +34,18 @@ export function validateConfigObject(
         path: iss.path.join("."),
         message: iss.message,
       })),
+    };
+  }
+  const duplicates = findDuplicateAgentDirs(validated.data as ClawdbotConfig);
+  if (duplicates.length > 0) {
+    return {
+      ok: false,
+      issues: [
+        {
+          path: "routing.agents",
+          message: formatDuplicateAgentDirError(duplicates),
+        },
+      ],
     };
   }
   return {

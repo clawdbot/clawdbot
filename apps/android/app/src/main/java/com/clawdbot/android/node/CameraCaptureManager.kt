@@ -5,8 +5,10 @@ import android.content.Context
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.util.Base64
 import android.content.pm.PackageManager
+import android.media.ExifInterface
 import androidx.lifecycle.LifecycleOwner
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -86,18 +88,19 @@ class CameraCaptureManager(private val context: Context) {
       provider.unbindAll()
       provider.bindToLifecycle(owner, selector, capture)
 
-      val bytes = capture.takeJpegBytes(context.mainExecutor())
+      val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor())
       val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
+      val rotated = rotateBitmapByExif(decoded, orientation)
       val scaled =
-        if (maxWidth != null && maxWidth > 0 && decoded.width > maxWidth) {
+        if (maxWidth != null && maxWidth > 0 && rotated.width > maxWidth) {
           val h =
-            (decoded.height.toDouble() * (maxWidth.toDouble() / decoded.width.toDouble()))
+            (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
               .toInt()
               .coerceAtLeast(1)
-          decoded.scale(maxWidth, h)
+          rotated.scale(maxWidth, h)
         } else {
-          decoded
+          rotated
         }
 
       val maxPayloadBytes = 5 * 1024 * 1024
@@ -194,6 +197,31 @@ class CameraCaptureManager(private val context: Context) {
       )
     }
 
+  private fun rotateBitmapByExif(bitmap: Bitmap, orientation: Int): Bitmap {
+    val matrix = Matrix()
+    when (orientation) {
+      ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+      ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+      ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+      ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+      ExifInterface.ORIENTATION_TRANSPOSE -> {
+        matrix.postRotate(90f)
+        matrix.postScale(-1f, 1f)
+      }
+      ExifInterface.ORIENTATION_TRANSVERSE -> {
+        matrix.postRotate(-90f)
+        matrix.postScale(-1f, 1f)
+      }
+      else -> return bitmap
+    }
+    val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    if (rotated !== bitmap) {
+      bitmap.recycle()
+    }
+    return rotated
+  }
+
   private fun parseFacing(paramsJson: String?): String? =
     when {
       paramsJson?.contains("\"front\"") == true -> "front"
@@ -254,7 +282,8 @@ private suspend fun Context.cameraProvider(): ProcessCameraProvider =
     )
   }
 
-private suspend fun ImageCapture.takeJpegBytes(executor: Executor): ByteArray =
+/** Returns (jpegBytes, exifOrientation) so caller can rotate the decoded bitmap. */
+private suspend fun ImageCapture.takeJpegWithExif(executor: Executor): Pair<ByteArray, Int> =
   suspendCancellableCoroutine { cont ->
     val file = File.createTempFile("clawdbot-snap-", ".jpg")
     val options = ImageCapture.OutputFileOptions.Builder(file).build()
@@ -263,13 +292,19 @@ private suspend fun ImageCapture.takeJpegBytes(executor: Executor): ByteArray =
       executor,
       object : ImageCapture.OnImageSavedCallback {
         override fun onError(exception: ImageCaptureException) {
+          file.delete()
           cont.resumeWithException(exception)
         }
 
         override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
           try {
+            val exif = ExifInterface(file.absolutePath)
+            val orientation = exif.getAttributeInt(
+              ExifInterface.TAG_ORIENTATION,
+              ExifInterface.ORIENTATION_NORMAL,
+            )
             val bytes = file.readBytes()
-            cont.resume(bytes)
+            cont.resume(Pair(bytes, orientation))
           } catch (e: Exception) {
             cont.resumeWithException(e)
           } finally {

@@ -38,6 +38,7 @@ import {
   updateLastRoute,
 } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { formatDurationMs } from "../infra/format-duration.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
@@ -131,9 +132,6 @@ export type WebMonitorTuning = {
   /** WhatsApp account id. Default: "default". */
   accountId?: string;
 };
-
-const formatDuration = (ms: number) =>
-  ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
 
 export { HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN };
 
@@ -1613,7 +1611,7 @@ export async function monitorWebProvider(
 
     if (loggedOut) {
       runtime.error(
-        "WhatsApp session logged out. Run `clawdbot login --provider web` to relink.",
+        "WhatsApp session logged out. Run `clawdbot providers login --provider web` to relink.",
       );
       await closeListener();
       break;
@@ -1654,7 +1652,7 @@ export async function monitorWebProvider(
       "web reconnect: scheduling retry",
     );
     runtime.error(
-      `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDuration(delay)}… (${errorStr})`,
+      `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationMs(delay)}… (${errorStr})`,
     );
     await closeListener();
     try {

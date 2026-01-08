@@ -12,15 +12,7 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
-import {
-  extractElevatedDirective,
-  extractQueueDirective,
-  extractReasoningDirective,
-  extractReplyToTag,
-  extractThinkDirective,
-  extractVerboseDirective,
-  getReplyFromConfig,
-} from "./reply.js";
+import { getReplyFromConfig } from "./reply.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -60,7 +52,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   }
 }
 
-describe("directive parsing", () => {
+describe("directive behavior", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([
@@ -74,74 +66,34 @@ describe("directive parsing", () => {
     vi.restoreAllMocks();
   });
 
-  it("ignores verbose directive inside URL", () => {
-    const body = "https://x.com/verioussmith/status/1997066835133669687";
-    const res = extractVerboseDirective(body);
-    expect(res.hasDirective).toBe(false);
-    expect(res.cleaned).toBe(body);
-  });
+  it("keeps reserved command aliases from matching after trimming", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
 
-  it("ignores typoed /verioussmith", () => {
-    const body = "/verioussmith";
-    const res = extractVerboseDirective(body);
-    expect(res.hasDirective).toBe(false);
-    expect(res.cleaned).toBe(body.trim());
-  });
+      const res = await getReplyFromConfig(
+        {
+          Body: "/help",
+          From: "+1222",
+          To: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            models: {
+              "anthropic/claude-opus-4-5": { alias: " help " },
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
 
-  it("ignores think directive inside URL", () => {
-    const body = "see https://example.com/path/thinkstuff";
-    const res = extractThinkDirective(body);
-    expect(res.hasDirective).toBe(false);
-  });
-
-  it("matches verbose with leading space", () => {
-    const res = extractVerboseDirective(" please /verbose on now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.verboseLevel).toBe("on");
-  });
-
-  it("matches reasoning directive", () => {
-    const res = extractReasoningDirective("/reasoning on please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.reasoningLevel).toBe("on");
-  });
-
-  it("matches reasoning stream directive", () => {
-    const res = extractReasoningDirective("/reasoning stream please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.reasoningLevel).toBe("stream");
-  });
-
-  it("matches elevated with leading space", () => {
-    const res = extractElevatedDirective(" please /elevated on now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.elevatedLevel).toBe("on");
-  });
-
-  it("matches think at start of line", () => {
-    const res = extractThinkDirective("/think:high run slow");
-    expect(res.hasDirective).toBe(true);
-    expect(res.thinkLevel).toBe("high");
-  });
-
-  it("matches queue directive", () => {
-    const res = extractQueueDirective("please /queue interrupt now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("interrupt");
-    expect(res.queueReset).toBe(false);
-    expect(res.cleaned).toBe("please now");
-  });
-
-  it("parses queue options and modes", () => {
-    const res = extractQueueDirective(
-      "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
-    );
-    expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("steer-backlog");
-    expect(res.debounceMs).toBe(2000);
-    expect(res.cap).toBe(5);
-    expect(res.dropPolicy).toBe("summarize");
-    expect(res.cleaned).toBe("please now");
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Help");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
   });
 
   it("errors on invalid queue options", async () => {
@@ -173,25 +125,87 @@ describe("directive parsing", () => {
     });
   });
 
-  it("extracts reply_to_current tag", () => {
-    const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
-    expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
+  it("shows current queue settings when /queue has no arguments", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/queue",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          routing: {
+            queue: {
+              mode: "collect",
+              debounceMs: 1500,
+              cap: 9,
+              drop: "summarize",
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain(
+        "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
+      );
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
   });
 
-  it("extracts reply_to id tag", () => {
-    const res = extractReplyToTag("see [[reply_to:12345]] now", "msg-1");
-    expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+  it("shows current think level when /think has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            thinkingDefault: "high",
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current thinking level: high");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
   });
 
-  it("preserves newlines when stripping reply tags", () => {
-    const res = extractReplyToTag(
-      "line 1\nline 2 [[reply_to_current]]\n\nline 3",
-      "msg-2",
-    );
-    expect(res.replyToId).toBe("msg-2");
-    expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+  it("shows off when /think has no argument and no default set", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current thinking level: off");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
   });
 
   it("strips reply tags and maps reply_to_current to MessageSid", async () => {
@@ -321,6 +335,129 @@ describe("directive parsing", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toMatch(/^⚙️ Verbose logging enabled\./);
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current think level when /think has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            thinkingDefault: "high",
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current thinking level: high");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows off when /think has no argument and no default set", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current thinking level: off");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current verbose level when /verbose has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/verbose", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            verboseDefault: "on",
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current verbose level: on");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current reasoning level when /reasoning has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/reasoning", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current reasoning level: off");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current elevated level when /elevated has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            elevatedDefault: "on",
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current elevated level: on");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

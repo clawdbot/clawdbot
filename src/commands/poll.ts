@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
+import { withProgress } from "../cli/progress.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
 import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
@@ -57,25 +58,33 @@ export async function pollCommand(
     return;
   }
 
-  const result = await callGateway<{
-    messageId: string;
-    toJid?: string;
-    channelId?: string;
-  }>({
-    method: "poll",
-    params: {
-      to: opts.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationHours: normalized.durationHours,
-      provider,
-      idempotencyKey: randomIdempotencyKey(),
+  const result = await withProgress(
+    {
+      label: `Sending poll via ${provider}…`,
+      indeterminate: true,
+      enabled: opts.json !== true,
     },
-    timeoutMs: 10_000,
-    clientName: "cli",
-    mode: "cli",
-  });
+    async () =>
+      await callGateway<{
+        messageId: string;
+        toJid?: string;
+        channelId?: string;
+      }>({
+        method: "poll",
+        params: {
+          to: opts.to,
+          question: normalized.question,
+          options: normalized.options,
+          maxSelections: normalized.maxSelections,
+          durationHours: normalized.durationHours,
+          provider,
+          idempotencyKey: randomIdempotencyKey(),
+        },
+        timeoutMs: 10_000,
+        clientName: "cli",
+        mode: "cli",
+      }),
+  );
 
   runtime.log(
     success(

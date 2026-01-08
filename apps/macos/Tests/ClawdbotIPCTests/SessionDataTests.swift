@@ -14,7 +14,7 @@ struct SessionDataTests {
     @Test func sessionTokenStatsFormatKTokensRoundsAsExpected() {
         #expect(SessionTokenStats.formatKTokens(999) == "999")
         #expect(SessionTokenStats.formatKTokens(1000) == "1.0k")
-        #expect(SessionTokenStats.formatKTokens(12_340) == "12k")
+        #expect(SessionTokenStats.formatKTokens(12340) == "12k")
     }
 
     @Test func sessionTokenStatsPercentUsedClampsTo100() {
@@ -28,7 +28,7 @@ struct SessionDataTests {
             key: "user@example.com",
             kind: .direct,
             displayName: nil,
-            surface: nil,
+            provider: nil,
             subject: nil,
             room: nil,
             space: nil,

@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendCommand = vi.fn();
 const statusCommand = vi.fn();
 const configureCommand = vi.fn();
-const loginWeb = vi.fn();
+const setupCommand = vi.fn();
+const onboardCommand = vi.fn();
 const callGateway = vi.fn();
+const runProviderLogin = vi.fn();
+const runProviderLogout = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -18,9 +21,12 @@ const runtime = {
 vi.mock("../commands/send.js", () => ({ sendCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
 vi.mock("../commands/configure.js", () => ({ configureCommand }));
+vi.mock("../commands/setup.js", () => ({ setupCommand }));
+vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
-vi.mock("../provider-web.js", () => ({
-  loginWeb,
+vi.mock("./provider-auth.js", () => ({
+  runProviderLogin,
+  runProviderLogout,
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
@@ -55,6 +61,53 @@ describe("cli program", () => {
     const program = buildProgram();
     await program.parseAsync(["config"], { from: "user" });
     expect(configureCommand).toHaveBeenCalled();
+  });
+
+  it("runs setup without wizard flags", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["setup"], { from: "user" });
+    expect(setupCommand).toHaveBeenCalled();
+    expect(onboardCommand).not.toHaveBeenCalled();
+  });
+
+  it("runs setup wizard when wizard flags are present", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["setup", "--remote-url", "ws://example"], {
+      from: "user",
+    });
+    expect(onboardCommand).toHaveBeenCalled();
+    expect(setupCommand).not.toHaveBeenCalled();
+  });
+
+  it("runs providers login", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["providers", "login", "--account", "work"], {
+      from: "user",
+    });
+    expect(runProviderLogin).toHaveBeenCalledWith(
+      { provider: undefined, account: "work", verbose: false },
+      runtime,
+    );
+  });
+
+  it("runs providers logout", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["providers", "logout", "--account", "work"], {
+      from: "user",
+    });
+    expect(runProviderLogout).toHaveBeenCalledWith(
+      { provider: undefined, account: "work" },
+      runtime,
+    );
+  });
+
+  it("runs hidden login alias", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["login", "--account", "work"], { from: "user" });
+    expect(runProviderLogin).toHaveBeenCalledWith(
+      { provider: undefined, account: "work", verbose: false },
+      runtime,
+    );
   });
 
   it("runs nodes list and calls node.pair.list", async () => {
@@ -612,44 +665,6 @@ describe("cli program", () => {
       ["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "png"],
       { from: "user" },
     );
-
-    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
-    const mediaPath = out.replace(/^MEDIA:/, "").trim();
-    expect(mediaPath).toMatch(/clawdbot-canvas-snapshot-.*\.png$/);
-
-    try {
-      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
-    } finally {
-      await fs.unlink(mediaPath).catch(() => {});
-    }
-  });
-
-  it("runs canvas snapshot and prints MEDIA path", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "mac-1",
-            displayName: "Mac Node",
-            platform: "macos",
-            connected: true,
-            caps: ["canvas"],
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "mac-1",
-        command: "canvas.snapshot",
-        payload: { format: "png", base64: "aGk=" },
-      });
-
-    const program = buildProgram();
-    runtime.log.mockClear();
-    await program.parseAsync(["canvas", "snapshot", "--format", "png"], {
-      from: "user",
-    });
 
     const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
     const mediaPath = out.replace(/^MEDIA:/, "").trim();

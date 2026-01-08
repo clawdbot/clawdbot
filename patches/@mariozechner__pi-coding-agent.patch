@@ -1,0 +1,28 @@
+diff --git a/dist/core/sdk.js b/dist/core/sdk.js
+index 0000000..1111111 100644
+--- a/dist/core/sdk.js
++++ b/dist/core/sdk.js
+@@ -441,6 +441,8 @@ export async function createAgentSession(options = {}) {
+             }
+             return key;
+         },
++        // PATCH: Pass extraParams through for provider-specific features (e.g., GLM-4.7 thinking mode)
++        extraParams: options.extraParams,
+     });
+     time("createAgent");
+     // Restore messages if session has existing data
+diff --git a/dist/core/sdk.d.ts b/dist/core/sdk.d.ts
+index 0000000..1111111 100644
+--- a/dist/core/sdk.d.ts
++++ b/dist/core/sdk.d.ts
+@@ -79,6 +79,10 @@ export interface CreateAgentSessionOptions {
+     sessionManager?: SessionManager;
+     /** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
+     settingsManager?: SettingsManager;
++    /**
++     * Extra params to pass to the provider API (e.g., Z.AI GLM thinking mode params).
++     */
++    extraParams?: Record<string, unknown>;
+ }
+ /** Result from createAgentSession */
+ export interface CreateAgentSessionResult {

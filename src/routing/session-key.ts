@@ -89,3 +89,20 @@ export function buildAgentPeerSessionKey(params: {
   const peerId = (params.peerId ?? "").trim() || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${provider}:${peerKind}:${peerId}`;
 }
+
+export function resolveThreadSessionKeys(params: {
+  baseSessionKey: string;
+  threadId?: string | null;
+  parentSessionKey?: string;
+  useSuffix?: boolean;
+}): { sessionKey: string; parentSessionKey?: string } {
+  const threadId = (params.threadId ?? "").trim();
+  if (!threadId) {
+    return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
+  }
+  const useSuffix = params.useSuffix ?? true;
+  const sessionKey = useSuffix
+    ? `${params.baseSessionKey}:thread:${threadId}`
+    : params.baseSessionKey;
+  return { sessionKey, parentSessionKey: params.parentSessionKey };
+}

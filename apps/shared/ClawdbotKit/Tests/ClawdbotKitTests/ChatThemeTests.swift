@@ -1,6 +1,6 @@
-@testable import ClawdbotChatUI
 import Foundation
 import Testing
+@testable import ClawdbotChatUI
 
 #if os(macOS)
 import AppKit

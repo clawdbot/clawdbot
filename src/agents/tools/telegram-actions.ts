@@ -1,7 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { reactMessageTelegram } from "../../telegram/send.js";
+import {
+  reactMessageTelegram,
+  sendMessageTelegram,
+} from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import {
   createActionGate,
@@ -47,6 +50,39 @@ export async function handleTelegramAction(
       return jsonResult({ ok: true, added: emoji });
     }
     return jsonResult({ ok: true, removed: true });
+  }
+
+  if (action === "sendMessage") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const content = readStringParam(params, "content", { required: true });
+    const mediaUrl = readStringParam(params, "mediaUrl");
+    // Optional threading parameters for forum topics and reply chains
+    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
+      integer: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or telegram.botToken.",
+      );
+    }
+    const result = await sendMessageTelegram(to, content, {
+      token,
+      mediaUrl: mediaUrl || undefined,
+      replyToMessageId: replyToMessageId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+    });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

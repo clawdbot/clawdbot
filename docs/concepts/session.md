@@ -16,7 +16,7 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 ## Where state lives
 - On the **gateway host**:
   - Store file: `~/.clawdbot/agents/<agentId>/sessions/sessions.json` (per agent).
-  - Transcripts: `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl` (one file per session id).
+- Transcripts: `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl` (Telegram topic sessions use `.../<SessionId>-topic-<threadId>.jsonl`).
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
 - Group entries may include `displayName`, `provider`, `subject`, `room`, and `space` to label sessions in UIs.
 - Clawdbot does **not** read legacy Pi/Tau session folders.
@@ -85,7 +85,7 @@ Send these as standalone messages so they register.
 - `clawdbot gateway call sessions.list --params '{}'` — fetch sessions from the running gateway (use `--url`/`--token` for remote gateway access).
 - Send `/status` as a standalone message in chat to see whether the agent is reachable, how much of the session context is used, current thinking/verbose toggles, and when your WhatsApp web creds were last refreshed (helps spot relink needs).
 - Send `/stop` as a standalone message to abort the current run.
-- Send `/compact` (optional instructions) as a standalone message to summarize older context and free up window space.
+- Send `/compact` (optional instructions) as a standalone message to summarize older context and free up window space. See [/concepts/compaction](/concepts/compaction).
 - JSONL transcripts can be opened directly to review full turns.
 
 ## Tips

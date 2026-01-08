@@ -5,7 +5,7 @@ read_when:
 ---
 # Voice Wake & Push-to-Talk
 
-Updated: 2025-12-23 · Owners: mac app
+Updated: 2026-01-08 · Owners: mac app
 
 ## Modes
 - **Wake-word mode** (default): always-on Speech recognizer waits for trigger tokens (`swabbleTriggerWords`). On match it starts capture, shows the overlay with partial text, and auto-sends after silence.
@@ -13,7 +13,7 @@ Updated: 2025-12-23 · Owners: mac app
 
 ## Runtime behavior (wake-word)
 - Speech recognizer lives in `VoiceWakeRuntime`.
-- Trigger only fires when there’s a **meaningful pause** between the wake word and the next word (~0.45s gap).
+- Trigger only fires when there’s a **meaningful pause** between the wake word and the next word (~0.55s gap). The overlay/chime can start on the pause even before the command begins.
 - Silence windows: 2.0s when speech is flowing, 5.0s if only the trigger was heard.
 - Hard stop: 120s to prevent runaway sessions.
 - Debounce between sessions: 350ms.
@@ -41,7 +41,8 @@ Hardening:
 ## User-facing settings
 - **Voice Wake** toggle: enables wake-word runtime.
 - **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
-- Language & mic pickers, live level meter, trigger-word table, tester.
+- Language & mic pickers, live level meter, trigger-word table, tester (local-only; does not forward).
+- Mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
 - **Sounds**: chimes on trigger detect and on send; defaults to the macOS “Glass” system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
 
 ## Forwarding behavior

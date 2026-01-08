@@ -85,6 +85,20 @@ describe("resolveTextChunkLimit", () => {
     expect(resolveTextChunkLimit(cfg, "telegram")).toBe(1234);
   });
 
+  it("prefers account overrides when provided", () => {
+    const cfg = {
+      telegram: {
+        textChunkLimit: 2000,
+        accounts: {
+          default: { textChunkLimit: 1234 },
+          primary: { textChunkLimit: 777 },
+        },
+      },
+    };
+    expect(resolveTextChunkLimit(cfg, "telegram", "primary")).toBe(777);
+    expect(resolveTextChunkLimit(cfg, "telegram", "default")).toBe(1234);
+  });
+
   it("uses the matching provider override", () => {
     const cfg = {
       discord: { textChunkLimit: 111 },

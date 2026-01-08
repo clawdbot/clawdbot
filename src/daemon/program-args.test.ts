@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
@@ -22,14 +23,16 @@ afterEach(() => {
 
 describe("resolveGatewayProgramArguments", () => {
   it("uses realpath-resolved dist entry when running via npx shim", async () => {
-    process.argv = ["node", "/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot"];
-    fsMocks.realpath.mockResolvedValue(
+    const argv1 = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot",
+    );
+    const entryPath = path.resolve(
       "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/entry.js",
     );
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (
-        target === "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/entry.js"
-      ) {
+      if (target === entryPath) {
         return;
       }
       throw new Error("missing");
@@ -39,20 +42,24 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       process.execPath,
-      "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/entry.js",
-      "gateway-daemon",
+      entryPath,
+      "gateway",
       "--port",
       "18789",
     ]);
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
-    process.argv = ["node", "/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot"];
+    const argv1 = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot",
+    );
+    const indexPath = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/index.js",
+    );
+    process.argv = ["node", argv1];
     fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
     fsMocks.access.mockImplementation(async (target: string) => {
-      if (
-        target === "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/index.js"
-      ) {
+      if (target === indexPath) {
         return;
       }
       throw new Error("missing");
@@ -62,8 +69,8 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       process.execPath,
-      "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/index.js",
-      "gateway-daemon",
+      indexPath,
+      "gateway",
       "--port",
       "18789",
     ]);

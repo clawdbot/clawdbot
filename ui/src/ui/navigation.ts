@@ -5,7 +5,7 @@ export const TAB_GROUPS = [
     tabs: ["overview", "connections", "instances", "sessions", "cron"],
   },
   { label: "Agent", tabs: ["skills", "nodes"] },
-  { label: "Settings", tabs: ["config", "debug"] },
+  { label: "Settings", tabs: ["config", "debug", "logs"] },
 ] as const;
 
 export type Tab =
@@ -18,7 +18,8 @@ export type Tab =
   | "nodes"
   | "chat"
   | "config"
-  | "debug";
+  | "debug"
+  | "logs";
 
 const TAB_PATHS: Record<Tab, string> = {
   overview: "/overview",
@@ -31,6 +32,7 @@ const TAB_PATHS: Record<Tab, string> = {
   chat: "/chat",
   config: "/config",
   debug: "/debug",
+  logs: "/logs",
 };
 
 const PATH_TO_TAB = new Map(
@@ -118,6 +120,8 @@ export function titleForTab(tab: Tab) {
       return "Config";
     case "debug":
       return "Debug";
+    case "logs":
+      return "Logs";
     default:
       return "Control";
   }
@@ -145,6 +149,8 @@ export function subtitleForTab(tab: Tab) {
       return "Edit ~/.clawdbot/clawdbot.json safely.";
     case "debug":
       return "Gateway snapshots, events, and manual RPC calls.";
+    case "logs":
+      return "Live tail of the gateway file logs.";
     default:
       return "";
   }

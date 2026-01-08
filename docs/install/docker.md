@@ -31,7 +31,7 @@ From repo root:
 This script:
 - builds the gateway image
 - runs the onboarding wizard
-- runs WhatsApp login
+- prints optional provider setup hints
 - starts the gateway via Docker Compose
 
 It writes config/workspace on the host:
@@ -43,9 +43,29 @@ It writes config/workspace on the host:
 ```bash
 docker build -t clawdbot:local -f Dockerfile .
 docker compose run --rm clawdbot-cli onboard
-docker compose run --rm clawdbot-cli login
 docker compose up -d clawdbot-gateway
 ```
+
+### Provider setup (optional)
+
+Use the CLI container to configure providers, then restart the gateway if needed.
+
+WhatsApp (QR):
+```bash
+docker compose run --rm clawdbot-cli providers login
+```
+
+Telegram (bot token):
+```bash
+docker compose run --rm clawdbot-cli providers add --provider telegram --token "<token>"
+```
+
+Discord (bot token):
+```bash
+docker compose run --rm clawdbot-cli providers add --provider discord --token "<token>"
+```
+
+Docs: [WhatsApp](/providers/whatsapp), [Telegram](/providers/telegram), [Discord](/providers/discord)
 
 ### Health check
 
@@ -85,6 +105,18 @@ container. The gateway stays on your host, but the tool execution is isolated:
 
 Warning: `scope: "shared"` disables cross-session isolation. All sessions share
 one container and one workspace.
+
+### Per-agent sandbox profiles (multi-agent)
+
+If you use multi-agent routing, each agent can override sandbox + tool settings:
+`routing.agents[id].sandbox` and `routing.agents[id].tools`. This lets you run
+mixed access levels in one gateway:
+- Full access (personal agent)
+- Read-only tools + read-only workspace (family/work agent)
+- No filesystem/shell tools (public agent)
+
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for examples,
+precedence, and troubleshooting.
 
 ### Default behavior
 
@@ -147,6 +179,9 @@ one container and one workspace.
 Hardening knobs live under `agent.sandbox.docker`:
 `network`, `user`, `pidsLimit`, `memory`, `memorySwap`, `cpus`, `ulimits`,
 `seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`.
+
+Multi-agent: override `agent.sandbox.{docker,browser,prune}.*` per agent via `routing.agents.<agentId>.sandbox.{docker,browser,prune}.*`
+(ignored when `agent.sandbox.scope` / `routing.agents.<agentId>.sandbox.scope` is `"shared"`).
 
 ### Build the default sandbox image
 

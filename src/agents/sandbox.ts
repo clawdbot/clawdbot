@@ -207,7 +207,7 @@ function isToolAllowed(policy: SandboxToolPolicy, name: string) {
   return allow.includes(name.toLowerCase());
 }
 
-function resolveSandboxScope(params: {
+export function resolveSandboxScope(params: {
   scope?: SandboxScope;
   perSession?: boolean;
 }): SandboxScope {
@@ -218,6 +218,108 @@ function resolveSandboxScope(params: {
   return "agent";
 }
 
+export function resolveSandboxDockerConfig(params: {
+  scope: SandboxScope;
+  globalDocker?: Partial<SandboxDockerConfig>;
+  agentDocker?: Partial<SandboxDockerConfig>;
+}): SandboxDockerConfig {
+  const agentDocker =
+    params.scope === "shared" ? undefined : params.agentDocker;
+  const globalDocker = params.globalDocker;
+
+  const env = agentDocker?.env
+    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
+    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+
+  const ulimits = agentDocker?.ulimits
+    ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
+    : globalDocker?.ulimits;
+
+  return {
+    image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,
+    containerPrefix:
+      agentDocker?.containerPrefix ??
+      globalDocker?.containerPrefix ??
+      DEFAULT_SANDBOX_CONTAINER_PREFIX,
+    workdir:
+      agentDocker?.workdir ?? globalDocker?.workdir ?? DEFAULT_SANDBOX_WORKDIR,
+    readOnlyRoot:
+      agentDocker?.readOnlyRoot ?? globalDocker?.readOnlyRoot ?? true,
+    tmpfs: agentDocker?.tmpfs ??
+      globalDocker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
+    network: agentDocker?.network ?? globalDocker?.network ?? "none",
+    user: agentDocker?.user ?? globalDocker?.user,
+    capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
+    env,
+    setupCommand: agentDocker?.setupCommand ?? globalDocker?.setupCommand,
+    pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit,
+    memory: agentDocker?.memory ?? globalDocker?.memory,
+    memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
+    cpus: agentDocker?.cpus ?? globalDocker?.cpus,
+    ulimits,
+    seccompProfile: agentDocker?.seccompProfile ?? globalDocker?.seccompProfile,
+    apparmorProfile:
+      agentDocker?.apparmorProfile ?? globalDocker?.apparmorProfile,
+    dns: agentDocker?.dns ?? globalDocker?.dns,
+    extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
+  };
+}
+
+export function resolveSandboxBrowserConfig(params: {
+  scope: SandboxScope;
+  globalBrowser?: Partial<SandboxBrowserConfig>;
+  agentBrowser?: Partial<SandboxBrowserConfig>;
+}): SandboxBrowserConfig {
+  const agentBrowser =
+    params.scope === "shared" ? undefined : params.agentBrowser;
+  const globalBrowser = params.globalBrowser;
+  return {
+    enabled: agentBrowser?.enabled ?? globalBrowser?.enabled ?? false,
+    image:
+      agentBrowser?.image ??
+      globalBrowser?.image ??
+      DEFAULT_SANDBOX_BROWSER_IMAGE,
+    containerPrefix:
+      agentBrowser?.containerPrefix ??
+      globalBrowser?.containerPrefix ??
+      DEFAULT_SANDBOX_BROWSER_PREFIX,
+    cdpPort:
+      agentBrowser?.cdpPort ??
+      globalBrowser?.cdpPort ??
+      DEFAULT_SANDBOX_BROWSER_CDP_PORT,
+    vncPort:
+      agentBrowser?.vncPort ??
+      globalBrowser?.vncPort ??
+      DEFAULT_SANDBOX_BROWSER_VNC_PORT,
+    noVncPort:
+      agentBrowser?.noVncPort ??
+      globalBrowser?.noVncPort ??
+      DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
+    headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
+    enableNoVnc:
+      agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
+  };
+}
+
+export function resolveSandboxPruneConfig(params: {
+  scope: SandboxScope;
+  globalPrune?: Partial<SandboxPruneConfig>;
+  agentPrune?: Partial<SandboxPruneConfig>;
+}): SandboxPruneConfig {
+  const agentPrune = params.scope === "shared" ? undefined : params.agentPrune;
+  const globalPrune = params.globalPrune;
+  return {
+    idleHours:
+      agentPrune?.idleHours ??
+      globalPrune?.idleHours ??
+      DEFAULT_SANDBOX_IDLE_HOURS,
+    maxAgeDays:
+      agentPrune?.maxAgeDays ??
+      globalPrune?.maxAgeDays ??
+      DEFAULT_SANDBOX_MAX_AGE_DAYS,
+  };
+}
+
 function resolveSandboxScopeKey(scope: SandboxScope, sessionKey: string) {
   const trimmed = sessionKey.trim() || "main";
   if (scope === "shared") return "shared";
@@ -226,7 +328,7 @@ function resolveSandboxScopeKey(scope: SandboxScope, sessionKey: string) {
   return `agent:${agentId}`;
 }
 
-function defaultSandboxConfig(
+export function resolveSandboxConfigForAgent(
   cfg?: ClawdbotConfig,
   agentId?: string,
 ): SandboxConfig {
@@ -241,62 +343,41 @@ function defaultSandboxConfig(
     }
   }
 
+  const scope = resolveSandboxScope({
+    scope: agentSandbox?.scope ?? agent?.scope,
+    perSession: agentSandbox?.perSession ?? agent?.perSession,
+  });
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
-    scope: resolveSandboxScope({
-      scope: agentSandbox?.scope ?? agent?.scope,
-      perSession: agentSandbox?.perSession ?? agent?.perSession,
-    }),
+    scope,
     workspaceAccess:
       agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ??
       agent?.workspaceRoot ??
       DEFAULT_SANDBOX_WORKSPACE_ROOT,
-    docker: {
-      image: agent?.docker?.image ?? DEFAULT_SANDBOX_IMAGE,
-      containerPrefix:
-        agent?.docker?.containerPrefix ?? DEFAULT_SANDBOX_CONTAINER_PREFIX,
-      workdir: agent?.docker?.workdir ?? DEFAULT_SANDBOX_WORKDIR,
-      readOnlyRoot: agent?.docker?.readOnlyRoot ?? true,
-      tmpfs: agent?.docker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
-      network: agent?.docker?.network ?? "none",
-      user: agent?.docker?.user,
-      capDrop: agent?.docker?.capDrop ?? ["ALL"],
-      env: agent?.docker?.env ?? { LANG: "C.UTF-8" },
-      setupCommand: agent?.docker?.setupCommand,
-      pidsLimit: agent?.docker?.pidsLimit,
-      memory: agent?.docker?.memory,
-      memorySwap: agent?.docker?.memorySwap,
-      cpus: agent?.docker?.cpus,
-      ulimits: agent?.docker?.ulimits,
-      seccompProfile: agent?.docker?.seccompProfile,
-      apparmorProfile: agent?.docker?.apparmorProfile,
-      dns: agent?.docker?.dns,
-      extraHosts: agent?.docker?.extraHosts,
-    },
-    browser: {
-      enabled: agent?.browser?.enabled ?? false,
-      image: agent?.browser?.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE,
-      containerPrefix:
-        agent?.browser?.containerPrefix ?? DEFAULT_SANDBOX_BROWSER_PREFIX,
-      cdpPort: agent?.browser?.cdpPort ?? DEFAULT_SANDBOX_BROWSER_CDP_PORT,
-      vncPort: agent?.browser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
-      noVncPort:
-        agent?.browser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
-      headless: agent?.browser?.headless ?? false,
-      enableNoVnc: agent?.browser?.enableNoVnc ?? true,
-    },
+    docker: resolveSandboxDockerConfig({
+      scope,
+      globalDocker: agent?.docker,
+      agentDocker: agentSandbox?.docker,
+    }),
+    browser: resolveSandboxBrowserConfig({
+      scope,
+      globalBrowser: agent?.browser,
+      agentBrowser: agentSandbox?.browser,
+    }),
     tools: {
       allow:
         agentSandbox?.tools?.allow ?? agent?.tools?.allow ?? DEFAULT_TOOL_ALLOW,
       deny:
         agentSandbox?.tools?.deny ?? agent?.tools?.deny ?? DEFAULT_TOOL_DENY,
     },
-    prune: {
-      idleHours: agent?.prune?.idleHours ?? DEFAULT_SANDBOX_IDLE_HOURS,
-      maxAgeDays: agent?.prune?.maxAgeDays ?? DEFAULT_SANDBOX_MAX_AGE_DAYS,
-    },
+    prune: resolveSandboxPruneConfig({
+      scope,
+      globalPrune: agent?.prune,
+      agentPrune: agentSandbox?.prune,
+    }),
   };
 }
 
@@ -944,7 +1025,7 @@ export async function resolveSandboxContext(params: {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) return null;
   const agentId = resolveAgentIdFromSessionKey(rawSessionKey);
-  const cfg = defaultSandboxConfig(params.config, agentId);
+  const cfg = resolveSandboxConfigForAgent(params.config, agentId);
   const mainKey = params.config?.session?.mainKey?.trim() || "main";
   if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
 
@@ -1007,7 +1088,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) return null;
   const agentId = resolveAgentIdFromSessionKey(rawSessionKey);
-  const cfg = defaultSandboxConfig(params.config, agentId);
+  const cfg = resolveSandboxConfigForAgent(params.config, agentId);
   const mainKey = params.config?.session?.mainKey?.trim() || "main";
   if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
 

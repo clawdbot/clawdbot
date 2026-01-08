@@ -19,6 +19,14 @@ An **agent** is a fully scoped brain with its own:
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
+## Paths (quick map)
+
+- Config: `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`)
+- State dir: `~/.clawdbot` (or `CLAWDBOT_STATE_DIR`)
+- Workspace: `~/clawd` (or `~/clawd-<agentId>`)
+- Agent dir: `~/.clawdbot/agents/<agentId>/agent` (or `routing.agents.<agentId>.agentDir`)
+- Sessions: `~/.clawdbot/agents/<agentId>/sessions`
+
 ### Single-agent mode (default)
 
 If you do nothing, Clawdbot runs a single agent:
@@ -37,6 +45,12 @@ clawdbot agents add work
 ```
 
 Then add `routing.bindings` (or let the wizard do it) to route inbound messages.
+
+Verify with:
+
+```bash
+clawdbot agents list --bindings
+```
 
 ## Multiple agents = multiple people, multiple personalities
 
@@ -152,6 +166,10 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
         sandbox: {
           mode: "all",     // Always sandboxed
           scope: "agent",  // One container per agent
+          docker: {
+            // Optional one-time setup after container creation
+            setupCommand: "apt-get update && apt-get install -y git curl",
+          },
         },
         tools: {
           allow: ["read"],                    // Only read tool

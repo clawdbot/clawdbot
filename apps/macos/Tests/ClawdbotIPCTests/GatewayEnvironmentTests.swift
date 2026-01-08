@@ -19,13 +19,19 @@ import Testing
         #expect(Semver(major: 1, minor: 9, patch: 9).compatible(with: required) == false)
     }
 
-    @Test func gatewayPortDefaultsAndRespectsOverride() {
-        let defaultPort = GatewayEnvironment.gatewayPort()
-        #expect(defaultPort == 18789)
+    @Test func gatewayPortDefaultsAndRespectsOverride() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["CLAWDBOT_CONFIG_PATH": configPath],
+            defaults: ["gatewayPort": nil])
+        {
+            let defaultPort = GatewayEnvironment.gatewayPort()
+            #expect(defaultPort == 18789)
 
-        UserDefaults.standard.set(19999, forKey: "gatewayPort")
-        defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
-        #expect(GatewayEnvironment.gatewayPort() == 19999)
+            UserDefaults.standard.set(19999, forKey: "gatewayPort")
+            defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
+            #expect(GatewayEnvironment.gatewayPort() == 19999)
+        }
     }
 
     @Test func expectedGatewayVersionFromStringUsesParser() {

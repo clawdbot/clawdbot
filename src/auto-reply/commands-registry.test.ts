@@ -23,7 +23,9 @@ describe("commands registry", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/help")).toBe(true);
     expect(detection.regex.test("/status")).toBe(true);
+    expect(detection.regex.test("/status:")).toBe(true);
     expect(detection.regex.test("/stop")).toBe(true);
+    expect(detection.regex.test("/send:")).toBe(true);
     expect(detection.regex.test("try /status")).toBe(false);
   });
 

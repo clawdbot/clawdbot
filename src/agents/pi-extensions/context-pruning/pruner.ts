@@ -153,6 +153,13 @@ function findAssistantCutoffIndex(
   return null;
 }
 
+function findFirstUserIndex(messages: AgentMessage[]): number | null {
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i]?.role === "user") return i;
+  }
+  return null;
+}
+
 function softTrimToolResultMessage(params: {
   msg: ToolResultMessage;
   settings: EffectiveContextPruningSettings;
@@ -207,13 +214,20 @@ export function pruneContextMessages(params: {
   );
   if (cutoffIndex === null) return messages;
 
+  // Bootstrap safety: never prune anything before the first user message. This protects initial
+  // "identity" reads (SOUL.md, USER.md, etc.) which typically happen before the first inbound user
+  // message exists in the session transcript.
+  const firstUserIndex = findFirstUserIndex(messages);
+  const pruneStartIndex =
+    firstUserIndex === null ? messages.length : firstUserIndex;
+
   const isToolPrunable =
     params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
 
   if (settings.mode === "aggressive") {
     let next: AgentMessage[] | null = null;
 
-    for (let i = 0; i < cutoffIndex; i++) {
+    for (let i = pruneStartIndex; i < cutoffIndex; i++) {
       const msg = messages[i];
       if (!msg || msg.role !== "toolResult") continue;
       if (!isToolPrunable(msg.toolName)) continue;
@@ -248,7 +262,7 @@ export function pruneContextMessages(params: {
   const prunableToolIndexes: number[] = [];
   let next: AgentMessage[] | null = null;
 
-  for (let i = 0; i < cutoffIndex; i++) {
+  for (let i = pruneStartIndex; i < cutoffIndex; i++) {
     const msg = messages[i];
     if (!msg || msg.role !== "toolResult") continue;
     if (!isToolPrunable(msg.toolName)) continue;

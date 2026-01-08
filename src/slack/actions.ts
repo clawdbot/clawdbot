@@ -1,10 +1,13 @@
 import { WebClient } from "@slack/web-api";
 
 import { loadConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
+import { resolveSlackAccount } from "./accounts.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
 export type SlackActionClientOpts = {
+  accountId?: string;
   token?: string;
   client?: WebClient;
 };
@@ -28,12 +31,16 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
-function resolveToken(explicit?: string) {
-  const cfgToken = loadConfig().slack?.botToken;
-  const token = resolveSlackBotToken(
-    explicit ?? process.env.SLACK_BOT_TOKEN ?? cfgToken ?? undefined,
-  );
+function resolveToken(explicit?: string, accountId?: string) {
+  const cfg = loadConfig();
+  const account = resolveSlackAccount({ cfg, accountId });
+  const token = resolveSlackBotToken(explicit ?? account.botToken ?? undefined);
   if (!token) {
+    logVerbose(
+      `slack actions: missing bot token for account=${account.accountId} explicit=${Boolean(
+        explicit,
+      )} source=${account.botTokenSource ?? "unknown"}`,
+    );
     throw new Error(
       "SLACK_BOT_TOKEN or slack.botToken is required for Slack actions",
     );
@@ -50,7 +57,7 @@ function normalizeEmoji(raw: string) {
 }
 
 async function getClient(opts: SlackActionClientOpts = {}) {
-  const token = resolveToken(opts.token);
+  const token = resolveToken(opts.token, opts.accountId);
   return opts.client ?? new WebClient(token);
 }
 
@@ -141,6 +148,7 @@ export async function sendSlackMessage(
   opts: SlackActionClientOpts & { mediaUrl?: string } = {},
 ) {
   return await sendMessageSlack(to, content, {
+    accountId: opts.accountId,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
     client: opts.client,

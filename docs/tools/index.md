@@ -42,6 +42,7 @@ Core parameters:
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
+- If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
 
 ### `process`
 Manage background bash sessions.
@@ -52,6 +53,7 @@ Core actions:
 Notes:
 - `poll` returns new output and exit status when complete.
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
+- `process` is scoped per agent; sessions from other agents are not visible.
 
 ### `browser`
 Control the dedicated clawd browser.
@@ -98,7 +100,7 @@ Notes:
 - Uses gateway `node.invoke` under the hood.
 - If no `node` is provided, the tool picks a default (single connected node or local mac node).
 - A2UI is v0.8 only (no `createSurface`); the CLI rejects v0.9 JSONL with line errors.
-- Quick smoke: `clawdbot canvas a2ui push --text "Hello from A2UI"`.
+- Quick smoke: `clawdbot nodes canvas a2ui push --node <id> --text "Hello from A2UI"`.
 
 ### `nodes`
 Discover and target paired nodes; send notifications; capture camera/screen.
@@ -107,6 +109,7 @@ Core actions:
 - `status`, `describe`
 - `pending`, `approve`, `reject` (pairing)
 - `notify` (macOS `system.notify`)
+- `run` (macOS `system.run`)
 - `camera_snap`, `camera_clip`, `screen_record`
 - `location_get`
 
@@ -115,6 +118,20 @@ Notes:
 - Images return image blocks + `MEDIA:<path>`.
 - Videos return `FILE:<path>` (mp4).
 - Location returns a JSON payload (lat/lon/accuracy/timestamp).
+- `run` params: `command` argv array; optional `cwd`, `env` (`KEY=VAL`), `commandTimeoutMs`, `invokeTimeoutMs`, `needsScreenRecording`.
+
+Example (`run`):
+```json
+{
+  "action": "run",
+  "node": "office-mac",
+  "command": ["echo", "Hello"],
+  "env": ["FOO=bar"],
+  "commandTimeoutMs": 12000,
+  "invokeTimeoutMs": 45000,
+  "needsScreenRecording": false
+}
+```
 
 ### `image`
 Analyze an image with the configured image model.
@@ -142,10 +159,13 @@ Notes:
 - `update` uses `{ id, patch }`.
 
 ### `gateway`
-Restart the running Gateway process (in-place).
+Restart or apply updates to the running Gateway process (in-place).
 
 Core actions:
-- `restart` (sends `SIGUSR1` to the current process; `clawdbot gateway`/`gateway-daemon` restart in-place)
+- `restart` (sends `SIGUSR1` to the current process; `clawdbot gateway` restart in-place)
+- `config.get` / `config.schema`
+- `config.apply` (validate + write config + restart + wake)
+- `update.run` (run update + restart + wake)
 
 Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
@@ -157,7 +177,7 @@ Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey`, `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey`, `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
+- `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
 
 Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.
@@ -167,6 +187,13 @@ Notes:
 - `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
+
+### `agents_list`
+List agent ids that the current session may target with `sessions_spawn`.
+
+Notes:
+- Result is restricted to per-agent allowlists (`routing.agents.<agentId>.subagents.allowAgents`).
+- When `["*"]` is configured, the tool includes all configured agents and marks `allowAny: true`.
 
 ### `discord`
 Send Discord reactions, stickers, or polls.
@@ -221,9 +248,10 @@ Notes:
 - The tool is only exposed when the current provider is WhatsApp.
 
 ### `telegram`
-Send Telegram reactions.
+Send Telegram messages or reactions.
 
 Core actions:
+- `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
 - `react` (`chatId`, `messageId`, `emoji`, optional `remove`)
 
 Notes:
@@ -257,11 +285,11 @@ Canvas render:
 Node targeting:
 1) `nodes` → `status`
 2) `describe` on the chosen node
-3) `notify` / `camera_snap` / `screen_record`
+3) `notify` / `run` / `camera_snap` / `screen_record`
 
 ## Safety
 
-- Avoid `system.run` (not exposed as a tool).
+- Avoid direct `system.run`; use `nodes` → `run` only with explicit user consent.
 - Respect user consent for camera/screen capture.
 - Use `status/describe` to ensure permissions before invoking media commands.
 

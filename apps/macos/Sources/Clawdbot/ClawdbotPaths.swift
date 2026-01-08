@@ -3,9 +3,9 @@ import Foundation
 enum ClawdbotEnv {
     static func path(_ key: String) -> String? {
         // Normalize env overrides once so UI + file IO stay consistent.
-        guard let value = ProcessInfo.processInfo.environment[key]?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !value.isEmpty
+        guard let raw = getenv(key) else { return nil }
+        let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty
         else {
             return nil
         }

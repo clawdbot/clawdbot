@@ -1,3 +1,4 @@
+import ClawdbotProtocol
 import Foundation
 
 enum ClawdbotConfigFile {
@@ -32,7 +33,8 @@ enum ClawdbotConfigFile {
     }
 
     static func saveDict(_ dict: [String: Any]) {
-        if ProcessInfo.processInfo.isNixMode { return }
+        // Nix mode disables config writes in production, but tests rely on saving temp configs.
+        if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
         do {
             let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
             let url = self.url()

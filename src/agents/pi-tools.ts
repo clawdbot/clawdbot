@@ -154,12 +154,73 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   return existing;
 }
 
+// Check if an anyOf array contains only literal values that can be flattened
+// TypeBox Type.Literal generates { const: "value", type: "string" }
+// Some schemas may use { enum: ["value"], type: "string" }
+// Both patterns are flattened to { type: "string", enum: ["a", "b", ...] }
+function tryFlattenLiteralAnyOf(
+  anyOf: unknown[],
+): { type: string; enum: unknown[] } | null {
+  if (anyOf.length === 0) return null;
+
+  const allValues: unknown[] = [];
+  let commonType: string | null = null;
+
+  for (const variant of anyOf) {
+    if (!variant || typeof variant !== "object") return null;
+    const v = variant as Record<string, unknown>;
+
+    // Extract the literal value - either from const or single-element enum
+    let literalValue: unknown;
+    if ("const" in v) {
+      literalValue = v.const;
+    } else if (Array.isArray(v.enum) && v.enum.length === 1) {
+      literalValue = v.enum[0];
+    } else {
+      return null; // Not a literal pattern
+    }
+
+    // Must have consistent type (usually "string")
+    const variantType = typeof v.type === "string" ? v.type : null;
+    if (!variantType) return null;
+    if (commonType === null) commonType = variantType;
+    else if (commonType !== variantType) return null;
+
+    allValues.push(literalValue);
+  }
+
+  if (commonType && allValues.length > 0) {
+    return { type: commonType, enum: allValues };
+  }
+  return null;
+}
+
 function cleanSchemaForGemini(schema: unknown): unknown {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
 
   const obj = schema as Record<string, unknown>;
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
+
+  // Try to flatten anyOf of literals to a single enum BEFORE processing
+  // This handles Type.Union([Type.Literal("a"), Type.Literal("b")]) patterns
+  if (hasAnyOf) {
+    const flattened = tryFlattenLiteralAnyOf(obj.anyOf as unknown[]);
+    if (flattened) {
+      // Return flattened enum, preserving metadata (description, title, default, examples)
+      const result: Record<string, unknown> = {
+        type: flattened.type,
+        enum: flattened.enum,
+      };
+      for (const key of ["description", "title", "default", "examples"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
+      return result;
+    }
+  }
+
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
@@ -371,6 +432,43 @@ function filterToolsByPolicy(
   });
 }
 
+function resolveEffectiveToolPolicy(params: {
+  config?: ClawdbotConfig;
+  sessionKey?: string;
+}) {
+  const agentId = params.sessionKey
+    ? resolveAgentIdFromSessionKey(params.sessionKey)
+    : undefined;
+  const agentConfig =
+    params.config && agentId
+      ? resolveAgentConfig(params.config, agentId)
+      : undefined;
+  const hasAgentTools = agentConfig?.tools !== undefined;
+  const globalTools = params.config?.agent?.tools;
+  return {
+    agentId,
+    policy: hasAgentTools ? agentConfig?.tools : globalTools,
+  };
+}
+
+function isToolAllowedByPolicy(name: string, policy?: SandboxToolPolicy) {
+  if (!policy) return true;
+  const deny = new Set(normalizeToolNames(policy.deny));
+  const allowRaw = normalizeToolNames(policy.allow);
+  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
+  const normalized = name.trim().toLowerCase();
+  if (deny.has(normalized)) return false;
+  if (allow) return allow.has(normalized);
+  return true;
+}
+
+function isToolAllowedByPolicies(
+  name: string,
+  policies: Array<SandboxToolPolicy | undefined>,
+) {
+  return policies.every((policy) => isToolAllowedByPolicy(name, policy));
+}
+
 function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return {
     ...tool,
@@ -409,8 +507,13 @@ function createWhatsAppLoginTool(): AnyAgentTool {
     name: "whatsapp_login",
     description:
       "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
+    // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)])
+    // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("start"), Type.Literal("wait")]),
+      action: Type.Unsafe<"start" | "wait">({
+        type: "string",
+        enum: ["start", "wait"],
+      }),
       timeoutMs: Type.Optional(Type.Number()),
       force: Type.Optional(Type.Boolean()),
     }),
@@ -522,6 +625,7 @@ function shouldIncludeWhatsAppTool(messageProvider?: string): boolean {
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  agentAccountId?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   agentDir?: string;
@@ -529,6 +633,21 @@ export function createClawdbotCodingTools(options?: {
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
+  const { agentId, policy: effectiveToolsPolicy } = resolveEffectiveToolPolicy({
+    config: options?.config,
+    sessionKey: options?.sessionKey,
+  });
+  const scopeKey =
+    options?.bash?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const subagentPolicy =
+    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
+      ? resolveSubagentToolPolicy(options.config)
+      : undefined;
+  const allowBackground = isToolAllowedByPolicies("process", [
+    effectiveToolsPolicy,
+    sandbox?.tools,
+    subagentPolicy,
+  ]);
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
@@ -545,6 +664,8 @@ export function createClawdbotCodingTools(options?: {
   });
   const bashTool = createBashTool({
     ...options?.bash,
+    allowBackground,
+    scopeKey,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
@@ -556,6 +677,7 @@ export function createClawdbotCodingTools(options?: {
   });
   const processTool = createProcessTool({
     cleanupMs: options?.bash?.cleanupMs,
+    scopeKey,
   });
   const tools: AnyAgentTool[] = [
     ...base,
@@ -574,6 +696,7 @@ export function createClawdbotCodingTools(options?: {
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
       agentProvider: options?.messageProvider,
+      agentAccountId: options?.agentAccountId,
       agentDir: options?.agentDir,
       sandboxed: !!sandbox,
       config: options?.config,
@@ -590,33 +713,15 @@ export function createClawdbotCodingTools(options?: {
     if (tool.name === "whatsapp") return allowWhatsApp;
     return true;
   });
-  const globallyFiltered =
-    options?.config?.agent?.tools &&
-    (options.config.agent.tools.allow?.length ||
-      options.config.agent.tools.deny?.length)
-      ? filterToolsByPolicy(filtered, options.config.agent.tools)
-      : filtered;
-
-  // Agent-specific tool policy
-  let agentFiltered = globallyFiltered;
-  if (options?.sessionKey && options?.config) {
-    const agentId = resolveAgentIdFromSessionKey(options.sessionKey);
-    const agentConfig = resolveAgentConfig(options.config, agentId);
-    if (agentConfig?.tools) {
-      agentFiltered = filterToolsByPolicy(globallyFiltered, agentConfig.tools);
-    }
-  }
-
+  const toolsFiltered = effectiveToolsPolicy
+    ? filterToolsByPolicy(filtered, effectiveToolsPolicy)
+    : filtered;
   const sandboxed = sandbox
-    ? filterToolsByPolicy(agentFiltered, sandbox.tools)
-    : agentFiltered;
-  const subagentFiltered =
-    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? filterToolsByPolicy(
-          sandboxed,
-          resolveSubagentToolPolicy(options.config),
-        )
-      : sandboxed;
+    ? filterToolsByPolicy(toolsFiltered, sandbox.tools)
+    : toolsFiltered;
+  const subagentFiltered = subagentPolicy
+    ? filterToolsByPolicy(sandboxed, subagentPolicy)
+    : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   return subagentFiltered.map(normalizeToolParameters);

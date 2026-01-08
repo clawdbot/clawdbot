@@ -147,7 +147,17 @@
       "emoji": "🔌",
       "title": "Gateway",
       "actions": {
-        "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] }
+        "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] },
+        "config.get": { "label": "config get" },
+        "config.schema": { "label": "config schema" },
+        "config.apply": {
+          "label": "config apply",
+          "detailKeys": ["restartDelayMs"]
+        },
+        "update.run": {
+          "label": "update run",
+          "detailKeys": ["restartDelayMs"]
+        }
       }
     },
     "whatsapp_login": {

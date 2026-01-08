@@ -22,6 +22,8 @@ read_when: "Setting up Slack or debugging Slack socket mode"
 
 Use the manifest below so scopes and events stay in sync.
 
+Multi-account support: use `slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
 ## Manifest (optional)
 Use this Slack app manifest to create the app quickly (adjust the name/command if you want).
 
@@ -167,6 +169,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     },
     "reactionNotifications": "own",
     "reactionAllowlist": ["U123"],
+    "replyToMode": "off",
     "actions": {
       "reactions": true,
       "messages": true,
@@ -193,6 +196,18 @@ Tokens can also be supplied via env vars:
 Ack reactions are controlled globally via `messages.ackReaction` +
 `messages.ackReactionScope`.
 
+## Limits
+- Outbound text is chunked to `slack.textChunkLimit` (default 4000).
+- Media uploads are capped by `slack.mediaMaxMb` (default 20).
+
+## Reply threading
+Slack supports optional threaded replies via tags:
+- `[[reply_to_current]]` — reply to the triggering message.
+- `[[reply_to:<id>]]` — reply to a specific message id.
+
+Controlled by `slack.replyToMode`:
+- `off` (default), `first`, `all`.
+
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.
@@ -212,6 +227,7 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 Channel options (`slack.channels.<id>` or `slack.channels.<name>`):
 - `allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `requireMention`: mention gating for the channel.
+- `allowBots`: allow bot-authored messages in this channel (default: false).
 - `users`: optional per-channel user allowlist.
 - `skills`: skill filter (omit = all skills, empty = none).
 - `systemPrompt`: extra system prompt for the channel (combined with topic/purpose).
@@ -236,5 +252,6 @@ Slack tool actions can be gated with `slack.actions.*`:
 ## Notes
 - Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
+- Bot-authored messages are ignored by default; enable via `slack.allowBots` or `slack.channels.<id>.allowBots`.
 - For the Slack tool, reaction removal semantics are in [/tools/reactions](/tools/reactions).
 - Attachments are downloaded to the media store when permitted and under the size limit.

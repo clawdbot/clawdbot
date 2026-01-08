@@ -2,6 +2,12 @@
 
 Highlights from #showcase (Jan 2–5, 2026). Curated for “wow” factor + concrete links.
 
+## Clawdhub projects (formerly Clawdis)
+- **xuezh** — Chinese learning engine + Clawdbot skill for pronunciation feedback and study flows. <span class="showcase-link"><a href="https://github.com/joshp123/xuezh">github.com/joshp123/xuezh</a><span class="showcase-preview"><img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback in Clawdbot" loading="lazy" decoding="async" /></span></span>
+- **gohome** — Nix-native home automation with Clawdbot as the interface, plus Grafana dashboards. <span class="showcase-link"><a href="https://github.com/joshp123/gohome">github.com/joshp123/gohome</a><span class="showcase-preview"><img src="/assets/showcase/gohome-grafana.png" alt="GoHome Grafana dashboard" loading="lazy" decoding="async" /></span></span>
+- **Roborock skill for GoHome** — Vacuum control plugin with gRPC actions + metrics. <span class="showcase-link"><a href="https://github.com/joshp123/gohome/tree/main/plugins/roborock">github.com/joshp123/gohome/tree/main/plugins/roborock</a><span class="showcase-preview"><img src="/assets/showcase/roborock-screenshot.jpg" alt="GoHome Roborock status screenshot" loading="lazy" decoding="async" /></span></span>
+- **padel-cli** — Playtomic availability + booking CLI with a Clawdbot plugin output. <span class="showcase-link"><a href="https://github.com/joshp123/padel-cli">github.com/joshp123/padel-cli</a><span class="showcase-preview"><img src="/assets/showcase/padel-screenshot.jpg" alt="padel-cli availability screenshot" loading="lazy" decoding="async" /></span></span>
+
 ## Automation & real-world outcomes
 - **Grocery autopilot (Picnic)** — Skill built around an unofficial Picnic API client. Pulls order history, infers preferred brands, maps recipes to cart, completes order in minutes. https://github.com/timkrase/clawdis-picnic-skill
 - **Grocery autopilot (Picnic, alt)** — Another Picnic-based skill built via the `picnic-api` package. https://github.com/MRVDH/picnic-api

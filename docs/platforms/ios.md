@@ -12,6 +12,15 @@ read_when:
 
 Status: prototype implemented (internal) · Date: 2025-12-13
 
+## Support snapshot
+- Role: companion node app (iOS does not host the Gateway).
+- Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
+- Install: [Getting Started](/start/getting-started) + [Pairing](/gateway/pairing).
+- Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
+
+## System control
+System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
+
 ## Connection Runbook
 
 This is the practical “how do I connect the iOS node” guide:

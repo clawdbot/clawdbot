@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -35,6 +36,6 @@ describe("nodes screen helpers", () => {
       tmpDir: "/tmp",
       id: "id1",
     });
-    expect(p).toBe("/tmp/clawdbot-screen-record-id1.mp4");
+    expect(p).toBe(path.join("/tmp", "clawdbot-screen-record-id1.mp4"));
   });
 });

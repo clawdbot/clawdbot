@@ -18,7 +18,7 @@ App bundle layout:
   - bun `--compile` relay executable built from [`dist/macos/relay.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/macos/relay.js)
   - Supports:
     - `clawdbot …` (CLI)
-    - `clawdbot gateway-daemon …` (LaunchAgent daemon)
+    - `clawdbot gateway …` (LaunchAgent daemon)
 - `Clawdbot.app/Contents/Resources/Relay/package.json`
   - tiny “p runtime compatibility” file (see below)
 - `Clawdbot.app/Contents/Resources/Relay/theme/`
@@ -109,7 +109,7 @@ dist/Clawdbot.app/Contents/Resources/Relay/clawdbot --version
 
 CLAWDBOT_SKIP_PROVIDERS=1 \
 CLAWDBOT_SKIP_CANVAS_HOST=1 \
-dist/Clawdbot.app/Contents/Resources/Relay/clawdbot gateway-daemon --port 18999 --bind loopback
+dist/Clawdbot.app/Contents/Resources/Relay/clawdbot gateway --port 18999 --bind loopback
 ```
 
 Then, in another shell:

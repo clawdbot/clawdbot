@@ -1,0 +1,154 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  extractElevatedDirective,
+  extractQueueDirective,
+  extractReasoningDirective,
+  extractReplyToTag,
+  extractThinkDirective,
+  extractVerboseDirective,
+} from "./reply.js";
+
+describe("directive parsing", () => {
+  it("ignores verbose directive inside URL", () => {
+    const body = "https://x.com/verioussmith/status/1997066835133669687";
+    const res = extractVerboseDirective(body);
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe(body);
+  });
+
+  it("ignores typoed /verioussmith", () => {
+    const body = "/verioussmith";
+    const res = extractVerboseDirective(body);
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe(body.trim());
+  });
+
+  it("ignores think directive inside URL", () => {
+    const body = "see https://example.com/path/thinkstuff";
+    const res = extractThinkDirective(body);
+    expect(res.hasDirective).toBe(false);
+  });
+
+  it("matches verbose with leading space", () => {
+    const res = extractVerboseDirective(" please /verbose on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBe("on");
+  });
+
+  it("matches reasoning directive", () => {
+    const res = extractReasoningDirective("/reasoning on please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.reasoningLevel).toBe("on");
+  });
+
+  it("matches reasoning stream directive", () => {
+    const res = extractReasoningDirective("/reasoning stream please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.reasoningLevel).toBe("stream");
+  });
+
+  it("matches elevated with leading space", () => {
+    const res = extractElevatedDirective(" please /elevated on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBe("on");
+  });
+
+  it("matches think at start of line", () => {
+    const res = extractThinkDirective("/think:high run slow");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBe("high");
+  });
+
+  it("does not match /think followed by extra letters", () => {
+    // e.g. someone typing "/think" + extra letter "hink"
+    const res = extractThinkDirective("/thinkstuff");
+    expect(res.hasDirective).toBe(false);
+  });
+
+  it("matches /think with no argument", () => {
+    const res = extractThinkDirective("/think");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+  });
+
+  it("matches /t with no argument", () => {
+    const res = extractThinkDirective("/t");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+  });
+
+  it("matches think with no argument and consumes colon", () => {
+    const res = extractThinkDirective("/think:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches verbose with no argument", () => {
+    const res = extractVerboseDirective("/verbose:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches reasoning with no argument", () => {
+    const res = extractReasoningDirective("/reasoning:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.reasoningLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches elevated with no argument", () => {
+    const res = extractElevatedDirective("/elevated:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches queue directive", () => {
+    const res = extractQueueDirective("please /queue interrupt now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("interrupt");
+    expect(res.queueReset).toBe(false);
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("parses queue options and modes", () => {
+    const res = extractQueueDirective(
+      "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
+    );
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("steer-backlog");
+    expect(res.debounceMs).toBe(2000);
+    expect(res.cap).toBe(5);
+    expect(res.dropPolicy).toBe("summarize");
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("extracts reply_to_current tag", () => {
+    const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
+    expect(res.replyToId).toBe("msg-1");
+    expect(res.cleaned).toBe("ok");
+  });
+
+  it("extracts reply_to id tag", () => {
+    const res = extractReplyToTag("see [[reply_to:12345]] now", "msg-1");
+    expect(res.replyToId).toBe("12345");
+    expect(res.cleaned).toBe("see now");
+  });
+
+  it("preserves newlines when stripping reply tags", () => {
+    const res = extractReplyToTag(
+      "line 1\nline 2 [[reply_to_current]]\n\nline 3",
+      "msg-2",
+    );
+    expect(res.replyToId).toBe("msg-2");
+    expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+  });
+});

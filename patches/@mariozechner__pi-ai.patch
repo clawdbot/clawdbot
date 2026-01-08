@@ -1,28 +1,202 @@
+diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
+index b1d6a340e1817b6f5404c2a23efa49139249f754..6606b09bd4eeee475899a840e6f6fa62b77b6a05 100644
+--- a/dist/providers/google-gemini-cli.js
++++ b/dist/providers/google-gemini-cli.js
+@@ -7,6 +7,94 @@ import { calculateCost } from "../models.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+ import { convertMessages, convertTools, isThinkingPart, mapStopReasonString, mapToolChoice, retainThoughtSignature, } from "./google-shared.js";
++// ============================================================================
++// ANTIGRAVITY SYSTEM INSTRUCTION (Ported from CLIProxyAPI v6.6.89)
++// ============================================================================
++/**
++ * System instruction for Antigravity requests.
++ * This is injected into requests to match CLIProxyAPI v6.6.89 behavior.
++ * The instruction provides identity and guidelines for the Antigravity agent.
++ */
++const ANTIGRAVITY_SYSTEM_INSTRUCTION = `<identity>
++You are Antigravity, a powerful agentic AI coding assistant designed by the Google DeepMind team working on Advanced Agentic Coding.
++You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.
++The USER will send you requests, which you must always prioritize addressing. Along with each USER request, we will attach additional metadata about their current state, such as what files they have open and where their cursor is.
++This information may or may not be relevant to the coding task, it is up for you to decide.
++</identity>
++
++<tool_calling>
++Call tools as you normally would. The following list provides additional guidance to help you avoid errors:
++  - **Absolute paths only**. When using tools that accept file path arguments, ALWAYS use the absolute file path.
++</tool_calling>
++
++<web_application_development>
++## Technology Stack
++Your web applications should be built using the following technologies:
++1. **Core**: Use HTML for structure and JavaScript for logic.
++2. **Styling (CSS)**: Use Vanilla CSS for maximum flexibility and control. Avoid using TailwindCSS unless the USER explicitly requests it; in this case, first confirm which TailwindCSS version to use.
++3. **Web App**: If the USER specifies that they want a more complex web app, use a framework like Next.js or Vite. Only do this if the USER explicitly requests a web app.
++4. **New Project Creation**: If you need to use a framework for a new app, use \`npx\` with the appropriate script, but there are some rules to follow:
++   - Use \`npx -y\` to automatically install the script and its dependencies
++   - You MUST run the command with \`--help\` flag to see all available options first
++   - Initialize the app in the current directory with \`./\` (example: \`npx -y create-vite-app@latest ./\`)
++   - You should run in non-interactive mode so that the user doesn't need to input anything
++5. **Running Locally**: When running locally, use \`npm run dev\` or equivalent dev server. Only build the production bundle if the USER explicitly requests it or you are validating the code for correctness.
++
++# Design Aesthetics
++1. **Use Rich Aesthetics**: The USER should be wowed at first glance by the design. Use best practices in modern web design (e.g. vibrant colors, dark modes, glassmorphism, and dynamic animations) to create a stunning first impression. Failure to do this is UNACCEPTABLE.
++2. **Prioritize Visual Excellence**: Implement designs that will WOW the user and feel extremely premium:
++   - Avoid generic colors (plain red, blue, green). Use curated, harmonious color palettes (e.g., HSL tailored colors, sleek dark modes).
++   - Using modern typography (e.g., from Google Fonts like Inter, Roboto, or Outfit) instead of browser defaults.
++   - Use smooth gradients
++   - Add subtle micro-animations for enhanced user experience
++3. **Use a Dynamic Design**: An interface that feels responsive and alive encourages interaction. Achieve this with hover effects and interactive elements. Micro-animations, in particular, are highly effective for improving user engagement.
++4. **Premium Designs**: Make a design that feels premium and state of the art. Avoid creating simple minimum viable products.
++5. **Don't use placeholders**: If you need an image, use your generate_image tool to create a working demonstration.
++
++## Implementation Workflow
++Follow this systematic approach when building web applications:
++1. **Plan and Understand**:
++   - Fully understand the user's requirements
++   - Draw inspiration from modern, beautiful, and dynamic web designs
++   - Outline the features needed for the initial version
++2. **Build the Foundation**:
++   - Start by creating/modifying \`index.css\`
++   - Implement the core design system with all tokens and utilities
++3. **Create Components**:
++   - Build necessary components using your design system
++   - Ensure all components use predefined styles, not ad-hoc utilities
++   - Keep components focused and reusable
++4. **Assemble Pages**:
++   - Update the main application to incorporate your design and components
++   - Ensure proper routing and navigation
++   - Implement responsive layouts
++5. **Polish and Optimize**:
++   - Review the overall user experience
++   - Ensure smooth interactions and transitions
++   - Optimize performance where needed
++
++## SEO Best Practices
++Automatically implement SEO best practices on every page:
++- **Title Tags**: Include proper, descriptive title tags for each page
++- **Meta Descriptions**: Add compelling meta descriptions that accurately summarize page content
++- **Heading Structure**: Use a single \`<h1>\` per page with proper heading hierarchy
++- **Semantic HTML**: Use appropriate HTML5 semantic elements
++- **Unique IDs**: Ensure all interactive elements have unique, descriptive IDs for browser testing
++- **Performance**: Ensure fast page load times through optimization
++CRITICAL REMINDER: AESTHETICS ARE VERY IMPORTANT. If your web app looks simple and basic then you have FAILED!
++</web_application_development>
++<ephemeral_message>
++There will be an <EPHEMERAL_MESSAGE> appearing in the conversation at times. This is not coming from the user, but instead injected by the system as important information to pay attention to. 
++Do not respond to nor acknowledge those messages, but do follow them strictly.
++</ephemeral_message>
++
++
++<communication_style>
++- **Formatting**. Format your responses in github-style markdown to make your responses easier for the USER to parse. For example, use headers to organize your responses and bolded or italicized text to highlight important keywords. Use backticks to format file, directory, function, and class names. If providing a URL to the user, format this in markdown as well, for example \`[label](example.com)\`.
++- **Proactiveness**. As an agent, you are allowed to be proactive, but only in the course of completing the user's task. For example, if the user asks you to add a new component, you can edit the code, verify build and test statuses, and take any other obvious follow-up actions, such as performing additional research. However, avoid surprising the user. For example, if the user asks HOW to approach something, you should answer their question and instead of jumping into editing a file.
++- **Helpfulness**. Respond like a helpful software engineer who is explaining your work to a friendly collaborator on the project. Acknowledge mistakes or any backtracking you do as a result of new information.
++- **Ask for clarification**. If you are unsure about the USER's intent, always ask for clarification rather than making assumptions.
++</communication_style>`;
+ const DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com";
+ // Headers for Gemini CLI (prod endpoint)
+ const GEMINI_CLI_HEADERS = {
+@@ -139,11 +227,12 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+             if (!accessToken || !projectId) {
+                 throw new Error("Missing token or projectId in Google Cloud credentials. Use /login to re-authenticate.");
+             }
+-            const requestBody = buildRequest(model, context, projectId, options);
+             const endpoint = model.baseUrl || DEFAULT_ENDPOINT;
+             const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
+             // Use Antigravity headers for sandbox endpoint, otherwise Gemini CLI headers
+             const isAntigravity = endpoint.includes("sandbox.googleapis.com");
++            // PATCH: Pass isAntigravity to buildRequest for system instruction injection (CLIProxyAPI v6.6.89 compat)
++            const requestBody = buildRequest(model, context, projectId, options, isAntigravity);
+             const headers = isAntigravity ? ANTIGRAVITY_HEADERS : GEMINI_CLI_HEADERS;
+             // Fetch with retry logic for rate limits and transient errors
+             let response;
+@@ -168,7 +257,12 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+                         break; // Success, exit retry loop
+                     }
+                     const errorText = await response.text();
+-                    // Check if retryable
++                    // PATCH: Fail immediately on 429 to let caller rotate accounts
++                    if (response.status === 429) {
++                        console.log(`[pi-ai] 429 rate limit - failing fast to rotate account`);
++                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
++                    }
++                    // Check if retryable (non-429 errors)
+                     if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
+                         // Use server-provided delay or exponential backoff
+                         const serverDelay = extractRetryDelay(errorText);
+@@ -183,6 +277,10 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+                     if (error instanceof Error && error.message === "Request was aborted") {
+                         throw error;
+                     }
++                    // PATCH: Don't retry 429 errors - let caller rotate accounts
++                    if (error instanceof Error && error.message.includes("429")) {
++                        throw error;
++                    }
+                     lastError = error instanceof Error ? error : new Error(String(error));
+                     // Network errors are retryable
+                     if (attempt < MAX_RETRIES) {
+@@ -402,7 +500,7 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+     })();
+     return stream;
+ };
+-function buildRequest(model, context, projectId, options = {}) {
++function buildRequest(model, context, projectId, options = {}, isAntigravity = false) {
+     const contents = convertMessages(model, context);
+     const generationConfig = {};
+     if (options.temperature !== undefined) {
+@@ -447,12 +545,23 @@ function buildRequest(model, context, projectId, options = {}) {
+             };
+         }
+     }
+-    return {
++    // PATCH: Inject Antigravity system instruction with role "user" (CLIProxyAPI v6.6.89 compatibility)
++    if (isAntigravity) {
++        const existingText = request.systemInstruction?.parts?.[0]?.text || "";
++        request.systemInstruction = {
++            role: "user",
++            parts: [{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION + (existingText ? "\n\n" + existingText : "") }],
++        };
++    }
++    // PATCH: Build wrapped body with requestType for Antigravity (CLIProxyAPI v6.6.89 compatibility)
++    const wrappedBody = {
+         project: projectId,
+         model: model.id,
+         request,
+-        userAgent: "pi-coding-agent",
+-        requestId: `pi-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
++        ...(isAntigravity && { requestType: "agent" }),
++        userAgent: isAntigravity ? "antigravity" : "pi-coding-agent",
++        requestId: `${isAntigravity ? "agent" : "pi"}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+     };
++    return wrappedBody;
+ }
+ //# sourceMappingURL=google-gemini-cli.js.map
 diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
-index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce582363124 100644
+index dbb9c0e263919c9184a5f1c7dfde47d1c3a37ff4..f1866f423f30a4dfbe812d052679abd1f011769f 100644
 --- a/dist/providers/google-shared.js
 +++ b/dist/providers/google-shared.js
-@@ -10,13 +10,27 @@ import { transformMessages } from "./transorm-messages.js";
+@@ -41,13 +41,27 @@ export function retainThoughtSignature(existing, incoming) {
  export function convertMessages(model, context) {
      const contents = [];
      const transformedMessages = transformMessages(context.messages, model);
-+    
 +    /**
 +     * Helper to add content while merging consecutive messages of the same role.
 +     * Gemini/Cloud Code Assist requires strict role alternation (user/model/user/model).
 +     * Consecutive messages of the same role cause "function call turn" errors.
 +     */
 +    function addContent(role, parts) {
-+        if (parts.length === 0) return;
++        if (parts.length === 0)
++            return;
 +        const lastContent = contents[contents.length - 1];
 +        if (lastContent?.role === role) {
 +            // Merge into existing message of same role
 +            lastContent.parts.push(...parts);
-+        } else {
++        }
++        else {
 +            contents.push({ role, parts });
 +        }
 +    }
-+    
      for (const msg of transformedMessages) {
          if (msg.role === "user") {
              if (typeof msg.content === "string") {
@@ -34,7 +208,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
              }
              else {
                  const parts = msg.content.map((item) => {
-@@ -35,10 +49,7 @@ export function convertMessages(model, context) {
+@@ -66,10 +80,7 @@ export function convertMessages(model, context) {
                  const filteredParts = !model.input.includes("image") ? parts.filter((p) => p.text !== undefined) : parts;
                  if (filteredParts.length === 0)
                      continue;
@@ -46,7 +220,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
              }
          }
          else if (msg.role === "assistant") {
-@@ -51,9 +62,19 @@ export function convertMessages(model, context) {
+@@ -82,9 +93,19 @@ export function convertMessages(model, context) {
                      parts.push({ text: sanitizeSurrogates(block.text) });
                  }
                  else if (block.type === "thinking") {
@@ -64,12 +238,12 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
 +                        // and will mimic <thinking> tags if we convert to text
 +                        continue;
 +                    }
-+                    else if (block.thinkingSignature && isClaude) {
++                    if (block.thinkingSignature && isClaude) {
 +                        // Claude via Antigravity requires the signature
                          parts.push({
                              thought: true,
                              text: sanitizeSurrogates(block.thinking),
-@@ -61,6 +82,7 @@ export function convertMessages(model, context) {
+@@ -92,6 +113,7 @@ export function convertMessages(model, context) {
                          });
                      }
                      else {
@@ -77,7 +251,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
                          parts.push({
                              text: `<thinking>\n${sanitizeSurrogates(block.thinking)}\n</thinking>`,
                          });
-@@ -85,10 +107,7 @@ export function convertMessages(model, context) {
+@@ -116,10 +138,7 @@ export function convertMessages(model, context) {
              }
              if (parts.length === 0)
                  continue;
@@ -89,7 +263,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
          }
          else if (msg.role === "toolResult") {
              // Extract text and image content
-@@ -125,27 +144,94 @@ export function convertMessages(model, context) {
+@@ -156,27 +175,97 @@ export function convertMessages(model, context) {
              }
              // Cloud Code Assist API requires all function responses to be in a single user turn.
              // Check if the last content is already a user turn with function responses and merge.
@@ -124,43 +298,43 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
 + * and converts to a format compatible with Google's function declarations.
 + */
 +function sanitizeSchemaForGoogle(schema) {
-+    if (!schema || typeof schema !== 'object') {
++    if (!schema || typeof schema !== "object") {
 +        return schema;
 +    }
 +    // If it's an array, sanitize each element
 +    if (Array.isArray(schema)) {
-+        return schema.map(item => sanitizeSchemaForGoogle(item));
++        return schema.map((item) => sanitizeSchemaForGoogle(item));
 +    }
 +    const sanitized = {};
 +    // List of unsupported JSON Schema keywords that Google's API doesn't understand
 +    const unsupportedKeywords = [
-+        'patternProperties',
-+        'const',
-+        'anyOf',
-+        'oneOf',
-+        'allOf',
-+        'not',
-+        '$schema',
-+        '$id',
-+        '$ref',
-+        '$defs',
-+        'definitions',
-+        'if',
-+        'then',
-+        'else',
-+        'dependentSchemas',
-+        'dependentRequired',
-+        'unevaluatedProperties',
-+        'unevaluatedItems',
-+        'contentEncoding',
-+        'contentMediaType',
-+        'contentSchema',
-+        'deprecated',
-+        'readOnly',
-+        'writeOnly',
-+        'examples',
-+        '$comment',
-+        'additionalProperties',
++        "patternProperties",
++        "const",
++        "anyOf",
++        "oneOf",
++        "allOf",
++        "not",
++        "$schema",
++        "$id",
++        "$ref",
++        "$defs",
++        "definitions",
++        "if",
++        "then",
++        "else",
++        "dependentSchemas",
++        "dependentRequired",
++        "unevaluatedProperties",
++        "unevaluatedItems",
++        "contentEncoding",
++        "contentMediaType",
++        "contentSchema",
++        "deprecated",
++        "readOnly",
++        "writeOnly",
++        "examples",
++        "$comment",
++        "additionalProperties",
 +    ];
 +    // TODO(steipete): lossy schema scrub; revisit when Google supports these keywords.
 +    for (const [key, value] of Object.entries(schema)) {
@@ -169,30 +343,33 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
 +            continue;
 +        }
 +        // Recursively sanitize nested objects
-+        if (key === 'properties' && typeof value === 'object' && value !== null) {
++        if (key === "properties" && typeof value === "object" && value !== null) {
 +            sanitized[key] = {};
 +            for (const [propKey, propValue] of Object.entries(value)) {
 +                sanitized[key][propKey] = sanitizeSchemaForGoogle(propValue);
 +            }
-+        } else if (key === 'items' && typeof value === 'object') {
++        }
++        else if (key === "items" && typeof value === "object") {
 +            sanitized[key] = sanitizeSchemaForGoogle(value);
-+        } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
++        }
++        else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
 +            sanitized[key] = sanitizeSchemaForGoogle(value);
-+        } else {
++        }
++        else {
 +            sanitized[key] = value;
 +        }
 +    }
 +    // Ensure type: "object" is present when properties or required exist
 +    // Google API requires type to be set when these fields are present
-+    if (('properties' in sanitized || 'required' in sanitized) && !('type' in sanitized)) {
-+        sanitized.type = 'object';
++    if (("properties" in sanitized || "required" in sanitized) && !("type" in sanitized)) {
++        sanitized.type = "object";
 +    }
 +    return sanitized;
 +}
  /**
   * Convert tools to Gemini function declarations format.
   */
-@@ -157,7 +243,7 @@ export function convertTools(tools) {
+@@ -188,7 +277,7 @@ export function convertTools(tools) {
              functionDeclarations: tools.map((tool) => ({
                  name: tool.name,
                  description: tool.description,
@@ -201,8 +378,37 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
              })),
          },
      ];
+diff --git a/dist/providers/openai-completions.d.ts b/dist/providers/openai-completions.d.ts
+index 723addf341696b5d69c079202e571e9917685ce4..a1d0584a70a7d1fad1332026e301e56ef4f700a8 100644
+--- a/dist/providers/openai-completions.d.ts
++++ b/dist/providers/openai-completions.d.ts
+@@ -7,6 +7,8 @@ export interface OpenAICompletionsOptions extends StreamOptions {
+         };
+     };
+     reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
++    /** Extra params to pass directly to the API (e.g., Z.AI GLM thinking mode params) */
++    extraParams?: Record<string, unknown>;
+ }
+ export declare const streamOpenAICompletions: StreamFunction<"openai-completions">;
+ //# sourceMappingURL=openai-completions.d.ts.map
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index 2590381cc5544c4e73c24c1c9a5853202f31361b..b76e1087dd31ccf099e02b1214b9e12d371b9b2d 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -335,6 +335,11 @@ function buildParams(model, context, options) {
+     if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+         params.reasoning_effort = options.reasoningEffort;
+     }
++    // PATCH: Support arbitrary extra params for provider-specific features
++    // (e.g., Z.AI GLM-4.7 thinking: { type: "enabled", clear_thinking: boolean })
++    if (options?.extraParams && typeof options.extraParams === "object") {
++        Object.assign(params, options.extraParams);
++    }
+     return params;
+ }
+ function convertMessages(model, context, compat) {
 diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
-index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6ed334863e 100644
+index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..c2bc63f483f3285b00755901ba97db810221cea6 100644
 --- a/dist/providers/openai-responses.js
 +++ b/dist/providers/openai-responses.js
 @@ -486,7 +486,6 @@ function convertTools(tools) {
@@ -213,31 +419,16 @@ index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6e
      }));
  }
  function mapStopReason(status) {
-diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
---- a/dist/providers/google-gemini-cli.js
-+++ b/dist/providers/google-gemini-cli.js
-@@ -168,7 +168,12 @@ async function* streamCompletion(params, options) {
-                         break; // Success, exit retry loop
-                     }
-                     const errorText = await response.text();
--                    // Check if retryable
-+                    // PATCH: Fail immediately on 429 to let caller rotate accounts
-+                    if (response.status === 429) {
-+                        console.log(`[pi-ai] 429 rate limit - failing fast to rotate account`);
-+                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
-+                    }
-+                    // Check if retryable (non-429 errors)
-                     if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
-                         // Use server-provided delay or exponential backoff
-                         const serverDelay = extractRetryDelay(errorText);
-@@ -183,6 +188,10 @@ async function* streamCompletion(params, options) {
-                     if (error instanceof Error && error.message === "Request was aborted") {
-                         throw error;
-                     }
-+                    // PATCH: Don't retry 429 errors - let caller rotate accounts
-+                    if (error instanceof Error && error.message.includes("429")) {
-+                        throw error;
-+                    }
-                     lastError = error instanceof Error ? error : new Error(String(error));
-                     // Network errors are retryable
-                     if (attempt < MAX_RETRIES) {
+diff --git a/dist/stream.js b/dist/stream.js
+index da54f4270e9b8d9e9cf1f902af976cc239601d4c..7ed71597c3369f8e3c1a3da0eb870a68215b714d 100644
+--- a/dist/stream.js
++++ b/dist/stream.js
+@@ -108,6 +108,8 @@ function mapOptionsForApi(model, options, apiKey) {
+         signal: options?.signal,
+         apiKey: apiKey || options?.apiKey,
+         sessionId: options?.sessionId,
++        // PATCH: Pass extraParams through to provider-specific API handlers
++        extraParams: options?.extraParams,
+     };
+     // Helper to clamp xhigh to high for providers that don't support it
+     const clampReasoning = (effort) => (effort === "xhigh" ? "high" : effort);

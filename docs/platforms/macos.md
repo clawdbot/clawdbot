@@ -8,6 +8,25 @@ read_when:
 
 Author: steipete · Status: draft spec · Date: 2025-12-20
 
+## Support snapshot
+- Core Gateway: supported (TypeScript on Node/Bun).
+- Companion app: macOS menu bar app with permissions + node bridge.
+- Install: [Getting Started](/start/getting-started) or [Install & updates](/install/updating).
+- Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
+
+## System control (launchd)
+If you run the bundled macOS app, it installs a per-user LaunchAgent labeled `com.clawdbot.gateway`.
+CLI-only installs can use `clawdbot onboard --install-daemon`, `clawdbot daemon install`, or `clawdbot configure` → **Gateway daemon**.
+
+```bash
+launchctl kickstart -k gui/$UID/com.clawdbot.gateway
+launchctl bootout gui/$UID/com.clawdbot.gateway
+```
+
+`launchctl` only works if the LaunchAgent is installed; otherwise run `clawdbot daemon install` first.
+
+Details: [Gateway runbook](/gateway) and [Bundled bun Gateway](/platforms/mac/bun).
+
 ## Purpose
 - Single macOS menu-bar app named **Clawdbot** that:
   - Shows native notifications for Clawdbot/clawdbot events.
@@ -23,7 +42,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
   - `Clawdbot` (LSUIElement MenuBarExtra app; hosts Gateway + node bridge + PeekabooBridgeHost).
 - Bundle ID: `com.clawdbot.mac`.
 - Bundled runtime binaries live under `Contents/Resources/Relay/`:
-  - `clawdbot` (bun‑compiled relay: CLI + gateway-daemon)
+  - `clawdbot` (bun‑compiled relay: CLI + gateway)
 - The app symlinks `clawdbot` into `/usr/local/bin` and `/opt/homebrew/bin`.
 
 ## Gateway + node bridge
@@ -48,7 +67,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
 ## CLI (`clawdbot`)
 - The **only** CLI is `clawdbot` (TS/bun). There is no `clawdbot-mac` helper.
 - For mac‑specific actions, the CLI uses `node.invoke`:
-  - `clawdbot canvas present|navigate|eval|snapshot|a2ui push|a2ui reset`
+  - `clawdbot nodes canvas present|navigate|eval|snapshot|a2ui push|a2ui reset`
   - `clawdbot nodes run --node <id> -- <command...>`
   - `clawdbot nodes notify --node <id> --title ...`
 

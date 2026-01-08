@@ -9,7 +9,12 @@ describe("control command parsing", () => {
       hasCommand: true,
       mode: "allow",
     });
+    expect(parseSendPolicyCommand("/send: on")).toEqual({
+      hasCommand: true,
+      mode: "allow",
+    });
     expect(parseSendPolicyCommand("/send")).toEqual({ hasCommand: true });
+    expect(parseSendPolicyCommand("/send:")).toEqual({ hasCommand: true });
     expect(parseSendPolicyCommand("send on")).toEqual({ hasCommand: false });
     expect(parseSendPolicyCommand("send")).toEqual({ hasCommand: false });
   });
@@ -18,6 +23,13 @@ describe("control command parsing", () => {
     expect(parseActivationCommand("/activation mention")).toEqual({
       hasCommand: true,
       mode: "mention",
+    });
+    expect(parseActivationCommand("/activation: mention")).toEqual({
+      hasCommand: true,
+      mode: "mention",
+    });
+    expect(parseActivationCommand("/activation:")).toEqual({
+      hasCommand: true,
     });
     expect(parseActivationCommand("activation mention")).toEqual({
       hasCommand: false,
@@ -28,8 +40,10 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/send")).toBe(true);
     expect(hasControlCommand("send")).toBe(false);
     expect(hasControlCommand("/help")).toBe(true);
+    expect(hasControlCommand("/help:")).toBe(true);
     expect(hasControlCommand("help")).toBe(false);
     expect(hasControlCommand("/status")).toBe(true);
+    expect(hasControlCommand("/status:")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
   });
 

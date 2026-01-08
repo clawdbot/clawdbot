@@ -1,3 +1,4 @@
+import ClawdbotProtocol
 import Foundation
 import Testing
 @testable import Clawdbot
@@ -15,7 +16,7 @@ struct AgentEventStoreTests {
             seq: 1,
             stream: "test",
             ts: 0,
-            data: [:] as [String: AnyCodable],
+            data: [:] as [String: ClawdbotProtocol.AnyCodable],
             summary: nil))
         #expect(store.events.count == 1)
 
@@ -32,7 +33,7 @@ struct AgentEventStoreTests {
                 seq: i,
                 stream: "test",
                 ts: Double(i),
-                data: [:] as [String: AnyCodable],
+                data: [:] as [String: ClawdbotProtocol.AnyCodable],
                 summary: nil))
         }
 

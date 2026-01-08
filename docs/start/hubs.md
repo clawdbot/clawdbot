@@ -17,6 +17,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Dashboard (local Gateway)](http://127.0.0.1:18789/)
 - [FAQ](https://docs.clawd.bot/start/faq)
 - [Configuration](https://docs.clawd.bot/gateway/configuration)
+- [Configuration examples](https://docs.clawd.bot/gateway/configuration-examples)
 - [Clawd (personal assistant)](https://docs.clawd.bot/start/clawd)
 - [Showcase](https://docs.clawd.bot/start/showcase)
 - [Lore](https://docs.clawd.bot/start/lore)
@@ -36,6 +37,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Agent loop](https://docs.clawd.bot/concepts/agent-loop)
 - [Streaming + chunking](/concepts/streaming)
 - [Multi-agent routing](https://docs.clawd.bot/concepts/multi-agent)
+- [Compaction](https://docs.clawd.bot/concepts/compaction)
 - [Sessions](https://docs.clawd.bot/concepts/session)
 - [Sessions (alias)](https://docs.clawd.bot/concepts/sessions)
 - [Session pruning](https://docs.clawd.bot/concepts/session-pruning)
@@ -52,6 +54,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Groups](https://docs.clawd.bot/concepts/groups)
 - [Group messages](https://docs.clawd.bot/concepts/group-messages)
 - [Model failover](https://docs.clawd.bot/concepts/model-failover)
+- [OAuth](https://docs.clawd.bot/concepts/oauth)
 
 ## Providers + ingress
 
@@ -113,7 +116,16 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 ## Platforms
 
-- [macOS app overview](https://docs.clawd.bot/platforms/macos)
+- [Platforms overview](https://docs.clawd.bot/platforms)
+- [macOS](https://docs.clawd.bot/platforms/macos)
+- [iOS](https://docs.clawd.bot/platforms/ios)
+- [Android](https://docs.clawd.bot/platforms/android)
+- [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
+- [Linux](https://docs.clawd.bot/platforms/linux)
+- [Web surfaces](https://docs.clawd.bot/web)
+
+## macOS companion app (internals)
+
 - [macOS dev setup](https://docs.clawd.bot/platforms/mac/dev-setup)
 - [macOS menu bar](https://docs.clawd.bot/platforms/mac/menu-bar)
 - [macOS voice wake](https://docs.clawd.bot/platforms/mac/voicewake)
@@ -132,11 +144,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS XPC](https://docs.clawd.bot/platforms/mac/xpc)
 - [macOS skills](https://docs.clawd.bot/platforms/mac/skills)
 - [macOS Peekaboo plan](https://docs.clawd.bot/platforms/mac/peekaboo)
-- [iOS node](https://docs.clawd.bot/platforms/ios)
-- [Android node](https://docs.clawd.bot/platforms/android)
-- [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
-- [Linux app](https://docs.clawd.bot/platforms/linux)
-- [Web surfaces](https://docs.clawd.bot/web)
 
 ## Workspace + templates
 

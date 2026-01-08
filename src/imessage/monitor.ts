@@ -8,6 +8,7 @@ import {
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveProviderGroupPolicy,
@@ -22,6 +23,7 @@ import {
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
 import {
@@ -56,6 +58,8 @@ export type MonitorIMessageOpts = {
   abortSignal?: AbortSignal;
   cliPath?: string;
   dbPath?: string;
+  accountId?: string;
+  config?: ClawdbotConfig;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   includeAttachments?: boolean;
@@ -75,32 +79,21 @@ function resolveRuntime(opts: MonitorIMessageOpts): RuntimeEnv {
   );
 }
 
-function resolveAllowFrom(opts: MonitorIMessageOpts): string[] {
-  const cfg = loadConfig();
-  const raw = opts.allowFrom ?? cfg.imessage?.allowFrom ?? [];
-  return raw.map((entry) => String(entry).trim()).filter(Boolean);
-}
-
-function resolveGroupAllowFrom(opts: MonitorIMessageOpts): string[] {
-  const cfg = loadConfig();
-  const raw =
-    opts.groupAllowFrom ??
-    cfg.imessage?.groupAllowFrom ??
-    (cfg.imessage?.allowFrom && cfg.imessage.allowFrom.length > 0
-      ? cfg.imessage.allowFrom
-      : []);
-  return raw.map((entry) => String(entry).trim()).filter(Boolean);
+function normalizeAllowList(list?: Array<string | number>) {
+  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
   client: Awaited<ReturnType<typeof createIMessageRpcClient>>;
+  accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit } = params;
+  const { replies, target, client, runtime, maxBytes, textLimit, accountId } =
+    params;
   for (const payload of replies) {
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -108,7 +101,11 @@ async function deliverReplies(params: {
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
       for (const chunk of chunkText(text, textLimit)) {
-        await sendMessageIMessage(target, chunk, { maxBytes, client });
+        await sendMessageIMessage(target, chunk, {
+          maxBytes,
+          client,
+          accountId,
+        });
       }
     } else {
       let first = true;
@@ -119,6 +116,7 @@ async function deliverReplies(params: {
           mediaUrl: url,
           maxBytes,
           client,
+          accountId,
         });
       }
     }
@@ -130,17 +128,32 @@ export async function monitorIMessageProvider(
   opts: MonitorIMessageOpts = {},
 ): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = loadConfig();
-  const textLimit = resolveTextChunkLimit(cfg, "imessage");
-  const allowFrom = resolveAllowFrom(opts);
-  const groupAllowFrom = resolveGroupAllowFrom(opts);
-  const groupPolicy = cfg.imessage?.groupPolicy ?? "open";
-  const dmPolicy = cfg.imessage?.dmPolicy ?? "pairing";
+  const cfg = opts.config ?? loadConfig();
+  const accountInfo = resolveIMessageAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const imessageCfg = accountInfo.config;
+  const textLimit = resolveTextChunkLimit(
+    cfg,
+    "imessage",
+    accountInfo.accountId,
+  );
+  const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const groupAllowFrom = normalizeAllowList(
+    opts.groupAllowFrom ??
+      imessageCfg.groupAllowFrom ??
+      (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0
+        ? imessageCfg.allowFrom
+        : []),
+  );
+  const groupPolicy = imessageCfg.groupPolicy ?? "open";
+  const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const mentionRegexes = buildMentionRegexes(cfg);
   const includeAttachments =
-    opts.includeAttachments ?? cfg.imessage?.includeAttachments ?? false;
+    opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes =
-    (opts.mediaMaxMb ?? cfg.imessage?.mediaMaxMb ?? 16) * 1024 * 1024;
+    (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
 
   const handleMessage = async (raw: unknown) => {
     const params = raw as { message?: IMessagePayload | null };
@@ -202,6 +215,7 @@ export async function monitorIMessageProvider(
       const groupListPolicy = resolveProviderGroupPolicy({
         cfg,
         provider: "imessage",
+        accountId: accountInfo.accountId,
         groupId,
       });
       if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
@@ -254,6 +268,7 @@ export async function monitorIMessageProvider(
                 {
                   client,
                   maxBytes: mediaMaxBytes,
+                  accountId: accountInfo.accountId,
                   ...(chatId ? { chatId } : {}),
                 },
               );
@@ -279,6 +294,7 @@ export async function monitorIMessageProvider(
     const requireMention = resolveProviderGroupRequireMention({
       cfg,
       provider: "imessage",
+      accountId: accountInfo.accountId,
       groupId,
       requireMentionOverride: opts.requireMention,
       overrideOrder: "before-config",
@@ -344,6 +360,7 @@ export async function monitorIMessageProvider(
     const route = resolveAgentRoute({
       cfg,
       provider: "imessage",
+      accountId: accountInfo.accountId,
       peer: {
         kind: isGroup ? "group" : "dm",
         id: isGroup
@@ -410,6 +427,7 @@ export async function monitorIMessageProvider(
           replies: [payload],
           target: ctxPayload.To,
           client,
+          accountId: accountInfo.accountId,
           runtime,
           maxBytes: mediaMaxBytes,
           textLimit,
@@ -431,8 +449,8 @@ export async function monitorIMessageProvider(
   };
 
   const client = await createIMessageRpcClient({
-    cliPath: opts.cliPath ?? cfg.imessage?.cliPath,
-    dbPath: opts.dbPath ?? cfg.imessage?.dbPath,
+    cliPath: opts.cliPath ?? imessageCfg.cliPath,
+    dbPath: opts.dbPath ?? imessageCfg.dbPath,
     runtime,
     onNotification: (msg) => {
       if (msg.method === "message") {

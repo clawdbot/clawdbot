@@ -150,6 +150,11 @@
         "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] }
       }
     },
+    "agents_list": {
+      "emoji": "🧭",
+      "title": "Agents",
+      "detailKeys": []
+    },
     "sessions_list": {
       "emoji": "🗂️",
       "title": "Sessions",
@@ -168,7 +173,7 @@
     "sessions_spawn": {
       "emoji": "🧑‍🔧",
       "title": "Sub-agent",
-      "detailKeys": ["label", "runTimeoutSeconds", "cleanup"]
+      "detailKeys": ["label", "agentId", "runTimeoutSeconds", "cleanup"]
     },
     "whatsapp_login": {
       "emoji": "🟢",

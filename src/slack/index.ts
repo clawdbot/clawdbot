@@ -1,4 +1,10 @@
 export {
+  listEnabledSlackAccounts,
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+} from "./accounts.js";
+export {
   deleteSlackMessage,
   editSlackMessage,
   getSlackMemberInfo,

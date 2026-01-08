@@ -1,8 +1,10 @@
 import AVFoundation
+import OSLog
 import SwiftUI
 
 actor MicLevelMonitor {
-    private let engine = AVAudioEngine()
+    private let logger = Logger(subsystem: "com.clawdbot", category: "voicewake.meter")
+    private var engine: AVAudioEngine?
     private var update: (@Sendable (Double) -> Void)?
     private var running = false
     private var smoothedLevel: Double = 0
@@ -10,23 +12,37 @@ actor MicLevelMonitor {
     func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
         self.update = onLevel
         if self.running { return }
-        let input = self.engine.inputNode
+        self.logger.info(
+            "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
+        let engine = AVAudioEngine()
+        self.engine = engine
+        let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            self.engine = nil
+            throw NSError(
+                domain: "MicLevelMonitor",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
+        }
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
             guard let self else { return }
             let level = Self.normalizedLevel(from: buffer)
             Task { await self.push(level: level) }
         }
-        self.engine.prepare()
-        try self.engine.start()
+        engine.prepare()
+        try engine.start()
         self.running = true
     }
 
     func stop() {
         guard self.running else { return }
-        self.engine.inputNode.removeTap(onBus: 0)
-        self.engine.stop()
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        self.engine = nil
         self.running = false
     }
 

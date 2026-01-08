@@ -13,4 +13,3 @@ import Testing
         #expect(decoded.format == .jpeg)
     }
 }
-

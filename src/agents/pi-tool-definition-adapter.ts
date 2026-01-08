@@ -4,11 +4,22 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { logError } from "../logger.js";
+import { logDebug, logError } from "../logger.js";
 import { jsonResult } from "./tools/common.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
 type AnyAgentTool = AgentTool<any, unknown>;
+
+function describeToolExecutionError(err: unknown): {
+  message: string;
+  stack?: string;
+} {
+  if (err instanceof Error) {
+    const message = err.message?.trim() ? err.message : String(err);
+    return { message, stack: err.stack };
+  }
+  return { message: String(err) };
+}
 
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
@@ -37,13 +48,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               ? String((err as { name?: unknown }).name)
               : "";
           if (name === "AbortError") throw err;
-          const message =
-            err instanceof Error ? (err.stack ?? err.message) : String(err);
-          logError(`[tools] ${tool.name} failed: ${message}`);
+          const described = describeToolExecutionError(err);
+          if (described.stack && described.stack !== described.message) {
+            logDebug(`tools: ${tool.name} failed stack:\n${described.stack}`);
+          }
+          logError(`[tools] ${tool.name} failed: ${described.message}`);
           return jsonResult({
             status: "error",
             tool: tool.name,
-            error: message,
+            error: described.message,
           });
         }
       },

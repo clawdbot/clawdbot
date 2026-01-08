@@ -42,8 +42,7 @@ export function resolveBonjourCliPath(
   const argv = opts.argv ?? process.argv;
   const argvPath = argv[1];
   if (argvPath && isFile(argvPath)) {
-    const base = path.basename(argvPath);
-    if (!base.includes("gateway-daemon")) return argvPath;
+    return argvPath;
   }
 
   const cwd = opts.cwd ?? process.cwd();

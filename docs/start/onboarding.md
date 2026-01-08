@@ -32,6 +32,8 @@ Implementation note (2025-12-19): in local mode, the macOS app bundles the Gatew
 
 This is the “bind Clawdbot to subscription auth” step. It is explicitly the **Anthropic (Claude Pro/Max)** or **OpenAI (ChatGPT/Codex)** OAuth flow, not a generic “login”.
 
+More detail: [/concepts/oauth](/concepts/oauth)
+
 ### Recommended: OAuth (Anthropic)
 
 The macOS app should:
@@ -80,7 +82,7 @@ The onboarding flow now embeds the SwiftUI chat view directly. It uses a **speci
 This onboarding chat is where the agent:
 - does the BOOTSTRAP.md identity ritual (one question at a time)
 - visits **soul.md** with the user and writes `SOUL.md` (values, tone, boundaries)
-- asks how the user wants to talk (web-only / WhatsApp / Telegram)
+- asks how the user wants to talk (web-only / Telegram / WhatsApp)
 - guides linking steps (including showing a QR inline for WhatsApp via the `whatsapp_login` tool)
 
 If the workspace bootstrap is already complete (BOOTSTRAP.md removed), the onboarding chat step is skipped.
@@ -165,15 +167,29 @@ On the gateway host, create `~/.clawdbot/credentials/oauth.json` with this exact
 
 Set permissions: `chmod 600 ~/.clawdbot/credentials/oauth.json`
 
-**Note:** Clawdbot auto-imports from legacy pi-coding-agent paths (`~/.pi/agent/oauth.json`, etc.) but this does NOT work with Claude Code credentials — different file and format.
+**Note:** Clawdbot can import from legacy pi-coding-agent paths (`~/.pi/agent/oauth.json`, etc.), but Claude Code/Codex CLI credentials live in different files.
 
-### Using Claude Code credentials
+### Using Claude Code + Codex CLI credentials (direct)
 
-If Claude Code is installed on the gateway host, convert its credentials:
+If these CLIs are installed on the **gateway host** and you’ve already signed in, Clawdbot auto-syncs their OAuth tokens into the per-agent auth profile store (`~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`) on load:
+
+- **Claude Code**: reads `~/.claude/.credentials.json` → profile `anthropic:claude-cli`
+- **Codex CLI**: reads `~/.codex/auth.json` → profile `openai-codex:codex-cli`
+
+Verification:
+
+```bash
+clawdbot providers list
+```
+
+### Fallback: convert Claude Code credentials into `oauth.json`
+
+If you don’t want to install Claude Code on the gateway host, you can still seed the legacy import file:
 
 ```bash
 cat ~/.claude/.credentials.json | jq '{
   anthropic: {
+    type: "oauth",
     access: .claudeAiOauth.accessToken,
     refresh: .claudeAiOauth.refreshToken,
     expires: .claudeAiOauth.expiresAt
@@ -181,12 +197,6 @@ cat ~/.claude/.credentials.json | jq '{
 }' > ~/.clawdbot/credentials/oauth.json
 chmod 600 ~/.clawdbot/credentials/oauth.json
 ```
-
-| Claude Code field | Clawdbot field |
-|-------------------|---------------|
-| `accessToken` | `access` |
-| `refreshToken` | `refresh` |
-| `expiresAt` | `expires` |
 
 ## Workspace backup (recommended)
 

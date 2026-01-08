@@ -57,6 +57,9 @@ struct VoiceWakeTestCard: View {
                     .symbolEffect(.pulse)
                     .foregroundStyle(Color.accentColor))
 
+        case .finalizing:
+            AnyView(ProgressView().controlSize(.small))
+
         case .detected:
             AnyView(Image(systemName: "checkmark.circle.fill").foregroundStyle(.green))
 
@@ -78,6 +81,9 @@ struct VoiceWakeTestCard: View {
 
         case let .hearing(text):
             "Heard: \(text)"
+
+        case .finalizing:
+            "Finalizing…"
 
         case .detected:
             "Voice wake detected!"

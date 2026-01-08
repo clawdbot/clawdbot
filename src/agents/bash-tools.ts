@@ -39,27 +39,32 @@ const DEFAULT_PATH =
   process.env.PATH ??
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-const stringEnum = (
-  values: readonly string[],
-  options?: Parameters<typeof Type.Union>[1],
+// NOTE: Using Type.Unsafe with enum instead of Type.Union([Type.Literal(...)])
+// because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
+// Type.Union of literals compiles to { anyOf: [{enum:["a"]}, {enum:["b"]}, ...] }
+// which is valid but not accepted. A flat enum { type: "string", enum: [...] } works.
+const stringEnum = <T extends readonly string[]>(
+  values: T,
+  options?: { description?: string },
 ) =>
-  Type.Union(
-    values.map((value) => Type.Literal(value)) as [
-      ReturnType<typeof Type.Literal>,
-      ...ReturnType<typeof Type.Literal>[],
-    ],
-    options,
-  );
+  Type.Unsafe<T[number]>({
+    type: "string",
+    enum: values as unknown as string[],
+    ...options,
+  });
 
 export type BashToolDefaults = {
   backgroundMs?: number;
   timeoutSec?: number;
   sandbox?: BashSandboxConfig;
   elevated?: BashElevatedDefaults;
+  allowBackground?: boolean;
+  scopeKey?: string;
 };
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
+  scopeKey?: string;
 };
 
 export type BashSandboxConfig = {
@@ -126,6 +131,7 @@ export function createBashTool(
     10,
     120_000,
   );
+  const allowBackground = defaults?.allowBackground ?? true;
   const defaultTimeoutSec =
     typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
       ? defaults.timeoutSec
@@ -152,18 +158,27 @@ export function createBashTool(
         throw new Error("Provide a command to start.");
       }
 
-      const yieldWindow = params.background
-        ? 0
-        : clampNumber(
-            params.yieldMs ?? defaultBackgroundMs,
-            defaultBackgroundMs,
-            10,
-            120_000,
-          );
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const startedAt = Date.now();
       const sessionId = randomUUID();
       const warnings: string[] = [];
+      const backgroundRequested = params.background === true;
+      const yieldRequested = typeof params.yieldMs === "number";
+      if (!allowBackground && (backgroundRequested || yieldRequested)) {
+        warnings.push(
+          "Warning: background execution is disabled; running synchronously.",
+        );
+      }
+      const yieldWindow = allowBackground
+        ? backgroundRequested
+          ? 0
+          : clampNumber(
+              params.yieldMs ?? defaultBackgroundMs,
+              defaultBackgroundMs,
+              10,
+              120_000,
+            )
+        : null;
       const elevatedDefaults = defaults?.elevated;
       const elevatedDefaultOn =
         elevatedDefaults?.defaultLevel === "on" &&
@@ -238,6 +253,7 @@ export function createBashTool(
       const session = {
         id: sessionId,
         command: params.command,
+        scopeKey: defaults?.scopeKey,
         child,
         pid: child?.pid,
         startedAt,
@@ -351,15 +367,17 @@ export function createBashTool(
             resolveRunning();
           };
 
-          if (yieldWindow === 0) {
-            onYieldNow();
-          } else {
-            yieldTimer = setTimeout(() => {
-              if (settled) return;
-              yielded = true;
-              markBackgrounded(session);
-              resolveRunning();
-            }, yieldWindow);
+          if (allowBackground && yieldWindow !== null) {
+            if (yieldWindow === 0) {
+              onYieldNow();
+            } else {
+              yieldTimer = setTimeout(() => {
+                if (settled) return;
+                yielded = true;
+                markBackgrounded(session);
+                resolveRunning();
+              }, yieldWindow);
+            }
           }
 
           const handleExit = (
@@ -456,6 +474,9 @@ export function createProcessTool(
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);
   }
+  const scopeKey = defaults?.scopeKey;
+  const isInScope = (session?: { scopeKey?: string } | null) =>
+    !scopeKey || session?.scopeKey === scopeKey;
 
   return {
     name: "process",
@@ -473,32 +494,36 @@ export function createProcessTool(
       };
 
       if (params.action === "list") {
-        const running = listRunningSessions().map((s) => ({
-          sessionId: s.id,
-          status: "running",
-          pid: s.pid ?? undefined,
-          startedAt: s.startedAt,
-          runtimeMs: Date.now() - s.startedAt,
-          cwd: s.cwd,
-          command: s.command,
-          name: deriveSessionName(s.command),
-          tail: s.tail,
-          truncated: s.truncated,
-        }));
-        const finished = listFinishedSessions().map((s) => ({
-          sessionId: s.id,
-          status: s.status,
-          startedAt: s.startedAt,
-          endedAt: s.endedAt,
-          runtimeMs: s.endedAt - s.startedAt,
-          cwd: s.cwd,
-          command: s.command,
-          name: deriveSessionName(s.command),
-          tail: s.tail,
-          truncated: s.truncated,
-          exitCode: s.exitCode ?? undefined,
-          exitSignal: s.exitSignal ?? undefined,
-        }));
+        const running = listRunningSessions()
+          .filter((s) => isInScope(s))
+          .map((s) => ({
+            sessionId: s.id,
+            status: "running",
+            pid: s.pid ?? undefined,
+            startedAt: s.startedAt,
+            runtimeMs: Date.now() - s.startedAt,
+            cwd: s.cwd,
+            command: s.command,
+            name: deriveSessionName(s.command),
+            tail: s.tail,
+            truncated: s.truncated,
+          }));
+        const finished = listFinishedSessions()
+          .filter((s) => isInScope(s))
+          .map((s) => ({
+            sessionId: s.id,
+            status: s.status,
+            startedAt: s.startedAt,
+            endedAt: s.endedAt,
+            runtimeMs: s.endedAt - s.startedAt,
+            cwd: s.cwd,
+            command: s.command,
+            name: deriveSessionName(s.command),
+            tail: s.tail,
+            truncated: s.truncated,
+            exitCode: s.exitCode ?? undefined,
+            exitSignal: s.exitSignal ?? undefined,
+          }));
         const lines = [...running, ...finished]
           .sort((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
@@ -532,34 +557,38 @@ export function createProcessTool(
 
       const session = getSession(params.sessionId);
       const finished = getFinishedSession(params.sessionId);
+      const scopedSession = isInScope(session) ? session : undefined;
+      const scopedFinished = isInScope(finished) ? finished : undefined;
 
       switch (params.action) {
         case "poll": {
-          if (!session) {
-            if (finished) {
+          if (!scopedSession) {
+            if (scopedFinished) {
               return {
                 content: [
                   {
                     type: "text",
                     text:
-                      (finished.tail ||
+                      (scopedFinished.tail ||
                         `(no output recorded${
-                          finished.truncated ? " — truncated to cap" : ""
+                          scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
                       `\n\nProcess exited with ${
-                        finished.exitSignal
-                          ? `signal ${finished.exitSignal}`
-                          : `code ${finished.exitCode ?? 0}`
+                        scopedFinished.exitSignal
+                          ? `signal ${scopedFinished.exitSignal}`
+                          : `code ${scopedFinished.exitCode ?? 0}`
                       }.`,
                   },
                 ],
                 details: {
                   status:
-                    finished.status === "completed" ? "completed" : "failed",
+                    scopedFinished.status === "completed"
+                      ? "completed"
+                      : "failed",
                   sessionId: params.sessionId,
-                  exitCode: finished.exitCode ?? undefined,
-                  aggregated: finished.aggregated,
-                  name: deriveSessionName(finished.command),
+                  exitCode: scopedFinished.exitCode ?? undefined,
+                  aggregated: scopedFinished.aggregated,
+                  name: deriveSessionName(scopedFinished.command),
                 },
               };
             }
@@ -573,7 +602,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          if (!session.backgrounded) {
+          if (!scopedSession.backgrounded) {
             return {
               content: [
                 {
@@ -584,17 +613,17 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          const { stdout, stderr } = drainSession(session);
-          const exited = session.exited;
-          const exitCode = session.exitCode ?? 0;
-          const exitSignal = session.exitSignal ?? undefined;
+          const { stdout, stderr } = drainSession(scopedSession);
+          const exited = scopedSession.exited;
+          const exitCode = scopedSession.exitCode ?? 0;
+          const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
             const status =
               exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
-              session,
-              session.exitCode ?? null,
-              session.exitSignal ?? null,
+              scopedSession,
+              scopedSession.exitCode ?? null,
+              scopedSession.exitSignal ?? null,
               status,
             );
           }
@@ -624,15 +653,15 @@ export function createProcessTool(
               status,
               sessionId: params.sessionId,
               exitCode: exited ? exitCode : undefined,
-              aggregated: session.aggregated,
-              name: deriveSessionName(session.command),
+              aggregated: scopedSession.aggregated,
+              name: deriveSessionName(scopedSession.command),
             },
           };
         }
 
         case "log": {
-          if (session) {
-            if (!session.backgrounded) {
+          if (scopedSession) {
+            if (!scopedSession.backgrounded) {
               return {
                 content: [
                   {
@@ -644,31 +673,31 @@ export function createProcessTool(
               };
             }
             const { slice, totalLines, totalChars } = sliceLogLines(
-              session.aggregated,
+              scopedSession.aggregated,
               params.offset,
               params.limit,
             );
             return {
               content: [{ type: "text", text: slice || "(no output yet)" }],
               details: {
-                status: session.exited ? "completed" : "running",
+                status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
                 total: totalLines,
                 totalLines,
                 totalChars,
-                truncated: session.truncated,
-                name: deriveSessionName(session.command),
+                truncated: scopedSession.truncated,
+                name: deriveSessionName(scopedSession.command),
               },
             };
           }
-          if (finished) {
+          if (scopedFinished) {
             const { slice, totalLines, totalChars } = sliceLogLines(
-              finished.aggregated,
+              scopedFinished.aggregated,
               params.offset,
               params.limit,
             );
             const status =
-              finished.status === "completed" ? "completed" : "failed";
+              scopedFinished.status === "completed" ? "completed" : "failed";
             return {
               content: [
                 { type: "text", text: slice || "(no output recorded)" },
@@ -679,10 +708,10 @@ export function createProcessTool(
                 total: totalLines,
                 totalLines,
                 totalChars,
-                truncated: finished.truncated,
-                exitCode: finished.exitCode ?? undefined,
-                exitSignal: finished.exitSignal ?? undefined,
-                name: deriveSessionName(finished.command),
+                truncated: scopedFinished.truncated,
+                exitCode: scopedFinished.exitCode ?? undefined,
+                exitSignal: scopedFinished.exitSignal ?? undefined,
+                name: deriveSessionName(scopedFinished.command),
               },
             };
           }
@@ -698,7 +727,7 @@ export function createProcessTool(
         }
 
         case "write": {
-          if (!session) {
+          if (!scopedSession) {
             return {
               content: [
                 {
@@ -709,7 +738,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          if (!session.backgrounded) {
+          if (!scopedSession.backgrounded) {
             return {
               content: [
                 {
@@ -720,7 +749,10 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          if (!session.child?.stdin || session.child.stdin.destroyed) {
+          if (
+            !scopedSession.child?.stdin ||
+            scopedSession.child.stdin.destroyed
+          ) {
             return {
               content: [
                 {
@@ -732,13 +764,13 @@ export function createProcessTool(
             };
           }
           await new Promise<void>((resolve, reject) => {
-            session.child?.stdin.write(params.data ?? "", (err) => {
+            scopedSession.child?.stdin.write(params.data ?? "", (err) => {
               if (err) reject(err);
               else resolve();
             });
           });
           if (params.eof) {
-            session.child.stdin.end();
+            scopedSession.child.stdin.end();
           }
           return {
             content: [
@@ -752,13 +784,15 @@ export function createProcessTool(
             details: {
               status: "running",
               sessionId: params.sessionId,
-              name: session ? deriveSessionName(session.command) : undefined,
+              name: scopedSession
+                ? deriveSessionName(scopedSession.command)
+                : undefined,
             },
           };
         }
 
         case "kill": {
-          if (!session) {
+          if (!scopedSession) {
             return {
               content: [
                 {
@@ -769,7 +803,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          if (!session.backgrounded) {
+          if (!scopedSession.backgrounded) {
             return {
               content: [
                 {
@@ -780,21 +814,23 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          killSession(session);
-          markExited(session, null, "SIGKILL", "failed");
+          killSession(scopedSession);
+          markExited(scopedSession, null, "SIGKILL", "failed");
           return {
             content: [
               { type: "text", text: `Killed session ${params.sessionId}.` },
             ],
             details: {
               status: "failed",
-              name: session ? deriveSessionName(session.command) : undefined,
+              name: scopedSession
+                ? deriveSessionName(scopedSession.command)
+                : undefined,
             },
           };
         }
 
         case "clear": {
-          if (finished) {
+          if (scopedFinished) {
             deleteSession(params.sessionId);
             return {
               content: [
@@ -815,20 +851,22 @@ export function createProcessTool(
         }
 
         case "remove": {
-          if (session) {
-            killSession(session);
-            markExited(session, null, "SIGKILL", "failed");
+          if (scopedSession) {
+            killSession(scopedSession);
+            markExited(scopedSession, null, "SIGKILL", "failed");
             return {
               content: [
                 { type: "text", text: `Removed session ${params.sessionId}.` },
               ],
               details: {
                 status: "failed",
-                name: session ? deriveSessionName(session.command) : undefined,
+                name: scopedSession
+                  ? deriveSessionName(scopedSession.command)
+                  : undefined,
               },
             };
           }
-          if (finished) {
+          if (scopedFinished) {
             deleteSession(params.sessionId);
             return {
               content: [

@@ -114,7 +114,7 @@ describe("Agent-specific tool filtering", () => {
     expect(familyToolNames).not.toContain("edit");
   });
 
-  it("should combine global and agent-specific deny lists", () => {
+  it("should prefer agent-specific tool policy over global", () => {
     const cfg: ClawdbotConfig = {
       agent: {
         tools: {
@@ -126,7 +126,7 @@ describe("Agent-specific tool filtering", () => {
           work: {
             workspace: "~/clawd-work",
             tools: {
-              deny: ["bash", "process"], // Agent deny
+              deny: ["bash", "process"], // Agent deny (override)
             },
           },
         },
@@ -141,8 +141,8 @@ describe("Agent-specific tool filtering", () => {
     });
 
     const toolNames = tools.map((t) => t.name);
-    // Both global and agent denies should be applied
-    expect(toolNames).not.toContain("browser");
+    // Agent policy overrides global: browser is allowed again
+    expect(toolNames).toContain("browser");
     expect(toolNames).not.toContain("bash");
     expect(toolNames).not.toContain("process");
   });
@@ -212,5 +212,31 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("bash");
     expect(toolNames).not.toContain("write");
+  });
+
+  it("should run bash synchronously when process is denied", async () => {
+    const cfg: ClawdbotConfig = {
+      agent: {
+        tools: {
+          deny: ["process"],
+        },
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main",
+      agentDir: "/tmp/agent-main",
+    });
+    const bash = tools.find((tool) => tool.name === "bash");
+    expect(bash).toBeDefined();
+
+    const result = await bash?.execute("call1", {
+      command: "echo done",
+      yieldMs: 10,
+    });
+
+    expect(result?.details.status).toBe("completed");
   });
 });

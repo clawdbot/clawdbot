@@ -1,16 +1,25 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 
 // We need to test the internal defaultSandboxConfig function, but it's not exported.
 // Instead, we test the behavior through resolveSandboxContext which uses it.
 
+type SpawnCall = {
+  command: string;
+  args: string[];
+};
+
+const spawnCalls: SpawnCall[] = [];
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
-    spawn: () => {
+    spawn: (command: string, args: string[]) => {
+      spawnCalls.push({ command, args });
       const child = new EventEmitter() as {
         stdout?: Readable;
         stderr?: Readable;
@@ -18,13 +27,31 @@ vi.mock("node:child_process", async (importOriginal) => {
       };
       child.stdout = new Readable({ read() {} });
       child.stderr = new Readable({ read() {} });
-      queueMicrotask(() => child.emit("close", 0));
+
+      const dockerArgs = command === "docker" ? args : [];
+      const shouldFailContainerInspect =
+        dockerArgs[0] === "inspect" &&
+        dockerArgs[1] === "-f" &&
+        dockerArgs[2] === "{{.State.Running}}";
+      const shouldSucceedImageInspect =
+        dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
+
+      const code = shouldFailContainerInspect ? 1 : 0;
+      if (shouldSucceedImageInspect) {
+        queueMicrotask(() => child.emit("close", 0));
+      } else {
+        queueMicrotask(() => child.emit("close", code));
+      }
       return child;
     },
   };
 });
 
 describe("Agent-specific sandbox config", () => {
+  beforeEach(() => {
+    spawnCalls.length = 0;
+  });
+
   it("should use global sandbox config when no agent-specific config exists", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
@@ -52,6 +79,145 @@ describe("Agent-specific sandbox config", () => {
 
     expect(context).toBeDefined();
     expect(context?.enabled).toBe(true);
+  });
+
+  it("should allow agent-specific docker setupCommand overrides", async () => {
+    const { resolveSandboxContext } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agent: {
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          docker: {
+            setupCommand: "echo global",
+          },
+        },
+      },
+      routing: {
+        agents: {
+          work: {
+            workspace: "~/clawd-work",
+            sandbox: {
+              mode: "all",
+              scope: "agent",
+              docker: {
+                setupCommand: "echo work",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const context = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:work:main",
+      workspaceDir: "/tmp/test-work",
+    });
+
+    expect(context).toBeDefined();
+    expect(context?.docker.setupCommand).toBe("echo work");
+    expect(
+      spawnCalls.some(
+        (call) =>
+          call.command === "docker" &&
+          call.args[0] === "exec" &&
+          call.args.includes("-lc") &&
+          call.args.includes("echo work"),
+      ),
+    ).toBe(true);
+  });
+
+  it("should ignore agent-specific docker overrides when scope is shared", async () => {
+    const { resolveSandboxContext } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agent: {
+        sandbox: {
+          mode: "all",
+          scope: "shared",
+          docker: {
+            setupCommand: "echo global",
+          },
+        },
+      },
+      routing: {
+        agents: {
+          work: {
+            workspace: "~/clawd-work",
+            sandbox: {
+              mode: "all",
+              scope: "shared",
+              docker: {
+                setupCommand: "echo work",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const context = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:work:main",
+      workspaceDir: "/tmp/test-work",
+    });
+
+    expect(context).toBeDefined();
+    expect(context?.docker.setupCommand).toBe("echo global");
+    expect(context?.containerName).toContain("shared");
+    expect(
+      spawnCalls.some(
+        (call) =>
+          call.command === "docker" &&
+          call.args[0] === "exec" &&
+          call.args.includes("-lc") &&
+          call.args.includes("echo global"),
+      ),
+    ).toBe(true);
+  });
+
+  it("should allow agent-specific docker settings beyond setupCommand", async () => {
+    const { resolveSandboxContext } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agent: {
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          docker: {
+            image: "global-image",
+            network: "none",
+          },
+        },
+      },
+      routing: {
+        agents: {
+          work: {
+            workspace: "~/clawd-work",
+            sandbox: {
+              mode: "all",
+              scope: "agent",
+              docker: {
+                image: "work-image",
+                network: "bridge",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const context = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:work:main",
+      workspaceDir: "/tmp/test-work",
+    });
+
+    expect(context).toBeDefined();
+    expect(context?.docker.image).toBe("work-image");
+    expect(context?.docker.network).toBe("bridge");
   });
 
   it("should override with agent-specific sandbox mode 'off'", async () => {
@@ -184,7 +350,9 @@ describe("Agent-specific sandbox config", () => {
     });
 
     expect(context).toBeDefined();
-    expect(context?.workspaceDir).toContain("/tmp/isolated-sandboxes");
+    expect(context?.workspaceDir).toContain(
+      path.resolve("/tmp/isolated-sandboxes"),
+    );
   });
 
   it("should prefer agent config over global for multiple agents", async () => {

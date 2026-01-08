@@ -2,11 +2,13 @@ import { loadConfig } from "../config/config.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
+import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 
 export type SignalSendOpts = {
   baseUrl?: string;
   account?: string;
+  accountId?: string;
   mediaUrl?: string;
   maxBytes?: number;
   timeoutMs?: number;
@@ -21,23 +23,6 @@ type SignalTarget =
   | { type: "recipient"; recipient: string }
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
-
-function resolveBaseUrl(explicit?: string): string {
-  const cfg = loadConfig();
-  const signalCfg = cfg.signal;
-  if (explicit?.trim()) return explicit.trim();
-  if (signalCfg?.httpUrl?.trim()) return signalCfg.httpUrl.trim();
-  const host = signalCfg?.httpHost?.trim() || "127.0.0.1";
-  const port = signalCfg?.httpPort ?? 8080;
-  return `http://${host}:${port}`;
-}
-
-function resolveAccount(explicit?: string): string | undefined {
-  const cfg = loadConfig();
-  const signalCfg = cfg.signal;
-  const account = explicit?.trim() || signalCfg?.account?.trim();
-  return account || undefined;
-}
 
 function parseTarget(raw: string): SignalTarget {
   let value = raw.trim();
@@ -81,11 +66,25 @@ export async function sendMessageSignal(
   text: string,
   opts: SignalSendOpts = {},
 ): Promise<SignalSendResult> {
-  const baseUrl = resolveBaseUrl(opts.baseUrl);
-  const account = resolveAccount(opts.account);
+  const cfg = loadConfig();
+  const accountInfo = resolveSignalAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
+  const account = opts.account?.trim() || accountInfo.config.account?.trim();
   const target = parseTarget(to);
   let message = text ?? "";
-  const maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
+  const maxBytes = (() => {
+    if (typeof opts.maxBytes === "number") return opts.maxBytes;
+    if (typeof accountInfo.config.mediaMaxMb === "number") {
+      return accountInfo.config.mediaMaxMb * 1024 * 1024;
+    }
+    if (typeof cfg.agent?.mediaMaxMb === "number") {
+      return cfg.agent.mediaMaxMb * 1024 * 1024;
+    }
+    return 8 * 1024 * 1024;
+  })();
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {

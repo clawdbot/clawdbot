@@ -71,7 +71,16 @@ export type GatewayRequestContext = {
   getRuntimeSnapshot: () => ProviderRuntimeSnapshot;
   startWhatsAppProvider: (accountId?: string) => Promise<void>;
   stopWhatsAppProvider: (accountId?: string) => Promise<void>;
-  stopTelegramProvider: () => Promise<void>;
+  startTelegramProvider: (accountId?: string) => Promise<void>;
+  stopTelegramProvider: (accountId?: string) => Promise<void>;
+  startDiscordProvider: (accountId?: string) => Promise<void>;
+  stopDiscordProvider: (accountId?: string) => Promise<void>;
+  startSlackProvider: (accountId?: string) => Promise<void>;
+  stopSlackProvider: (accountId?: string) => Promise<void>;
+  startSignalProvider: (accountId?: string) => Promise<void>;
+  stopSignalProvider: (accountId?: string) => Promise<void>;
+  startIMessageProvider: (accountId?: string) => Promise<void>;
+  stopIMessageProvider: (accountId?: string) => Promise<void>;
   markWhatsAppLoggedOut: (cleared: boolean, accountId?: string) => void;
   wizardRunner: (
     opts: import("../../commands/onboard-types.js").OnboardOptions,

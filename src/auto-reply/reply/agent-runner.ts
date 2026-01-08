@@ -14,14 +14,16 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { TemplateContext } from "../templating.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { extractAudioTag } from "./audio-tags.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
   enqueueFollowupRun,
@@ -29,9 +31,20 @@ import {
   type QueueSettings,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { extractReplyToTag } from "./reply-tags.js";
+import {
+  applyReplyTagsToPayload,
+  applyReplyThreading,
+  filterMessagingToolDuplicates,
+  isRenderablePayload,
+  shouldSuppressMessagingToolReplies,
+} from "./reply-payloads.js";
+import {
+  createReplyToModeFilter,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
@@ -76,6 +89,7 @@ export async function runReplyAgent(params: {
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
+  typingMode: TypingMode;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -101,9 +115,15 @@ export async function runReplyAgent(params: {
     resolvedBlockStreamingBreak,
     sessionCtx,
     shouldInjectGroupIntro,
+    typingMode,
   } = params;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat,
+  });
 
   const shouldEmitToolResult = () => {
     if (!sessionKey || !storePath) {
@@ -138,6 +158,16 @@ export async function runReplyAgent(params: {
       replyToId: payload.replyToId ?? null,
     });
   };
+  const replyToChannel =
+    sessionCtx.OriginatingChannel ??
+    ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
+      | OriginatingChannelType
+      | undefined);
+  const replyToMode = resolveReplyToMode(
+    followupRun.run.config,
+    replyToChannel,
+  );
+  const applyReplyToMode = createReplyToModeFilter(replyToMode);
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(
@@ -173,6 +203,7 @@ export async function runReplyAgent(params: {
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
+    typingMode,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -210,6 +241,7 @@ export async function runReplyAgent(params: {
             sessionKey,
             messageProvider:
               sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            agentAccountId: sessionCtx.AccountId,
             sessionFile: followupRun.run.sessionFile,
             workspaceDir: followupRun.run.workspaceDir,
             agentDir: followupRun.run.agentDir,
@@ -252,30 +284,40 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    if (!isHeartbeat) {
-                      await typing.startTypingOnText(text);
-                    }
+                    await typingSignals.signalTextDelta(text);
                     await opts.onPartialReply?.({
                       text,
                       mediaUrls: payload.mediaUrls,
                     });
                   }
                 : undefined,
-            onReasoningStream: opts?.onReasoningStream
-              ? async (payload) => {
-                  await opts.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onReasoningStream:
+              typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
+                ? async (payload) => {
+                    await typingSignals.signalReasoningDelta();
+                    await opts?.onReasoningStream?.({
+                      text: payload.text,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  }
+                : undefined,
             onAgentEvent: (evt) => {
-              if (evt.stream !== "compaction") return;
-              const phase =
-                typeof evt.data.phase === "string" ? evt.data.phase : "";
-              const willRetry = Boolean(evt.data.willRetry);
-              if (phase === "end" && !willRetry) {
-                autoCompactionCompleted = true;
+              // Trigger typing when tools start executing
+              if (evt.stream === "tool") {
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "start") {
+                  void typingSignals.signalToolStart();
+                }
+              }
+              // Track auto-compaction completion
+              if (evt.stream === "compaction") {
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const willRetry = Boolean(evt.data.willRetry);
+                if (phase === "end" && !willRetry) {
+                  autoCompactionCompleted = true;
+                }
               }
             },
             onBlockReply:
@@ -296,21 +338,28 @@ export async function runReplyAgent(params: {
                       if (stripped.shouldSkip && !hasMedia) return;
                       text = stripped.text;
                     }
-                    const tagResult = extractReplyToTag(
-                      text,
+                    const taggedPayload = applyReplyTagsToPayload(
+                      {
+                        text,
+                        mediaUrls: payload.mediaUrls,
+                        mediaUrl: payload.mediaUrls?.[0],
+                      },
                       sessionCtx.MessageSid,
                     );
-                    const cleaned = tagResult.cleaned || undefined;
-                    const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
+                    if (!isRenderablePayload(taggedPayload)) return;
+                    const audioTagResult = extractAudioTag(taggedPayload.text);
+                    const cleaned = audioTagResult.cleaned || undefined;
+                    const hasMedia =
+                      Boolean(taggedPayload.mediaUrl) ||
+                      (taggedPayload.mediaUrls?.length ?? 0) > 0;
                     if (!cleaned && !hasMedia) return;
                     if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia)
                       return;
-                    const blockPayload: ReplyPayload = {
+                    const blockPayload: ReplyPayload = applyReplyToMode({
+                      ...taggedPayload,
                       text: cleaned,
-                      mediaUrls: payload.mediaUrls,
-                      mediaUrl: payload.mediaUrls?.[0],
-                      replyToId: tagResult.replyToId,
-                    };
+                      audioAsVoice: audioTagResult.audioAsVoice,
+                    });
                     const payloadKey = buildPayloadKey(blockPayload);
                     if (
                       streamedPayloadKeys.has(payloadKey) ||
@@ -320,9 +369,7 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      if (!isHeartbeat) {
-                        await typing.startTypingOnText(cleaned);
-                      }
+                      await typingSignals.signalTextDelta(taggedPayload.text);
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -367,9 +414,7 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    if (!isHeartbeat) {
-                      await typing.startTypingOnText(text);
-                    }
+                    await typingSignals.signalTextDelta(text);
                     await opts.onToolResult?.({
                       text,
                       mediaUrls: payload.mediaUrls,
@@ -486,46 +531,57 @@ export async function runReplyAgent(params: {
           return [{ ...payload, text: stripped.text }];
         });
 
-    const replyTaggedPayloads: ReplyPayload[] = sanitizedPayloads
+    const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
+      payloads: sanitizedPayloads,
+      applyReplyToMode,
+      currentMessageId: sessionCtx.MessageSid,
+    })
       .map((payload) => {
-        const { cleaned, replyToId } = extractReplyToTag(
-          payload.text,
-          sessionCtx.MessageSid,
-        );
+        const audioTagResult = extractAudioTag(payload.text);
         return {
           ...payload,
-          text: cleaned ? cleaned : undefined,
-          replyToId: replyToId ?? payload.replyToId,
+          text: audioTagResult.cleaned ? audioTagResult.cleaned : undefined,
+          audioAsVoice: audioTagResult.audioAsVoice,
         };
       })
-      .filter(
-        (payload) =>
-          payload.text ||
-          payload.mediaUrl ||
-          (payload.mediaUrls && payload.mediaUrls.length > 0),
-      );
+      .filter(isRenderablePayload);
 
+    // Drop final payloads if block streaming is enabled and we already streamed
+    // block replies. Tool-sent duplicates are filtered below.
     const shouldDropFinalPayloads =
       blockStreamingEnabled && didStreamBlockReply;
+    const messagingToolSentTexts = runResult.messagingToolSentTexts ?? [];
+    const messagingToolSentTargets = runResult.messagingToolSentTargets ?? [];
+    const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
+      messageProvider: followupRun.run.messageProvider,
+      messagingToolSentTargets,
+      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      accountId: sessionCtx.AccountId,
+    });
+    const dedupedPayloads = filterMessagingToolDuplicates({
+      payloads: replyTaggedPayloads,
+      sentTexts: messagingToolSentTexts,
+    });
     const filteredPayloads = shouldDropFinalPayloads
       ? []
       : blockStreamingEnabled
-        ? replyTaggedPayloads.filter(
+        ? dedupedPayloads.filter(
             (payload) => !streamedPayloadKeys.has(buildPayloadKey(payload)),
           )
-        : replyTaggedPayloads;
+        : dedupedPayloads;
+    const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
-    if (filteredPayloads.length === 0) return finalizeWithFollowup(undefined);
+    if (replyPayloads.length === 0) return finalizeWithFollowup(undefined);
 
-    const shouldSignalTyping = filteredPayloads.some((payload) => {
+    const shouldSignalTyping = replyPayloads.some((payload) => {
       const trimmed = payload.text?.trim();
       if (trimmed && trimmed !== SILENT_REPLY_TOKEN) return true;
       if (payload.mediaUrl) return true;
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
     });
-    if (shouldSignalTyping && !isHeartbeat) {
-      await typing.startTypingLoop();
+    if (shouldSignalTyping) {
+      await typingSignals.signalRunStart();
     }
 
     if (sessionStore && sessionKey) {
@@ -582,7 +638,7 @@ export async function runReplyAgent(params: {
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.
-    let finalPayloads = filteredPayloads;
+    let finalPayloads = replyPayloads;
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({
         sessionEntry,

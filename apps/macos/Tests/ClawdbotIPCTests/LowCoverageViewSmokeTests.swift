@@ -1,4 +1,5 @@
 import AppKit
+import ClawdbotProtocol
 import SwiftUI
 import Testing
 

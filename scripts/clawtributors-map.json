@@ -1,0 +1,24 @@
+{
+  "ensureLogins": [
+    "jdrhyne",
+    "manmal"
+  ],
+  "seedCommit": "d6863f87",
+  "placeholderAvatar": "assets/avatar-placeholder.svg",
+  "displayName": {
+    "jdrhyne": "Jonathan D. Rhyne (DJ-D)"
+  },
+  "nameToLogin": {
+    "peter steinberger": "steipete",
+    "eng. juan combetto": "omniwired",
+    "mariano belinky": "mbelinky",
+    "vasanth rao naik sabavat": "vsabavat",
+    "tu nombre real": "nachx639",
+    "django navarro": "djangonavarro220"
+  },
+  "emailToLogin": {
+    "steipete@gmail.com": "steipete",
+    "rltorres26+github@gmail.com": "RandyVentures",
+    "hixvac@gmail.com": "VACInc"
+  }
+}

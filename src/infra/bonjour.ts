@@ -2,6 +2,9 @@ import os from "node:os";
 
 import { logDebug, logWarn } from "../logger.js";
 import { getLogger } from "../logging.js";
+import { ignoreCiaoCancellationRejection } from "./bonjour-ciao.js";
+import { formatBonjourError } from "./bonjour-errors.js";
+import { registerUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 export type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -43,14 +46,6 @@ type BonjourService = {
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
   serviceState: string;
 };
-
-function formatBonjourError(err: unknown): string {
-  if (err instanceof Error) {
-    const msg = err.message || String(err);
-    return err.name && err.name !== "Error" ? `${err.name}: ${msg}` : msg;
-  }
-  return String(err);
-}
 
 function serviceSummary(label: string, svc: BonjourService): string {
   let fqdn = "unknown";
@@ -141,6 +136,13 @@ export async function startGatewayBonjourAdvertiser(
       label: "bridge",
       svc: bridge as unknown as BonjourService,
     });
+  }
+
+  let ciaoCancellationRejectionHandler: (() => void) | undefined;
+  if (services.length > 0) {
+    ciaoCancellationRejectionHandler = registerUnhandledRejectionHandler(
+      ignoreCiaoCancellationRejection,
+    );
   }
 
   logDebug(
@@ -254,6 +256,8 @@ export async function startGatewayBonjourAdvertiser(
         await responder.shutdown();
       } catch {
         /* ignore */
+      } finally {
+        ciaoCancellationRejectionHandler?.();
       }
     },
   };

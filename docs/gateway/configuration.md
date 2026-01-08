@@ -15,6 +15,8 @@ If the file is missing, CLAWDBOT uses safe-ish defaults (embedded Pi agent + per
 - tune the embedded agent (`agent`) and session behavior (`session`)
 - set the agent's identity (`identity`)
 
+> **New to configuration?** Check out the [Configuration Examples](/gateway/configuration-examples) guide for complete examples with detailed explanations!
+
 ## Schema + UI hints
 
 The Gateway exposes a JSON Schema representation of the config via `config.schema` for UI editors.
@@ -22,6 +24,26 @@ The Control UI renders a form from this schema, with a **Raw JSON** editor as an
 
 Hints (labels, grouping, sensitive fields) ship alongside the schema so clients can render
 better forms without hard-coding config knowledge.
+
+## Apply + restart (RPC)
+
+Use `config.apply` to validate + write the full config and restart the Gateway in one step.
+It writes a restart sentinel and pings the last active session after the Gateway comes back.
+
+Params:
+- `raw` (string) — JSON5 payload for the entire config
+- `sessionKey` (optional) — last active session key for the wake-up ping
+- `restartDelayMs` (optional) — delay before restart (default 2000)
+
+Example (via `gateway call`):
+
+```bash
+clawdbot gateway call config.apply --params '{
+  "raw": "{\\n  agent: { workspace: \\"~/clawd\\" }\\n}\\n",
+  "sessionKey": "agent:main:whatsapp:dm:+15555550123",
+  "restartDelayMs": 1000
+}'
+```
 
 ## Minimal config (recommended starting point)
 
@@ -94,6 +116,8 @@ Env var equivalent:
 Clawdbot stores **per-agent** auth profiles (OAuth + API keys) in:
 - `<agentDir>/auth-profiles.json` (default: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`)
 
+See also: [/concepts/oauth](/concepts/oauth)
+
 Legacy OAuth imports:
 - `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
 
@@ -108,6 +132,10 @@ Overrides:
 - Agent dir (default agent root override): `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
+
+Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
+- `~/.claude/.credentials.json` (Claude Code) → `anthropic:claude-cli`
+- `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
 
 ### `auth`
 
@@ -145,7 +173,7 @@ If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
 
 ### `wizard`
 
-Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
+Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 
 ```json5
 {
@@ -239,6 +267,33 @@ Run multiple WhatsApp accounts in one gateway:
 Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
+
+### `telegram.accounts` / `discord.accounts` / `slack.accounts` / `signal.accounts` / `imessage.accounts`
+
+Run multiple accounts per provider (each account has its own `accountId` and optional `name`):
+
+```json5
+{
+  telegram: {
+    accounts: {
+      default: {
+        name: "Primary bot",
+        botToken: "123456:ABC..."
+      },
+      alerts: {
+        name: "Alerts bot",
+        botToken: "987654:XYZ..."
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `default` is used when `accountId` is omitted (CLI + routing).
+- Env tokens only apply to the **default** account.
+- Base provider settings (group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Use `routing.bindings[].match.accountId` to route each account to a different agent.
 
 ### `routing.groupChat`
 
@@ -339,8 +394,13 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
     - `workspaceAccess`: `"none"` | `"ro"` | `"rw"`
     - `scope`: `"session"` | `"agent"` | `"shared"`
     - `workspaceRoot`: custom sandbox workspace root
+    - `docker`: per-agent docker overrides (e.g. `image`, `network`, `env`, `setupCommand`, limits; ignored when `scope: "shared"`)
+    - `browser`: per-agent sandboxed browser overrides (ignored when `scope: "shared"`)
+    - `prune`: per-agent sandbox pruning overrides (ignored when `scope: "shared"`)
     - `tools`: per-agent sandbox tool policy (deny wins; overrides `agent.sandbox.tools`)
-  - `tools`: per-agent tool restrictions (applied before sandbox tool policy).
+  - `subagents`: per-agent sub-agent defaults.
+    - `allowAgents`: allowlist of agent ids for `sessions_spawn` from this agent (`["*"]` = allow any; default: only same agent)
+  - `tools`: per-agent tool restrictions (overrides `agent.tools`; applied before sandbox tool policy).
     - `allow`: array of allowed tool names
     - `deny`: array of denied tool names (deny wins)
 - `routing.bindings[]`: routes inbound messages to an `agentId`.
@@ -358,6 +418,75 @@ Deterministic match order:
 6) `routing.defaultAgentId`
 
 Within each match tier, the first matching entry in `routing.bindings` wins.
+
+#### Per-agent access profiles (multi-agent)
+
+Each agent can carry its own sandbox + tool policy. Use this to mix access
+levels in one gateway:
+- **Full access** (personal agent)
+- **Read-only** tools + workspace
+- **No filesystem access** (messaging/session tools only)
+
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence and
+additional examples.
+
+Full access (no sandbox):
+```json5
+{
+  routing: {
+    agents: {
+      personal: {
+        workspace: "~/clawd-personal",
+        sandbox: { mode: "off" }
+      }
+    }
+  }
+}
+```
+
+Read-only tools + read-only workspace:
+```json5
+{
+  routing: {
+    agents: {
+      family: {
+        workspace: "~/clawd-family",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceAccess: "ro"
+        },
+        tools: {
+          allow: ["read", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn"],
+          deny: ["write", "edit", "bash", "process", "browser"]
+        }
+      }
+    }
+  }
+}
+```
+
+No filesystem access (messaging/session tools enabled):
+```json5
+{
+  routing: {
+    agents: {
+      public: {
+        workspace: "~/clawd-public",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceAccess: "none"
+        },
+        tools: {
+          allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "whatsapp", "telegram", "slack", "discord", "gateway"],
+          deny: ["read", "write", "edit", "bash", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
+        }
+      }
+    }
+  }
+}
+```
 
 Example: two WhatsApp accounts → two agents:
 
@@ -468,6 +597,7 @@ Set `web.enabled: false` to keep it off by default.
 
 Clawdbot starts Telegram only when a `telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `telegram.botToken`.
 Set `telegram.enabled: false` to disable automatic startup.
+Multi-account support lives under `telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 ```json5
 {
@@ -490,9 +620,16 @@ Set `telegram.enabled: false` to disable automatic startup.
         }
       }
     },
+    replyToMode: "first",                 // off | first | all
     streamMode: "partial",               // off | partial | block (draft streaming)
-    actions: { reactions: true },        // tool action gates (false disables)
+    actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
     mediaMaxMb: 5,
+    retry: {                             // outbound retry policy
+      attempts: 3,
+      minDelayMs: 400,
+      maxDelayMs: 30000,
+      jitter: 0.1
+    },
     proxy: "socks5://localhost:9050",
     webhookUrl: "https://example.com/telegram-webhook",
     webhookSecret: "secret",
@@ -505,10 +642,12 @@ Draft streaming notes:
 - Uses Telegram `sendMessageDraft` (draft bubble, not a real message).
 - Requires **private chat topics** (message_thread_id in DMs; bot has topics enabled).
 - `/reasoning stream` streams reasoning into the draft, then sends the final answer.
+Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `discord` (bot transport)
 
 Configure the Discord bot by setting the bot token and optional gating:
+Multi-account support lives under `discord.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 ```json5
 {
@@ -559,7 +698,15 @@ Configure the Discord bot by setting the bot token and optional gating:
         }
       }
     },
-    historyLimit: 20                        // include last N guild messages as context
+    historyLimit: 20,                       // include last N guild messages as context
+    textChunkLimit: 2000,                   // optional outbound text chunk size (chars)
+    maxLinesPerMessage: 17,                 // soft max lines per message (Discord UI clipping)
+    retry: {                                // outbound retry policy
+      attempts: 3,
+      minDelayMs: 500,
+      maxDelayMs: 30000,
+      jitter: 0.1
+    }
   }
 }
 ```
@@ -571,6 +718,8 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+Outbound text is chunked by `discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
+Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `slack` (socket mode)
 
@@ -590,17 +739,20 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       groupChannels: ["G123"]
     },
     channels: {
-      C123: { allow: true, requireMention: true },
+      C123: { allow: true, requireMention: true, allowBots: false },
       "#general": {
         allow: true,
         requireMention: true,
+        allowBots: false,
         users: ["U123"],
         skills: ["docs"],
         systemPrompt: "Short answers only."
       }
     },
+    allowBots: false,
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
+    replyToMode: "off",           // off | first | all
     actions: {
       reactions: true,
       messages: true,
@@ -620,7 +772,11 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 }
 ```
 
+Multi-account support lives under `slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
+
 Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+
+Bot-authored messages are ignored by default. Enable with `slack.allowBots` or `slack.channels.<id>.allowBots`.
 
 Reaction notification modes:
 - `off`: no reaction events.
@@ -656,10 +812,19 @@ Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 }
 ```
 
+Multi-account support lives under `imessage.accounts` (see the multi-account section above).
+
 Notes:
 - Requires Full Disk Access to the Messages DB.
 - The first send will prompt for Messages automation permission.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
+- `imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
+
+Example wrapper:
+```bash
+#!/usr/bin/env bash
+exec ssh -T mac-mini "imsg rpc"
+```
 
 ### `agent.workspace`
 
@@ -755,6 +920,13 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `agent.models` defines the configured model catalog (and acts as the allowlist for `/model`).
 `agent.model.primary` sets the default model; `agent.model.fallbacks` are global failovers.
 `agent.imageModel` is optional and is **only used if the primary model lacks image input**.
+Each `agent.models` entry can include:
+- `alias` (optional model shortcut, e.g. `/opus`).
+- `params` (optional provider-specific API params passed through to the model request).
+
+Z.AI GLM-4.x models automatically enable thinking mode unless you:
+- set `--thinking off`, or
+- define `agent.models["zai/<model>"].params.thinking` yourself.
 
 Clawdbot also ships a few built-in alias shorthands. Defaults only apply when the model
 is already present in `agent.models`:
@@ -774,7 +946,16 @@ If you configure the same alias name (case-insensitive) yourself, your value win
     models: {
       "anthropic/claude-opus-4-5": { alias: "Opus" },
       "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
-      "openrouter/deepseek/deepseek-r1:free": {}
+      "openrouter/deepseek/deepseek-r1:free": {},
+      "zai/glm-4.7": {
+        alias: "GLM",
+        params: {
+          thinking: {
+            type: "enabled",
+            clear_thinking: false
+          }
+        }
+      }
     },
     model: {
       primary: "anthropic/claude-opus-4-5",
@@ -823,6 +1004,7 @@ This is intended to reduce token usage for chatty agents that accumulate large t
 High level:
 - Never touches user/assistant messages.
 - Protects the last `keepLastAssistants` assistant messages (no tool results after that point are pruned).
+- Protects the bootstrap prefix (nothing before the first user message is pruned).
 - Modes:
   - `adaptive`: soft-trims oversized tool results (keep head/tail) when the estimated context ratio crosses `softTrimRatio`.
     Then hard-clears the oldest eligible tool results when the estimated context ratio crosses `hardClearRatio` **and**
@@ -908,6 +1090,14 @@ Block streaming:
   }
   ```
 See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
+
+Typing indicators:
+- `agent.typingMode`: `"never" | "instant" | "thinking" | "message"`. Defaults to
+  `instant` for direct chats / mentions and `message` for unmentioned group chats.
+- `session.typingMode`: per-session override for the mode.
+- `agent.typingIntervalSeconds`: how often the typing signal is refreshed (default: 6s).
+- `session.typingIntervalSeconds`: per-session override for the refresh interval.
+See [/concepts/typing-indicators](/concepts/typing-indicators) for behavior details.
 
 `agent.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
 Aliases come from `agent.models.*.alias` (e.g. `Opus`).
@@ -1023,6 +1213,7 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
         capDrop: ["ALL"],
         env: { LANG: "C.UTF-8" },
         setupCommand: "apt-get update && apt-get install -y git curl jq",
+        // Per-agent override (multi-agent): routing.agents.<agentId>.sandbox.docker.*
         pidsLimit: 256,
         memory: "1g",
         memorySwap: "2g",
@@ -1374,6 +1565,8 @@ Notes:
 - `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
+- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 
 Auth and Tailscale:
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
@@ -1497,6 +1690,9 @@ Defaults:
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate:
           "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
+        deliver: true,
+        provider: "last",
+        model: "openai/gpt-5.2-mini",
       },
     ],
   }
@@ -1510,7 +1706,7 @@ Requests must include the hook token:
 
 Endpoints:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, provider?, to?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, provider?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -1520,6 +1716,9 @@ Mapping notes:
 - `match.source` matches a payload field (e.g. `{ source: "gmail" }`) so you can use a generic `/hooks/ingest` path.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
+- `deliver: true` sends the final reply to a provider; `provider` defaults to `last` (falls back to WhatsApp).
+- If there is no prior delivery route, set `provider` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage).
+- `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agent.models` is set).
 
 Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
 

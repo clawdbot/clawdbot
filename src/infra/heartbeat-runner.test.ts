@@ -6,6 +6,11 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
+  resolveAgentIdFromSessionKey,
+  resolveMainSessionKey,
+  resolveStorePath,
+} from "../config/sessions.js";
+import {
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
@@ -192,15 +197,24 @@ describe("runHeartbeatOnce", () => {
       "{agentId}",
       "sessions.json",
     );
-    const storePath = path.join(tmpDir, "agents", "work", "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
+      const cfg: ClawdbotConfig = {
+        routing: { defaultAgentId: "work" },
+        agent: { heartbeat: { every: "5m" } },
+        whatsapp: { allowFrom: ["*"] },
+        session: { store: storeTemplate },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(sessionKey);
+      const storePath = resolveStorePath(storeTemplate, { agentId });
+
       await fs.mkdir(path.dirname(storePath), { recursive: true });
       await fs.writeFile(
         storePath,
         JSON.stringify(
           {
-            "agent:work:main": {
+            [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
               lastProvider: "whatsapp",
@@ -211,13 +225,6 @@ describe("runHeartbeatOnce", () => {
           2,
         ),
       );
-
-      const cfg: ClawdbotConfig = {
-        routing: { defaultAgentId: "work" },
-        agent: { heartbeat: { every: "5m" } },
-        whatsapp: { allowFrom: ["*"] },
-        session: { store: storeTemplate },
-      };
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -411,7 +418,7 @@ describe("runHeartbeatOnce", () => {
       expect(sendTelegram).toHaveBeenCalledWith(
         "123456",
         "Hello from heartbeat",
-        expect.objectContaining({ token: "test-bot-token-123" }),
+        expect.objectContaining({ accountId: "default", verbose: false }),
       );
     } finally {
       replySpy.mockRestore();

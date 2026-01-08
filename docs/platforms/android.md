@@ -8,6 +8,15 @@ read_when:
 
 # Android App (Node)
 
+## Support snapshot
+- Role: companion node app (Android does not host the Gateway).
+- Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
+- Install: [Getting Started](/start/getting-started) + [Pairing](/gateway/pairing).
+- Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
+
+## System control
+System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
+
 ## Connection Runbook
 
 Android node app ⇄ (mDNS/NSD + TCP bridge) ⇄ **Gateway bridge** ⇄ (loopback WS) ⇄ **Gateway**

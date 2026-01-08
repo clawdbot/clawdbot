@@ -21,7 +21,7 @@ struct UsageMenuLabelView: View {
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(row.titleText)
+                Text(self.row.titleText)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(self.primaryTextColor)
                     .lineLimit(1)
@@ -30,7 +30,7 @@ struct UsageMenuLabelView: View {
 
                 Spacer(minLength: 4)
 
-                Text(row.detailText())
+                Text(self.row.detailText())
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(self.secondaryTextColor)
                     .lineLimit(1)
@@ -43,4 +43,3 @@ struct UsageMenuLabelView: View {
         .padding(.trailing, self.paddingTrailing)
     }
 }
-

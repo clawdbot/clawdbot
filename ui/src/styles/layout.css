@@ -22,7 +22,7 @@
   --shell-pad: 8px;
   --shell-gap: 0px;
   --shell-nav-col: 0px;
-  --shell-topbar-row: 0px;
+  --shell-topbar-row: auto;
 }
 
 .shell--chat-focus .content {
@@ -52,15 +52,6 @@
     padding var(--shell-focus-duration) var(--shell-focus-ease),
     border-width var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: max(0px, var(--topbar-height, 92px));
-}
-
-.shell--chat-focus .topbar {
-  opacity: 0;
-  transform: translateY(-10px);
-  max-height: 0px;
-  padding: 0;
-  border-width: 0;
-  pointer-events: none;
 }
 
 .brand {
@@ -206,6 +197,31 @@
     100vh - var(--topbar-height, 0px) - var(--shell-gap) -
       var(--shell-pad) - var(--shell-pad)
   );
+}
+
+.docs-link {
+  position: fixed;
+  right: calc(var(--shell-pad) + 4px);
+  bottom: calc(var(--shell-pad) + 4px);
+  z-index: 30;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+  transition: transform 140ms ease, border-color 140ms ease,
+    background 140ms ease, color 140ms ease;
+}
+
+.docs-link:hover {
+  transform: translateY(-2px);
+  border-color: rgba(245, 159, 74, 0.5);
+  background: rgba(245, 159, 74, 0.18);
+  color: var(--text);
 }
 
 .content-header {

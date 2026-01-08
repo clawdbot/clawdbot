@@ -63,7 +63,7 @@ struct AgentWorkspaceTests {
         case .unsafe:
             break
         case .safe:
-            #expect(false, "Expected unsafe bootstrap safety result.")
+            #expect(Bool(false), "Expected unsafe bootstrap safety result.")
         }
     }
 
@@ -81,7 +81,7 @@ struct AgentWorkspaceTests {
         case .safe:
             break
         case .unsafe:
-            #expect(false, "Expected safe bootstrap safety result.")
+            #expect(Bool(false), "Expected safe bootstrap safety result.")
         }
     }
 

@@ -60,6 +60,7 @@ Payload:
   "deliver": false,
   "provider": "last",
   "to": "+15551234567",
+  "model": "openai/gpt-5.2-mini",
   "thinking": "low",
   "timeoutSeconds": 120
 }
@@ -72,6 +73,7 @@ Payload:
 - `deliver` optional (default `false`)
 - `provider` optional: `last` | `whatsapp` | `telegram`
 - `to` optional (provider-specific target)
+- `model` optional (model override, `provider/model` or alias; must be allowed if `agent.models` is set)
 - `thinking` optional (override)
 - `timeoutSeconds` optional
 
@@ -92,6 +94,8 @@ Mapping options (summary):
 - `hooks.transformsDir` + `transform.module` loads a JS/TS module for custom logic.
 - Use `match.source` to keep a generic ingest endpoint (payload-driven routing).
 - TS transforms require a TS loader (e.g. `bun` or `tsx`) or precompiled `.js` at runtime.
+- Set `deliver: true` + `provider`/`to` on mappings to route replies to a chat surface
+  (`provider` defaults to `last` and falls back to WhatsApp).
 - `clawdbot hooks gmail setup` writes `hooks.gmail` config for `clawdbot hooks gmail run`.
 See [`docs/gmail-pubsub.md`](https://docs.clawd.bot/automation/gmail-pubsub) for the full Gmail watch flow.
 
@@ -118,6 +122,19 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","wakeMode":"next-heartbeat"}'
 ```
+
+### Use a different model
+
+Add `model` to the agent payload (or mapping) to override the model for that run:
+
+```bash
+curl -X POST http://127.0.0.1:18789/hooks/agent \
+  -H 'x-clawdbot-token: SECRET' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
+```
+
+If you enforce `agent.models`, make sure the override model is included there.
 
 ```bash
 curl -X POST http://127.0.0.1:18789/hooks/gmail \

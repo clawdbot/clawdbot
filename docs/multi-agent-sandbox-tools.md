@@ -1,3 +1,10 @@
+---
+summary: "Per-agent sandbox + tool restrictions, precedence, and examples"
+title: Multi-Agent Sandbox & Tools
+read_when: "You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway."
+status: active
+---
+
 # Multi-Agent Sandbox & Tools Configuration
 
 ## Overview
@@ -142,9 +149,13 @@ routing.agents[id].sandbox.mode > agent.sandbox.mode
 routing.agents[id].sandbox.scope > agent.sandbox.scope
 routing.agents[id].sandbox.workspaceRoot > agent.sandbox.workspaceRoot
 routing.agents[id].sandbox.workspaceAccess > agent.sandbox.workspaceAccess
+routing.agents[id].sandbox.docker.* > agent.sandbox.docker.*
+routing.agents[id].sandbox.browser.* > agent.sandbox.browser.*
+routing.agents[id].sandbox.prune.* > agent.sandbox.prune.*
 ```
 
-**Note:** `docker`, `browser`, and `prune` settings from `agent.sandbox` are still **global** and apply to all sandboxed agents.
+**Notes:**
+- `routing.agents[id].sandbox.{docker,browser,prune}.*` overrides `agent.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
 
 ### Tool Restrictions
 The filtering order is:
@@ -237,7 +248,7 @@ After configuring multi-agent sandbox and tools:
 
 1. **Check agent resolution:**
    ```bash
-   clawdbot agents list
+   clawdbot agents list --bindings
    ```
 
 2. **Verify sandbox containers:**
@@ -251,7 +262,7 @@ After configuring multi-agent sandbox and tools:
 
 4. **Monitor logs:**
    ```bash
-   tail -f ~/.clawdbot/logs/gateway.log | grep -E "routing|sandbox|tools"
+   tail -f "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}/logs/gateway.log" | grep -E "routing|sandbox|tools"
    ```
 
 ---

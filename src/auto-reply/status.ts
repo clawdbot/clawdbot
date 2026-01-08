@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 
 import { lookupContextTokens } from "../agents/context.js";
 import {
@@ -16,10 +15,11 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
-  resolveSessionTranscriptPath,
+  resolveSessionFilePath,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { resolveCommitHash } from "../infra/git-commit.js";
 import { VERSION } from "../version.js";
 import type {
   ElevatedLevel,
@@ -92,76 +92,6 @@ export const formatContextUsageShort = (
   contextTokens: number | null | undefined,
 ) => `Context ${formatTokens(total, contextTokens ?? null)}`;
 
-const formatCommit = (value?: string | null) => {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
-};
-
-const resolveGitHead = (startDir: string) => {
-  let current = startDir;
-  for (let i = 0; i < 12; i += 1) {
-    const gitPath = path.join(current, ".git");
-    try {
-      const stat = fs.statSync(gitPath);
-      if (stat.isDirectory()) {
-        return path.join(gitPath, "HEAD");
-      }
-      if (stat.isFile()) {
-        const raw = fs.readFileSync(gitPath, "utf-8");
-        const match = raw.match(/gitdir:\s*(.+)/i);
-        if (match?.[1]) {
-          const resolved = path.resolve(current, match[1].trim());
-          return path.join(resolved, "HEAD");
-        }
-      }
-    } catch {
-      // ignore missing .git at this level
-    }
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return null;
-};
-
-let cachedCommit: string | null | undefined;
-const resolveCommitHash = () => {
-  if (cachedCommit !== undefined) return cachedCommit;
-  const envCommit =
-    process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim();
-  const normalized = formatCommit(envCommit);
-  if (normalized) {
-    cachedCommit = normalized;
-    return cachedCommit;
-  }
-  try {
-    const headPath = resolveGitHead(process.cwd());
-    if (!headPath) {
-      cachedCommit = null;
-      return cachedCommit;
-    }
-    const head = fs.readFileSync(headPath, "utf-8").trim();
-    if (!head) {
-      cachedCommit = null;
-      return cachedCommit;
-    }
-    if (head.startsWith("ref:")) {
-      const ref = head.replace(/^ref:\s*/i, "").trim();
-      const refPath = path.resolve(path.dirname(headPath), ref);
-      const refHash = fs.readFileSync(refPath, "utf-8").trim();
-      cachedCommit = formatCommit(refHash);
-      return cachedCommit;
-    }
-    cachedCommit = formatCommit(head);
-    return cachedCommit;
-  } catch {
-    cachedCommit = null;
-    return cachedCommit;
-  }
-};
-
 const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) return "";
   const depth = typeof queue.depth === "number" ? `depth ${queue.depth}` : null;
@@ -185,6 +115,7 @@ const formatQueueDetails = (queue?: QueueStatus) => {
 
 const readUsageFromSessionLog = (
   sessionId?: string,
+  sessionEntry?: SessionEntry,
 ):
   | {
       input: number;
@@ -194,9 +125,9 @@ const readUsageFromSessionLog = (
       model?: string;
     }
   | undefined => {
-  // Transcripts always live at: ~/.clawdbot/sessions/<SessionId>.jsonl
+  // Transcripts are stored at the session file path (fallback: ~/.clawdbot/sessions/<SessionId>.jsonl)
   if (!sessionId) return undefined;
-  const logPath = resolveSessionTranscriptPath(sessionId);
+  const logPath = resolveSessionFilePath(sessionId, sessionEntry);
   if (!fs.existsSync(logPath)) return undefined;
 
   try {
@@ -249,8 +180,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultModel: DEFAULT_MODEL,
   });
   const provider =
-    entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
-  let model = entry?.model ?? resolved.model ?? DEFAULT_MODEL;
+    entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
+  let model = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
   let contextTokens =
     entry?.contextTokens ??
     args.agent?.contextTokens ??
@@ -264,7 +195,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(entry?.sessionId);
+    const logUsage = readUsageFromSessionLog(entry?.sessionId, entry);
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {

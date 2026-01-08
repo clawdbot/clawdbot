@@ -18,6 +18,8 @@ struct MenuContent: View {
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
+    @State private var micObserver = AudioInputDeviceObserver()
+    @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
@@ -142,6 +144,14 @@ struct MenuContent: View {
         }
         .task(id: self.state.connectionMode) {
             await self.loadBrowserControlEnabled()
+        }
+        .onAppear {
+            self.startMicObserver()
+        }
+        .onDisappear {
+            self.micRefreshTask?.cancel()
+            self.micRefreshTask = nil
+            self.micObserver.stop()
         }
     }
 
@@ -440,13 +450,22 @@ struct MenuContent: View {
         if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
             return match.name
         }
+        if !self.state.voiceWakeMicName.isEmpty { return self.state.voiceWakeMicName }
         return "Unavailable"
     }
 
     private var microphoneMenuItems: some View {
         Group {
+            if self.isSelectedMicUnavailable {
+                Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.secondary)
+                    .disabled(true)
+                Divider()
+            }
             Button {
                 self.state.voiceWakeMicID = ""
+                self.state.voiceWakeMicName = ""
             } label: {
                 Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
                     .labelStyle(.titleAndIcon)
@@ -456,6 +475,7 @@ struct MenuContent: View {
             ForEach(self.availableMics) { mic in
                 Button {
                     self.state.voiceWakeMicID = mic.uid
+                    self.state.voiceWakeMicName = mic.name
                 } label: {
                     Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
                         .labelStyle(.titleAndIcon)
@@ -463,6 +483,12 @@ struct MenuContent: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private var isSelectedMicUnavailable: Bool {
+        let selected = self.state.voiceWakeMicID
+        guard !selected.isEmpty else { return false }
+        return !self.availableMics.contains(where: { $0.uid == selected })
     }
 
     private var defaultMicLabel: String {
@@ -500,12 +526,51 @@ struct MenuContent: View {
             deviceTypes: [.external, .microphone],
             mediaType: .audio,
             position: .unspecified)
-        self.availableMics = discovery.devices
+        let connectedDevices = discovery.devices.filter(\.isConnected)
+        self.availableMics = connectedDevices
             .sorted { lhs, rhs in
                 lhs.localizedName.localizedCaseInsensitiveCompare(rhs.localizedName) == .orderedAscending
             }
             .map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        self.availableMics = self.filterAliveInputs(self.availableMics)
+        self.updateSelectedMicName()
         self.loadingMics = false
+    }
+
+    private func startMicObserver() {
+        self.micObserver.start {
+            Task { @MainActor in
+                self.scheduleMicRefresh()
+            }
+        }
+    }
+
+    @MainActor
+    private func scheduleMicRefresh() {
+        self.micRefreshTask?.cancel()
+        self.micRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self.loadMicrophones(force: true)
+        }
+    }
+
+    private func filterAliveInputs(_ inputs: [AudioInputDevice]) -> [AudioInputDevice] {
+        let aliveUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
+        guard !aliveUIDs.isEmpty else { return inputs }
+        return inputs.filter { aliveUIDs.contains($0.uid) }
+    }
+
+    @MainActor
+    private func updateSelectedMicName() {
+        let selected = self.state.voiceWakeMicID
+        if selected.isEmpty {
+            self.state.voiceWakeMicName = ""
+            return
+        }
+        if let match = self.availableMics.first(where: { $0.uid == selected }) {
+            self.state.voiceWakeMicName = match.name
+        }
     }
 
     private struct AudioInputDevice: Identifiable, Equatable {

@@ -87,12 +87,12 @@ Related:
 
 Use the main `clawdbot` CLI; it invokes canvas commands via `node.invoke`.
 
-- `clawdbot canvas present [--node <id>] [--target <...>] [--x/--y/--width/--height]`
+- `clawdbot nodes canvas present --node <id> [--target <...>] [--x/--y/--width/--height]`
   - Local targets map into the session directory via the custom scheme (directory targets resolve `index.html|index.htm`).
   - If `/` has no index file, Canvas shows the built-in scaffold page and returns `status: "welcome"`.
-- `clawdbot canvas hide [--node <id>]`
-- `clawdbot canvas eval --js <code> [--node <id>]`
-- `clawdbot canvas snapshot [--node <id>]`
+- `clawdbot nodes canvas hide --node <id>`
+- `clawdbot nodes canvas eval --js <code> --node <id>`
+- `clawdbot nodes canvas snapshot --node <id>`
 
 ### Canvas A2UI
 
@@ -104,8 +104,8 @@ http://<gateway-host>:18793/__clawdbot__/a2ui/
 
 The macOS app simply renders that page in the Canvas panel. The agent can drive it with JSONL **server→client protocol messages** (one JSON object per line):
 
-- `clawdbot canvas a2ui push --jsonl <path> [--node <id>]`
-- `clawdbot canvas a2ui reset [--node <id>]`
+- `clawdbot nodes canvas a2ui push --jsonl <path> --node <id>`
+- `clawdbot nodes canvas a2ui reset --node <id>`
 
 `push` expects a JSONL file where **each line is a single JSON object** (parsed and forwarded to the in-page A2UI renderer).
 
@@ -113,18 +113,18 @@ Minimal example (v0.8):
 
 ```bash
 cat > /tmp/a2ui-v0.8.jsonl <<'EOF'
-{"surfaceUpdate":{"surfaceId":"main","components":[{"id":"root","component":{"Column":{"children":{"explicitList":["title","content"]}}}},{"id":"title","component":{"Text":{"text":{"literalString":"Canvas (A2UI v0.8)"},"usageHint":"h1"}}},{"id":"content","component":{"Text":{"text":{"literalString":"If you can read this, `canvas a2ui push` works."},"usageHint":"body"}}}]}}
+{"surfaceUpdate":{"surfaceId":"main","components":[{"id":"root","component":{"Column":{"children":{"explicitList":["title","content"]}}}},{"id":"title","component":{"Text":{"text":{"literalString":"Canvas (A2UI v0.8)"},"usageHint":"h1"}}},{"id":"content","component":{"Text":{"text":{"literalString":"If you can read this, `nodes canvas a2ui push` works."},"usageHint":"body"}}}]}}
 {"beginRendering":{"surfaceId":"main","root":"root"}}
 EOF
 
-clawdbot canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
+clawdbot nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
 Notes:
 - This does **not** support the A2UI v0.9 examples using `createSurface`.
 - A2UI **fails** if the Gateway canvas host is unreachable (no local fallback).
-- `canvas a2ui push` validates JSONL (line numbers on errors) and rejects v0.9 payloads.
-- Quick smoke: `clawdbot canvas a2ui push --text "Hello from A2UI"` renders a minimal v0.8 view.
+- `nodes canvas a2ui push` validates JSONL (line numbers on errors) and rejects v0.9 payloads.
+- Quick smoke: `clawdbot nodes canvas a2ui push --node <id> --text "Hello from A2UI"` renders a minimal v0.8 view.
 
 ## Triggering agent runs from Canvas (deep links)
 

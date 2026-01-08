@@ -88,3 +88,49 @@ describe("nodes camera_snap", () => {
     });
   });
 });
+
+describe("nodes run", () => {
+  beforeEach(() => {
+    callGateway.mockReset();
+  });
+
+  it("passes invoke and command timeouts", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "mac-1" }] };
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: "mac-1",
+          command: "system.run",
+          timeoutMs: 45_000,
+          params: {
+            command: ["echo", "hi"],
+            cwd: "/tmp",
+            env: { FOO: "bar" },
+            timeoutMs: 12_000,
+          },
+        });
+        return {
+          payload: { stdout: "", stderr: "", exitCode: 0, success: true },
+        };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+
+    const tool = createClawdbotTools().find(
+      (candidate) => candidate.name === "nodes",
+    );
+    if (!tool) throw new Error("missing nodes tool");
+
+    await tool.execute("call1", {
+      action: "run",
+      node: "mac-1",
+      command: ["echo", "hi"],
+      cwd: "/tmp",
+      env: ["FOO=bar"],
+      commandTimeoutMs: 12_000,
+      invokeTimeoutMs: 45_000,
+    });
+  });
+});

@@ -1,5 +1,3 @@
-import chalk from "chalk";
-
 import { lookupContextTokens } from "../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -15,6 +13,7 @@ import {
 } from "../config/sessions.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { isRich, theme } from "../terminal/theme.js";
 
 type SessionRow = {
   key: string;
@@ -41,8 +40,6 @@ const AGE_PAD = 9;
 const MODEL_PAD = 14;
 const TOKENS_PAD = 20;
 
-const isRich = () => Boolean(process.stdout.isTTY && chalk.level > 0);
-
 const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
@@ -54,10 +51,10 @@ const truncateKey = (key: string) => {
 
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   if (!rich || pct === null) return label;
-  if (pct >= 95) return chalk.red(label);
-  if (pct >= 80) return chalk.yellow(label);
-  if (pct >= 60) return chalk.green(label);
-  return chalk.gray(label);
+  if (pct >= 95) return theme.error(label);
+  if (pct >= 80) return theme.warn(label);
+  if (pct >= 60) return theme.success(label);
+  return theme.muted(label);
 };
 
 const formatTokensCell = (
@@ -79,21 +76,21 @@ const formatTokensCell = (
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   const label = kind.padEnd(KIND_PAD);
   if (!rich) return label;
-  if (kind === "group") return chalk.magenta(label);
-  if (kind === "global") return chalk.yellow(label);
-  if (kind === "direct") return chalk.cyan(label);
-  return chalk.gray(label);
+  if (kind === "group") return theme.accentBright(label);
+  if (kind === "global") return theme.warn(label);
+  if (kind === "direct") return theme.accent(label);
+  return theme.muted(label);
 };
 
 const formatAgeCell = (updatedAt: number | null | undefined, rich: boolean) => {
   const ageLabel = updatedAt ? formatAge(Date.now() - updatedAt) : "unknown";
   const padded = ageLabel.padEnd(AGE_PAD);
-  return rich ? chalk.gray(padded) : padded;
+  return rich ? theme.muted(padded) : padded;
 };
 
 const formatModelCell = (model: string | null | undefined, rich: boolean) => {
   const label = (model ?? "unknown").padEnd(MODEL_PAD);
-  return rich ? chalk.white(label) : label;
+  return rich ? theme.info(label) : label;
 };
 
 const formatFlagsCell = (row: SessionRow, rich: boolean) => {
@@ -107,7 +104,7 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
   const label = flags.join(" ");
-  return label.length === 0 ? "" : rich ? chalk.gray(label) : label;
+  return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 };
 
 const formatAge = (ms: number | null | undefined) => {
@@ -240,7 +237,7 @@ export async function sessionsCommand(
     "Flags",
   ].join(" ");
 
-  runtime.log(rich ? chalk.bold(header) : header);
+  runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
     const model = row.model ?? configModel;
@@ -251,7 +248,7 @@ export async function sessionsCommand(
     const total = row.totalTokens ?? input + output;
 
     const keyLabel = truncateKey(row.key).padEnd(KEY_PAD);
-    const keyCell = rich ? chalk.cyan(keyLabel) : keyLabel;
+    const keyCell = rich ? theme.accent(keyLabel) : keyLabel;
 
     const line = [
       formatKindCell(row.kind, rich),

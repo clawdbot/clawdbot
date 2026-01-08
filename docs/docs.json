@@ -508,6 +508,10 @@
     {
       "source": "/wizard",
       "destination": "/start/wizard"
+    },
+    {
+      "source": "/oauth",
+      "destination": "/concepts/oauth"
     }
   ],
   "navigation": {
@@ -543,8 +547,11 @@
           "concepts/architecture",
           "concepts/agent",
           "concepts/agent-loop",
+          "concepts/system-prompt",
+          "concepts/oauth",
           "concepts/agent-workspace",
           "concepts/multi-agent",
+          "concepts/compaction",
           "concepts/session",
           "concepts/session-pruning",
           "concepts/sessions",
@@ -553,6 +560,7 @@
           "concepts/provider-routing",
           "concepts/groups",
           "concepts/group-messages",
+          "concepts/typing-indicators",
           "concepts/queue",
           "concepts/models",
           "concepts/model-failover",
@@ -567,6 +575,7 @@
           "gateway/pairing",
           "gateway/gateway-lock",
           "gateway/configuration",
+          "gateway/configuration-examples",
           "gateway/background-process",
           "gateway/health",
           "gateway/heartbeat",
@@ -645,7 +654,18 @@
       {
         "group": "Platforms",
         "pages": [
+          "platforms",
           "platforms/macos",
+          "platforms/ios",
+          "platforms/android",
+          "platforms/windows",
+          "platforms/linux",
+          "platforms/exe-dev"
+        ]
+      },
+      {
+        "group": "macOS Companion App",
+        "pages": [
           "platforms/mac/dev-setup",
           "platforms/mac/menu-bar",
           "platforms/mac/voicewake",
@@ -663,11 +683,7 @@
           "platforms/mac/bun",
           "platforms/mac/xpc",
           "platforms/mac/skills",
-          "platforms/mac/peekaboo",
-          "platforms/ios",
-          "platforms/android",
-          "platforms/windows",
-          "platforms/linux"
+          "platforms/mac/peekaboo"
         ]
       },
       {

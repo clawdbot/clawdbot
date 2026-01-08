@@ -23,6 +23,13 @@ Clawdbot uses a file logger backed by `tslog` ([`src/logging.ts`](https://github
 
 The file format is one JSON object per line.
 
+The Control UI Logs tab tails this file via the gateway (`logs.tail`).
+CLI can do the same:
+
+```bash
+clawdbot logs --follow
+```
+
 **Verbose vs. log levels**
 
 - **File logs** are controlled exclusively by `logging.level`.

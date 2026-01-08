@@ -74,8 +74,13 @@ export type SessionsPatchResult = {
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
+  sessionFile?: string,
 ): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath);
+  const candidates = resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+  );
 
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) return [];
@@ -99,9 +104,11 @@ export function readSessionMessages(
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
+  sessionFile?: string,
   agentId?: string,
 ): string[] {
   const candidates: string[] = [];
+  if (sessionFile) candidates.push(sessionFile);
   if (storePath) {
     const dir = path.dirname(storePath);
     candidates.push(path.join(dir, `${sessionId}.jsonl`));

@@ -24,6 +24,7 @@ read_when:
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/think:medium` or `/t high`.
 - That sticks for the current session (per-sender by default); cleared by `/think:off` or session idle reset.
 - Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
+- Send `/think` (or `/think:`) with no argument to see the current thinking level.
 
 ## Application by agent
 - **Embedded Pi**: the resolved level is passed to the in-process Pi agent runtime.
@@ -32,6 +33,7 @@ read_when:
 - Levels: `on|full` or `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - Inline directive affects only that message; session/global defaults apply otherwise.
+- Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command); the tool output itself is not forwarded. These tool summaries are sent as soon as each tool finishes (separate bubbles), not as streaming deltas. If you toggle `/verbose on|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## Reasoning visibility (/reasoning)
@@ -40,6 +42,7 @@ read_when:
 - When enabled, any model-provided reasoning content is appended as a separate italic block.
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
+- Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 
 ## Related
 - Elevated mode docs live in [`docs/elevated.md`](/tools/elevated).

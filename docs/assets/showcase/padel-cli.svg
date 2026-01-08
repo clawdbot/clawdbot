@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420" viewBox="0 0 800 420" role="img" aria-label="padel-cli availability output">
+  <rect width="800" height="420" rx="24" fill="#0b0f14" />
+  <rect x="24" y="24" width="752" height="372" rx="18" fill="#0f172a" stroke="#263246" stroke-width="2" />
+  <text x="48" y="72" fill="#9ca3af" font-size="18" font-family="Fragment Mono, ui-monospace, SFMono-Regular, Menlo, monospace">
+    <tspan x="48" dy="0">$ padel search --location "Barcelona" --date 2026-01-08 --time 18:00-22:00</tspan>
+    <tspan x="48" dy="30" fill="#e5e7eb">Available courts (3):</tspan>
+    <tspan x="48" dy="28" fill="#e5e7eb">- Vall d'Hebron 19:00 Court 2 (90m) EUR 34</tspan>
+    <tspan x="48" dy="28" fill="#e5e7eb">- Badalona 20:30 Court 1 (60m) EUR 28</tspan>
+    <tspan x="48" dy="28" fill="#e5e7eb">- Gracia 21:00 Court 4 (90m) EUR 36</tspan>
+  </text>
+</svg>

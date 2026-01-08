@@ -67,6 +67,37 @@ describe("gateway server hooks", () => {
     await server.close();
   });
 
+  test("hooks agent forwards model override", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret" };
+    cronIsolatedRun.mockClear();
+    cronIsolatedRun.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+    });
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: JSON.stringify({
+        message: "Do it",
+        name: "Email",
+        model: "openai/gpt-4.1-mini",
+      }),
+    });
+    expect(res.status).toBe(202);
+    await waitForSystemEvent();
+    const call = cronIsolatedRun.mock.calls[0]?.[0] as {
+      job?: { payload?: { model?: string } };
+    };
+    expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
+    drainSystemEvents();
+    await server.close();
+  });
+
   test("hooks wake accepts query token", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
     const port = await getFreePort();

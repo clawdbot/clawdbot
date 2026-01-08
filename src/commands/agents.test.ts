@@ -40,7 +40,7 @@ describe("agents helpers", () => {
     const work = summaries.find((summary) => summary.id === "work");
 
     expect(main).toBeTruthy();
-    expect(main?.workspace).toBe("/main-ws");
+    expect(main?.workspace).toBe(path.resolve("/main-ws"));
     expect(main?.bindings).toBe(1);
     expect(main?.model).toBe("anthropic/claude");
     expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(
@@ -49,8 +49,8 @@ describe("agents helpers", () => {
 
     expect(work).toBeTruthy();
     expect(work?.name).toBe("Work");
-    expect(work?.workspace).toBe("/work-ws");
-    expect(work?.agentDir).toBe("/state/agents/work/agent");
+    expect(work?.workspace).toBe(path.resolve("/work-ws"));
+    expect(work?.agentDir).toBe(path.resolve("/state/agents/work/agent"));
     expect(work?.bindings).toBe(1);
     expect(work?.isDefault).toBe(true);
   });

@@ -1,3 +1,4 @@
+import ClawdbotProtocol
 import Foundation
 import SwiftUI
 

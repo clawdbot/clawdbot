@@ -34,3 +34,17 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   const header = `[${parts.join(" ")}]`;
   return `${header} ${params.body}`;
 }
+
+export function formatThreadStarterEnvelope(params: {
+  provider: string;
+  author?: string;
+  timestamp?: number | Date;
+  body: string;
+}): string {
+  return formatAgentEnvelope({
+    provider: params.provider,
+    from: params.author,
+    timestamp: params.timestamp,
+    body: params.body,
+  });
+}

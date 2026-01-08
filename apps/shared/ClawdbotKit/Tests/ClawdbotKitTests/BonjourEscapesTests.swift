@@ -24,4 +24,3 @@ import Testing
         #expect(BonjourEscapes.decode("Hello\\065World") == "HelloAWorld")
     }
 }
-

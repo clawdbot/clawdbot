@@ -1,6 +1,6 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.7",
+  "version": "2026.1.8-2",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
@@ -41,7 +41,14 @@
     "README.md",
     "README-header.png",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/postinstall.js",
+    "dist/terminal/**",
+    "dist/routing/**",
+    "dist/utils/**",
+    "dist/logging/**",
+    "dist/markdown/**",
+    "dist/pairing/**"
   ],
   "scripts": {
     "dev": "tsx src/entry.ts",
@@ -66,9 +73,11 @@
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
     "format:fix": "biome format src --write",
     "test": "vitest",
+    "test:ui": "pnpm --dir ui test",
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:live": "vitest run --config vitest.live.config.ts",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
@@ -83,20 +92,21 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
-    "@buape/carbon": "0.0.0-beta-20260107085330",
+    "@buape/carbon": "0.13.0",
     "@clack/prompts": "^0.11.0",
+    "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
-    "@mariozechner/pi-agent-core": "^0.37.2",
-    "@mariozechner/pi-ai": "^0.37.2",
-    "@mariozechner/pi-coding-agent": "^0.37.2",
-    "@mariozechner/pi-tui": "^0.37.2",
-    "@sinclair/typebox": "0.34.46",
+    "@mariozechner/pi-agent-core": "^0.38.0",
+    "@mariozechner/pi-ai": "^0.38.0",
+    "@mariozechner/pi-coding-agent": "^0.38.0",
+    "@mariozechner/pi-tui": "^0.38.0",
+    "@sinclair/typebox": "0.34.47",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.17.1",
-    "body-parser": "^2.2.1",
+    "body-parser": "^2.2.2",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
     "chromium-bidi": "12.0.1",
@@ -110,17 +120,20 @@
     "grammy": "^1.39.2",
     "json5": "^2.2.3",
     "long": "5.3.2",
+    "markdown-it": "^14.1.0",
+    "osc-progress": "^0.2.0",
     "playwright-core": "1.57.0",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "tslog": "^4.10.2",
-    "undici": "^7.18.0",
+    "undici": "^7.18.2",
     "ws": "^8.19.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.11",
+    "@grammyjs/types": "^3.23.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@mariozechner/mini-lit": "0.2.1",
@@ -136,12 +149,11 @@
     "jszip": "^3.10.1",
     "lit": "^3.3.2",
     "lucide": "^0.562.0",
-    "markdown-it": "^14.1.0",
     "ollama": "^0.6.3",
-    "oxlint": "^1.37.0",
+    "oxlint": "^1.38.0",
     "oxlint-tsgolint": "^0.10.1",
     "quicktype-core": "^23.2.6",
-    "rolldown": "1.0.0-beta.58",
+    "rolldown": "1.0.0-beta.59",
     "signal-utils": "^0.21.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
@@ -150,12 +162,11 @@
   },
   "pnpm": {
     "overrides": {
-      "@sinclair/typebox": "0.34.46"
+      "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
       "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
-      "qrcode-terminal": "patches/qrcode-terminal.patch",
-      "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
+      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch"
     }
   },
   "vitest": {
@@ -192,6 +203,8 @@
   },
   "patchedDependencies": {
     "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
+    "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
+    "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
     "qrcode-terminal": "patches/qrcode-terminal.patch",
     "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
   }

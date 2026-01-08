@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentSystemPromptAppend } from "./system-prompt.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 
-describe("buildAgentSystemPromptAppend", () => {
+describe("buildAgentSystemPrompt", () => {
   it("includes owner numbers when provided", () => {
-    const prompt = buildAgentSystemPromptAppend({
+    const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       ownerNumbers: ["+123", " +456 ", ""],
     });
@@ -15,7 +15,7 @@ describe("buildAgentSystemPromptAppend", () => {
   });
 
   it("omits owner section when numbers are missing", () => {
-    const prompt = buildAgentSystemPromptAppend({
+    const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
     });
 
@@ -24,7 +24,7 @@ describe("buildAgentSystemPromptAppend", () => {
   });
 
   it("adds reasoning tag hint when enabled", () => {
-    const prompt = buildAgentSystemPromptAppend({
+    const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       reasoningTagHint: true,
     });
@@ -35,7 +35,7 @@ describe("buildAgentSystemPromptAppend", () => {
   });
 
   it("lists available tools when provided", () => {
-    const prompt = buildAgentSystemPromptAppend({
+    const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       toolNames: ["bash", "sessions_list", "sessions_history", "sessions_send"],
     });
@@ -47,19 +47,19 @@ describe("buildAgentSystemPromptAppend", () => {
   });
 
   it("includes user time when provided", () => {
-    const prompt = buildAgentSystemPromptAppend({
+    const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
       userTime: "Monday 2026-01-05 15:26",
     });
 
-    expect(prompt).toContain("## Time");
-    expect(prompt).toContain("User timezone: America/Chicago");
-    expect(prompt).toContain("Current user time: Monday 2026-01-05 15:26");
+    expect(prompt).toContain(
+      "Time: assume UTC unless stated. User TZ=America/Chicago. Current user time (converted)=Monday 2026-01-05 15:26.",
+    );
   });
 
   it("includes model alias guidance when aliases are provided", () => {
-    const prompt = buildAgentSystemPromptAppend({
+    const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
@@ -70,5 +70,43 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+  });
+
+  it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["gateway", "bash"],
+    });
+
+    expect(prompt).toContain("## ClaudeBot Self-Update");
+    expect(prompt).toContain("config.apply");
+    expect(prompt).toContain("update.run");
+  });
+
+  it("includes skills guidance with workspace path", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+    });
+
+    expect(prompt).toContain("## Skills");
+    expect(prompt).toContain(
+      "Use `read` to load from /tmp/clawd/skills/<name>/SKILL.md",
+    );
+  });
+
+  it("renders project context files when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      contextFiles: [
+        { path: "AGENTS.md", content: "Alpha" },
+        { path: "IDENTITY.md", content: "Bravo" },
+      ],
+    });
+
+    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("## AGENTS.md");
+    expect(prompt).toContain("Alpha");
+    expect(prompt).toContain("## IDENTITY.md");
+    expect(prompt).toContain("Bravo");
   });
 });

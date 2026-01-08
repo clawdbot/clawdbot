@@ -4,6 +4,7 @@ import type {
   GroupKeyResolution,
   SessionEntry,
 } from "../../config/sessions.js";
+import { resolveSlackAccount } from "../../slack/accounts.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 
@@ -148,7 +149,8 @@ export function resolveGroupRequireMention(params: {
     return true;
   }
   if (provider === "slack") {
-    const channels = cfg.slack?.channels ?? {};
+    const account = resolveSlackAccount({ cfg, accountId: ctx.AccountId });
+    const channels = account.channels ?? {};
     const keys = Object.keys(channels);
     if (keys.length === 0) return true;
     const channelId = groupId?.trim();

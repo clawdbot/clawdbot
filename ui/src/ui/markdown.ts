@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import { truncateText } from "./format";
 
 marked.setOptions({
   gfm: true,
@@ -39,6 +40,8 @@ const allowedTags = [
 const allowedAttrs = ["class", "href", "rel", "target", "title"];
 
 let hooksInstalled = false;
+const MARKDOWN_CHAR_LIMIT = 140_000;
+const MARKDOWN_PARSE_LIMIT = 40_000;
 
 function installHooks() {
   if (hooksInstalled) return;
@@ -57,10 +60,30 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) return "";
   installHooks();
-  const rendered = marked.parse(input) as string;
+  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+  const suffix = truncated.truncated
+    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    : "";
+  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    const html = `<pre class="code-block">${escaped}</pre>`;
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: allowedTags,
+      ALLOWED_ATTR: allowedAttrs,
+    });
+  }
+  const rendered = marked.parse(`${truncated.text}${suffix}`) as string;
   return DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS: allowedTags,
     ALLOWED_ATTR: allowedAttrs,
   });
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}

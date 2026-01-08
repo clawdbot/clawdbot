@@ -1,3 +1,4 @@
+import { RateLimitError } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -660,5 +661,135 @@ describe("sendPollDiscord", () => {
         }),
       }),
     );
+  });
+});
+
+function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
+  const response = new Response(null, {
+    status: 429,
+    headers: {
+      "X-RateLimit-Scope": "user",
+      "X-RateLimit-Bucket": "test-bucket",
+    },
+  });
+  return new RateLimitError(response, {
+    message: "You are being rate limited.",
+    retry_after: retryAfter,
+    global: false,
+  });
+}
+
+describe("retry rate limits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("retries on Discord rate limits", async () => {
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0);
+
+    postMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(res.messageId).toBe("msg1");
+    expect(postMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses retry_after delays when rate limited", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0.5);
+
+    postMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+
+    const promise = sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({
+      messageId: "msg1",
+      channelId: "789",
+    });
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("stops after max retry attempts", async () => {
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0);
+
+    postMock.mockRejectedValue(rateLimitError);
+
+    await expect(
+      sendMessageDiscord("channel:789", "hello", {
+        rest,
+        token: "t",
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(postMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-rate-limit errors", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockRejectedValueOnce(new Error("network error"));
+
+    await expect(
+      sendMessageDiscord("channel:789", "hello", { rest, token: "t" }),
+    ).rejects.toThrow("network error");
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries reactions on rate limits", async () => {
+    const { rest, putMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0);
+
+    putMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce(undefined);
+
+    const res = await reactMessageDiscord("chan1", "msg1", "ok", {
+      rest,
+      token: "t",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(putMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries media upload without duplicating overflow text", async () => {
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0);
+    const text = "a".repeat(2005);
+
+    postMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", text, {
+      rest,
+      token: "t",
+      mediaUrl: "https://example.com/photo.jpg",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(res.messageId).toBe("msg1");
+    expect(postMock).toHaveBeenCalledTimes(3);
   });
 });

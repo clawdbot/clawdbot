@@ -5,10 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 
@@ -45,18 +46,6 @@ vi.mock("./queue.js", async () => {
 
 import { runReplyAgent } from "./agent-runner.js";
 
-function createTyping(): TypingController {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
-}
-
 type EmbeddedPiAgentParams = {
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
 };
@@ -68,8 +57,9 @@ function createMinimalRun(params?: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
+  typingMode?: TypingMode;
 }) {
-  const typing = createTyping();
+  const typing = createMockTypingController();
   const opts = params?.opts;
   const sessionCtx = {
     Provider: "whatsapp",
@@ -130,6 +120,7 @@ function createMinimalRun(params?: {
         blockStreamingEnabled: false,
         resolvedBlockStreamingBreak: "message_end",
         shouldInjectGroupIntro: false,
+        typingMode: params?.typingMode ?? "instant",
       }),
   };
 }
@@ -169,6 +160,63 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await run();
 
     expect(onPartialReply).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("starts typing only on deltas in message mode", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [{ text: "final" }],
+      meta: {},
+    }));
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "message",
+    });
+    await run();
+
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("starts typing from reasoning stream in thinking mode", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+        onReasoningStream?: (payload: {
+          text?: string;
+        }) => Promise<void> | void;
+      }) => {
+        await params.onReasoningStream?.({ text: "Reasoning:\nstep" });
+        await params.onPartialReply?.({ text: "hi" });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "thinking",
+    });
+    await run();
+
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
+  it("suppresses typing in never mode", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onPartialReply?: (payload: { text?: string }) => void;
+      }) => {
+        params.onPartialReply?.({ text: "hi" });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "never",
+    });
+    await run();
+
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });

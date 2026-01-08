@@ -42,7 +42,7 @@ TRASH
   }
 
   start_gateway() {
-    node dist/index.js gateway-daemon --port 18789 --bind loopback > /tmp/gateway-e2e.log 2>&1 &
+    node dist/index.js gateway --port 18789 --bind loopback > /tmp/gateway-e2e.log 2>&1 &
     GATEWAY_PID="$!"
   }
 
@@ -268,7 +268,7 @@ if (errors.length > 0) {
 }
 NODE
 
-    node dist/index.js gateway-daemon --port 18789 --bind loopback > /tmp/gateway.log 2>&1 &
+    node dist/index.js gateway --port 18789 --bind loopback > /tmp/gateway.log 2>&1 &
     GW_PID=$!
     # Gate on gateway readiness, then run health.
     for _ in $(seq 1 10); do

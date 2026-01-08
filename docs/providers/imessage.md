@@ -6,7 +6,7 @@ read_when:
 ---
 # iMessage (imsg)
 
-Updated: 2026-01-06
+Updated: 2026-01-08
 
 Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 
@@ -19,22 +19,41 @@ Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio
 - macOS with Messages signed in.
 - Full Disk Access for Clawdbot + `imsg` (Messages DB access).
 - Automation permission when sending.
+- `imessage.cliPath` can point to any command that proxies stdin/stdout (for example, a wrapper script that SSHes to another Mac and runs `imsg rpc`).
 
 ## Setup (fast path)
 1) Ensure Messages is signed in on this Mac.
 2) Configure iMessage and start the gateway.
+
+### Remote/SSH variant (optional)
+If you want iMessage on another Mac, set `imessage.cliPath` to a wrapper that
+execs `ssh` and runs `imsg rpc` on the remote host. Clawdbot only needs a
+stdio stream; `imsg` still runs on the remote macOS host.
+
+Example wrapper (save somewhere in your PATH and `chmod +x`):
+```bash
+#!/usr/bin/env bash
+exec ssh -T mac-mini imsg "$@"
+```
+
+Notes:
+- Remote Mac must have Messages signed in and `imsg` installed.
+- Full Disk Access + Automation prompts happen on the remote Mac.
+- Use SSH keys (no password prompt) so the gateway can launch `imsg rpc` unattended.
 
 Example:
 ```json5
 {
   imessage: {
     enabled: true,
-    cliPath: "imsg",
+    cliPath: "/usr/local/bin/imessage-remote",
     dmPolicy: "pairing",
     allowFrom: ["+15555550123"]
   }
 }
 ```
+
+Multi-account support: use `imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
 ## Access control (DMs + groups)
 DMs:
@@ -57,6 +76,10 @@ Groups:
 ## Media + limits
 - Optional attachment ingestion via `imessage.includeAttachments`.
 - Media cap via `imessage.mediaMaxMb`.
+
+## Limits
+- Outbound text is chunked to `imessage.textChunkLimit` (default 4000).
+- Media uploads are capped by `imessage.mediaMaxMb` (default 16).
 
 ## Addressing / delivery targets
 Prefer `chat_id` for stable routing:

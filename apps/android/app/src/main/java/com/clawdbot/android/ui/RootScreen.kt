@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
@@ -47,7 +48,6 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Report
-import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -123,7 +123,7 @@ fun RootScreen(viewModel: MainViewModel) {
       if (screenRecordActive) {
         return@remember StatusActivity(
           title = "Recording screen…",
-          icon = Icons.Default.ScreenShare,
+          icon = Icons.AutoMirrored.Filled.ScreenShare,
           contentDescription = "Recording screen",
           tint = androidx.compose.ui.graphics.Color.Red,
         )
@@ -327,11 +327,10 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         // Some embedded web UIs (incl. the "background website") use localStorage/sessionStorage.
         settings.domStorageEnabled = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
-          WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
-        }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
           WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
+        } else {
+          disableForceDarkIfSupported(settings)
         }
         if (isDebuggable) {
           Log.d("ClawdbotWebView", "userAgent: ${settings.userAgentString}")
@@ -412,6 +411,12 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       }
     },
   )
+}
+
+private fun disableForceDarkIfSupported(settings: WebSettings) {
+  if (!WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) return
+  @Suppress("DEPRECATION")
+  WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
 }
 
 private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {

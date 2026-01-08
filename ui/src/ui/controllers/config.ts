@@ -21,11 +21,14 @@ import {
 export type ConfigState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  applySessionKey: string;
   configLoading: boolean;
   configRaw: string;
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
+  configApplying: boolean;
+  updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown | null;
   configSchemaVersion: string | null;
@@ -89,10 +92,18 @@ export function applyConfigSchema(
 
 export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
   state.configSnapshot = snapshot;
-  if (typeof snapshot.raw === "string") {
-    state.configRaw = snapshot.raw;
-  } else if (snapshot.config && typeof snapshot.config === "object") {
-    state.configRaw = `${JSON.stringify(snapshot.config, null, 2).trimEnd()}\n`;
+  const rawFromSnapshot =
+    typeof snapshot.raw === "string"
+      ? snapshot.raw
+      : snapshot.config && typeof snapshot.config === "object"
+        ? serializeConfigForm(snapshot.config as Record<string, unknown>)
+        : state.configRaw;
+  if (!state.configFormDirty || state.configFormMode === "raw") {
+    state.configRaw = rawFromSnapshot;
+  } else if (state.configForm) {
+    state.configRaw = serializeConfigForm(state.configForm);
+  } else {
+    state.configRaw = rawFromSnapshot;
   }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
@@ -385,7 +396,7 @@ export async function saveConfig(state: ConfigState) {
   try {
     const raw =
       state.configFormMode === "form" && state.configForm
-        ? `${JSON.stringify(state.configForm, null, 2).trimEnd()}\n`
+        ? serializeConfigForm(state.configForm)
         : state.configRaw;
     await state.client.request("config.set", { raw });
     state.configFormDirty = false;
@@ -394,6 +405,43 @@ export async function saveConfig(state: ConfigState) {
     state.lastError = String(err);
   } finally {
     state.configSaving = false;
+  }
+}
+
+export async function applyConfig(state: ConfigState) {
+  if (!state.client || !state.connected) return;
+  state.configApplying = true;
+  state.lastError = null;
+  try {
+    const raw =
+      state.configFormMode === "form" && state.configForm
+        ? serializeConfigForm(state.configForm)
+        : state.configRaw;
+    await state.client.request("config.apply", {
+      raw,
+      sessionKey: state.applySessionKey,
+    });
+    state.configFormDirty = false;
+    await loadConfig(state);
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.configApplying = false;
+  }
+}
+
+export async function runUpdate(state: ConfigState) {
+  if (!state.client || !state.connected) return;
+  state.updateRunning = true;
+  state.lastError = null;
+  try {
+    await state.client.request("update.run", {
+      sessionKey: state.applySessionKey,
+    });
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.updateRunning = false;
   }
 }
 
@@ -408,6 +456,9 @@ export function updateConfigFormValue(
   setPathValue(base, path, value);
   state.configForm = base;
   state.configFormDirty = true;
+  if (state.configFormMode === "form") {
+    state.configRaw = serializeConfigForm(base);
+  }
 }
 
 export function removeConfigFormValue(
@@ -420,6 +471,9 @@ export function removeConfigFormValue(
   removePathValue(base, path);
   state.configForm = base;
   state.configFormDirty = true;
+  if (state.configFormMode === "form") {
+    state.configRaw = serializeConfigForm(base);
+  }
 }
 
 function cloneConfigObject<T>(value: T): T {
@@ -427,6 +481,10 @@ function cloneConfigObject<T>(value: T): T {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function serializeConfigForm(form: Record<string, unknown>): string {
+  return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
 
 function setPathValue(
