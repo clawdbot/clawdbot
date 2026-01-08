@@ -18,10 +18,15 @@
 - Auto-reply: removed `autoReply` from Discord/Slack/Telegram channel configs; use `requireMention` instead (Telegram topics now support `requireMention` overrides).
 
 ### Fixes
+- Doctor/Daemon: surface gateway runtime state + port collision diagnostics; warn on legacy workspace dirs.
 - Discord: format slow listener logs in seconds to match shared duration style.
+- CLI: show colored table output for `clawdbot cron list` (JSON behind `--json`).
+- CLI: add cron `create`/`remove`/`delete` aliases for job management.
 - Agent: avoid duplicating context/skills when SDK rebuilds the system prompt. (#418)
+- Agent: replace SDK base system prompt with ClaudeBot prompt, add skills guidance, and document the layout.
 - Signal: reconnect SSE monitor with abortable backoff; log stream errors. Thanks @nexty5870 for PR #430.
 - Gateway: pass resolved provider as messageProvider for agent runs so provider-specific tools are available. Thanks @imfing for PR #389.
+- Doctor: add state integrity checks + repair prompts for missing sessions/state dirs, transcript mismatches, and permission issues; document full doctor flow and workspace backup tips.
 - Discord/Telegram: add per-request retry policy with configurable delays and docs.
 - Telegram: run long polling via grammY runner with per-chat sequentialization and concurrency tied to `agent.maxConcurrent`. Thanks @mukhtharcm for PR #366.
 - macOS: prevent gateway launchd startup race where the app could kill a just-started gateway; avoid unnecessary `bootout` and ensure the job is enabled at login. Fixes #306. Thanks @gupsammy for PR #387.
@@ -31,12 +36,15 @@
 - WhatsApp: add self-phone mode (no pairing replies for outbound DMs) and onboarding prompt for personal vs separate numbers (auto allowlist + response prefix for personal).
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
+- Telegram: default `replyToMode` to `"first"`, add forum topic reply threading for tool sends, and update Telegram docs. Thanks @mneves75 for PR #326.
+- Agent: suppress duplicate messaging tool confirmations and honor per-provider reply threading in auto-replies. Thanks @mneves75 for PR #326.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.
 - Sandbox: allow per-agent `routing.agents.<agentId>.sandbox.{docker,browser,prune}.*` overrides for multi-agent gateways (ignored when `scope: "shared"`).
 - Tools: make per-agent tool policies override global defaults and run bash synchronously when `process` is disallowed.
 - Tools: scope `process` sessions per agent to prevent cross-agent visibility.
 - Cron: clamp timer delay to avoid TimeoutOverflowWarning. Thanks @emanuelst for PR #412.
 - Web UI: allow reconnect + password URL auth for the control UI and always scrub auth params from the URL. Thanks @oswalpalash for PR #414.
+- Web UI: add Connect button on Overview to apply connection changes. Thanks @wizaj for PR #385.
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.

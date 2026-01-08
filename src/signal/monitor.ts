@@ -3,6 +3,7 @@ import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
@@ -15,6 +16,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
+import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
 import { sendMessageSignal } from "./send.js";
@@ -51,6 +53,8 @@ export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   account?: string;
+  accountId?: string;
+  config?: ClawdbotConfig;
   baseUrl?: string;
   autoStart?: boolean;
   cliPath?: string;
@@ -83,36 +87,8 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   );
 }
 
-function resolveBaseUrl(opts: MonitorSignalOpts): string {
-  const cfg = loadConfig();
-  const signalCfg = cfg.signal;
-  if (opts.baseUrl?.trim()) return opts.baseUrl.trim();
-  if (signalCfg?.httpUrl?.trim()) return signalCfg.httpUrl.trim();
-  const host = opts.httpHost ?? signalCfg?.httpHost ?? "127.0.0.1";
-  const port = opts.httpPort ?? signalCfg?.httpPort ?? 8080;
-  return `http://${host}:${port}`;
-}
-
-function resolveAccount(opts: MonitorSignalOpts): string | undefined {
-  const cfg = loadConfig();
-  return opts.account?.trim() || cfg.signal?.account?.trim() || undefined;
-}
-
-function resolveAllowFrom(opts: MonitorSignalOpts): string[] {
-  const cfg = loadConfig();
-  const raw = opts.allowFrom ?? cfg.signal?.allowFrom ?? [];
-  return raw.map((entry) => String(entry).trim()).filter(Boolean);
-}
-
-function resolveGroupAllowFrom(opts: MonitorSignalOpts): string[] {
-  const cfg = loadConfig();
-  const raw =
-    opts.groupAllowFrom ??
-    cfg.signal?.groupAllowFrom ??
-    (cfg.signal?.allowFrom && cfg.signal.allowFrom.length > 0
-      ? cfg.signal.allowFrom
-      : []);
-  return raw.map((entry) => String(entry).trim()).filter(Boolean);
+function normalizeAllowList(raw?: Array<string | number>): string[] {
+  return (raw ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 function isAllowedSender(sender: string, allowFrom: string[]): boolean {
@@ -207,12 +183,21 @@ async function deliverReplies(params: {
   target: string;
   baseUrl: string;
   account?: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
 }) {
-  const { replies, target, baseUrl, account, runtime, maxBytes, textLimit } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+  } = params;
   for (const payload of replies) {
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -224,6 +209,7 @@ async function deliverReplies(params: {
           baseUrl,
           account,
           maxBytes,
+          accountId,
         });
       }
     } else {
@@ -236,6 +222,7 @@ async function deliverReplies(params: {
           account,
           mediaUrl: url,
           maxBytes,
+          accountId,
         });
       }
     }
@@ -247,37 +234,53 @@ export async function monitorSignalProvider(
   opts: MonitorSignalOpts = {},
 ): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = loadConfig();
-  const textLimit = resolveTextChunkLimit(cfg, "signal");
-  const baseUrl = resolveBaseUrl(opts);
-  const account = resolveAccount(opts);
-  const dmPolicy = cfg.signal?.dmPolicy ?? "pairing";
-  const allowFrom = resolveAllowFrom(opts);
-  const groupAllowFrom = resolveGroupAllowFrom(opts);
-  const groupPolicy = cfg.signal?.groupPolicy ?? "open";
+  const cfg = opts.config ?? loadConfig();
+  const accountInfo = resolveSignalAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
+  const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
+  const account = opts.account?.trim() || accountInfo.config.account?.trim();
+  const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
+  const allowFrom = normalizeAllowList(
+    opts.allowFrom ?? accountInfo.config.allowFrom,
+  );
+  const groupAllowFrom = normalizeAllowList(
+    opts.groupAllowFrom ??
+      accountInfo.config.groupAllowFrom ??
+      (accountInfo.config.allowFrom && accountInfo.config.allowFrom.length > 0
+        ? accountInfo.config.allowFrom
+        : []),
+  );
+  const groupPolicy = accountInfo.config.groupPolicy ?? "open";
   const mediaMaxBytes =
-    (opts.mediaMaxMb ?? cfg.signal?.mediaMaxMb ?? 8) * 1024 * 1024;
+    (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments =
-    opts.ignoreAttachments ?? cfg.signal?.ignoreAttachments ?? false;
+    opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
 
   const autoStart =
-    opts.autoStart ?? cfg.signal?.autoStart ?? !cfg.signal?.httpUrl;
+    opts.autoStart ??
+    accountInfo.config.autoStart ??
+    !accountInfo.config.httpUrl;
   let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
 
   if (autoStart) {
-    const cliPath = opts.cliPath ?? cfg.signal?.cliPath ?? "signal-cli";
-    const httpHost = opts.httpHost ?? cfg.signal?.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? cfg.signal?.httpPort ?? 8080;
+    const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+    const httpHost =
+      opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
+    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
       account,
       httpHost,
       httpPort,
-      receiveMode: opts.receiveMode ?? cfg.signal?.receiveMode,
+      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
       ignoreAttachments:
-        opts.ignoreAttachments ?? cfg.signal?.ignoreAttachments,
-      ignoreStories: opts.ignoreStories ?? cfg.signal?.ignoreStories,
-      sendReadReceipts: opts.sendReadReceipts ?? cfg.signal?.sendReadReceipts,
+        opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
+      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+      sendReadReceipts:
+        opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts,
       runtime,
     });
   }
@@ -357,7 +360,12 @@ export async function monitorSignalProvider(
                     "Ask the bot owner to approve with:",
                     "clawdbot pairing approve --provider signal <code>",
                   ].join("\n"),
-                  { baseUrl, account, maxBytes: mediaMaxBytes },
+                  {
+                    baseUrl,
+                    account,
+                    maxBytes: mediaMaxBytes,
+                    accountId: accountInfo.accountId,
+                  },
                 );
               } catch (err) {
                 logVerbose(
@@ -447,6 +455,7 @@ export async function monitorSignalProvider(
       const route = resolveAgentRoute({
         cfg,
         provider: "signal",
+        accountId: accountInfo.accountId,
         peer: {
           kind: isGroup ? "group" : "dm",
           id: isGroup ? (groupId ?? "unknown") : normalizeE164(sender),
@@ -505,6 +514,7 @@ export async function monitorSignalProvider(
             target: ctxPayload.To,
             baseUrl,
             account,
+            accountId: accountInfo.accountId,
             runtime,
             maxBytes: mediaMaxBytes,
             textLimit,

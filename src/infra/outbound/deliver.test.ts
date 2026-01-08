@@ -7,7 +7,7 @@ import {
 } from "./deliver.js";
 
 describe("deliverOutboundPayloads", () => {
-  it("chunks telegram markdown and passes config token", async () => {
+  it("chunks telegram markdown and passes account id", async () => {
     const sendTelegram = vi
       .fn()
       .mockResolvedValue({ messageId: "m1", chatId: "c1" });
@@ -28,7 +28,7 @@ describe("deliverOutboundPayloads", () => {
       expect(sendTelegram).toHaveBeenCalledTimes(2);
       for (const call of sendTelegram.mock.calls) {
         expect(call[2]).toEqual(
-          expect.objectContaining({ token: "tok-1", verbose: false }),
+          expect.objectContaining({ accountId: "default", verbose: false }),
         );
       }
       expect(results).toHaveLength(2);

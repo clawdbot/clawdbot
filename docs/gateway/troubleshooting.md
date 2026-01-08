@@ -9,6 +9,36 @@ When your CLAWDBOT misbehaves, here's how to fix it.
 
 ## Common Issues
 
+### Service Installed but Nothing is Running
+
+If the gateway service is installed but the process exits immediately, the daemon
+can appear “loaded” while nothing is running.
+
+**Check:**
+```bash
+clawdbot daemon status
+clawdbot doctor
+```
+
+Doctor/daemon will show runtime state (PID/last exit) and log hints.
+
+**Logs:**
+- macOS: `~/.clawdbot/logs/gateway.log` and `gateway.err.log`
+- Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
+- Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
+
+### Address Already in Use (Port 18789)
+
+This means something is already listening on the gateway port.
+
+**Check:**
+```bash
+clawdbot daemon status
+```
+
+It will show the listener(s) and likely causes (gateway already running, SSH tunnel).
+If needed, stop the service or pick a different port.
+
 ### "Agent was aborted"
 
 The agent was interrupted mid-response.

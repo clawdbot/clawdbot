@@ -2,6 +2,7 @@ import {
   installLaunchAgent,
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
+  readLaunchAgentRuntime,
   restartLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -10,14 +11,17 @@ import {
   installScheduledTask,
   isScheduledTaskInstalled,
   readScheduledTaskCommand,
+  readScheduledTaskRuntime,
   restartScheduledTask,
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   installSystemdService,
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
+  readSystemdServiceRuntime,
   restartSystemdService,
   stopSystemdService,
   uninstallSystemdService,
@@ -49,6 +53,9 @@ export type GatewayService = {
     programArguments: string[];
     workingDirectory?: string;
   } | null>;
+  readRuntime: (
+    env: Record<string, string | undefined>,
+  ) => Promise<GatewayServiceRuntime>;
 };
 
 export function resolveGatewayService(): GatewayService {
@@ -71,6 +78,7 @@ export function resolveGatewayService(): GatewayService {
       },
       isLoaded: async () => isLaunchAgentLoaded(),
       readCommand: readLaunchAgentProgramArguments,
+      readRuntime: readLaunchAgentRuntime,
     };
   }
 
@@ -93,6 +101,7 @@ export function resolveGatewayService(): GatewayService {
       },
       isLoaded: async () => isSystemdServiceEnabled(),
       readCommand: readSystemdServiceExecStart,
+      readRuntime: async () => await readSystemdServiceRuntime(),
     };
   }
 
@@ -115,6 +124,7 @@ export function resolveGatewayService(): GatewayService {
       },
       isLoaded: async () => isScheduledTaskInstalled(),
       readCommand: readScheduledTaskCommand,
+      readRuntime: async () => await readScheduledTaskRuntime(),
     };
   }
 

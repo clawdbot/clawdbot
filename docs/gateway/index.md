@@ -171,6 +171,7 @@ clawdbot daemon restart
 Notes:
 - `daemon status` probes the Gateway RPC by default (same URL/token defaults as `gateway status`).
 - `daemon status --deep` adds system-level scans (LaunchDaemons/system units).
+- `daemon status` now reports runtime state (PID/exit status) and port collisions when the gateway isn’t reachable.
 - `gateway install|uninstall|start|stop|restart` remain supported as aliases; `daemon` is the dedicated manager.
 - `gateway daemon status` is an alias for `clawdbot daemon status`.
 - If other gateway-like services are detected, the CLI warns. We recommend **one gateway per machine**; one gateway can host multiple agents.

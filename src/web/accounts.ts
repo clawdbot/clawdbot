@@ -9,6 +9,7 @@ import { resolveUserPath } from "../utils.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
+  name?: string;
   enabled: boolean;
   authDir: string;
   isLegacyAuthDir: boolean;
@@ -101,6 +102,7 @@ export function resolveWhatsAppAccount(params: {
   });
   return {
     accountId,
+    name: accountCfg?.name?.trim() || undefined,
     enabled,
     authDir,
     isLegacyAuthDir: isLegacy,

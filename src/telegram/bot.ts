@@ -50,6 +50,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { markdownToTelegramHtml } from "./format.js";
 import {
@@ -106,6 +107,7 @@ type TelegramContext = {
 
 export type TelegramBotOptions = {
   token: string;
+  accountId?: string;
   runtime?: RuntimeEnv;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;
@@ -159,14 +161,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
 
   const cfg = opts.config ?? loadConfig();
-  const textLimit = resolveTextChunkLimit(cfg, "telegram");
-  const dmPolicy = cfg.telegram?.dmPolicy ?? "pairing";
-  const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const telegramCfg = account.config;
+  const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
+  const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+  const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ??
-    cfg.telegram?.groupAllowFrom ??
-    (cfg.telegram?.allowFrom && cfg.telegram.allowFrom.length > 0
-      ? cfg.telegram.allowFrom
+    telegramCfg.groupAllowFrom ??
+    (telegramCfg.allowFrom && telegramCfg.allowFrom.length > 0
+      ? telegramCfg.allowFrom
       : undefined) ??
     (opts.allowFrom && opts.allowFrom.length > 0 ? opts.allowFrom : undefined);
   const normalizeAllowFrom = (list?: Array<string | number>) => {
@@ -206,15 +213,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       (entry) => entry === username || entry === `@${username}`,
     );
   };
-  const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
-  const streamMode = resolveTelegramStreamMode(cfg);
+  const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "first";
+  const streamMode = resolveTelegramStreamMode(telegramCfg);
   const nativeEnabled = cfg.commands?.native === true;
   const nativeDisabledExplicit = cfg.commands?.native === false;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
-    (opts.mediaMaxMb ?? cfg.telegram?.mediaMaxMb ?? 5) * 1024 * 1024;
+    (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const mentionRegexes = buildMentionRegexes(cfg);
   let botHasTopicsEnabled: boolean | undefined;
@@ -238,6 +245,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveProviderGroupPolicy({
       cfg,
       provider: "telegram",
+      accountId: account.accountId,
       groupId: String(chatId),
     });
   const resolveGroupActivation = (params: {
@@ -265,6 +273,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveProviderGroupRequireMention({
       cfg,
       provider: "telegram",
+      accountId: account.accountId,
       groupId: String(chatId),
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
@@ -273,7 +282,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     chatId: string | number,
     messageThreadId?: number,
   ) => {
-    const groups = cfg.telegram?.groups;
+    const groups = telegramCfg.groups;
     if (!groups) return { groupConfig: undefined, topicConfig: undefined };
     const groupKey = String(chatId);
     const groupConfig = groups[groupKey] ?? groups["*"];
@@ -305,6 +314,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const route = resolveAgentRoute({
       cfg,
       provider: "telegram",
+      accountId: account.accountId,
       peer: {
         kind: isGroup ? "group" : "dm",
         id: peerId,
@@ -815,7 +825,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
 
         if (isGroup && useAccessGroups) {
-          const groupPolicy = cfg.telegram?.groupPolicy ?? "open";
+          const groupPolicy = telegramCfg.groupPolicy ?? "open";
           if (groupPolicy === "disabled") {
             await bot.api.sendMessage(
               chatId,
@@ -882,6 +892,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         const route = resolveAgentRoute({
           cfg,
           provider: "telegram",
+          accountId: account.accountId,
           peer: {
             kind: isGroup ? "group" : "dm",
             id: isGroup
@@ -1010,7 +1021,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         // - "open" (default): groups bypass allowFrom, only mention-gating applies
         // - "disabled": block all group messages entirely
         // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-        const groupPolicy = cfg.telegram?.groupPolicy ?? "open";
+        const groupPolicy = telegramCfg.groupPolicy ?? "open";
         if (groupPolicy === "disabled") {
           logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
           return;
@@ -1261,9 +1272,9 @@ function buildTelegramThreadParams(messageThreadId?: number) {
 }
 
 function resolveTelegramStreamMode(
-  cfg: ReturnType<typeof loadConfig>,
+  telegramCfg: ClawdbotConfig["telegram"],
 ): TelegramStreamMode {
-  const raw = cfg.telegram?.streamMode?.trim().toLowerCase();
+  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
   if (raw === "off" || raw === "partial" || raw === "block") return raw;
   return "partial";
 }

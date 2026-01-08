@@ -543,6 +543,7 @@
           "concepts/architecture",
           "concepts/agent",
           "concepts/agent-loop",
+          "concepts/system-prompt",
           "concepts/agent-workspace",
           "concepts/multi-agent",
           "concepts/compaction",

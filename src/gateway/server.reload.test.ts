@@ -42,6 +42,7 @@ const hoisted = vi.hoisted(() => {
         lastEventAt: null,
         lastError: null,
       },
+      whatsappAccounts: {},
       telegram: {
         running: false,
         lastStartAt: null,
@@ -49,18 +50,21 @@ const hoisted = vi.hoisted(() => {
         lastError: null,
         mode: null,
       },
+      telegramAccounts: {},
       discord: {
         running: false,
         lastStartAt: null,
         lastStopAt: null,
         lastError: null,
       },
+      discordAccounts: {},
       slack: {
         running: false,
         lastStartAt: null,
         lastStopAt: null,
         lastError: null,
       },
+      slackAccounts: {},
       signal: {
         running: false,
         lastStartAt: null,
@@ -68,6 +72,7 @@ const hoisted = vi.hoisted(() => {
         lastError: null,
         baseUrl: null,
       },
+      signalAccounts: {},
       imessage: {
         running: false,
         lastStartAt: null,
@@ -76,6 +81,7 @@ const hoisted = vi.hoisted(() => {
         cliPath: null,
         dbPath: null,
       },
+      imessageAccounts: {},
     })),
     startProviders: vi.fn(async () => {}),
     startWhatsAppProvider: vi.fn(async () => {}),

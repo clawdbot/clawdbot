@@ -39,6 +39,8 @@ Example:
 }
 ```
 
+Multi-account support: use `signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
 ## Access control (DMs + groups)
 DMs:
 - Default: `signal.dmPolicy = "pairing"`.

@@ -795,6 +795,31 @@ public struct ConfigSetParams: Codable, Sendable {
     }
 }
 
+public struct ConfigApplyParams: Codable, Sendable {
+    public let raw: String
+    public let sessionkey: String?
+    public let note: String?
+    public let restartdelayms: Int?
+
+    public init(
+        raw: String,
+        sessionkey: String?,
+        note: String?,
+        restartdelayms: Int?
+    ) {
+        self.raw = raw
+        self.sessionkey = sessionkey
+        self.note = note
+        self.restartdelayms = restartdelayms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case raw
+        case sessionkey = "sessionKey"
+        case note
+        case restartdelayms = "restartDelayMs"
+    }
+}
+
 public struct ConfigSchemaParams: Codable, Sendable {
 }
 
@@ -1501,6 +1526,31 @@ public struct ChatEvent: Codable, Sendable {
         case errormessage = "errorMessage"
         case usage
         case stopreason = "stopReason"
+    }
+}
+
+public struct UpdateRunParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let note: String?
+    public let restartdelayms: Int?
+    public let timeoutms: Int?
+
+    public init(
+        sessionkey: String?,
+        note: String?,
+        restartdelayms: Int?,
+        timeoutms: Int?
+    ) {
+        self.sessionkey = sessionkey
+        self.note = note
+        self.restartdelayms = restartdelayms
+        self.timeoutms = timeoutms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case note
+        case restartdelayms = "restartDelayMs"
+        case timeoutms = "timeoutMs"
     }
 }
 

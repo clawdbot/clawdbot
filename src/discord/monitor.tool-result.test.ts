@@ -46,6 +46,8 @@ describe("discord tool result dispatch", () => {
     const runtimeError = vi.fn();
     const handler = createDiscordMessageHandler({
       cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
       token: "token",
       runtime: {
         log: vi.fn(),
@@ -115,6 +117,8 @@ describe("discord tool result dispatch", () => {
 
     const handler = createDiscordMessageHandler({
       cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
       token: "token",
       runtime: {
         log: vi.fn(),
@@ -197,6 +201,8 @@ describe("discord tool result dispatch", () => {
 
     const handler = createDiscordMessageHandler({
       cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
       token: "token",
       runtime: {
         log: vi.fn(),
@@ -306,6 +312,8 @@ describe("discord tool result dispatch", () => {
 
     const handler = createDiscordMessageHandler({
       cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
       token: "token",
       runtime: {
         log: vi.fn(),

@@ -11,7 +11,14 @@ const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue(undefined);
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceReadCommand = vi.fn().mockResolvedValue(null);
+const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
 const findExtraGatewayServices = vi.fn(async () => []);
+const inspectPortUsage = vi.fn(async () => ({
+  port: 18789,
+  status: "free",
+  listeners: [],
+  hints: [],
+}));
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
@@ -43,6 +50,7 @@ vi.mock("../daemon/service.js", () => ({
     restart: serviceRestart,
     isLoaded: serviceIsLoaded,
     readCommand: serviceReadCommand,
+    readRuntime: serviceReadRuntime,
   }),
 }));
 
@@ -53,6 +61,11 @@ vi.mock("../daemon/legacy.js", () => ({
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) =>
     findExtraGatewayServices(env, opts),
+}));
+
+vi.mock("../infra/ports.js", () => ({
+  inspectPortUsage: (port: number) => inspectPortUsage(port),
+  formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -81,6 +94,7 @@ describe("daemon-cli coverage", () => {
       expect.objectContaining({ method: "status" }),
     );
     expect(findExtraGatewayServices).toHaveBeenCalled();
+    expect(inspectPortUsage).toHaveBeenCalled();
   });
 
   it("passes deep scan flag for daemon status", async () => {

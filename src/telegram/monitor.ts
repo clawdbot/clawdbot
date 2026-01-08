@@ -2,13 +2,15 @@ import { type RunOptions, run } from "@grammyjs/runner";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramBot } from "./bot.js";
 import { makeProxyFetch } from "./proxy.js";
-import { resolveTelegramToken } from "./token.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
   token?: string;
+  accountId?: string;
+  config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   useWebhook?: boolean;
@@ -36,20 +38,22 @@ export function createTelegramRunnerOptions(
 }
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const cfg = loadConfig();
-  const { token } = resolveTelegramToken(cfg, {
-    envToken: opts.token,
+  const cfg = opts.config ?? loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
   });
+  const token = opts.token?.trim() || account.token;
   if (!token) {
     throw new Error(
-      "TELEGRAM_BOT_TOKEN or telegram.botToken/tokenFile is required for Telegram gateway",
+      `Telegram bot token missing for account "${account.accountId}" (set telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
     );
   }
 
   const proxyFetch =
     opts.proxyFetch ??
-    (cfg.telegram?.proxy
-      ? makeProxyFetch(cfg.telegram?.proxy as string)
+    (account.config.proxy
+      ? makeProxyFetch(account.config.proxy as string)
       : undefined);
 
   const bot = createTelegramBot({
@@ -57,6 +61,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     runtime: opts.runtime,
     proxyFetch,
     config: cfg,
+    accountId: account.accountId,
   });
 
   if (opts.useWebhook) {

@@ -27,6 +27,11 @@ clawdbot [--dev] [--profile <name>] <command>
   doctor
   login
   logout
+  providers
+    list
+    status
+    add
+    remove
   send
   poll
   agent
@@ -200,6 +205,20 @@ Clear cached WhatsApp Web credentials.
 Options:
 - `--provider <provider>`
 - `--account <id>`
+
+### `providers`
+Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
+
+Subcommands:
+- `providers list`: show configured chat providers and auth profiles (Claude CLI + Codex CLI sync included).
+- `providers status`: check gateway reachability and provider health (`--probe` to verify credentials).
+- `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
+- `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
+
+Common options:
+- `--provider <name>`: `whatsapp|telegram|discord|slack|signal|imessage`
+- `--account <id>`: provider account id (default `default`)
+- `--name <label>`: display name for the account
 
 ### `pairing`
 Approve DM pairing requests across providers.
@@ -483,10 +502,10 @@ Manage scheduled jobs (Gateway RPC). See [/automation/cron-jobs](/automation/cro
 
 Subcommands:
 - `cron status [--json]`
-- `cron list [--all] [--json]`
-- `cron add` (requires `--name` and exactly one of `--at` | `--every` | `--cron`, and exactly one payload of `--system-event` | `--message`)
+- `cron list [--all] [--json]` (table output by default; use `--json` for raw)
+- `cron add` (alias: `create`; requires `--name` and exactly one of `--at` | `--every` | `--cron`, and exactly one payload of `--system-event` | `--message`)
 - `cron edit <id>` (patch fields)
-- `cron rm <id>`
+- `cron rm <id>` (aliases: `remove`, `delete`)
 - `cron enable <id>`
 - `cron disable <id>`
 - `cron runs --id <id> [--limit <n>]`

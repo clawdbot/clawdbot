@@ -17,10 +17,17 @@ import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
 } from "../daemon/inspect.js";
+import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  formatPortDiagnostics,
+  inspectPortUsage,
+  type PortListener,
+  type PortUsageStatus,
+} from "../infra/ports.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDefaultDeps } from "./deps.js";
 
@@ -34,6 +41,25 @@ type DaemonStatus = {
       programArguments: string[];
       workingDirectory?: string;
     } | null;
+    runtime?: {
+      status?: string;
+      state?: string;
+      subState?: string;
+      pid?: number;
+      lastExitStatus?: number;
+      lastExitReason?: string;
+      lastRunResult?: string;
+      lastRunTime?: string;
+      detail?: string;
+      cachedLabel?: boolean;
+      missingUnit?: boolean;
+    };
+  };
+  port?: {
+    port: number;
+    status: PortUsageStatus;
+    listeners: PortListener[];
+    hints: string[];
   };
   rpc?: {
     ok: boolean;
@@ -96,6 +122,61 @@ async function probeGatewayStatus(opts: GatewayRpcOpts) {
   }
 }
 
+function formatRuntimeStatus(runtime: DaemonStatus["service"]["runtime"]) {
+  if (!runtime) return null;
+  const status = runtime.status ?? "unknown";
+  const details: string[] = [];
+  if (runtime.pid) details.push(`pid ${runtime.pid}`);
+  if (runtime.state && runtime.state.toLowerCase() !== status) {
+    details.push(`state ${runtime.state}`);
+  }
+  if (runtime.subState) details.push(`sub ${runtime.subState}`);
+  if (runtime.lastExitStatus !== undefined) {
+    details.push(`last exit ${runtime.lastExitStatus}`);
+  }
+  if (runtime.lastExitReason) {
+    details.push(`reason ${runtime.lastExitReason}`);
+  }
+  if (runtime.lastRunResult) {
+    details.push(`last run ${runtime.lastRunResult}`);
+  }
+  if (runtime.lastRunTime) {
+    details.push(`last run time ${runtime.lastRunTime}`);
+  }
+  if (runtime.detail) details.push(runtime.detail);
+  return details.length > 0 ? `${status} (${details.join(", ")})` : status;
+}
+
+function shouldReportPortUsage(
+  status: PortUsageStatus | undefined,
+  rpcOk?: boolean,
+) {
+  if (status !== "busy") return false;
+  if (rpcOk === true) return false;
+  return true;
+}
+
+function renderRuntimeHints(
+  runtime: DaemonStatus["service"]["runtime"],
+): string[] {
+  if (!runtime) return [];
+  const hints: string[] = [];
+  if (runtime.status === "stopped") {
+    if (process.platform === "darwin") {
+      const logs = resolveGatewayLogPaths(process.env);
+      hints.push(`Logs: ${logs.stdoutPath}`);
+      hints.push(`Errors: ${logs.stderrPath}`);
+    } else if (process.platform === "linux") {
+      hints.push(
+        "Logs: journalctl --user -u clawdbot-gateway.service -n 200 --no-pager",
+      );
+    } else if (process.platform === "win32") {
+      hints.push('Logs: schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST');
+    }
+  }
+  return hints;
+}
+
 function renderGatewayServiceStartHints(): string[] {
   switch (process.platform) {
     case "darwin":
@@ -117,10 +198,27 @@ async function gatherDaemonStatus(opts: {
   deep?: boolean;
 }): Promise<DaemonStatus> {
   const service = resolveGatewayService();
-  const [loaded, command] = await Promise.all([
+  const [loaded, command, runtime] = await Promise.all([
     service.isLoaded({ env: process.env }).catch(() => false),
     service.readCommand(process.env).catch(() => null),
+    service.readRuntime(process.env).catch(() => undefined),
   ]);
+  let portStatus: DaemonStatus["port"] | undefined;
+  try {
+    const cfg = loadConfig();
+    if (cfg.gateway?.mode !== "remote") {
+      const port = resolveGatewayPort(cfg, process.env);
+      const diagnostics = await inspectPortUsage(port);
+      portStatus = {
+        port: diagnostics.port,
+        status: diagnostics.status,
+        listeners: diagnostics.listeners,
+        hints: diagnostics.hints,
+      };
+    }
+  } catch {
+    portStatus = undefined;
+  }
   const legacyServices = await findLegacyGatewayServices(process.env);
   const extraServices = await findExtraGatewayServices(process.env, {
     deep: opts.deep,
@@ -134,7 +232,9 @@ async function gatherDaemonStatus(opts: {
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
       command,
+      runtime,
     },
+    port: portStatus,
     rpc,
     legacyServices,
     extraServices,
@@ -159,11 +259,38 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (service.command?.workingDirectory) {
     defaultRuntime.log(`Working dir: ${service.command.workingDirectory}`);
   }
+  const runtimeLine = formatRuntimeStatus(service.runtime);
+  if (runtimeLine) {
+    defaultRuntime.log(`Runtime: ${runtimeLine}`);
+  }
   if (rpc) {
     if (rpc.ok) {
       defaultRuntime.log("RPC probe: ok");
     } else {
       defaultRuntime.error(`RPC probe: failed (${rpc.error})`);
+    }
+  }
+  if (service.loaded && service.runtime?.status === "stopped") {
+    defaultRuntime.error(
+      "Service is loaded but not running (likely exited immediately).",
+    );
+    for (const hint of renderRuntimeHints(service.runtime)) {
+      defaultRuntime.error(hint);
+    }
+  }
+  if (service.runtime?.cachedLabel) {
+    defaultRuntime.error(
+      `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
+    );
+  }
+  if (status.port && shouldReportPortUsage(status.port.status, rpc?.ok)) {
+    for (const line of formatPortDiagnostics({
+      port: status.port.port,
+      status: status.port.status,
+      listeners: status.port.listeners,
+      hints: status.port.hints,
+    })) {
+      defaultRuntime.error(line);
     }
   }
 

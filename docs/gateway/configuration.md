@@ -260,6 +260,33 @@ Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
 
+### `telegram.accounts` / `discord.accounts` / `slack.accounts` / `signal.accounts` / `imessage.accounts`
+
+Run multiple accounts per provider (each account has its own `accountId` and optional `name`):
+
+```json5
+{
+  telegram: {
+    accounts: {
+      default: {
+        name: "Primary bot",
+        botToken: "123456:ABC..."
+      },
+      alerts: {
+        name: "Alerts bot",
+        botToken: "987654:XYZ..."
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `default` is used when `accountId` is omitted (CLI + routing).
+- Env tokens only apply to the **default** account.
+- Base provider settings (group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Use `routing.bindings[].match.accountId` to route each account to a different agent.
+
 ### `routing.groupChat`
 
 Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
@@ -560,6 +587,7 @@ Set `web.enabled: false` to keep it off by default.
 
 Clawdbot starts Telegram only when a `telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `telegram.botToken`.
 Set `telegram.enabled: false` to disable automatic startup.
+Multi-account support lives under `telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 ```json5
 {
@@ -582,8 +610,9 @@ Set `telegram.enabled: false` to disable automatic startup.
         }
       }
     },
+    replyToMode: "first",                 // off | first | all
     streamMode: "partial",               // off | partial | block (draft streaming)
-    actions: { reactions: true },        // tool action gates (false disables)
+    actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
     mediaMaxMb: 5,
     retry: {                             // outbound retry policy
       attempts: 3,
@@ -608,6 +637,7 @@ Retry policy defaults and behavior are documented in [Retry policy](/concepts/re
 ### `discord` (bot transport)
 
 Configure the Discord bot by setting the bot token and optional gating:
+Multi-account support lives under `discord.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 ```json5
 {
@@ -707,6 +737,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
     },
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
+    replyToMode: "off",           // off | first | all
     actions: {
       reactions: true,
       messages: true,
@@ -725,6 +756,8 @@ Slack runs in Socket Mode and requires both a bot token and app token:
   }
 }
 ```
+
+Multi-account support lives under `slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
 
@@ -762,10 +795,19 @@ Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 }
 ```
 
+Multi-account support lives under `imessage.accounts` (see the multi-account section above).
+
 Notes:
 - Requires Full Disk Access to the Messages DB.
 - The first send will prompt for Messages automation permission.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
+- `imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
+
+Example wrapper:
+```bash
+#!/usr/bin/env bash
+exec ssh -T mac-mini "imsg rpc"
+```
 
 ### `agent.workspace`
 

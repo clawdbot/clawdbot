@@ -69,6 +69,7 @@
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:live": "vitest run --config vitest.live.config.ts",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
@@ -122,6 +123,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.11",
+    "@grammyjs/types": "^3.23.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@mariozechner/mini-lit": "0.2.1",

@@ -134,6 +134,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.3.11
         version: 2.3.11
+      '@grammyjs/types':
+        specifier: ^3.23.0
+        version: 3.23.0
       '@lit-labs/signals':
         specifier: ^0.2.0
         version: 0.2.0

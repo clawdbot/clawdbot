@@ -5,7 +5,6 @@ import { sendMessageIMessage } from "../../imessage/index.js";
 import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
-import { resolveTelegramToken } from "../../telegram/token.js";
 import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import { resolveDefaultWhatsAppAccountId } from "../../web/accounts.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
@@ -53,14 +52,16 @@ export const sendHandlers: GatewayRequestHandlers = {
     const to = request.to.trim();
     const message = request.message.trim();
     const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
+    const accountId =
+      typeof request.accountId === "string" && request.accountId.trim().length
+        ? request.accountId.trim()
+        : undefined;
     try {
       if (provider === "telegram") {
-        const cfg = loadConfig();
-        const { token } = resolveTelegramToken(cfg);
         const result = await sendMessageTelegram(to, message, {
           mediaUrl: request.mediaUrl,
           verbose: shouldLogVerbose(),
-          token: token || undefined,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -77,7 +78,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       } else if (provider === "discord") {
         const result = await sendMessageDiscord(to, message, {
           mediaUrl: request.mediaUrl,
-          token: process.env.DISCORD_BOT_TOKEN,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -94,6 +95,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       } else if (provider === "slack") {
         const result = await sendMessageSlack(to, message, {
           mediaUrl: request.mediaUrl,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -108,14 +110,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         respond(true, payload, undefined, { provider });
       } else if (provider === "signal") {
-        const cfg = loadConfig();
-        const host = cfg.signal?.httpHost?.trim() || "127.0.0.1";
-        const port = cfg.signal?.httpPort ?? 8080;
-        const baseUrl = cfg.signal?.httpUrl?.trim() || `http://${host}:${port}`;
         const result = await sendMessageSignal(to, message, {
           mediaUrl: request.mediaUrl,
-          baseUrl,
-          account: cfg.signal?.account,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -129,14 +126,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         respond(true, payload, undefined, { provider });
       } else if (provider === "imessage") {
-        const cfg = loadConfig();
         const result = await sendMessageIMessage(to, message, {
           mediaUrl: request.mediaUrl,
-          cliPath: cfg.imessage?.cliPath,
-          dbPath: cfg.imessage?.dbPath,
-          maxBytes: cfg.imessage?.mediaMaxMb
-            ? cfg.imessage.mediaMaxMb * 1024 * 1024
-            : undefined,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -151,16 +143,13 @@ export const sendHandlers: GatewayRequestHandlers = {
         respond(true, payload, undefined, { provider });
       } else {
         const cfg = loadConfig();
-        const accountId =
-          typeof request.accountId === "string" &&
-          request.accountId.trim().length > 0
-            ? request.accountId.trim()
-            : resolveDefaultWhatsAppAccountId(cfg);
+        const targetAccountId =
+          accountId ?? resolveDefaultWhatsAppAccountId(cfg);
         const result = await sendMessageWhatsApp(to, message, {
           mediaUrl: request.mediaUrl,
           verbose: shouldLogVerbose(),
           gifPlayback: request.gifPlayback,
-          accountId,
+          accountId: targetAccountId,
         });
         const payload = {
           runId: idem,
@@ -238,9 +227,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       maxSelections: request.maxSelections,
       durationHours: request.durationHours,
     };
+    const accountId =
+      typeof request.accountId === "string" && request.accountId.trim().length
+        ? request.accountId.trim()
+        : undefined;
     try {
       if (provider === "discord") {
-        const result = await sendPollDiscord(to, poll);
+        const result = await sendPollDiscord(to, poll, { accountId });
         const payload = {
           runId: idem,
           messageId: result.messageId,

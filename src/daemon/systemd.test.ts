@@ -1,43 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runExec } from "../process/exec.js";
-import { readSystemdUserLingerStatus } from "./systemd.js";
+import { describe, expect, it } from "vitest";
 
-vi.mock("../process/exec.js", () => ({
-  runExec: vi.fn(),
-  runCommandWithTimeout: vi.fn(),
-}));
+import { parseSystemdShow } from "./systemd.js";
 
-const runExecMock = vi.mocked(runExec);
-
-describe("readSystemdUserLingerStatus", () => {
-  beforeEach(() => {
-    runExecMock.mockReset();
-  });
-
-  it("returns yes when loginctl reports Linger=yes", async () => {
-    runExecMock.mockResolvedValue({
-      stdout: "Linger=yes\n",
-      stderr: "",
+describe("systemd runtime parsing", () => {
+  it("parses active state details", () => {
+    const output = [
+      "ActiveState=inactive",
+      "SubState=dead",
+      "MainPID=0",
+      "ExecMainStatus=2",
+      "ExecMainCode=exited",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "inactive",
+      subState: "dead",
+      execMainStatus: 2,
+      execMainCode: "exited",
     });
-    const result = await readSystemdUserLingerStatus({ USER: "tobi" });
-    expect(result).toEqual({ user: "tobi", linger: "yes" });
-  });
-
-  it("returns no when loginctl reports Linger=no", async () => {
-    runExecMock.mockResolvedValue({
-      stdout: "Linger=no\n",
-      stderr: "",
-    });
-    const result = await readSystemdUserLingerStatus({ USER: "tobi" });
-    expect(result).toEqual({ user: "tobi", linger: "no" });
-  });
-
-  it("returns null when Linger is missing", async () => {
-    runExecMock.mockResolvedValue({
-      stdout: "UID=1000\n",
-      stderr: "",
-    });
-    const result = await readSystemdUserLingerStatus({ USER: "tobi" });
-    expect(result).toBeNull();
   });
 });

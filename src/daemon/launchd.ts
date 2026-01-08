@@ -7,6 +7,7 @@ import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
 } from "./constants.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
 function resolveHomeDir(env: Record<string, string | undefined>): string {
@@ -196,11 +197,87 @@ function resolveGuiDomain(): string {
   return `gui/${process.getuid()}`;
 }
 
+export type LaunchctlPrintInfo = {
+  state?: string;
+  pid?: number;
+  lastExitStatus?: number;
+  lastExitReason?: string;
+};
+
+export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
+  const info: LaunchctlPrintInfo = {};
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = line.match(/^([a-zA-Z\s]+?)\s*=\s*(.+)$/);
+    if (!match) continue;
+    const key = match[1]?.trim().toLowerCase();
+    const value = match[2]?.trim();
+    if (!key || value === undefined) continue;
+    if (key === "state") {
+      info.state = value;
+    } else if (key === "pid") {
+      const pid = Number.parseInt(value, 10);
+      if (Number.isFinite(pid)) info.pid = pid;
+    } else if (key === "last exit status") {
+      const status = Number.parseInt(value, 10);
+      if (Number.isFinite(status)) info.lastExitStatus = status;
+    } else if (key === "last exit reason") {
+      info.lastExitReason = value;
+    }
+  }
+  return info;
+}
+
 export async function isLaunchAgentLoaded(): Promise<boolean> {
   const domain = resolveGuiDomain();
   const label = GATEWAY_LAUNCH_AGENT_LABEL;
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
+}
+
+async function hasLaunchAgentPlist(
+  env: Record<string, string | undefined>,
+): Promise<boolean> {
+  const plistPath = resolveLaunchAgentPlistPath(env);
+  try {
+    await fs.access(plistPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function readLaunchAgentRuntime(
+  env: Record<string, string | undefined>,
+): Promise<GatewayServiceRuntime> {
+  const domain = resolveGuiDomain();
+  const label = GATEWAY_LAUNCH_AGENT_LABEL;
+  const res = await execLaunchctl(["print", `${domain}/${label}`]);
+  if (res.code !== 0) {
+    return {
+      status: "unknown",
+      detail: (res.stderr || res.stdout).trim() || undefined,
+      missingUnit: true,
+    };
+  }
+  const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
+  const plistExists = await hasLaunchAgentPlist(env);
+  const state = parsed.state?.toLowerCase();
+  const status =
+    state === "running" || parsed.pid
+      ? "running"
+      : state
+        ? "stopped"
+        : "unknown";
+  return {
+    status,
+    state: parsed.state,
+    pid: parsed.pid,
+    lastExitStatus: parsed.lastExitStatus,
+    lastExitReason: parsed.lastExitReason,
+    cachedLabel: !plistExists,
+  };
 }
 
 export type LegacyLaunchAgent = {

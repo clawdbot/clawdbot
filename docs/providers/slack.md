@@ -22,6 +22,8 @@ read_when: "Setting up Slack or debugging Slack socket mode"
 
 Use the manifest below so scopes and events stay in sync.
 
+Multi-account support: use `slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
 ## Manifest (optional)
 Use this Slack app manifest to create the app quickly (adjust the name/command if you want).
 
@@ -167,6 +169,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     },
     "reactionNotifications": "own",
     "reactionAllowlist": ["U123"],
+    "replyToMode": "off",
     "actions": {
       "reactions": true,
       "messages": true,
@@ -192,6 +195,14 @@ Tokens can also be supplied via env vars:
 
 Ack reactions are controlled globally via `messages.ackReaction` +
 `messages.ackReactionScope`.
+
+## Reply threading
+Slack supports optional threaded replies via tags:
+- `[[reply_to_current]]` — reply to the triggering message.
+- `[[reply_to:<id>]]` — reply to a specific message id.
+
+Controlled by `slack.replyToMode`:
+- `off` (default), `first`, `all`.
 
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).

@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
+import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import {
   formatIMessageChatTarget,
@@ -14,6 +15,7 @@ export type IMessageSendOpts = {
   dbPath?: string;
   service?: IMessageService;
   region?: string;
+  accountId?: string;
   mediaUrl?: string;
   maxBytes?: number;
   timeoutMs?: number;
@@ -24,28 +26,6 @@ export type IMessageSendOpts = {
 export type IMessageSendResult = {
   messageId: string;
 };
-
-function resolveCliPath(explicit?: string): string {
-  const cfg = loadConfig();
-  return explicit?.trim() || cfg.imessage?.cliPath?.trim() || "imsg";
-}
-
-function resolveDbPath(explicit?: string): string | undefined {
-  const cfg = loadConfig();
-  return explicit?.trim() || cfg.imessage?.dbPath?.trim() || undefined;
-}
-
-function resolveService(explicit?: IMessageService): IMessageService {
-  const cfg = loadConfig();
-  return (
-    explicit || (cfg.imessage?.service as IMessageService | undefined) || "auto"
-  );
-}
-
-function resolveRegion(explicit?: string): string {
-  const cfg = loadConfig();
-  return explicit?.trim() || cfg.imessage?.region?.trim() || "US";
-}
 
 async function resolveAttachment(
   mediaUrl: string,
@@ -66,15 +46,28 @@ export async function sendMessageIMessage(
   text: string,
   opts: IMessageSendOpts = {},
 ): Promise<IMessageSendResult> {
-  const cliPath = resolveCliPath(opts.cliPath);
-  const dbPath = resolveDbPath(opts.dbPath);
+  const cfg = loadConfig();
+  const account = resolveIMessageAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const cliPath =
+    opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
+  const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
   const target = parseIMessageTarget(
     opts.chatId ? formatIMessageChatTarget(opts.chatId) : to,
   );
   const service =
-    opts.service ?? (target.kind === "handle" ? target.service : undefined);
-  const region = resolveRegion(opts.region);
-  const maxBytes = opts.maxBytes ?? 16 * 1024 * 1024;
+    opts.service ??
+    (target.kind === "handle" ? target.service : undefined) ??
+    (account.config.service as IMessageService | undefined);
+  const region = opts.region?.trim() || account.config.region?.trim() || "US";
+  const maxBytes =
+    typeof opts.maxBytes === "number"
+      ? opts.maxBytes
+      : typeof account.config.mediaMaxMb === "number"
+        ? account.config.mediaMaxMb * 1024 * 1024
+        : 16 * 1024 * 1024;
   let message = text ?? "";
   let filePath: string | undefined;
 
@@ -94,7 +87,7 @@ export async function sendMessageIMessage(
 
   const params: Record<string, unknown> = {
     text: message,
-    service: resolveService(service),
+    service: (service || "auto") as IMessageService,
     region,
   };
   if (filePath) params.file = filePath;

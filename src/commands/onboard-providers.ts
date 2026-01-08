@@ -2,13 +2,38 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
+import {
+  listDiscordAccountIds,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccount,
+} from "../discord/accounts.js";
+import {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+} from "../imessage/accounts.js";
 import { loginWeb } from "../provider-web.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeE164 } from "../utils.js";
+import {
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+} from "../signal/accounts.js";
+import {
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+} from "../slack/accounts.js";
+import {
+  listTelegramAccountIds,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+} from "../telegram/accounts.js";
+import { formatTerminalLink, normalizeE164 } from "../utils.js";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
@@ -18,6 +43,53 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { ProviderChoice } from "./onboard-types.js";
 import { installSignalCli } from "./signal-install.js";
+
+const DOCS_BASE = "https://docs.clawd.bot";
+
+function docsLink(path: string, label?: string): string {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const url = `${DOCS_BASE}${cleanPath}`;
+  return formatTerminalLink(label ?? url, url, { fallback: url });
+}
+
+async function promptAccountId(params: {
+  cfg: ClawdbotConfig;
+  prompter: WizardPrompter;
+  label: string;
+  currentId?: string;
+  listAccountIds: (cfg: ClawdbotConfig) => string[];
+  defaultAccountId: string;
+}): Promise<string> {
+  const existingIds = params.listAccountIds(params.cfg);
+  const initial =
+    params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
+  const choice = (await params.prompter.select({
+    message: `${params.label} account`,
+    options: [
+      ...existingIds.map((id) => ({
+        value: id,
+        label: id === DEFAULT_ACCOUNT_ID ? "default (primary)" : id,
+      })),
+      { value: "__new__", label: "Add a new account" },
+    ],
+    initialValue: initial,
+  })) as string;
+
+  if (choice !== "__new__") return normalizeAccountId(choice);
+
+  const entered = await params.prompter.text({
+    message: `New ${params.label} account id`,
+    validate: (value) => (value?.trim() ? undefined : "Required"),
+  });
+  const normalized = normalizeAccountId(String(entered));
+  if (String(entered).trim() !== normalized) {
+    await params.prompter.note(
+      `Normalized account id to "${normalized}".`,
+      `${params.label} account`,
+    );
+  }
+  return normalized;
+}
 
 function addWildcardAllowFrom(
   allowFrom?: Array<string | number> | null,
@@ -51,13 +123,13 @@ async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
       "DM security: default is pairing; unknown DMs get a pairing code.",
       "Approve with: clawdbot pairing approve --provider <provider> <code>",
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
-      "Docs: https://docs.clawd.bot/start/pairing",
+      `Docs: ${docsLink("/start/pairing", "start/pairing")}`,
       "",
-      "Telegram: easiest start — register a bot with @BotFather, paste token, go.",
+      "Telegram: simplest way to get started — register a bot with @BotFather and get going.",
       "WhatsApp: works with your own number; recommend a separate phone + eSIM.",
       "Discord: very well supported right now.",
       "Slack: supported (Socket Mode).",
-      "Signal: signal-cli linked device; more setup (if you want easy, hop on Discord).",
+      'Signal: signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
       "iMessage: this is still a work in progress.",
     ].join("\n"),
     "How providers work",
@@ -71,7 +143,7 @@ async function noteTelegramTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Run /newbot (or /mybots)",
       "3) Copy the token (looks like 123456:ABC...)",
       "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
-      "Docs: https://docs.clawd.bot/telegram",
+      `Docs: ${docsLink("/telegram", "telegram")}`,
     ].join("\n"),
     "Telegram bot token",
   );
@@ -84,7 +156,7 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Bot → Add Bot → Reset Token → copy token",
       "3) OAuth2 → URL Generator → scope 'bot' → invite to your server",
       "Tip: enable Message Content Intent if you need message text.",
-      "Docs: https://docs.clawd.bot/discord",
+      `Docs: ${docsLink("/discord", "discord")}`,
     ].join("\n"),
     "Discord bot token",
   );
@@ -172,7 +244,7 @@ async function noteSlackTokenHelp(
       "4) Enable Event Subscriptions (socket) for message events",
       "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
-      "Docs: https://docs.clawd.bot/slack",
+      `Docs: ${docsLink("/slack", "slack")}`,
       "",
       "Manifest (JSON):",
       manifest,
@@ -345,7 +417,7 @@ async function maybeConfigureDmPolicies(params: {
         "Default: pairing (unknown DMs get a pairing code).",
         `Approve: clawdbot pairing approve --provider ${params.provider} <code>`,
         `Public DMs: ${params.policyKey}="open" + ${params.allowFromKey} includes "*".`,
-        "Docs: https://docs.clawd.bot/start/pairing",
+        `Docs: ${docsLink("/start/pairing", "start/pairing")}`,
       ].join("\n"),
       `${params.label} DM access`,
     );
@@ -432,7 +504,7 @@ async function promptWhatsAppAllowFrom(
       "- disabled: ignore WhatsApp DMs",
       "",
       `Current: dmPolicy=${existingPolicy}, allowFrom=${existingLabel}`,
-      "Docs: https://docs.clawd.bot/whatsapp",
+      `Docs: ${docsLink("/whatsapp", "whatsapp")}`,
     ].join("\n"),
     "WhatsApp DM access",
   );
@@ -567,6 +639,9 @@ type SetupProvidersOptions = {
   allowDisable?: boolean;
   allowSignalInstall?: boolean;
   onSelection?: (selection: ProviderChoice[]) => void;
+  accountIds?: Partial<Record<ProviderChoice, string>>;
+  onAccountId?: (provider: ProviderChoice, accountId: string) => void;
+  promptAccountIds?: boolean;
   whatsappAccountId?: string;
   promptWhatsAppAccountId?: boolean;
   onWhatsAppAccountId?: (accountId: string) => void;
@@ -585,22 +660,31 @@ export async function setupProviders(
   const discordEnv = Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
   const slackBotEnv = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
   const slackAppEnv = Boolean(process.env.SLACK_APP_TOKEN?.trim());
-  const telegramConfigured = Boolean(
-    telegramEnv || cfg.telegram?.botToken || cfg.telegram?.tokenFile,
+  const telegramConfigured = listTelegramAccountIds(cfg).some((accountId) =>
+    Boolean(resolveTelegramAccount({ cfg, accountId }).token),
   );
-  const discordConfigured = Boolean(discordEnv || cfg.discord?.token);
-  const slackConfigured = Boolean(
-    (slackBotEnv && slackAppEnv) ||
-      (cfg.slack?.botToken && cfg.slack?.appToken),
+  const discordConfigured = listDiscordAccountIds(cfg).some((accountId) =>
+    Boolean(resolveDiscordAccount({ cfg, accountId }).token),
   );
-  const signalConfigured = Boolean(
-    cfg.signal?.account || cfg.signal?.httpUrl || cfg.signal?.httpPort,
+  const slackConfigured = listSlackAccountIds(cfg).some((accountId) => {
+    const account = resolveSlackAccount({ cfg, accountId });
+    return Boolean(account.botToken && account.appToken);
+  });
+  const signalConfigured = listSignalAccountIds(cfg).some(
+    (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
   );
   const signalCliPath = cfg.signal?.cliPath ?? "signal-cli";
   const signalCliDetected = await detectBinary(signalCliPath);
-  const imessageConfigured = Boolean(
-    cfg.imessage?.cliPath || cfg.imessage?.dbPath || cfg.imessage?.allowFrom,
-  );
+  const imessageConfigured = listIMessageAccountIds(cfg).some((accountId) => {
+    const account = resolveIMessageAccount({ cfg, accountId });
+    return Boolean(
+      account.config.cliPath ||
+        account.config.dbPath ||
+        account.config.allowFrom ||
+        account.config.service ||
+        account.config.region,
+    );
+  });
   const imessageCliPath = cfg.imessage?.cliPath ?? "imsg";
   const imessageCliDetected = await detectBinary(imessageCliPath);
 
@@ -635,8 +719,8 @@ export async function setupProviders(
         value: "telegram",
         label: "Telegram (Bot API)",
         hint: telegramConfigured
-          ? "easy start · configured"
-          : "easy start · needs token",
+          ? "recommended · configured"
+          : "recommended · newcomer-friendly",
       },
       {
         value: "whatsapp",
@@ -667,20 +751,26 @@ export async function setupProviders(
   })) as ProviderChoice[];
 
   options?.onSelection?.(selection);
+  const accountOverrides: Partial<Record<ProviderChoice, string>> = {
+    ...options?.accountIds,
+  };
+  if (options?.whatsappAccountId?.trim()) {
+    accountOverrides.whatsapp = options.whatsappAccountId.trim();
+  }
+  const recordAccount = (provider: ProviderChoice, accountId: string) => {
+    options?.onAccountId?.(provider, accountId);
+    if (provider === "whatsapp") {
+      options?.onWhatsAppAccountId?.(accountId);
+    }
+  };
 
   const selectionNotes: Record<ProviderChoice, string> = {
-    telegram:
-      "Telegram — easiest start: register a bot with @BotFather and paste the token. Docs: https://docs.clawd.bot/telegram",
-    whatsapp:
-      "WhatsApp — works with your own number; recommend a separate phone + eSIM. Docs: https://docs.clawd.bot/whatsapp",
-    discord:
-      "Discord — very well supported right now. Docs: https://docs.clawd.bot/discord",
-    slack:
-      "Slack — supported (Socket Mode). Docs: https://docs.clawd.bot/slack",
-    signal:
-      "Signal — signal-cli linked device; more setup (if you want easy, hop on Discord). Docs: https://docs.clawd.bot/signal",
-    imessage:
-      "iMessage — this is still a work in progress. Docs: https://docs.clawd.bot/imessage",
+    telegram: `Telegram — simplest way to get started: register a bot with @BotFather and get going. Docs: ${docsLink("/telegram", "telegram")}`,
+    whatsapp: `WhatsApp — works with your own number; recommend a separate phone + eSIM. Docs: ${docsLink("/whatsapp", "whatsapp")}`,
+    discord: `Discord — very well supported right now. Docs: ${docsLink("/discord", "discord")}`,
+    slack: `Slack — supported (Socket Mode). Docs: ${docsLink("/slack", "slack")}`,
+    signal: `Signal — signal-cli linked device; more setup (David Reagans: "Hop on Discord."). Docs: ${docsLink("/signal", "signal")}`,
+    imessage: `iMessage — this is still a work in progress. Docs: ${docsLink("/imessage", "imessage")}`,
   };
   const selectedLines = selection
     .map((provider) => selectionNotes[provider])
@@ -689,38 +779,23 @@ export async function setupProviders(
     await prompter.note(selectedLines.join("\n"), "Selected providers");
   }
 
+  const shouldPromptAccountIds = options?.promptAccountIds === true;
+
   let next = cfg;
 
   if (selection.includes("whatsapp")) {
-    if (options?.promptWhatsAppAccountId && !options.whatsappAccountId) {
-      const existingIds = listWhatsAppAccountIds(next);
-      const choice = (await prompter.select({
-        message: "WhatsApp account",
-        options: [
-          ...existingIds.map((id) => ({
-            value: id,
-            label: id === DEFAULT_ACCOUNT_ID ? "default (primary)" : id,
-          })),
-          { value: "__new__", label: "Add a new account" },
-        ],
-      })) as string;
-
-      if (choice === "__new__") {
-        const entered = await prompter.text({
-          message: "New WhatsApp account id",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        });
-        const normalized = normalizeAccountId(String(entered));
-        if (String(entered).trim() !== normalized) {
-          await prompter.note(
-            `Normalized account id to "${normalized}".`,
-            "WhatsApp account",
-          );
-        }
-        whatsappAccountId = normalized;
-      } else {
-        whatsappAccountId = choice;
-      }
+    const overrideId = accountOverrides.whatsapp?.trim();
+    if (overrideId) {
+      whatsappAccountId = normalizeAccountId(overrideId);
+    } else if (shouldPromptAccountIds || options?.promptWhatsAppAccountId) {
+      whatsappAccountId = await promptAccountId({
+        cfg: next,
+        prompter,
+        label: "WhatsApp",
+        currentId: whatsappAccountId,
+        listAccountIds: listWhatsAppAccountIds,
+        defaultAccountId: resolveDefaultWhatsAppAccountId(next),
+      });
     }
 
     if (whatsappAccountId !== DEFAULT_ACCOUNT_ID) {
@@ -740,7 +815,7 @@ export async function setupProviders(
       };
     }
 
-    options?.onWhatsAppAccountId?.(whatsappAccountId);
+    recordAccount("whatsapp", whatsappAccountId);
     whatsappLinked = await detectWhatsAppLinked(next, whatsappAccountId);
     const { authDir } = resolveWhatsAppAuthDir({
       cfg: next,
@@ -752,7 +827,7 @@ export async function setupProviders(
         [
           "Scan the QR with WhatsApp on your phone.",
           `Credentials are stored under ${authDir}/ for future runs.`,
-          "Docs: https://docs.clawd.bot/whatsapp",
+          `Docs: ${docsLink("/whatsapp", "whatsapp")}`,
         ].join("\n"),
         "WhatsApp linking",
       );
@@ -769,7 +844,7 @@ export async function setupProviders(
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
         await prompter.note(
-          "Docs: https://docs.clawd.bot/whatsapp",
+          `Docs: ${docsLink("/whatsapp", "whatsapp")}`,
           "WhatsApp help",
         );
       }
@@ -784,11 +859,39 @@ export async function setupProviders(
   }
 
   if (selection.includes("telegram")) {
+    const telegramOverride = accountOverrides.telegram?.trim();
+    const defaultTelegramAccountId = resolveDefaultTelegramAccountId(next);
+    let telegramAccountId = telegramOverride
+      ? normalizeAccountId(telegramOverride)
+      : defaultTelegramAccountId;
+    if (shouldPromptAccountIds && !telegramOverride) {
+      telegramAccountId = await promptAccountId({
+        cfg: next,
+        prompter,
+        label: "Telegram",
+        currentId: telegramAccountId,
+        listAccountIds: listTelegramAccountIds,
+        defaultAccountId: defaultTelegramAccountId,
+      });
+    }
+    recordAccount("telegram", telegramAccountId);
+
+    const resolvedAccount = resolveTelegramAccount({
+      cfg: next,
+      accountId: telegramAccountId,
+    });
+    const accountConfigured = Boolean(resolvedAccount.token);
+    const allowEnv = telegramAccountId === DEFAULT_ACCOUNT_ID;
+    const canUseEnv = allowEnv && telegramEnv;
+    const hasConfigToken = Boolean(
+      resolvedAccount.config.botToken || resolvedAccount.config.tokenFile,
+    );
+
     let token: string | null = null;
-    if (!telegramConfigured) {
+    if (!accountConfigured) {
       await noteTelegramTokenHelp(prompter);
     }
-    if (telegramEnv && !cfg.telegram?.botToken) {
+    if (canUseEnv && !resolvedAccount.config.botToken) {
       const keepEnv = await prompter.confirm({
         message: "TELEGRAM_BOT_TOKEN detected. Use env var?",
         initialValue: true,
@@ -809,7 +912,7 @@ export async function setupProviders(
           }),
         ).trim();
       }
-    } else if (cfg.telegram?.botToken) {
+    } else if (hasConfigToken) {
       const keep = await prompter.confirm({
         message: "Telegram token already configured. Keep it?",
         initialValue: true,
@@ -832,23 +935,68 @@ export async function setupProviders(
     }
 
     if (token) {
-      next = {
-        ...next,
-        telegram: {
-          ...next.telegram,
-          enabled: true,
-          botToken: token,
-        },
-      };
+      if (telegramAccountId === DEFAULT_ACCOUNT_ID) {
+        next = {
+          ...next,
+          telegram: {
+            ...next.telegram,
+            enabled: true,
+            botToken: token,
+          },
+        };
+      } else {
+        next = {
+          ...next,
+          telegram: {
+            ...next.telegram,
+            enabled: true,
+            accounts: {
+              ...next.telegram?.accounts,
+              [telegramAccountId]: {
+                ...next.telegram?.accounts?.[telegramAccountId],
+                enabled:
+                  next.telegram?.accounts?.[telegramAccountId]?.enabled ?? true,
+                botToken: token,
+              },
+            },
+          },
+        };
+      }
     }
   }
 
   if (selection.includes("discord")) {
+    const discordOverride = accountOverrides.discord?.trim();
+    const defaultDiscordAccountId = resolveDefaultDiscordAccountId(next);
+    let discordAccountId = discordOverride
+      ? normalizeAccountId(discordOverride)
+      : defaultDiscordAccountId;
+    if (shouldPromptAccountIds && !discordOverride) {
+      discordAccountId = await promptAccountId({
+        cfg: next,
+        prompter,
+        label: "Discord",
+        currentId: discordAccountId,
+        listAccountIds: listDiscordAccountIds,
+        defaultAccountId: defaultDiscordAccountId,
+      });
+    }
+    recordAccount("discord", discordAccountId);
+
+    const resolvedAccount = resolveDiscordAccount({
+      cfg: next,
+      accountId: discordAccountId,
+    });
+    const accountConfigured = Boolean(resolvedAccount.token);
+    const allowEnv = discordAccountId === DEFAULT_ACCOUNT_ID;
+    const canUseEnv = allowEnv && discordEnv;
+    const hasConfigToken = Boolean(resolvedAccount.config.token);
+
     let token: string | null = null;
-    if (!discordConfigured) {
+    if (!accountConfigured) {
       await noteDiscordTokenHelp(prompter);
     }
-    if (discordEnv && !cfg.discord?.token) {
+    if (canUseEnv && !resolvedAccount.config.token) {
       const keepEnv = await prompter.confirm({
         message: "DISCORD_BOT_TOKEN detected. Use env var?",
         initialValue: true,
@@ -869,7 +1017,7 @@ export async function setupProviders(
           }),
         ).trim();
       }
-    } else if (cfg.discord?.token) {
+    } else if (hasConfigToken) {
       const keep = await prompter.confirm({
         message: "Discord token already configured. Keep it?",
         initialValue: true,
@@ -892,18 +1040,67 @@ export async function setupProviders(
     }
 
     if (token) {
-      next = {
-        ...next,
-        discord: {
-          ...next.discord,
-          enabled: true,
-          token,
-        },
-      };
+      if (discordAccountId === DEFAULT_ACCOUNT_ID) {
+        next = {
+          ...next,
+          discord: {
+            ...next.discord,
+            enabled: true,
+            token,
+          },
+        };
+      } else {
+        next = {
+          ...next,
+          discord: {
+            ...next.discord,
+            enabled: true,
+            accounts: {
+              ...next.discord?.accounts,
+              [discordAccountId]: {
+                ...next.discord?.accounts?.[discordAccountId],
+                enabled:
+                  next.discord?.accounts?.[discordAccountId]?.enabled ?? true,
+                token,
+              },
+            },
+          },
+        };
+      }
     }
   }
 
   if (selection.includes("slack")) {
+    const slackOverride = accountOverrides.slack?.trim();
+    const defaultSlackAccountId = resolveDefaultSlackAccountId(next);
+    let slackAccountId = slackOverride
+      ? normalizeAccountId(slackOverride)
+      : defaultSlackAccountId;
+    if (shouldPromptAccountIds && !slackOverride) {
+      slackAccountId = await promptAccountId({
+        cfg: next,
+        prompter,
+        label: "Slack",
+        currentId: slackAccountId,
+        listAccountIds: listSlackAccountIds,
+        defaultAccountId: defaultSlackAccountId,
+      });
+    }
+    recordAccount("slack", slackAccountId);
+
+    const resolvedAccount = resolveSlackAccount({
+      cfg: next,
+      accountId: slackAccountId,
+    });
+    const accountConfigured = Boolean(
+      resolvedAccount.botToken && resolvedAccount.appToken,
+    );
+    const allowEnv = slackAccountId === DEFAULT_ACCOUNT_ID;
+    const canUseEnv = allowEnv && slackBotEnv && slackAppEnv;
+    const hasConfigTokens = Boolean(
+      resolvedAccount.config.botToken && resolvedAccount.config.appToken,
+    );
+
     let botToken: string | null = null;
     let appToken: string | null = null;
     const slackBotName = String(
@@ -912,13 +1109,12 @@ export async function setupProviders(
         initialValue: "Clawdbot",
       }),
     ).trim();
-    if (!slackConfigured) {
+    if (!accountConfigured) {
       await noteSlackTokenHelp(prompter, slackBotName);
     }
     if (
-      slackBotEnv &&
-      slackAppEnv &&
-      (!cfg.slack?.botToken || !cfg.slack?.appToken)
+      canUseEnv &&
+      (!resolvedAccount.config.botToken || !resolvedAccount.config.appToken)
     ) {
       const keepEnv = await prompter.confirm({
         message: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
@@ -946,7 +1142,7 @@ export async function setupProviders(
           }),
         ).trim();
       }
-    } else if (cfg.slack?.botToken && cfg.slack?.appToken) {
+    } else if (hasConfigTokens) {
       const keep = await prompter.confirm({
         message: "Slack tokens already configured. Keep them?",
         initialValue: true,
@@ -981,21 +1177,63 @@ export async function setupProviders(
     }
 
     if (botToken && appToken) {
-      next = {
-        ...next,
-        slack: {
-          ...next.slack,
-          enabled: true,
-          botToken,
-          appToken,
-        },
-      };
+      if (slackAccountId === DEFAULT_ACCOUNT_ID) {
+        next = {
+          ...next,
+          slack: {
+            ...next.slack,
+            enabled: true,
+            botToken,
+            appToken,
+          },
+        };
+      } else {
+        next = {
+          ...next,
+          slack: {
+            ...next.slack,
+            enabled: true,
+            accounts: {
+              ...next.slack?.accounts,
+              [slackAccountId]: {
+                ...next.slack?.accounts?.[slackAccountId],
+                enabled:
+                  next.slack?.accounts?.[slackAccountId]?.enabled ?? true,
+                botToken,
+                appToken,
+              },
+            },
+          },
+        };
+      }
     }
   }
 
   if (selection.includes("signal")) {
-    let resolvedCliPath = signalCliPath;
-    let cliDetected = signalCliDetected;
+    const signalOverride = accountOverrides.signal?.trim();
+    const defaultSignalAccountId = resolveDefaultSignalAccountId(next);
+    let signalAccountId = signalOverride
+      ? normalizeAccountId(signalOverride)
+      : defaultSignalAccountId;
+    if (shouldPromptAccountIds && !signalOverride) {
+      signalAccountId = await promptAccountId({
+        cfg: next,
+        prompter,
+        label: "Signal",
+        currentId: signalAccountId,
+        listAccountIds: listSignalAccountIds,
+        defaultAccountId: defaultSignalAccountId,
+      });
+    }
+    recordAccount("signal", signalAccountId);
+
+    const resolvedAccount = resolveSignalAccount({
+      cfg: next,
+      accountId: signalAccountId,
+    });
+    const accountConfig = resolvedAccount.config;
+    let resolvedCliPath = accountConfig.cliPath ?? signalCliPath;
+    let cliDetected = await detectBinary(resolvedCliPath);
     if (options?.allowSignalInstall) {
       const wantsInstall = await prompter.confirm({
         message: cliDetected
@@ -1035,7 +1273,7 @@ export async function setupProviders(
       );
     }
 
-    let account = cfg.signal?.account ?? "";
+    let account = accountConfig.account ?? "";
     if (account) {
       const keep = await prompter.confirm({
         message: `Signal account set (${account}). Keep it?`,
@@ -1054,15 +1292,35 @@ export async function setupProviders(
     }
 
     if (account) {
-      next = {
-        ...next,
-        signal: {
-          ...next.signal,
-          enabled: true,
-          account,
-          cliPath: resolvedCliPath ?? "signal-cli",
-        },
-      };
+      if (signalAccountId === DEFAULT_ACCOUNT_ID) {
+        next = {
+          ...next,
+          signal: {
+            ...next.signal,
+            enabled: true,
+            account,
+            cliPath: resolvedCliPath ?? "signal-cli",
+          },
+        };
+      } else {
+        next = {
+          ...next,
+          signal: {
+            ...next.signal,
+            enabled: true,
+            accounts: {
+              ...next.signal?.accounts,
+              [signalAccountId]: {
+                ...next.signal?.accounts?.[signalAccountId],
+                enabled:
+                  next.signal?.accounts?.[signalAccountId]?.enabled ?? true,
+                account,
+                cliPath: resolvedCliPath ?? "signal-cli",
+              },
+            },
+          },
+        };
+      }
     }
 
     await prompter.note(
@@ -1070,15 +1328,37 @@ export async function setupProviders(
         'Link device with: signal-cli link -n "Clawdbot"',
         "Scan QR in Signal → Linked Devices",
         "Then run: clawdbot gateway call providers.status --params '{\"probe\":true}'",
-        "Docs: https://docs.clawd.bot/signal",
+        `Docs: ${docsLink("/signal", "signal")}`,
       ].join("\n"),
       "Signal next steps",
     );
   }
 
   if (selection.includes("imessage")) {
-    let resolvedCliPath = imessageCliPath;
-    if (!imessageCliDetected) {
+    const imessageOverride = accountOverrides.imessage?.trim();
+    const defaultIMessageAccountId = resolveDefaultIMessageAccountId(next);
+    let imessageAccountId = imessageOverride
+      ? normalizeAccountId(imessageOverride)
+      : defaultIMessageAccountId;
+    if (shouldPromptAccountIds && !imessageOverride) {
+      imessageAccountId = await promptAccountId({
+        cfg: next,
+        prompter,
+        label: "iMessage",
+        currentId: imessageAccountId,
+        listAccountIds: listIMessageAccountIds,
+        defaultAccountId: defaultIMessageAccountId,
+      });
+    }
+    recordAccount("imessage", imessageAccountId);
+
+    const resolvedAccount = resolveIMessageAccount({
+      cfg: next,
+      accountId: imessageAccountId,
+    });
+    let resolvedCliPath = resolvedAccount.config.cliPath ?? imessageCliPath;
+    const cliDetected = await detectBinary(resolvedCliPath);
+    if (!cliDetected) {
       const entered = await prompter.text({
         message: "imsg CLI path",
         initialValue: resolvedCliPath,
@@ -1094,14 +1374,33 @@ export async function setupProviders(
     }
 
     if (resolvedCliPath) {
-      next = {
-        ...next,
-        imessage: {
-          ...next.imessage,
-          enabled: true,
-          cliPath: resolvedCliPath,
-        },
-      };
+      if (imessageAccountId === DEFAULT_ACCOUNT_ID) {
+        next = {
+          ...next,
+          imessage: {
+            ...next.imessage,
+            enabled: true,
+            cliPath: resolvedCliPath,
+          },
+        };
+      } else {
+        next = {
+          ...next,
+          imessage: {
+            ...next.imessage,
+            enabled: true,
+            accounts: {
+              ...next.imessage?.accounts,
+              [imessageAccountId]: {
+                ...next.imessage?.accounts?.[imessageAccountId],
+                enabled:
+                  next.imessage?.accounts?.[imessageAccountId]?.enabled ?? true,
+                cliPath: resolvedCliPath,
+              },
+            },
+          },
+        };
+      }
     }
 
     await prompter.note(
@@ -1110,7 +1409,7 @@ export async function setupProviders(
         "Ensure Clawdbot has Full Disk Access to Messages DB.",
         "Grant Automation permission for Messages when prompted.",
         "List chats with: imsg chats --limit 20",
-        "Docs: https://docs.clawd.bot/imessage",
+        `Docs: ${docsLink("/imessage", "imessage")}`,
       ].join("\n"),
       "iMessage next steps",
     );

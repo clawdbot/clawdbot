@@ -7,6 +7,7 @@ import {
   GATEWAY_WINDOWS_TASK_NAME,
   LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
 } from "./constants.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,6 +101,33 @@ export async function readScheduledTaskCommand(
   } catch {
     return null;
   }
+}
+
+export type ScheduledTaskInfo = {
+  status?: string;
+  lastRunTime?: string;
+  lastRunResult?: string;
+};
+
+export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
+  const info: ScheduledTaskInfo = {};
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const idx = line.indexOf(":");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim().toLowerCase();
+    const value = line.slice(idx + 1).trim();
+    if (!value) continue;
+    if (key === "status") {
+      info.status = value;
+    } else if (key === "last run time") {
+      info.lastRunTime = value;
+    } else if (key === "last run result") {
+      info.lastRunResult = value;
+    }
+  }
+  return info;
 }
 
 function buildTaskScript({
@@ -273,6 +301,44 @@ export async function isScheduledTaskInstalled(): Promise<boolean> {
   await assertSchtasksAvailable();
   const res = await execSchtasks(["/Query", "/TN", GATEWAY_WINDOWS_TASK_NAME]);
   return res.code === 0;
+}
+
+export async function readScheduledTaskRuntime(): Promise<GatewayServiceRuntime> {
+  try {
+    await assertSchtasksAvailable();
+  } catch (err) {
+    return {
+      status: "unknown",
+      detail: String(err),
+    };
+  }
+  const res = await execSchtasks([
+    "/Query",
+    "/TN",
+    GATEWAY_WINDOWS_TASK_NAME,
+    "/V",
+    "/FO",
+    "LIST",
+  ]);
+  if (res.code !== 0) {
+    const detail = (res.stderr || res.stdout).trim();
+    const missing = detail.toLowerCase().includes("cannot find the file");
+    return {
+      status: missing ? "stopped" : "unknown",
+      detail: detail || undefined,
+      missingUnit: missing,
+    };
+  }
+  const parsed = parseSchtasksQuery(res.stdout || "");
+  const statusRaw = parsed.status?.toLowerCase();
+  const status =
+    statusRaw === "running" ? "running" : statusRaw ? "stopped" : "unknown";
+  return {
+    status,
+    state: parsed.status,
+    lastRunTime: parsed.lastRunTime,
+    lastRunResult: parsed.lastRunResult,
+  };
 }
 export type LegacyScheduledTask = {
   name: string;

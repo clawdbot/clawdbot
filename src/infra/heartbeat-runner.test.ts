@@ -411,7 +411,7 @@ describe("runHeartbeatOnce", () => {
       expect(sendTelegram).toHaveBeenCalledWith(
         "123456",
         "Hello from heartbeat",
-        expect.objectContaining({ token: "test-bot-token-123" }),
+        expect.objectContaining({ accountId: "default", verbose: false }),
       );
     } finally {
       replySpy.mockRestore();

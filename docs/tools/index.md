@@ -241,9 +241,10 @@ Notes:
 - The tool is only exposed when the current provider is WhatsApp.
 
 ### `telegram`
-Send Telegram reactions.
+Send Telegram messages or reactions.
 
 Core actions:
+- `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
 - `react` (`chatId`, `messageId`, `emoji`, optional `remove`)
 
 Notes:

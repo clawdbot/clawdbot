@@ -15,7 +15,6 @@ import {
   discoverModels,
   SessionManager,
   SettingsManager,
-  type Skill,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type {
@@ -54,6 +53,7 @@ import {
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
+  type EmbeddedContextFile,
   ensureSessionHeader,
   formatAssistantErrorText,
   isAuthAssistantError,
@@ -85,12 +85,10 @@ import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  buildWorkspaceSkillSnapshot,
   loadWorkspaceSkillEntries,
-  type SkillEntry,
   type SkillSnapshot,
 } from "./skills.js";
-import { buildAgentSystemPromptAppend } from "./system-prompt.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
@@ -223,6 +221,11 @@ export type EmbeddedPiRunResult = {
     isError?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
+  // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)
+  // successfully sent a message. Used to suppress agent's confirmation text.
+  didSendViaMessagingTool?: boolean;
+  // Texts successfully sent via messaging tools during the run.
+  messagingToolSentTexts?: string[];
 };
 
 export type EmbeddedPiCompactResult = {
@@ -491,7 +494,7 @@ export function buildEmbeddedSandboxInfo(
   };
 }
 
-function buildEmbeddedAppendPrompt(params: {
+function buildEmbeddedSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
@@ -510,8 +513,9 @@ function buildEmbeddedAppendPrompt(params: {
   modelAliasLines: string[];
   userTimezone: string;
   userTime?: string;
+  contextFiles?: EmbeddedContextFile[];
 }): string {
-  return buildAgentSystemPromptAppend({
+  return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
@@ -524,17 +528,15 @@ function buildEmbeddedAppendPrompt(params: {
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,
+    contextFiles: params.contextFiles,
   });
 }
 
-export function createSystemPromptAppender(
-  appendPrompt: string,
+export function createSystemPromptOverride(
+  systemPrompt: string,
 ): (defaultPrompt: string) => string {
-  const trimmed = appendPrompt.trim();
-  if (!trimmed) {
-    return (defaultPrompt) => defaultPrompt;
-  }
-  return (defaultPrompt) => `${defaultPrompt}\n\n${appendPrompt}`;
+  const trimmed = systemPrompt.trim();
+  return () => trimmed;
 }
 
 const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write"]);
@@ -667,25 +669,6 @@ function resolveModel(
   return { model, authStorage, modelRegistry };
 }
 
-function resolvePromptSkills(
-  snapshot: SkillSnapshot,
-  entries: SkillEntry[],
-): Skill[] {
-  if (snapshot.resolvedSkills?.length) {
-    return snapshot.resolvedSkills;
-  }
-
-  const snapshotNames = snapshot.skills.map((entry) => entry.name);
-  if (snapshotNames.length === 0) return [];
-
-  const entryByName = new Map(
-    entries.map((entry) => [entry.skill.name, entry.skill]),
-  );
-  return snapshotNames
-    .map((name) => entryByName.get(name))
-    .filter((skill): skill is Skill => Boolean(skill));
-}
-
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
   sessionKey?: string;
@@ -775,12 +758,6 @@ export async function compactEmbeddedPiSession(params: {
         const skillEntries = shouldLoadSkillEntries
           ? loadWorkspaceSkillEntries(effectiveWorkspace)
           : [];
-        const skillsSnapshot =
-          params.skillsSnapshot ??
-          buildWorkspaceSkillSnapshot(effectiveWorkspace, {
-            config: params.config,
-            entries: skillEntries,
-          });
         restoreSkillEnv = params.skillsSnapshot
           ? applySkillEnvOverridesFromSnapshot({
               snapshot: params.skillsSnapshot,
@@ -794,7 +771,6 @@ export async function compactEmbeddedPiSession(params: {
         const bootstrapFiles =
           await loadWorkspaceBootstrapFiles(effectiveWorkspace);
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
-        const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
         const tools = createClawdbotCodingTools({
           bash: {
             ...params.config?.agent?.bash,
@@ -820,7 +796,7 @@ export async function compactEmbeddedPiSession(params: {
           params.config?.agent?.userTimezone,
         );
         const userTime = formatUserTime(new Date(), userTimezone);
-        const appendPrompt = buildEmbeddedAppendPrompt({
+        const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
           extraSystemPrompt: params.extraSystemPrompt,
@@ -835,8 +811,9 @@ export async function compactEmbeddedPiSession(params: {
           modelAliasLines: buildModelAliasLines(params.config),
           userTimezone,
           userTime,
+          contextFiles,
         });
-        const systemPrompt = createSystemPromptAppender(appendPrompt);
+        const systemPrompt = createSystemPromptOverride(appendPrompt);
 
         // Pre-warm session file to bring it into OS page cache
         await prewarmSessionFile(params.sessionFile);
@@ -873,8 +850,8 @@ export async function compactEmbeddedPiSession(params: {
           customTools,
           sessionManager,
           settingsManager,
-          skills: promptSkills,
-          contextFiles,
+          skills: [],
+          contextFiles: [],
           additionalExtensionPaths,
         }));
 
@@ -1090,12 +1067,6 @@ export async function runEmbeddedPiAgent(params: {
           const skillEntries = shouldLoadSkillEntries
             ? loadWorkspaceSkillEntries(effectiveWorkspace)
             : [];
-          const skillsSnapshot =
-            params.skillsSnapshot ??
-            buildWorkspaceSkillSnapshot(effectiveWorkspace, {
-              config: params.config,
-              entries: skillEntries,
-            });
           restoreSkillEnv = params.skillsSnapshot
             ? applySkillEnvOverridesFromSnapshot({
                 snapshot: params.skillsSnapshot,
@@ -1109,10 +1080,6 @@ export async function runEmbeddedPiAgent(params: {
           const bootstrapFiles =
             await loadWorkspaceBootstrapFiles(effectiveWorkspace);
           const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
-          const promptSkills = resolvePromptSkills(
-            skillsSnapshot,
-            skillEntries,
-          );
           // Tool schemas must be provider-compatible (OpenAI requires top-level `type: "object"`).
           // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
           const tools = createClawdbotCodingTools({
@@ -1140,7 +1107,7 @@ export async function runEmbeddedPiAgent(params: {
             params.config?.agent?.userTimezone,
           );
           const userTime = formatUserTime(new Date(), userTimezone);
-          const appendPrompt = buildEmbeddedAppendPrompt({
+          const appendPrompt = buildEmbeddedSystemPrompt({
             workspaceDir: effectiveWorkspace,
             defaultThinkLevel: thinkLevel,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -1155,8 +1122,9 @@ export async function runEmbeddedPiAgent(params: {
             modelAliasLines: buildModelAliasLines(params.config),
             userTimezone,
             userTime,
+            contextFiles,
           });
-          const systemPrompt = createSystemPromptAppender(appendPrompt);
+          const systemPrompt = createSystemPromptOverride(appendPrompt);
 
           // Pre-warm session file to bring it into OS page cache
           await prewarmSessionFile(params.sessionFile);
@@ -1197,8 +1165,8 @@ export async function runEmbeddedPiAgent(params: {
             customTools,
             sessionManager,
             settingsManager,
-            skills: promptSkills,
-            contextFiles,
+            skills: [],
+            contextFiles: [],
             additionalExtensionPaths,
           }));
 
@@ -1250,6 +1218,8 @@ export async function runEmbeddedPiAgent(params: {
             toolMetas,
             unsubscribe,
             waitForCompactionRetry,
+            getMessagingToolSentTexts,
+            didSendViaMessagingTool,
           } = subscription;
 
           const queueHandle: EmbeddedPiQueueHandle = {
@@ -1531,6 +1501,8 @@ export async function runEmbeddedPiAgent(params: {
               agentMeta,
               aborted,
             },
+            didSendViaMessagingTool: didSendViaMessagingTool(),
+            messagingToolSentTexts: getMessagingToolSentTexts(),
           };
         } finally {
           restoreSkillEnv?.();

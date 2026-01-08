@@ -10,6 +10,7 @@ export default defineConfig({
       "apps/macos/.build/**",
       "**/vendor/**",
       "dist/Clawdbot.app/**",
+      "**/*.live.test.ts",
     ],
     coverage: {
       provider: "v8",

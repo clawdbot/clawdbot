@@ -38,9 +38,9 @@ import {
   updateLastRoute,
 } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { formatDurationMs } from "../infra/format-duration.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { formatDurationMs } from "../infra/format-duration.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { toLocationContext } from "../providers/location.js";

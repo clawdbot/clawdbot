@@ -30,6 +30,7 @@ import {
   type PollInput,
 } from "../polls.js";
 import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
+import { resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
@@ -74,6 +75,7 @@ type DiscordRecipient =
 
 type DiscordSendOpts = {
   token?: string;
+  accountId?: string;
   mediaUrl?: string;
   verbose?: boolean;
   rest?: RequestClient;
@@ -88,6 +90,7 @@ export type DiscordSendResult = {
 
 export type DiscordReactOpts = {
   token?: string;
+  accountId?: string;
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
@@ -179,17 +182,20 @@ export type DiscordStickerUpload = {
   mediaUrl: string;
 };
 
-function resolveToken(explicit?: string) {
-  const cfgToken = loadConfig().discord?.token;
-  const token = normalizeDiscordToken(
-    explicit ?? process.env.DISCORD_BOT_TOKEN ?? cfgToken ?? undefined,
-  );
-  if (!token) {
+function resolveToken(params: {
+  explicit?: string;
+  accountId: string;
+  fallbackToken?: string;
+}) {
+  const explicit = normalizeDiscordToken(params.explicit);
+  if (explicit) return explicit;
+  const fallback = normalizeDiscordToken(params.fallbackToken);
+  if (!fallback) {
     throw new Error(
-      "DISCORD_BOT_TOKEN or discord.token is required for Discord sends",
+      `Discord bot token missing for account "${params.accountId}" (set discord.accounts.${params.accountId}.token or DISCORD_BOT_TOKEN for default).`,
     );
   }
-  return token;
+  return fallback;
 }
 
 function resolveRest(token: string, rest?: RequestClient) {
@@ -198,20 +204,30 @@ function resolveRest(token: string, rest?: RequestClient) {
 
 type DiscordClientOpts = {
   token?: string;
+  accountId?: string;
   rest?: RequestClient;
   retry?: RetryConfig;
   verbose?: boolean;
 };
 
 function createDiscordClient(opts: DiscordClientOpts, cfg = loadConfig()) {
-  const token = resolveToken(opts.token);
+  const account = resolveDiscordAccount({ cfg, accountId: opts.accountId });
+  const token = resolveToken({
+    explicit: opts.token,
+    accountId: account.accountId,
+    fallbackToken: account.token,
+  });
   const rest = resolveRest(token, opts.rest);
   const request = createDiscordRetryRunner({
     retry: opts.retry,
-    configRetry: cfg.discord?.retry,
+    configRetry: account.config.retry,
     verbose: opts.verbose,
   });
   return { token, rest, request };
+}
+
+function resolveDiscordRest(opts: DiscordClientOpts) {
+  return createDiscordClient(opts).rest;
 }
 
 function normalizeReactionEmoji(raw: string) {
@@ -635,8 +651,7 @@ export async function removeReactionDiscord(
   emoji: string,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const encoded = normalizeReactionEmoji(emoji);
   await rest.delete(
     Routes.channelMessageOwnReaction(channelId, messageId, encoded),
@@ -649,8 +664,7 @@ export async function removeOwnReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts = {},
 ): Promise<{ ok: true; removed: string[] }> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const message = (await rest.get(
     Routes.channelMessage(channelId, messageId),
   )) as {
@@ -683,8 +697,7 @@ export async function fetchReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts & { limit?: number } = {},
 ): Promise<DiscordReactionSummary[]> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const message = (await rest.get(
     Routes.channelMessage(channelId, messageId),
   )) as {
@@ -733,8 +746,7 @@ export async function fetchChannelPermissionsDiscord(
   channelId: string,
   opts: DiscordReactOpts = {},
 ): Promise<DiscordPermissionsSummary> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const channel = (await rest.get(Routes.channel(channelId))) as APIChannel;
   const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
@@ -808,8 +820,7 @@ export async function readMessagesDiscord(
   query: DiscordMessageQuery = {},
   opts: DiscordReactOpts = {},
 ): Promise<APIMessage[]> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const limit =
     typeof query.limit === "number" && Number.isFinite(query.limit)
       ? Math.min(Math.max(Math.floor(query.limit), 1), 100)
@@ -831,8 +842,7 @@ export async function editMessageDiscord(
   payload: DiscordMessageEdit,
   opts: DiscordReactOpts = {},
 ): Promise<APIMessage> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.patch(Routes.channelMessage(channelId, messageId), {
     body: { content: payload.content },
   })) as APIMessage;
@@ -843,8 +853,7 @@ export async function deleteMessageDiscord(
   messageId: string,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   await rest.delete(Routes.channelMessage(channelId, messageId));
   return { ok: true };
 }
@@ -854,8 +863,7 @@ export async function pinMessageDiscord(
   messageId: string,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   await rest.put(Routes.channelPin(channelId, messageId));
   return { ok: true };
 }
@@ -865,8 +873,7 @@ export async function unpinMessageDiscord(
   messageId: string,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   await rest.delete(Routes.channelPin(channelId, messageId));
   return { ok: true };
 }
@@ -875,8 +882,7 @@ export async function listPinsDiscord(
   channelId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIMessage[]> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
 }
 
@@ -885,8 +891,7 @@ export async function createThreadDiscord(
   payload: DiscordThreadCreate,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = { name: payload.name };
   if (payload.autoArchiveMinutes) {
     body.auto_archive_duration = payload.autoArchiveMinutes;
@@ -899,8 +904,7 @@ export async function listThreadsDiscord(
   payload: DiscordThreadList,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   if (payload.includeArchived) {
     if (!payload.channelId) {
       throw new Error("channelId required to list archived threads");
@@ -920,8 +924,7 @@ export async function searchMessagesDiscord(
   query: DiscordSearchQuery,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const params = new URLSearchParams();
   params.set("content", query.content);
   if (query.channelIds?.length) {
@@ -947,8 +950,7 @@ export async function listGuildEmojisDiscord(
   guildId: string,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return await rest.get(Routes.guildEmojis(guildId));
 }
 
@@ -956,8 +958,7 @@ export async function uploadEmojiDiscord(
   payload: DiscordEmojiUpload,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const media = await loadWebMediaRaw(
     payload.mediaUrl,
     DISCORD_MAX_EMOJI_BYTES,
@@ -986,8 +987,7 @@ export async function uploadStickerDiscord(
   payload: DiscordStickerUpload,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const media = await loadWebMediaRaw(
     payload.mediaUrl,
     DISCORD_MAX_STICKER_BYTES,
@@ -1025,8 +1025,7 @@ export async function fetchMemberInfoDiscord(
   userId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIGuildMember> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(
     Routes.guildMember(guildId, userId),
   )) as APIGuildMember;
@@ -1036,8 +1035,7 @@ export async function fetchRoleInfoDiscord(
   guildId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIRole[]> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(Routes.guildRoles(guildId))) as APIRole[];
 }
 
@@ -1045,8 +1043,7 @@ export async function addRoleDiscord(
   payload: DiscordRoleChange,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   await rest.put(
     Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId),
   );
@@ -1057,8 +1054,7 @@ export async function removeRoleDiscord(
   payload: DiscordRoleChange,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   await rest.delete(
     Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId),
   );
@@ -1069,8 +1065,7 @@ export async function fetchChannelInfoDiscord(
   channelId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIChannel> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
 }
 
@@ -1078,8 +1073,7 @@ export async function listGuildChannelsDiscord(
   guildId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIChannel[]> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(Routes.guildChannels(guildId))) as APIChannel[];
 }
 
@@ -1088,8 +1082,7 @@ export async function fetchVoiceStatusDiscord(
   userId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIVoiceState> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(
     Routes.guildVoiceState(guildId, userId),
   )) as APIVoiceState;
@@ -1099,8 +1092,7 @@ export async function listScheduledEventsDiscord(
   guildId: string,
   opts: DiscordReactOpts = {},
 ): Promise<APIGuildScheduledEvent[]> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.get(
     Routes.guildScheduledEvents(guildId),
   )) as APIGuildScheduledEvent[];
@@ -1111,8 +1103,7 @@ export async function createScheduledEventDiscord(
   payload: RESTPostAPIGuildScheduledEventJSONBody,
   opts: DiscordReactOpts = {},
 ): Promise<APIGuildScheduledEvent> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   return (await rest.post(Routes.guildScheduledEvents(guildId), {
     body: payload,
   })) as APIGuildScheduledEvent;
@@ -1122,8 +1113,7 @@ export async function timeoutMemberDiscord(
   payload: DiscordTimeoutTarget,
   opts: DiscordReactOpts = {},
 ): Promise<APIGuildMember> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   let until = payload.until;
   if (!until && payload.durationMinutes) {
     const ms = payload.durationMinutes * 60 * 1000;
@@ -1144,8 +1134,7 @@ export async function kickMemberDiscord(
   payload: DiscordModerationTarget,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   await rest.delete(Routes.guildMember(payload.guildId, payload.userId), {
     headers: payload.reason
       ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
@@ -1158,8 +1147,7 @@ export async function banMemberDiscord(
   payload: DiscordModerationTarget & { deleteMessageDays?: number },
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveDiscordRest(opts);
   const deleteMessageDays =
     typeof payload.deleteMessageDays === "number" &&
     Number.isFinite(payload.deleteMessageDays)

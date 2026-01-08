@@ -258,8 +258,8 @@ export function renderApp(state: AppViewState) {
                   lastActiveSessionKey: next,
                 });
               },
+              onConnect: () => state.connect(),
               onRefresh: () => state.loadOverview(),
-              onReconnect: () => state.connect(),
             })
           : nothing}
 

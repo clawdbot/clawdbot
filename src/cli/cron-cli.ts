@@ -1,4 +1,6 @@
+import chalk from "chalk";
 import type { Command } from "commander";
+import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
@@ -57,6 +59,141 @@ function parseAtMs(input: string): number | null {
   const dur = parseDurationMs(raw);
   if (dur) return Date.now() + dur;
   return null;
+}
+
+const CRON_ID_PAD = 36;
+const CRON_NAME_PAD = 24;
+const CRON_SCHEDULE_PAD = 32;
+const CRON_NEXT_PAD = 10;
+const CRON_LAST_PAD = 10;
+const CRON_STATUS_PAD = 9;
+const CRON_TARGET_PAD = 9;
+
+const isRich = () => Boolean(process.stdout.isTTY && chalk.level > 0);
+
+const pad = (value: string, width: number) => value.padEnd(width);
+
+const truncate = (value: string, width: number) => {
+  if (value.length <= width) return value;
+  if (width <= 3) return value.slice(0, width);
+  return `${value.slice(0, width - 3)}...`;
+};
+
+const formatIsoMinute = (ms: number) => {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "-";
+  const iso = d.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
+};
+
+const formatDuration = (ms: number) => {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+};
+
+const formatSpan = (ms: number) => {
+  if (ms < 60_000) return "<1m";
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+};
+
+const formatRelative = (ms: number | null | undefined, nowMs: number) => {
+  if (!ms) return "-";
+  const delta = ms - nowMs;
+  const label = formatSpan(Math.abs(delta));
+  return delta >= 0 ? `in ${label}` : `${label} ago`;
+};
+
+const formatSchedule = (schedule: CronSchedule) => {
+  if (schedule.kind === "at") return `at ${formatIsoMinute(schedule.atMs)}`;
+  if (schedule.kind === "every")
+    return `every ${formatDuration(schedule.everyMs)}`;
+  return schedule.tz
+    ? `cron ${schedule.expr} @ ${schedule.tz}`
+    : `cron ${schedule.expr}`;
+};
+
+const formatStatus = (job: CronJob) => {
+  if (!job.enabled) return "disabled";
+  if (job.state.runningAtMs) return "running";
+  return job.state.lastStatus ?? "idle";
+};
+
+const colorize = (
+  rich: boolean,
+  color: (msg: string) => string,
+  msg: string,
+) => (rich ? color(msg) : msg);
+
+function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
+  if (jobs.length === 0) {
+    runtime.log("No cron jobs.");
+    return;
+  }
+
+  const rich = isRich();
+  const header = [
+    pad("ID", CRON_ID_PAD),
+    pad("Name", CRON_NAME_PAD),
+    pad("Schedule", CRON_SCHEDULE_PAD),
+    pad("Next", CRON_NEXT_PAD),
+    pad("Last", CRON_LAST_PAD),
+    pad("Status", CRON_STATUS_PAD),
+    pad("Target", CRON_TARGET_PAD),
+  ].join(" ");
+
+  runtime.log(rich ? chalk.bold(header) : header);
+  const now = Date.now();
+
+  for (const job of jobs) {
+    const idLabel = pad(job.id, CRON_ID_PAD);
+    const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
+    const scheduleLabel = pad(
+      truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
+      CRON_SCHEDULE_PAD,
+    );
+    const nextLabel = pad(
+      job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
+      CRON_NEXT_PAD,
+    );
+    const lastLabel = pad(
+      formatRelative(job.state.lastRunAtMs, now),
+      CRON_LAST_PAD,
+    );
+    const statusRaw = formatStatus(job);
+    const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
+    const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
+
+    const coloredStatus = (() => {
+      if (statusRaw === "ok") return colorize(rich, chalk.green, statusLabel);
+      if (statusRaw === "error") return colorize(rich, chalk.red, statusLabel);
+      if (statusRaw === "running")
+        return colorize(rich, chalk.yellow, statusLabel);
+      if (statusRaw === "skipped")
+        return colorize(rich, chalk.gray, statusLabel);
+      return colorize(rich, chalk.gray, statusLabel);
+    })();
+
+    const coloredTarget =
+      job.sessionTarget === "isolated"
+        ? colorize(rich, chalk.magenta, targetLabel)
+        : colorize(rich, chalk.cyan, targetLabel);
+
+    const line = [
+      colorize(rich, chalk.cyan, idLabel),
+      colorize(rich, chalk.white, nameLabel),
+      colorize(rich, chalk.white, scheduleLabel),
+      colorize(rich, chalk.gray, nextLabel),
+      colorize(rich, chalk.gray, lastLabel),
+      coloredStatus,
+      coloredTarget,
+    ].join(" ");
+
+    runtime.log(line.trimEnd());
+  }
 }
 
 export function registerCronCli(program: Command) {
@@ -120,7 +257,12 @@ export function registerCronCli(program: Command) {
           const res = await callGatewayFromCli("cron.list", opts, {
             includeDisabled: Boolean(opts.all),
           });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(res, null, 2));
+            return;
+          }
+          const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
+          printCronList(jobs, defaultRuntime);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);
@@ -131,6 +273,7 @@ export function registerCronCli(program: Command) {
   addGatewayClientOptions(
     cron
       .command("add")
+      .alias("create")
       .description("Add a cron job")
       .requiredOption("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
@@ -315,6 +458,8 @@ export function registerCronCli(program: Command) {
   addGatewayClientOptions(
     cron
       .command("rm")
+      .alias("remove")
+      .alias("delete")
       .description("Remove a cron job")
       .argument("<id>", "Job id")
       .option("--json", "Output JSON", false)

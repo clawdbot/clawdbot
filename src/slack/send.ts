@@ -6,6 +6,7 @@ import {
 } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { loadWebMedia } from "../web/media.js";
+import { resolveSlackAccount } from "./accounts.js";
 import { resolveSlackBotToken } from "./token.js";
 
 const SLACK_TEXT_LIMIT = 4000;
@@ -22,6 +23,7 @@ type SlackRecipient =
 
 type SlackSendOpts = {
   token?: string;
+  accountId?: string;
   mediaUrl?: string;
   client?: WebClient;
   threadTs?: string;
@@ -32,17 +34,20 @@ export type SlackSendResult = {
   channelId: string;
 };
 
-function resolveToken(explicit?: string) {
-  const cfgToken = loadConfig().slack?.botToken;
-  const token = resolveSlackBotToken(
-    explicit ?? process.env.SLACK_BOT_TOKEN ?? cfgToken ?? undefined,
-  );
-  if (!token) {
+function resolveToken(params: {
+  explicit?: string;
+  accountId: string;
+  fallbackToken?: string;
+}) {
+  const explicit = resolveSlackBotToken(params.explicit);
+  if (explicit) return explicit;
+  const fallback = resolveSlackBotToken(params.fallbackToken);
+  if (!fallback) {
     throw new Error(
-      "SLACK_BOT_TOKEN or slack.botToken is required for Slack sends",
+      `Slack bot token missing for account "${params.accountId}" (set slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
     );
   }
-  return token;
+  return fallback;
 }
 
 function parseRecipient(raw: string): SlackRecipient {
@@ -140,17 +145,25 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl) {
     throw new Error("Slack send requires text or media");
   }
-  const token = resolveToken(opts.token);
+  const cfg = loadConfig();
+  const account = resolveSlackAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken({
+    explicit: opts.token,
+    accountId: account.accountId,
+    fallbackToken: account.botToken,
+  });
   const client = opts.client ?? new WebClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient);
-  const cfg = loadConfig();
-  const textLimit = resolveTextChunkLimit(cfg, "slack");
+  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
   const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
   const mediaMaxBytes =
-    typeof cfg.slack?.mediaMaxMb === "number"
-      ? cfg.slack.mediaMaxMb * 1024 * 1024
+    typeof account.config.mediaMaxMb === "number"
+      ? account.config.mediaMaxMb * 1024 * 1024
       : undefined;
 
   let lastMessageId = "";

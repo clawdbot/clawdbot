@@ -4,15 +4,21 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { handleTelegramAction } from "./telegram-actions.js";
 
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
+const sendMessageTelegram = vi.fn(async () => ({
+  messageId: "789",
+  chatId: "123",
+}));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
+  sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
   beforeEach(() => {
     reactMessageTelegram.mockClear();
+    sendMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -91,5 +97,75 @@ describe("handleTelegramAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/Telegram reactions are disabled/);
+  });
+
+  it("sends a text message", async () => {
+    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello, Telegram!",
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Hello, Telegram!",
+      { token: "tok", mediaUrl: undefined },
+    );
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining('"ok": true'),
+    });
+  });
+
+  it("sends a message with media", async () => {
+    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Check this image!",
+        mediaUrl: "https://example.com/image.jpg",
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "Check this image!",
+      { token: "tok", mediaUrl: "https://example.com/image.jpg" },
+    );
+  });
+
+  it("respects sendMessage gating", async () => {
+    const cfg = {
+      telegram: { botToken: "tok", actions: { sendMessage: false } },
+    } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "@testchannel",
+          content: "Hello!",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram sendMessage is disabled/);
+  });
+
+  it("throws on missing bot token for sendMessage", async () => {
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    const cfg = {} as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "@testchannel",
+          content: "Hello!",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram bot token missing/);
   });
 });

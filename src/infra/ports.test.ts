@@ -2,7 +2,10 @@ import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildPortHints,
+  classifyPortListener,
   ensurePortAvailable,
+  formatPortDiagnostics,
   handlePortError,
   PortInUseError,
 } from "./ports.js";
@@ -32,5 +35,37 @@ describe("ports helpers", () => {
     ).catch(() => {});
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("classifies ssh and gateway listeners", () => {
+    expect(
+      classifyPortListener(
+        { commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" },
+        18789,
+      ),
+    ).toBe("ssh");
+    expect(
+      classifyPortListener(
+        {
+          commandLine: "node /Users/me/Projects/clawdbot/dist/entry.js gateway",
+        },
+        18789,
+      ),
+    ).toBe("gateway");
+  });
+
+  it("formats port diagnostics with hints", () => {
+    const diagnostics = {
+      port: 18789,
+      status: "busy" as const,
+      listeners: [{ pid: 123, commandLine: "ssh -N -L 18789:127.0.0.1:18789" }],
+      hints: buildPortHints(
+        [{ pid: 123, commandLine: "ssh -N -L 18789:127.0.0.1:18789" }],
+        18789,
+      ),
+    };
+    const lines = formatPortDiagnostics(diagnostics);
+    expect(lines[0]).toContain("Port 18789 is already in use");
+    expect(lines.some((line) => line.includes("SSH tunnel"))).toBe(true);
   });
 });

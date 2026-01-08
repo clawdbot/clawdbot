@@ -59,6 +59,21 @@ describe("routeReply", () => {
     );
   });
 
+  it("passes replyToId to Telegram sends", async () => {
+    mocks.sendMessageTelegram.mockClear();
+    await routeReply({
+      payload: { text: "hi", replyToId: "123" },
+      channel: "telegram",
+      to: "telegram:123",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageTelegram).toHaveBeenCalledWith(
+      "telegram:123",
+      "hi",
+      expect.objectContaining({ replyToMessageId: 123 }),
+    );
+  });
+
   it("uses replyToId as threadTs for Slack", async () => {
     mocks.sendMessageSlack.mockClear();
     await routeReply({

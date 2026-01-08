@@ -5,7 +5,7 @@ read_when:
 ---
 # Telegram (Bot API)
 
-Updated: 2026-01-07
+Updated: 2026-01-08
 
 Status: production-ready for bot DMs + groups via grammY. Long-polling by default; webhook optional.
 
@@ -28,6 +28,8 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
   }
 }
 ```
+
+Multi-account support: use `telegram.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
 3) Start the gateway. Telegram starts when a `telegram` config section exists and a token is resolved.
 4) DM access defaults to pairing. Approve the code when the bot is first contacted.
@@ -139,7 +141,7 @@ Telegram supports optional threaded replies via tags:
 - `[[reply_to:<id>]]` -- reply to a specific message id.
 
 Controlled by `telegram.replyToMode`:
-- `off` (default), `first`, `all`.
+- `first` (default), `all`, `off`.
 
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.
@@ -166,10 +168,11 @@ More context: [Streaming + chunking](/concepts/streaming).
 ## Retry policy
 Outbound Telegram API calls retry on transient network/429 errors with exponential backoff and jitter. Configure via `telegram.retry`. See [Retry policy](/concepts/retry).
 
-## Agent tool (reactions)
+## Agent tool (messages + reactions)
+- Tool: `telegram` with `sendMessage` action (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`).
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- Tool gating: `telegram.actions.reactions` (default: enabled).
+- Tool gating: `telegram.actions.reactions` and `telegram.actions.sendMessage` (default: enabled).
 
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
@@ -215,7 +218,7 @@ Provider options:
   - `telegram.groups.<id>.enabled`: disable the group when `false`.
   - `telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
   - `telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-- `telegram.replyToMode`: `off | first | all`.
+- `telegram.replyToMode`: `off | first | all` (default: `first`).
 - `telegram.textChunkLimit`: outbound chunk size (chars).
 - `telegram.streamMode`: `off | partial | block` (draft streaming).
 - `telegram.mediaMaxMb`: inbound/outbound media cap (MB).
@@ -225,6 +228,7 @@ Provider options:
 - `telegram.webhookSecret`: webhook secret (optional).
 - `telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
 - `telegram.actions.reactions`: gate Telegram tool reactions.
+- `telegram.actions.sendMessage`: gate Telegram tool message sends.
 
 Related global options:
 - `routing.groupChat.mentionPatterns` (mention gating patterns).

@@ -141,6 +141,19 @@ gh auth login
 gh repo create clawd-workspace --private --source . --remote origin --push
 ```
 
+Option C: GitLab web UI
+
+1. Create a new **private** repository on GitLab.
+2. Do not initialize with a README (avoids merge conflicts).
+3. Copy the HTTPS remote URL.
+4. Add the remote and push:
+
+```bash
+git branch -M main
+git remote add origin <https-url>
+git push -u origin main
+```
+
 ### 3) Ongoing updates
 
 ```bash

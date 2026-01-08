@@ -20,6 +20,7 @@ import {
 } from "../gateway/ws-logging.js";
 import { setVerbose } from "../globals.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -368,6 +369,16 @@ export function registerGatewayCli(program: Command) {
           defaultRuntime.error(
             `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot gateway stop`,
           );
+          try {
+            const diagnostics = await inspectPortUsage(port);
+            if (diagnostics.status === "busy") {
+              for (const line of formatPortDiagnostics(diagnostics)) {
+                defaultRuntime.error(line);
+              }
+            }
+          } catch {
+            // ignore diagnostics failures
+          }
           await maybeExplainGatewayServiceStop();
           defaultRuntime.exit(1);
           return;
@@ -578,6 +589,16 @@ export function registerGatewayCli(program: Command) {
           defaultRuntime.error(
             `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot gateway stop`,
           );
+          try {
+            const diagnostics = await inspectPortUsage(port);
+            if (diagnostics.status === "busy") {
+              for (const line of formatPortDiagnostics(diagnostics)) {
+                defaultRuntime.error(line);
+              }
+            }
+          } catch {
+            // ignore diagnostics failures
+          }
           await maybeExplainGatewayServiceStop();
           defaultRuntime.exit(1);
           return;
