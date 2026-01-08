@@ -4,6 +4,7 @@ import type {
   ReactionEventContent,
   RoomMessageEventContent,
 } from "matrix-js-sdk/lib/@types/events.js";
+import type { EncryptedFile } from "matrix-js-sdk/lib/@types/media.js";
 
 import {
   chunkMarkdownText,
@@ -20,6 +21,8 @@ import {
   resolveSharedMatrixClient,
   waitForMatrixSync,
 } from "./client.js";
+import { encryptMatrixAttachment } from "./crypto-attachments.js";
+import { markdownToMatrixHtml } from "./format.js";
 
 const MATRIX_TEXT_LIMIT = 4000;
 
@@ -27,6 +30,11 @@ type MatrixDirectAccountData = AccountDataEvents[EventType.Direct];
 type MatrixReplyRelation = {
   "m.in_reply_to": { event_id: string };
 };
+type MatrixMessageContent = Record<string, unknown> & {
+  msgtype: MsgType;
+  body: string;
+};
+type MatrixUploadContent = Parameters<MatrixClient["uploadContent"]>[0];
 
 export type MatrixSendResult = {
   messageId: string;
@@ -118,87 +126,61 @@ export async function resolveMatrixRoomId(
   return target;
 }
 
-function resolveMatrixMsgType(
-  contentType?: string,
-): MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File {
-  if (!contentType) return MsgType.File;
-  if (contentType.startsWith("image/")) return MsgType.Image;
-  if (contentType.startsWith("audio/")) return MsgType.Audio;
-  if (contentType.startsWith("video/")) return MsgType.Video;
-  return MsgType.File;
-}
-
 function buildMediaContent(params: {
   msgtype: MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File;
   body: string;
-  url: string;
+  url?: string;
+  file?: EncryptedFile;
   filename?: string;
   mimetype?: string;
   size: number;
   relation?: MatrixReplyRelation;
 }): RoomMessageEventContent {
   const info = { mimetype: params.mimetype, size: params.size };
-  const base = {
+  const base: MatrixMessageContent = {
+    msgtype: params.msgtype,
     body: params.body,
-    url: params.url,
     filename: params.filename,
     info,
   };
+  if (params.file) {
+    base.file = params.file;
+  } else if (params.url) {
+    base.url = params.url;
+  }
   if (params.relation) {
-    switch (params.msgtype) {
-      case MsgType.Image:
-        return {
-          ...base,
-          msgtype: MsgType.Image,
-          "m.relates_to": params.relation,
-        };
-      case MsgType.Audio:
-        return {
-          ...base,
-          msgtype: MsgType.Audio,
-          "m.relates_to": params.relation,
-        };
-      case MsgType.Video:
-        return {
-          ...base,
-          msgtype: MsgType.Video,
-          "m.relates_to": params.relation,
-        };
-      default:
-        return {
-          ...base,
-          msgtype: MsgType.File,
-          "m.relates_to": params.relation,
-        };
-    }
+    base["m.relates_to"] = params.relation;
   }
-  switch (params.msgtype) {
-    case MsgType.Image:
-      return { ...base, msgtype: MsgType.Image };
-    case MsgType.Audio:
-      return { ...base, msgtype: MsgType.Audio };
-    case MsgType.Video:
-      return { ...base, msgtype: MsgType.Video };
-    default:
-      return { ...base, msgtype: MsgType.File };
-  }
+  applyMatrixFormatting(base, params.body);
+  return base as RoomMessageEventContent;
 }
 
 function buildTextContent(
   body: string,
   relation?: MatrixReplyRelation,
 ): RoomMessageEventContent {
-  if (relation) {
-    return {
-      msgtype: MsgType.Text,
-      body,
-      "m.relates_to": relation,
-    };
-  }
-  return {
-    msgtype: MsgType.Text,
-    body,
-  };
+  const content: MatrixMessageContent = relation
+    ? {
+        msgtype: MsgType.Text,
+        body,
+        "m.relates_to": relation,
+      }
+    : {
+        msgtype: MsgType.Text,
+        body,
+      };
+  applyMatrixFormatting(content, body);
+  return content as RoomMessageEventContent;
+}
+
+function applyMatrixFormatting(
+  content: MatrixMessageContent,
+  body: string,
+): void {
+  const formatted = markdownToMatrixHtml(body ?? "");
+  if (!formatted) return;
+  content.format = "org.matrix.custom.html";
+  content.formatted_body = formatted;
 }
 
 async function isMatrixRoomEncrypted(
@@ -226,6 +208,23 @@ function buildReplyRelation(
   const trimmed = replyToId?.trim();
   if (!trimmed) return undefined;
   return { "m.in_reply_to": { event_id: trimmed } };
+}
+
+async function uploadFile(
+  client: MatrixClient,
+  file: MatrixUploadContent | Buffer,
+  params: {
+    contentType?: string;
+    filename?: string;
+    includeFilename?: boolean;
+  },
+): Promise<string> {
+  const upload = await client.uploadContent(file as MatrixUploadContent, {
+    type: params.contentType,
+    name: params.filename,
+    includeFilename: params.includeFilename,
+  });
+  return upload.content_uri;
 }
 
 async function resolveMatrixClient(opts: {
@@ -276,11 +275,13 @@ export async function sendMessageMatrix(
   });
   try {
     const roomId = await resolveMatrixRoomId(client, to);
+    const encryptedRoom = opts.mediaUrl
+      ? await isMatrixRoomEncrypted(client, roomId)
+      : false;
     if (opts.mediaUrl) {
-      const encrypted = await isMatrixRoomEncrypted(client, roomId);
-      if (encrypted) {
+      if (encryptedRoom && !client.getCrypto()) {
         throw new Error(
-          "Matrix encrypted rooms do not support media uploads yet.",
+          "Matrix encryption is disabled; enable matrix.encryption to send media in encrypted rooms.",
         );
       }
     }
@@ -297,18 +298,38 @@ export async function sendMessageMatrix(
     if (opts.mediaUrl) {
       const maxBytes = resolveMediaMaxBytes();
       const media = await loadWebMedia(opts.mediaUrl, maxBytes);
-      const uploadBody = Uint8Array.from(media.buffer).buffer;
-      const upload = await client.uploadContent(uploadBody, {
-        type: media.contentType,
-        name: media.fileName,
-      });
-      const msgtype = resolveMatrixMsgType(media.contentType);
+      let file: EncryptedFile | undefined;
+      let url: string | undefined;
+      if (encryptedRoom) {
+        const encrypted = await encryptMatrixAttachment(media.buffer);
+        const contentUri = await uploadFile(
+          client,
+          Buffer.from(encrypted.encrypted),
+          {
+            contentType: "application/octet-stream",
+            filename: media.fileName,
+            includeFilename: false,
+          },
+        );
+        file = {
+          ...encrypted.info,
+          url: contentUri,
+        };
+      } else {
+        const contentUri = await uploadFile(client, media.buffer, {
+          contentType: media.contentType,
+          filename: media.fileName,
+        });
+        url = contentUri;
+      }
+      const msgtype = MsgType.File;
       const [firstChunk, ...rest] = chunks;
       const body = firstChunk ?? media.fileName ?? "(file)";
       const content = buildMediaContent({
         msgtype,
         body,
-        url: upload.content_uri,
+        url,
+        file,
         filename: media.fileName,
         mimetype: media.contentType,
         size: media.buffer.byteLength,
