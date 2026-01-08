@@ -907,7 +907,7 @@ describe("legacy config detection", () => {
     }
   });
 
-  it('rejects matrix.dm.policy="open" without allowFrom "*"', async () => {
+  it('rejects matrix.dm.policy="open" without allowFrom "*" when allowFrom is set', async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
@@ -924,6 +924,18 @@ describe("legacy config detection", () => {
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       matrix: { dm: { policy: "open", allowFrom: ["*"] } },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.matrix?.dm?.policy).toBe("open");
+    }
+  });
+
+  it('accepts matrix.dm.policy="open" without allowFrom', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      matrix: { dm: { policy: "open" } },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
