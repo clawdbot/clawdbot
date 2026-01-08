@@ -793,6 +793,7 @@ async function noteMatrixTokenHelp(prompter: WizardPrompter): Promise<void> {
     [
       "Matrix uses a user access token (no bot token).",
       "Provide matrix.homeserver + matrix.userId + matrix.accessToken.",
+      "If you enable E2EE, also provide the matrix.deviceId.",
       "Optional: set matrix.password to login at startup.",
       `Docs: ${formatDocsLink("/providers/matrix", "providers/matrix")}`,
     ].join("\n"),
@@ -1423,6 +1424,10 @@ export async function setupProviders(
     let userId: string | null = null;
     let accessToken: string | null = null;
     let password: string | null = null;
+    let deviceId: string | null = null;
+    let encryption: boolean | null = null;
+    let useEnv = false;
+    let keepExisting = false;
     const envConfigured =
       matrixHomeserverEnv &&
       matrixUserIdEnv &&
@@ -1442,13 +1447,7 @@ export async function setupProviders(
         initialValue: true,
       });
       if (keepEnv) {
-        next = {
-          ...next,
-          matrix: {
-            ...next.matrix,
-            enabled: true,
-          },
-        };
+        useEnv = true;
       } else {
         homeserver = String(
           await prompter.text({
@@ -1469,13 +1468,7 @@ export async function setupProviders(
         initialValue: true,
       });
       if (keep) {
-        next = {
-          ...next,
-          matrix: {
-            ...next.matrix,
-            enabled: true,
-          },
-        };
+        keepExisting = true;
       } else {
         homeserver = String(
           await prompter.text({
@@ -1505,43 +1498,75 @@ export async function setupProviders(
       ).trim();
     }
 
-    if (homeserver && userId) {
-      const authMethod = (await prompter.select({
-        message: "Matrix auth method",
-        options: [
-          { value: "accessToken", label: "Access token (recommended)" },
-          { value: "password", label: "Password login" },
-        ],
-      })) as "accessToken" | "password";
-      if (authMethod === "accessToken") {
-        accessToken = String(
-          await prompter.text({
-            message: "Matrix access token",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-      } else {
-        password = String(
-          await prompter.text({
-            message: "Matrix password",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-      }
-    }
-
-    if (homeserver && userId && (accessToken || password)) {
+    if (keepExisting) {
       next = {
         ...next,
         matrix: {
           ...next.matrix,
           enabled: true,
-          homeserver,
-          userId,
-          ...(accessToken ? { accessToken } : {}),
-          ...(password ? { password } : {}),
         },
       };
+    } else {
+      if (homeserver && userId) {
+        const authMethod = (await prompter.select({
+          message: "Matrix auth method",
+          options: [
+            { value: "accessToken", label: "Access token (recommended)" },
+            { value: "password", label: "Password login" },
+          ],
+        })) as "accessToken" | "password";
+        if (authMethod === "accessToken") {
+          accessToken = String(
+            await prompter.text({
+              message: "Matrix access token",
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }),
+          ).trim();
+        } else {
+          password = String(
+            await prompter.text({
+              message: "Matrix password",
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }),
+          ).trim();
+        }
+      }
+
+      const shouldApplyMatrixConfig =
+        useEnv || (homeserver && userId && (accessToken || password));
+      if (shouldApplyMatrixConfig) {
+        const e2eeChoice = (await prompter.select({
+          message: "Enable Matrix E2EE?",
+          options: [
+            { value: "yes", label: "Yes (recommended)" },
+            { value: "no", label: "No (disable encryption)" },
+          ],
+          initialValue: "yes",
+        })) as "yes" | "no";
+        encryption = e2eeChoice === "yes";
+        if (encryption) {
+          deviceId = String(
+            await prompter.text({
+              message: "Matrix device id",
+              initialValue: cfg.matrix?.deviceId,
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }),
+          ).trim();
+        }
+        next = {
+          ...next,
+          matrix: {
+            ...next.matrix,
+            enabled: true,
+            ...(homeserver ? { homeserver } : {}),
+            ...(userId ? { userId } : {}),
+            ...(accessToken ? { accessToken } : {}),
+            ...(password ? { password } : {}),
+            ...(typeof encryption === "boolean" ? { encryption } : {}),
+            ...(deviceId ? { deviceId } : {}),
+          },
+        };
+      }
     }
   }
 
