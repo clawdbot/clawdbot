@@ -43,9 +43,8 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/commands")).toBe(true);
     expect(hasControlCommand("/commands:")).toBe(true);
     expect(hasControlCommand("commands")).toBe(false);
-    expect(hasControlCommand("/compact")).toBe(true);
-    expect(hasControlCommand("/compact:")).toBe(true);
-    expect(hasControlCommand("compact")).toBe(false);
+    expect(hasControlCommand("/status")).toBe(true);
+    expect(hasControlCommand("/status:")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
     expect(hasControlCommand("usage")).toBe(false);
 
@@ -55,6 +54,9 @@ describe("control command parsing", () => {
         expect(hasControlCommand(`${alias}:`)).toBe(true);
       }
     }
+    expect(hasControlCommand("/compact")).toBe(true);
+    expect(hasControlCommand("/compact:")).toBe(true);
+    expect(hasControlCommand("compact")).toBe(false);
   });
 
   it("respects disabled config/debug commands", () => {
