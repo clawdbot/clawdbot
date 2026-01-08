@@ -14,7 +14,7 @@ read_when:
   - Else if `--to <e164>` is given, derive the session key from `session.scope` (direct chats collapse to `main`, or `global` when scope is global).
 - Runs the embedded Pi agent (configured via `agent`).
 - Thinking/verbose:
-  - Flags `--thinking <off|minimal|low|medium|high>` and `--verbose <on|off>` persist into the session store.
+  - Flags `--thinking <off|minimal|low|medium|high|xhigh>` (codex models only) and `--verbose <on|off>` persist into the session store.
 - Output:
   - Default: prints text (and `MEDIA:<url>` lines) to stdout.
   - `--json`: prints structured payloads + meta.

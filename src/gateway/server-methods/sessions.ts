@@ -17,9 +17,12 @@ import {
 } from "../../agents/pi-embedded.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import {
+  formatThinkingLevels,
+  formatXHighModelHint,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -175,12 +178,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       } else if (raw !== undefined) {
         const normalized = normalizeThinkLevel(String(raw));
         if (!normalized) {
+          const resolvedDefault = resolveConfiguredModelRef({
+            cfg,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+          });
+          const hintProvider =
+            existing?.providerOverride?.trim() || resolvedDefault.provider;
+          const hintModel =
+            existing?.modelOverride?.trim() || resolvedDefault.model;
           respond(
             false,
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              "invalid thinkingLevel (use off|minimal|low|medium|high)",
+              `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
             ),
           );
           return;
@@ -296,6 +308,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           next.providerOverride = resolved.ref.provider;
           next.modelOverride = resolved.ref.model;
         }
+      }
+    }
+
+    if (next.thinkingLevel === "xhigh") {
+      const resolvedDefault = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+      const effectiveProvider =
+        next.providerOverride ?? resolvedDefault.provider;
+      const effectiveModel = next.modelOverride ?? resolvedDefault.model;
+      if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`,
+          ),
+        );
+        return;
       }
     }
 

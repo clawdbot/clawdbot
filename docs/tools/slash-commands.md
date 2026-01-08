@@ -38,7 +38,7 @@ Text + native (when enabled):
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new`
-- `/think <level>` (aliases: `/thinking`, `/t`)
+- `/think <off|minimal|low|medium|high|xhigh>` (codex models only; aliases: `/thinking`, `/t`)
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)

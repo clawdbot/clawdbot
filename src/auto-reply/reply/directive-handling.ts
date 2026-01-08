@@ -29,6 +29,11 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
+import {
+  formatThinkingLevels,
+  formatXHighModelHint,
+  supportsXHighThinking,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type ElevatedLevel,
@@ -388,6 +393,50 @@ export async function handleDirectiveOnly(params: {
     }
   }
 
+  let modelSelection: ModelDirectiveSelection | undefined;
+  let profileOverride: string | undefined;
+  if (directives.hasModelDirective && directives.rawModelDirective) {
+    const resolved = resolveModelDirectiveSelection({
+      raw: directives.rawModelDirective,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys,
+    });
+    if (resolved.error) {
+      return { text: resolved.error };
+    }
+    modelSelection = resolved.selection;
+    if (modelSelection) {
+      if (directives.rawModelProfile) {
+        const profileResolved = resolveProfileOverride({
+          rawProfile: directives.rawModelProfile,
+          provider: modelSelection.provider,
+          cfg: params.cfg,
+        });
+        if (profileResolved.error) {
+          return { text: profileResolved.error };
+        }
+        profileOverride = profileResolved.profileId;
+      }
+      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
+      if (nextLabel !== initialModelLabel) {
+        enqueueSystemEvent(
+          formatModelSwitchEvent(nextLabel, modelSelection.alias),
+          {
+            contextKey: `model:${nextLabel}`,
+          },
+        );
+      }
+    }
+  }
+  if (directives.rawModelProfile && !modelSelection) {
+    return { text: "Auth profile override requires a model selection." };
+  }
+
+  const resolvedProvider = modelSelection?.provider ?? params.provider;
+  const resolvedModel = modelSelection?.model ?? params.model;
+
   if (directives.hasThinkDirective && !directives.thinkLevel) {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
@@ -395,7 +444,7 @@ export async function handleDirectiveOnly(params: {
       return { text: `Current thinking level: ${level}.` };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: off, minimal, low, medium, high.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel ?? ""}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -509,45 +558,15 @@ export async function handleDirectiveOnly(params: {
     return { text: errors.join(" ") };
   }
 
-  let modelSelection: ModelDirectiveSelection | undefined;
-  let profileOverride: string | undefined;
-  if (directives.hasModelDirective && directives.rawModelDirective) {
-    const resolved = resolveModelDirectiveSelection({
-      raw: directives.rawModelDirective,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-      allowedModelKeys,
-    });
-    if (resolved.error) {
-      return { text: resolved.error };
+  const nextThinkLevel = directives.hasThinkDirective
+    ? directives.thinkLevel
+    : sessionEntry?.thinkingLevel;
+  if (nextThinkLevel === "xhigh") {
+    if (!supportsXHighThinking(resolvedProvider, resolvedModel)) {
+      return {
+        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+      };
     }
-    modelSelection = resolved.selection;
-    if (modelSelection) {
-      if (directives.rawModelProfile) {
-        const profileResolved = resolveProfileOverride({
-          rawProfile: directives.rawModelProfile,
-          provider: modelSelection.provider,
-          cfg: params.cfg,
-        });
-        if (profileResolved.error) {
-          return { text: profileResolved.error };
-        }
-        profileOverride = profileResolved.profileId;
-      }
-      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
-      if (nextLabel !== initialModelLabel) {
-        enqueueSystemEvent(
-          formatModelSwitchEvent(nextLabel, modelSelection.alias),
-          {
-            contextKey: `model:${nextLabel}`,
-          },
-        );
-      }
-    }
-  }
-  if (directives.rawModelProfile && !modelSelection) {
-    return { text: "Auth profile override requires a model selection." };
   }
 
   if (sessionEntry && sessionStore && sessionKey) {

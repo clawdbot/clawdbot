@@ -704,7 +704,7 @@ export function resolveEmbeddedSessionLane(key: string) {
 }
 
 function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
-  // pi-agent-core supports "xhigh" too; Clawdbot doesn't surface it for now.
+  // pi-agent-core supports "xhigh"; Clawdbot enables it for specific codex models.
   if (!level) return "off";
   return level;
 }

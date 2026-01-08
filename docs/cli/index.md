@@ -324,7 +324,7 @@ Required:
 Options:
 - `--to <dest>` (for session key and optional delivery)
 - `--session-id <id>`
-- `--thinking <off|minimal|low|medium|high>`
+- `--thinking <off|minimal|low|medium|high|xhigh>` (codex models only)
 - `--verbose <on|off>`
 - `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
 - `--local`

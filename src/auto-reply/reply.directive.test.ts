@@ -66,6 +66,63 @@ describe("directive behavior", () => {
     vi.restoreAllMocks();
   });
 
+  it("accepts /thinking xhigh for codex models", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+        },
+        {},
+        {
+          agent: {
+            model: "openai-codex/gpt-5.2-codex",
+            workspace: path.join(home, "clawd"),
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res])
+        .map((entry) => entry?.text)
+        .filter(Boolean);
+      expect(texts).toContain("Thinking level set to xhigh.");
+    });
+  });
+
+  it("rejects /thinking xhigh for non-codex models", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+        },
+        {},
+        {
+          agent: {
+            model: "openai/gpt-4.1-mini",
+            workspace: path.join(home, "clawd"),
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res])
+        .map((entry) => entry?.text)
+        .filter(Boolean);
+      expect(texts).toContain(
+        'Thinking level "xhigh" is only supported for openai-codex/gpt-5.2-codex or openai-codex/gpt-5.1-codex.',
+      );
+    });
+  });
   it("keeps reserved command aliases from matching after trimming", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
