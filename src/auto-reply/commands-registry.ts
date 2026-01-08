@@ -264,7 +264,6 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
   assertCommandRegistry(commands);
   return commands;
 })();
-
 let cachedNativeCommandSurfaces: Set<string> | null = null;
 
 const getNativeCommandSurfaces = (): Set<string> => {
@@ -472,7 +471,7 @@ export function isNativeCommandSurface(surface?: string): boolean {
 
 export function shouldHandleTextCommands(params: {
   cfg: ClawdbotConfig;
-  surface?: string;
+  surface: string;
   commandSource?: "text" | "native";
 }): boolean {
   if (params.commandSource === "native") return true;
