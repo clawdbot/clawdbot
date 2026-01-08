@@ -128,6 +128,10 @@ export function applyProviderAccountConfig(params: {
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -266,6 +270,26 @@ export function applyProviderAccountConfig(params: {
             ...(params.appToken ? { appToken: params.appToken } : {}),
           },
         },
+      },
+    };
+  }
+
+  if (params.provider === "matrix") {
+    return {
+      ...next,
+      matrix: {
+        ...next.matrix,
+        enabled: true,
+        ...(params.useEnv
+          ? {}
+          : {
+              ...(params.homeserver ? { homeserver: params.homeserver } : {}),
+              ...(params.userId ? { userId: params.userId } : {}),
+              ...(params.accessToken
+                ? { accessToken: params.accessToken }
+                : {}),
+              ...(params.password ? { password: params.password } : {}),
+            }),
       },
     };
   }

@@ -32,6 +32,14 @@ describe("formatOutboundDeliverySummary", () => {
         channelId: "chan",
       }),
     ).toBe("✅ Sent via discord. Message ID: d1 (channel chan)");
+
+    expect(
+      formatOutboundDeliverySummary("matrix", {
+        provider: "matrix",
+        messageId: "mx1",
+        roomId: "!room:example",
+      }),
+    ).toBe("✅ Sent via matrix. Message ID: mx1 (room !room:example)");
   });
 });
 

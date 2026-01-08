@@ -42,8 +42,8 @@ export type FollowupRun = {
   originatingTo?: string;
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
-  /** Telegram forum topic thread id. */
-  originatingThreadId?: number;
+  /** Telegram forum topic id or Matrix thread root id. */
+  originatingThreadId?: number | string;
   run: {
     agentId: string;
     agentDir: string;
@@ -415,7 +415,9 @@ function hasCrossProviderItems(items: FollowupRun[]): boolean {
     const to = item.originatingTo;
     const accountId = item.originatingAccountId;
     const threadId = item.originatingThreadId;
-    if (!channel && !to && !accountId && typeof threadId !== "number") {
+    const hasThreadId =
+      typeof threadId === "number" || typeof threadId === "string";
+    if (!channel && !to && !accountId && !hasThreadId) {
       hasUnkeyed = true;
       continue;
     }
@@ -423,12 +425,9 @@ function hasCrossProviderItems(items: FollowupRun[]): boolean {
       return true;
     }
     keys.add(
-      [
-        channel,
-        to,
-        accountId || "",
-        typeof threadId === "number" ? String(threadId) : "",
-      ].join("|"),
+      [channel, to, accountId || "", hasThreadId ? String(threadId) : ""].join(
+        "|",
+      ),
     );
   }
 
@@ -490,7 +489,9 @@ export function scheduleFollowupDrain(
             (i) => i.originatingAccountId,
           )?.originatingAccountId;
           const originatingThreadId = items.find(
-            (i) => typeof i.originatingThreadId === "number",
+            (i) =>
+              typeof i.originatingThreadId === "number" ||
+              typeof i.originatingThreadId === "string",
           )?.originatingThreadId;
 
           const prompt = buildCollectPrompt(items, summary);

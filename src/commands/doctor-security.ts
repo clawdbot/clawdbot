@@ -17,6 +17,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
       | "imessage"
       | "discord"
       | "slack"
+      | "matrix"
       | "whatsapp";
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
@@ -149,6 +150,19 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
       approveHint:
         "Approve via: clawdbot pairing list --provider slack / clawdbot pairing approve --provider slack <code>",
       normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
+    });
+  }
+
+  if (cfg.matrix?.enabled !== false) {
+    await warnDmPolicy({
+      label: "Matrix",
+      provider: "matrix",
+      dmPolicy: cfg.matrix?.dm?.policy ?? "pairing",
+      allowFrom: cfg.matrix?.dm?.allowFrom ?? [],
+      allowFromPath: "matrix.dm.",
+      approveHint:
+        "Approve via: clawdbot pairing list --provider matrix / clawdbot pairing approve --provider matrix <code>",
+      normalizeEntry: (raw) => raw.replace(/^(matrix|user):/i, ""),
     });
   }
 

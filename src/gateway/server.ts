@@ -181,6 +181,7 @@ const logWhatsApp = logProviders.child("whatsapp");
 const logTelegram = logProviders.child("telegram");
 const logDiscord = logProviders.child("discord");
 const logSlack = logProviders.child("slack");
+const logMatrix = logProviders.child("matrix");
 const logSignal = logProviders.child("signal");
 const logIMessage = logProviders.child("imessage");
 const canvasRuntime = runtimeForLogger(logCanvas);
@@ -188,6 +189,7 @@ const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
 const telegramRuntimeEnv = runtimeForLogger(logTelegram);
 const discordRuntimeEnv = runtimeForLogger(logDiscord);
 const slackRuntimeEnv = runtimeForLogger(logSlack);
+const matrixRuntimeEnv = runtimeForLogger(logMatrix);
 const signalRuntimeEnv = runtimeForLogger(logSignal);
 const imessageRuntimeEnv = runtimeForLogger(logIMessage);
 
@@ -499,6 +501,7 @@ export async function startGatewayServer(
       | "telegram"
       | "discord"
       | "slack"
+      | "matrix"
       | "signal"
       | "imessage";
     to?: string;
@@ -753,12 +756,14 @@ export async function startGatewayServer(
     logTelegram,
     logDiscord,
     logSlack,
+    logMatrix,
     logSignal,
     logIMessage,
     whatsappRuntimeEnv,
     telegramRuntimeEnv,
     discordRuntimeEnv,
     slackRuntimeEnv,
+    matrixRuntimeEnv,
     signalRuntimeEnv,
     imessageRuntimeEnv,
   });
@@ -769,12 +774,14 @@ export async function startGatewayServer(
     startTelegramProvider,
     startDiscordProvider,
     startSlackProvider,
+    startMatrixProvider,
     startSignalProvider,
     startIMessageProvider,
     stopWhatsAppProvider,
     stopTelegramProvider,
     stopDiscordProvider,
     stopSlackProvider,
+    stopMatrixProvider,
     stopSignalProvider,
     stopIMessageProvider,
     markWhatsAppLoggedOut,
@@ -1837,6 +1844,13 @@ export async function startGatewayServer(
         if (plan.restartProviders.has("slack")) {
           await restartProvider("slack", stopSlackProvider, startSlackProvider);
         }
+        if (plan.restartProviders.has("matrix")) {
+          await restartProvider(
+            "matrix",
+            stopMatrixProvider,
+            startMatrixProvider,
+          );
+        }
         if (plan.restartProviders.has("signal")) {
           await restartProvider(
             "signal",
@@ -1945,6 +1959,7 @@ export async function startGatewayServer(
       await stopTelegramProvider();
       await stopDiscordProvider();
       await stopSlackProvider();
+      await stopMatrixProvider();
       await stopSignalProvider();
       await stopIMessageProvider();
       await stopGmailWatcher();

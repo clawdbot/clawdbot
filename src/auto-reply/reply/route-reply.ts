@@ -10,6 +10,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { sendMessageMatrix } from "../../matrix/send.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -26,8 +27,8 @@ export type RouteReplyParams = {
   to: string;
   /** Provider account id (multi-account). */
   accountId?: string;
-  /** Telegram message thread id (forum topics). */
-  threadId?: number;
+  /** Telegram forum topic id or Matrix thread root id. */
+  threadId?: number | string;
   /** Config for provider-specific settings. */
   cfg: ClawdbotConfig;
   /** Optional abort signal for cooperative cancellation. */
@@ -88,7 +89,7 @@ export async function routeReply(
           : undefined;
         const result = await sendMessageTelegram(to, text, {
           mediaUrl,
-          messageThreadId: threadId,
+          messageThreadId: typeof threadId === "number" ? threadId : undefined,
           replyToMessageId: resolvedReplyToMessageId,
           accountId,
         });
@@ -117,6 +118,15 @@ export async function routeReply(
         const result = await sendMessageSignal(to, text, {
           mediaUrl,
           accountId,
+        });
+        return { ok: true, messageId: result.messageId };
+      }
+
+      case "matrix": {
+        const result = await sendMessageMatrix(to, text, {
+          mediaUrl,
+          replyToId,
+          threadId: typeof threadId === "string" ? threadId : undefined,
         });
         return { ok: true, messageId: result.messageId };
       }
@@ -193,6 +203,7 @@ export function isRoutableChannel(
   | "telegram"
   | "slack"
   | "discord"
+  | "matrix"
   | "signal"
   | "imessage"
   | "whatsapp" {
@@ -201,6 +212,7 @@ export function isRoutableChannel(
     "telegram",
     "slack",
     "discord",
+    "matrix",
     "signal",
     "imessage",
     "whatsapp",

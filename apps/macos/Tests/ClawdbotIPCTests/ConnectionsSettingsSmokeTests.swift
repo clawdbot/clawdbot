@@ -47,6 +47,7 @@ struct ConnectionsSettingsSmokeTests {
                         hasCustomCert: false)),
                 lastProbeAt: 1_700_000_050_000),
             discord: nil,
+            matrix: nil,
             signal: ProvidersStatusSnapshot.SignalStatus(
                 configured: true,
                 baseUrl: "http://127.0.0.1:8080",
@@ -121,6 +122,7 @@ struct ConnectionsSettingsSmokeTests {
                     webhook: nil),
                 lastProbeAt: 1_700_000_100_000),
             discord: nil,
+            matrix: nil,
             signal: ProvidersStatusSnapshot.SignalStatus(
                 configured: false,
                 baseUrl: "http://127.0.0.1:8080",

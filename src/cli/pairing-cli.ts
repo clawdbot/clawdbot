@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
+import { sendMessageMatrix } from "../matrix/send.js";
 import {
   approveProviderPairingCode,
   listProviderPairingRequests,
@@ -19,6 +20,7 @@ const PROVIDERS: PairingProvider[] = [
   "imessage",
   "discord",
   "slack",
+  "matrix",
   "whatsapp",
 ];
 
@@ -54,6 +56,10 @@ async function notifyApproved(provider: PairingProvider, id: string) {
   }
   if (provider === "slack") {
     await sendMessageSlack(`user:${id}`, message);
+    return;
+  }
+  if (provider === "matrix") {
+    await sendMessageMatrix(`user:${id}`, message);
     return;
   }
   if (provider === "signal") {

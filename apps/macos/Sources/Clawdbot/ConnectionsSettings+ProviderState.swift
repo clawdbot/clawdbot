@@ -29,6 +29,15 @@ extension ConnectionsSettings {
         return .orange
     }
 
+    var matrixTint: Color {
+        guard let status = self.store.snapshot?.matrix else { return .secondary }
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
+    }
+
     var signalTint: Color {
         guard let status = self.store.snapshot?.signal else { return .secondary }
         if !status.configured { return .secondary }
@@ -64,6 +73,13 @@ extension ConnectionsSettings {
 
     var discordSummary: String {
         guard let status = self.store.snapshot?.discord else { return "Checking…" }
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
+    }
+
+    var matrixSummary: String {
+        guard let status = self.store.snapshot?.matrix else { return "Checking…" }
         if !status.configured { return "Not configured" }
         if status.running { return "Running" }
         return "Configured"
@@ -172,6 +188,37 @@ extension ConnectionsSettings {
         return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
+    var matrixDetails: String? {
+        guard let status = self.store.snapshot?.matrix else { return nil }
+        var lines: [String] = []
+        if let source = status.authSource {
+            lines.append("Auth source: \(source)")
+        }
+        if let probe = status.probe {
+            if probe.ok {
+                if let userId = probe.userId, !userId.isEmpty {
+                    lines.append("User: \(userId)")
+                }
+                if let deviceId = probe.deviceId, !deviceId.isEmpty {
+                    lines.append("Device: \(deviceId)")
+                }
+                if let elapsed = probe.elapsedMs {
+                    lines.append("Probe \(Int(elapsed))ms")
+                }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
+            }
+        }
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
+    }
+
     var signalDetails: String? {
         guard let status = self.store.snapshot?.signal else { return nil }
         var lines: [String] = []
@@ -228,6 +275,10 @@ extension ConnectionsSettings {
         self.store.snapshot?.discord?.tokenSource == "env"
     }
 
+    var isMatrixAuthLocked: Bool {
+        self.store.snapshot?.matrix?.authSource == "env"
+    }
+
     var orderedProviders: [ConnectionProvider] {
         ConnectionProvider.allCases.sorted { lhs, rhs in
             let lhsEnabled = self.providerEnabled(lhs)
@@ -266,6 +317,9 @@ extension ConnectionsSettings {
         case .discord:
             guard let status = self.store.snapshot?.discord else { return false }
             return status.configured || status.running
+        case .matrix:
+            guard let status = self.store.snapshot?.matrix else { return false }
+            return status.configured || status.running
         case .signal:
             guard let status = self.store.snapshot?.signal else { return false }
             return status.configured || status.running
@@ -284,6 +338,8 @@ extension ConnectionsSettings {
             self.telegramSection
         case .discord:
             self.discordSection
+        case .matrix:
+            self.matrixSection
         case .signal:
             self.signalSection
         case .imessage:
@@ -299,6 +355,8 @@ extension ConnectionsSettings {
             self.telegramTint
         case .discord:
             self.discordTint
+        case .matrix:
+            self.matrixTint
         case .signal:
             self.signalTint
         case .imessage:
@@ -314,6 +372,8 @@ extension ConnectionsSettings {
             self.telegramSummary
         case .discord:
             self.discordSummary
+        case .matrix:
+            self.matrixSummary
         case .signal:
             self.signalSummary
         case .imessage:
@@ -329,6 +389,8 @@ extension ConnectionsSettings {
             self.telegramDetails
         case .discord:
             self.discordDetails
+        case .matrix:
+            self.matrixDetails
         case .signal:
             self.signalDetails
         case .imessage:
@@ -350,6 +412,8 @@ extension ConnectionsSettings {
             return self.date(fromMs: self.store.snapshot?.telegram.lastProbeAt)
         case .discord:
             return self.date(fromMs: self.store.snapshot?.discord?.lastProbeAt)
+        case .matrix:
+            return self.date(fromMs: self.store.snapshot?.matrix?.lastProbeAt)
         case .signal:
             return self.date(fromMs: self.store.snapshot?.signal?.lastProbeAt)
         case .imessage:
@@ -367,6 +431,9 @@ extension ConnectionsSettings {
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case .discord:
             guard let status = self.store.snapshot?.discord else { return false }
+            return status.lastError?.isEmpty == false || status.probe?.ok == false
+        case .matrix:
+            guard let status = self.store.snapshot?.matrix else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case .signal:
             guard let status = self.store.snapshot?.signal else { return false }

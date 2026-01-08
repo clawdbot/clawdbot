@@ -22,6 +22,7 @@ export type CronPayload =
         | "telegram"
         | "discord"
         | "slack"
+        | "matrix"
         | "signal"
         | "imessage";
       to?: string;

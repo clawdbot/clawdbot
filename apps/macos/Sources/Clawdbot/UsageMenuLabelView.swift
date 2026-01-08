@@ -12,7 +12,7 @@ struct UsageMenuLabelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let used = row.usedPercent {
+            if let used = self.row.usedPercent {
                 ContextUsageBar(
                     usedTokens: Int(round(used)),
                     contextTokens: 100,

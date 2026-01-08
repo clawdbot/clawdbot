@@ -12,7 +12,7 @@ Goal: go from **zero** → **first working chat** (with sane defaults) as quickl
 Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It sets up:
 - model/auth (OAuth recommended)
 - gateway settings
-- providers (WhatsApp/Telegram/Discord/…)
+- providers (WhatsApp/Telegram/Discord/Matrix/…)
 - pairing defaults (secure DMs)
 - workspace bootstrap + skills
 - optional background daemon
@@ -95,6 +95,7 @@ WhatsApp doc: [WhatsApp](/providers/whatsapp)
 The wizard can write tokens/config for you. If you prefer manual config, start with:
 - Telegram: [Telegram](/providers/telegram)
 - Discord: [Discord](/providers/discord)
+- Matrix: [Matrix](/providers/matrix)
 
 **Telegram DM tip:** your first DM returns a pairing code. Approve it (see next step) or the bot won’t respond.
 

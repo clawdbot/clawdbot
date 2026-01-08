@@ -26,6 +26,10 @@ export type ProvidersAddOptions = {
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -170,6 +174,25 @@ export async function providersAddCommand(
       return;
     }
   }
+  if (provider === "matrix") {
+    if (accountId !== DEFAULT_ACCOUNT_ID) {
+      runtime.error("Matrix does not support multiple accounts.");
+      runtime.exit(1);
+      return;
+    }
+    if (
+      !useEnv &&
+      (!opts.homeserver ||
+        !opts.userId ||
+        (!opts.accessToken && !opts.password))
+    ) {
+      runtime.error(
+        "Matrix requires --homeserver, --user-id, and --access-token (or --password), or use --use-env.",
+      );
+      runtime.exit(1);
+      return;
+    }
+  }
   if (provider === "signal") {
     if (
       !opts.signalNumber &&
@@ -195,6 +218,10 @@ export async function providersAddCommand(
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,
+    homeserver: opts.homeserver,
+    userId: opts.userId,
+    accessToken: opts.accessToken,
+    password: opts.password,
     signalNumber: opts.signalNumber,
     cliPath: opts.cliPath,
     dbPath: opts.dbPath,

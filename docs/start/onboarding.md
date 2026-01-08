@@ -82,7 +82,7 @@ The onboarding flow now embeds the SwiftUI chat view directly. It uses a **speci
 This onboarding chat is where the agent:
 - does the BOOTSTRAP.md identity ritual (one question at a time)
 - visits **soul.md** with the user and writes `SOUL.md` (values, tone, boundaries)
-- asks how the user wants to talk (web-only / Telegram / WhatsApp)
+- asks how the user wants to talk (web-only / WhatsApp / Telegram / Matrix)
 - guides linking steps (including showing a QR inline for WhatsApp via the `whatsapp_login` tool)
 
 If the workspace bootstrap is already complete (BOOTSTRAP.md removed), the onboarding chat step is skipped.

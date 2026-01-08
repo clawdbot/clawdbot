@@ -42,6 +42,7 @@ const GROUP_LABELS: Record<string, string> = {
   telegram: "Telegram",
   discord: "Discord",
   slack: "Slack",
+  matrix: "Matrix",
   signal: "Signal",
   imessage: "iMessage",
   whatsapp: "WhatsApp",
@@ -69,6 +70,7 @@ const GROUP_ORDER: Record<string, number> = {
   telegram: 140,
   discord: 150,
   slack: 155,
+  matrix: 158,
   signal: 160,
   imessage: 170,
   whatsapp: 180,
@@ -124,6 +126,12 @@ const FIELD_LABELS: Record<string, string> = {
   "discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "slack.dm.policy": "Slack DM Policy",
   "slack.allowBots": "Slack Allow Bot Messages",
+  "matrix.homeserver": "Matrix Homeserver",
+  "matrix.userId": "Matrix User ID",
+  "matrix.accessToken": "Matrix Access Token",
+  "matrix.password": "Matrix Password",
+  "matrix.dm.policy": "Matrix DM Policy",
+  "matrix.allowlistOnly": "Matrix Allowlist Only",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
   "slack.appToken": "Slack App Token",
@@ -201,6 +209,10 @@ const FIELD_HELP: Record<string, string> = {
     "Soft max line count per Discord message (default: 17).",
   "slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
+  "matrix.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires matrix.dm.allowFrom=["*"].',
+  "matrix.allowlistOnly":
+    "Force allowlists for Matrix rooms + DMs (overrides open/pairing defaults).",
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

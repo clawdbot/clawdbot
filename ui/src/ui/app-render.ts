@@ -29,6 +29,7 @@ import type {
   CronFormState,
   DiscordForm,
   IMessageForm,
+  MatrixForm,
   SlackForm,
   SignalForm,
   TelegramForm,
@@ -48,6 +49,7 @@ import {
   loadProviders,
   updateDiscordForm,
   updateIMessageForm,
+  updateMatrixForm,
   updateSlackForm,
   updateSignalForm,
   updateTelegramForm,
@@ -137,6 +139,10 @@ export type AppViewState = {
   slackTokenLocked: boolean;
   slackAppTokenLocked: boolean;
   slackConfigStatus: string | null;
+  matrixForm: MatrixForm;
+  matrixSaving: boolean;
+  matrixAuthLocked: boolean;
+  matrixConfigStatus: string | null;
   signalForm: SignalForm;
   signalSaving: boolean;
   signalConfigStatus: string | null;
@@ -197,6 +203,7 @@ export type AppViewState = {
   handleWhatsAppWait: () => Promise<void>;
   handleWhatsAppLogout: () => Promise<void>;
   handleTelegramSave: () => Promise<void>;
+  handleMatrixSave: () => Promise<void>;
   handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
   resetToolStream: () => void;
   handleLogsScroll: (event: Event) => void;
@@ -313,6 +320,10 @@ export function renderApp(state: AppViewState) {
               slackAppTokenLocked: state.slackAppTokenLocked,
               slackSaving: state.slackSaving,
               slackStatus: state.slackConfigStatus,
+              matrixForm: state.matrixForm,
+              matrixAuthLocked: state.matrixAuthLocked,
+              matrixSaving: state.matrixSaving,
+              matrixStatus: state.matrixConfigStatus,
               signalForm: state.signalForm,
               signalSaving: state.signalSaving,
               signalStatus: state.signalConfigStatus,
@@ -329,6 +340,8 @@ export function renderApp(state: AppViewState) {
               onDiscordSave: () => state.handleDiscordSave(),
               onSlackChange: (patch) => updateSlackForm(state, patch),
               onSlackSave: () => state.handleSlackSave(),
+              onMatrixChange: (patch) => updateMatrixForm(state, patch),
+              onMatrixSave: () => state.handleMatrixSave(),
               onSignalChange: (patch) => updateSignalForm(state, patch),
               onSignalSave: () => state.handleSignalSave(),
               onIMessageChange: (patch) => updateIMessageForm(state, patch),

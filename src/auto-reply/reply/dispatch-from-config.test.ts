@@ -17,6 +17,7 @@ vi.mock("./route-reply.js", () => ({
           "telegram",
           "slack",
           "discord",
+          "matrix",
           "signal",
           "imessage",
           "whatsapp",

@@ -17,6 +17,7 @@ extension ConnectionsStore {
             self.applyUIConfig(snap)
             self.applyTelegramConfig(snap)
             self.applyDiscordConfig(snap)
+            self.applyMatrixConfig(snap)
             self.applySignalConfig(snap)
             self.applyIMessageConfig(snap)
         } catch {
@@ -83,6 +84,54 @@ extension ConnectionsStore {
         self.discordSlashName = slash?["name"]?.stringValue ?? ""
         self.discordSlashSessionPrefix = slash?["sessionPrefix"]?.stringValue ?? ""
         self.discordSlashEphemeral = slash?["ephemeral"]?.boolValue ?? true
+    }
+
+    private func applyMatrixConfig(_ snap: ConfigSnapshot) {
+        let matrix = snap.config?["matrix"]?.dictionaryValue
+        self.matrixEnabled = matrix?["enabled"]?.boolValue ?? true
+        self.matrixHomeserver = matrix?["homeserver"]?.stringValue ?? ""
+        self.matrixUserId = matrix?["userId"]?.stringValue ?? ""
+        self.matrixAccessToken = matrix?["accessToken"]?.stringValue ?? ""
+        self.matrixPassword = matrix?["password"]?.stringValue ?? ""
+        self.matrixDeviceId = matrix?["deviceId"]?.stringValue ?? ""
+        self.matrixDeviceName = matrix?["deviceName"]?.stringValue ?? ""
+        self.matrixEncryption = matrix?["encryption"]?.boolValue ?? true
+
+        let autoJoin = matrix?["autoJoin"]?.stringValue ?? "always"
+        self.matrixAutoJoin = ["always", "allowlist", "off"].contains(autoJoin)
+            ? autoJoin
+            : "always"
+        self.matrixAutoJoinAllowlist = self.stringList(from: matrix?["autoJoinAllowlist"]?.arrayValue)
+
+        let groupPolicy = matrix?["groupPolicy"]?.stringValue ?? "open"
+        self.matrixGroupPolicy = ["open", "allowlist", "disabled"].contains(groupPolicy)
+            ? groupPolicy
+            : "open"
+        self.matrixAllowlistOnly = matrix?["allowlistOnly"]?.boolValue ?? false
+
+        let dm = matrix?["dm"]?.dictionaryValue
+        self.matrixDmEnabled = dm?["enabled"]?.boolValue ?? true
+        let dmPolicy = dm?["policy"]?.stringValue ?? "pairing"
+        self.matrixDmPolicy = ["pairing", "allowlist", "open", "disabled"].contains(dmPolicy)
+            ? dmPolicy
+            : "pairing"
+        self.matrixDmAllowFrom = self.stringList(from: dm?["allowFrom"]?.arrayValue)
+
+        self.matrixTextChunkLimit = self.numberString(from: matrix?["textChunkLimit"])
+        self.matrixMediaMaxMb = self.numberString(from: matrix?["mediaMaxMb"])
+        self.matrixReplyToMode = self.replyMode(from: matrix?["replyToMode"]?.stringValue)
+
+        let threadReplies = matrix?["threadReplies"]?.stringValue ?? "inbound"
+        self.matrixThreadReplies = ["off", "inbound", "always"].contains(threadReplies)
+            ? threadReplies
+            : "inbound"
+
+        let actions = matrix?["actions"]?.dictionaryValue
+        self.matrixActionReactions = actions?["reactions"]?.boolValue ?? true
+        self.matrixActionMessages = actions?["messages"]?.boolValue ?? true
+        self.matrixActionPins = actions?["pins"]?.boolValue ?? true
+        self.matrixActionMemberInfo = actions?["memberInfo"]?.boolValue ?? true
+        self.matrixActionRoomInfo = actions?["roomInfo"]?.boolValue ?? true
     }
 
     private func decodeDiscordGuilds(_ guilds: [String: AnyCodable]?) -> [DiscordGuildForm] {
@@ -194,6 +243,128 @@ extension ConnectionsStore {
 
         let discord = self.buildDiscordConfig()
         self.setSection("discord", payload: discord)
+        await self.persistConfig()
+    }
+
+    func saveMatrixConfig() async {
+        guard !self.isSavingConfig else { return }
+        self.isSavingConfig = true
+        defer { self.isSavingConfig = false }
+        if !self.configLoaded {
+            await self.loadConfig()
+        }
+
+        var matrix: [String: Any] = (self.configRoot["matrix"] as? [String: Any]) ?? [:]
+        if self.matrixEnabled {
+            matrix.removeValue(forKey: "enabled")
+        } else {
+            matrix["enabled"] = false
+        }
+
+        self.setOptionalString(&matrix, key: "homeserver", value: self.matrixHomeserver)
+        self.setOptionalString(&matrix, key: "userId", value: self.matrixUserId)
+        self.setOptionalString(&matrix, key: "accessToken", value: self.matrixAccessToken)
+        self.setOptionalString(&matrix, key: "password", value: self.matrixPassword)
+        self.setOptionalString(&matrix, key: "deviceId", value: self.matrixDeviceId)
+        self.setOptionalString(&matrix, key: "deviceName", value: self.matrixDeviceName)
+
+        if self.matrixEncryption {
+            matrix.removeValue(forKey: "encryption")
+        } else {
+            matrix["encryption"] = false
+        }
+
+        let autoJoin = self.trimmed(self.matrixAutoJoin)
+        if autoJoin.isEmpty || autoJoin == "always" {
+            matrix.removeValue(forKey: "autoJoin")
+        } else if ["allowlist", "off"].contains(autoJoin) {
+            matrix["autoJoin"] = autoJoin
+        } else {
+            matrix.removeValue(forKey: "autoJoin")
+        }
+
+        let autoJoinAllowlist = self.splitCsv(self.matrixAutoJoinAllowlist)
+        if autoJoinAllowlist.isEmpty {
+            matrix.removeValue(forKey: "autoJoinAllowlist")
+        } else {
+            matrix["autoJoinAllowlist"] = autoJoinAllowlist
+        }
+
+        let groupPolicy = self.trimmed(self.matrixGroupPolicy)
+        if groupPolicy.isEmpty || groupPolicy == "open" {
+            matrix.removeValue(forKey: "groupPolicy")
+        } else if ["allowlist", "disabled"].contains(groupPolicy) {
+            matrix["groupPolicy"] = groupPolicy
+        } else {
+            matrix.removeValue(forKey: "groupPolicy")
+        }
+
+        if self.matrixAllowlistOnly {
+            matrix["allowlistOnly"] = true
+        } else {
+            matrix.removeValue(forKey: "allowlistOnly")
+        }
+
+        var dm: [String: Any] = (matrix["dm"] as? [String: Any]) ?? [:]
+        if self.matrixDmEnabled {
+            dm.removeValue(forKey: "enabled")
+        } else {
+            dm["enabled"] = false
+        }
+        let dmPolicy = self.trimmed(self.matrixDmPolicy)
+        if dmPolicy.isEmpty || dmPolicy == "pairing" {
+            dm.removeValue(forKey: "policy")
+        } else if ["allowlist", "open", "disabled"].contains(dmPolicy) {
+            dm["policy"] = dmPolicy
+        } else {
+            dm.removeValue(forKey: "policy")
+        }
+        let dmAllowFrom = self.splitCsv(self.matrixDmAllowFrom)
+        if dmAllowFrom.isEmpty {
+            dm.removeValue(forKey: "allowFrom")
+        } else {
+            dm["allowFrom"] = dmAllowFrom
+        }
+        if dm.isEmpty {
+            matrix.removeValue(forKey: "dm")
+        } else {
+            matrix["dm"] = dm
+        }
+
+        self.setOptionalInt(&matrix, key: "textChunkLimit", value: self.matrixTextChunkLimit, allowZero: false)
+        self.setOptionalNumber(&matrix, key: "mediaMaxMb", value: self.matrixMediaMaxMb)
+
+        let replyToMode = self.trimmed(self.matrixReplyToMode)
+        if replyToMode.isEmpty || replyToMode == "off" {
+            matrix.removeValue(forKey: "replyToMode")
+        } else if ["first", "all"].contains(replyToMode) {
+            matrix["replyToMode"] = replyToMode
+        } else {
+            matrix.removeValue(forKey: "replyToMode")
+        }
+
+        let threadReplies = self.trimmed(self.matrixThreadReplies)
+        if threadReplies.isEmpty || threadReplies == "inbound" {
+            matrix.removeValue(forKey: "threadReplies")
+        } else if ["always", "off"].contains(threadReplies) {
+            matrix["threadReplies"] = threadReplies
+        } else {
+            matrix.removeValue(forKey: "threadReplies")
+        }
+
+        var actions: [String: Any] = (matrix["actions"] as? [String: Any]) ?? [:]
+        self.setAction(&actions, key: "reactions", value: self.matrixActionReactions, defaultValue: true)
+        self.setAction(&actions, key: "messages", value: self.matrixActionMessages, defaultValue: true)
+        self.setAction(&actions, key: "pins", value: self.matrixActionPins, defaultValue: true)
+        self.setAction(&actions, key: "memberInfo", value: self.matrixActionMemberInfo, defaultValue: true)
+        self.setAction(&actions, key: "roomInfo", value: self.matrixActionRoomInfo, defaultValue: true)
+        if actions.isEmpty {
+            matrix.removeValue(forKey: "actions")
+        } else {
+            matrix["actions"] = actions
+        }
+
+        self.setSection("matrix", payload: matrix)
         await self.persistConfig()
     }
 

@@ -9,9 +9,11 @@ import {
 } from "./config";
 import {
   defaultDiscordActions,
+  defaultMatrixActions,
   defaultSlackActions,
   type DiscordForm,
   type IMessageForm,
+  type MatrixForm,
   type SignalForm,
   type SlackForm,
   type TelegramForm,
@@ -66,6 +68,29 @@ const baseSlackForm: SlackForm = {
   channels: [],
 };
 
+const baseMatrixForm: MatrixForm = {
+  enabled: true,
+  homeserver: "",
+  userId: "",
+  accessToken: "",
+  password: "",
+  deviceId: "",
+  deviceName: "",
+  encryption: true,
+  autoJoin: "always",
+  autoJoinAllowlist: "",
+  groupPolicy: "open",
+  allowlistOnly: false,
+  dmEnabled: true,
+  dmPolicy: "pairing",
+  dmAllowFrom: "",
+  textChunkLimit: "",
+  mediaMaxMb: "",
+  replyToMode: "off",
+  threadReplies: "inbound",
+  actions: { ...defaultMatrixActions },
+};
+
 const baseSignalForm: SignalForm = {
   enabled: true,
   account: "",
@@ -117,11 +142,13 @@ function createState(): ConfigState {
     telegramForm: { ...baseTelegramForm },
     discordForm: { ...baseDiscordForm },
     slackForm: { ...baseSlackForm },
+    matrixForm: { ...baseMatrixForm },
     signalForm: { ...baseSignalForm },
     imessageForm: { ...baseIMessageForm },
     telegramConfigStatus: null,
     discordConfigStatus: null,
     slackConfigStatus: null,
+    matrixConfigStatus: null,
     signalConfigStatus: null,
     imessageConfigStatus: null,
   };

@@ -7,6 +7,7 @@ export type OutboundProvider =
   | "telegram"
   | "discord"
   | "slack"
+  | "matrix"
   | "signal"
   | "imessage"
   | "none";
@@ -29,6 +30,7 @@ export function resolveOutboundTarget(params: {
     | "telegram"
     | "discord"
     | "slack"
+    | "matrix"
     | "signal"
     | "imessage"
     | "webchat";
@@ -82,6 +84,17 @@ export function resolveOutboundTarget(params: {
     }
     return { ok: true, to: trimmed };
   }
+  if (params.provider === "matrix") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to Matrix requires --to <roomId|room:ID|#alias|@user>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
   if (params.provider === "signal") {
     if (!trimmed) {
       return {
@@ -123,6 +136,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     rawTarget === "telegram" ||
     rawTarget === "discord" ||
     rawTarget === "slack" ||
+    rawTarget === "matrix" ||
     rawTarget === "signal" ||
     rawTarget === "imessage" ||
     rawTarget === "none" ||
@@ -150,6 +164,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     | "telegram"
     | "discord"
     | "slack"
+    | "matrix"
     | "signal"
     | "imessage"
     | undefined =
@@ -159,6 +174,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
           target === "telegram" ||
           target === "discord" ||
           target === "slack" ||
+          target === "matrix" ||
           target === "signal" ||
           target === "imessage"
         ? target

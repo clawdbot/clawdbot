@@ -533,6 +533,7 @@ export async function agentCommand(
     deliveryProvider === "telegram" ||
     deliveryProvider === "discord" ||
     deliveryProvider === "slack" ||
+    deliveryProvider === "matrix" ||
     deliveryProvider === "signal" ||
     deliveryProvider === "imessage" ||
     deliveryProvider === "webchat";
@@ -597,6 +598,7 @@ export async function agentCommand(
       deliveryProvider === "telegram" ||
       deliveryProvider === "discord" ||
       deliveryProvider === "slack" ||
+      deliveryProvider === "matrix" ||
       deliveryProvider === "signal" ||
       deliveryProvider === "imessage")
   ) {
@@ -614,6 +616,7 @@ export async function agentCommand(
           sendTelegram: deps.sendMessageTelegram,
           sendDiscord: deps.sendMessageDiscord,
           sendSlack: deps.sendMessageSlack,
+          sendMatrix: deps.sendMessageMatrix,
           sendSignal: deps.sendMessageSignal,
           sendIMessage: deps.sendMessageIMessage,
         },

@@ -158,6 +158,7 @@ function resolveDeliveryTarget(
       | "telegram"
       | "discord"
       | "slack"
+      | "matrix"
       | "signal"
       | "imessage";
     to?: string;
@@ -188,6 +189,7 @@ function resolveDeliveryTarget(
       requestedProvider === "telegram" ||
       requestedProvider === "discord" ||
       requestedProvider === "slack" ||
+      requestedProvider === "matrix" ||
       requestedProvider === "signal" ||
       requestedProvider === "imessage"
     ) {
@@ -625,6 +627,46 @@ export async function runCronIsolatedAgentTurn(params: {
           sendMedia: (caption, mediaUrl) =>
             params.deps.sendMessageSlack(slackTarget, caption, { mediaUrl }),
         });
+      } catch (err) {
+        if (!bestEffortDeliver)
+          return { status: "error", summary, error: String(err) };
+        return { status: "ok", summary };
+      }
+    } else if (resolvedDelivery.provider === "matrix") {
+      if (!resolvedDelivery.to) {
+        if (!bestEffortDeliver)
+          return {
+            status: "error",
+            summary,
+            error:
+              "Cron delivery to Matrix requires --provider matrix and --to <roomId|room:ID|#alias>.",
+          };
+        return {
+          status: "skipped",
+          summary: "Delivery skipped (no Matrix destination).",
+        };
+      }
+      const matrixTarget = resolvedDelivery.to;
+      try {
+        for (const payload of payloads) {
+          const mediaList =
+            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+          if (mediaList.length === 0) {
+            await params.deps.sendMessageMatrix(
+              matrixTarget,
+              payload.text ?? "",
+            );
+          } else {
+            let first = true;
+            for (const url of mediaList) {
+              const caption = first ? (payload.text ?? "") : "";
+              first = false;
+              await params.deps.sendMessageMatrix(matrixTarget, caption, {
+                mediaUrl: url,
+              });
+            }
+          }
+        }
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };

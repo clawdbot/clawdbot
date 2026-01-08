@@ -37,7 +37,7 @@ normal (non-heartbeat) reply, Clawdbot strips the token and logs a verbose
 message. If the reply is only `HEARTBEAT_OK`, it is dropped.
 
 ### Outbound normalization (all providers)
-For **all providers** (WhatsApp/Web, Telegram, Slack, Discord, Signal, iMessage),
+For **all providers** (WhatsApp/Web, Telegram, Slack, Discord, Signal, iMessage, Matrix),
 Clawdbot applies the same filtering to tool summaries, streaming block replies,
 and final replies:
 - drop payloads that are only `HEARTBEAT_OK` with no media
@@ -51,7 +51,7 @@ and final replies:
     heartbeat: {
       every: "30m",           // default: 30m (0m disables)
       model: "anthropic/claude-opus-4-5",
-      target: "last",          // last | whatsapp | telegram | discord | slack | signal | imessage | none
+      target: "last",          // last | whatsapp | telegram | discord | slack | signal | imessage | matrix | none
       to: "+15551234567",      // optional provider-specific override (e.g. E.164 or chat id)
       prompt: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.",
       ackMaxChars: 30          // max chars allowed after HEARTBEAT_OK
@@ -66,7 +66,7 @@ and final replies:
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `target`: where heartbeat output is delivered.
   - `last` (default): send to the last used external provider.
-  - `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`: force the provider (optionally set `to`).
+  - `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `matrix`: force the provider (optionally set `to`).
   - `none`: do not deliver externally; output stays in the session (WebChat-visible).
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default shown above). Safe to

@@ -16,10 +16,12 @@ import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../../infra/provider-usage.js";
+import { resolveMatrixConfig } from "../../matrix/client.js";
 import {
   type ChatProviderId,
   listChatProviders,
 } from "../../providers/registry.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
   listSignalAccountIds,
@@ -75,6 +77,10 @@ function formatLinked(value: boolean): string {
   return value ? theme.success("linked") : theme.warn("not linked");
 }
 
+function listMatrixAccountIds(): string[] {
+  return [DEFAULT_ACCOUNT_ID];
+}
+
 async function loadUsageWithProgress(
   runtime: RuntimeEnv,
 ): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
@@ -102,6 +108,7 @@ export async function providersListCommand(
     telegram: listTelegramAccountIds(cfg),
     discord: listDiscordAccountIds(cfg),
     slack: listSlackAccountIds(cfg),
+    matrix: listMatrixAccountIds(),
     signal: listSignalAccountIds(cfg),
     imessage: listIMessageAccountIds(cfg),
   };
@@ -170,6 +177,32 @@ export async function providersListCommand(
         account.enabled,
       )}`;
     },
+    matrix: async (accountId) => {
+      const resolved = resolveMatrixConfig(cfg);
+      const authSource =
+        process.env.MATRIX_ACCESS_TOKEN?.trim() ||
+        process.env.MATRIX_PASSWORD?.trim()
+          ? "env"
+          : cfg.matrix?.accessToken?.trim() || cfg.matrix?.password?.trim()
+            ? "config"
+            : "none";
+      const configured = Boolean(
+        resolved.homeserver &&
+          resolved.userId &&
+          (resolved.accessToken || resolved.password),
+      );
+      const label = formatProviderAccountLabel({
+        provider: "matrix",
+        accountId,
+        name: resolved.userId?.trim() || undefined,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatConfigured(configured)}, ${formatSource(
+        "auth",
+        authSource,
+      )}, ${formatEnabled(cfg.matrix?.enabled !== false)}`;
+    },
     signal: async (accountId) => {
       const account = resolveSignalAccount({ cfg, accountId });
       const label = formatProviderAccountLabel({
@@ -215,6 +248,7 @@ export async function providersListCommand(
         telegram: accountIdsByProvider.telegram,
         discord: accountIdsByProvider.discord,
         slack: accountIdsByProvider.slack,
+        matrix: accountIdsByProvider.matrix,
         signal: accountIdsByProvider.signal,
         imessage: accountIdsByProvider.imessage,
       },

@@ -219,6 +219,23 @@
         "memberInfo": { "label": "member", "detailKeys": ["userId"] },
         "emojiList": { "label": "emoji list" }
       }
+    },
+    "matrix": {
+      "emoji": "🟦",
+      "title": "Matrix",
+      "actions": {
+        "react": { "label": "react", "detailKeys": ["roomId", "messageId", "emoji"] },
+        "reactions": { "label": "reactions", "detailKeys": ["roomId", "messageId"] },
+        "sendMessage": { "label": "send", "detailKeys": ["to", "content"] },
+        "editMessage": { "label": "edit", "detailKeys": ["roomId", "messageId"] },
+        "deleteMessage": { "label": "delete", "detailKeys": ["roomId", "messageId"] },
+        "readMessages": { "label": "read messages", "detailKeys": ["roomId", "limit"] },
+        "pinMessage": { "label": "pin", "detailKeys": ["roomId", "messageId"] },
+        "unpinMessage": { "label": "unpin", "detailKeys": ["roomId", "messageId"] },
+        "listPins": { "label": "list pins", "detailKeys": ["roomId"] },
+        "memberInfo": { "label": "member", "detailKeys": ["userId", "roomId"] },
+        "roomInfo": { "label": "room", "detailKeys": ["roomId"] }
+      }
     }
   }
 }

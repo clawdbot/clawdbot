@@ -28,6 +28,10 @@ export type ProvidersRemoveOptions = {
   delete?: boolean;
 };
 
+function listMatrixAccountIds(): string[] {
+  return [DEFAULT_ACCOUNT_ID];
+}
+
 function listAccountIds(cfg: ClawdbotConfig, provider: ChatProvider): string[] {
   switch (provider) {
     case "whatsapp":
@@ -38,6 +42,8 @@ function listAccountIds(cfg: ClawdbotConfig, provider: ChatProvider): string[] {
       return listDiscordAccountIds(cfg);
     case "slack":
       return listSlackAccountIds(cfg);
+    case "matrix":
+      return listMatrixAccountIds();
     case "signal":
       return listSignalAccountIds(cfg);
     case "imessage":

@@ -7,6 +7,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createDiscordTool } from "./tools/discord-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createMatrixTool } from "./tools/matrix-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -35,6 +36,7 @@ export function createClawdbotTools(options?: {
     createNodesTool(),
     createCronTool(),
     createDiscordTool(),
+    createMatrixTool(),
     createSlackTool({
       agentAccountId: options?.agentAccountId,
       config: options?.config,

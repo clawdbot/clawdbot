@@ -8,6 +8,7 @@ struct ConnectionsSettings: View {
         case discord
         case signal
         case imessage
+        case matrix
 
         var id: String { self.rawValue }
 
@@ -18,6 +19,7 @@ struct ConnectionsSettings: View {
             case .discord: 2
             case .signal: 3
             case .imessage: 4
+            case .matrix: 5
             }
         }
 
@@ -26,6 +28,7 @@ struct ConnectionsSettings: View {
             case .whatsapp: "WhatsApp"
             case .telegram: "Telegram"
             case .discord: "Discord"
+            case .matrix: "Matrix"
             case .signal: "Signal"
             case .imessage: "iMessage"
             }
@@ -36,6 +39,7 @@ struct ConnectionsSettings: View {
             case .whatsapp: "WhatsApp Web"
             case .telegram: "Telegram Bot"
             case .discord: "Discord Bot"
+            case .matrix: "Matrix"
             case .signal: "Signal REST"
             case .imessage: "iMessage (imsg)"
             }
@@ -46,6 +50,7 @@ struct ConnectionsSettings: View {
             case .whatsapp: "message"
             case .telegram: "paperplane"
             case .discord: "bubble.left.and.bubble.right"
+            case .matrix: "square.grid.3x3"
             case .signal: "antenna.radiowaves.left.and.right"
             case .imessage: "message.fill"
             }
@@ -56,6 +61,8 @@ struct ConnectionsSettings: View {
     @State var selectedProvider: ConnectionProvider?
     @State var showTelegramToken = false
     @State var showDiscordToken = false
+    @State var showMatrixAccessToken = false
+    @State var showMatrixPassword = false
 
     init(store: ConnectionsStore = .shared) {
         self.store = store

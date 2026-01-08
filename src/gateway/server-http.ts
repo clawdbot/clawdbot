@@ -38,6 +38,7 @@ type HookDispatchers = {
       | "telegram"
       | "discord"
       | "slack"
+      | "matrix"
       | "signal"
       | "imessage";
     to?: string;

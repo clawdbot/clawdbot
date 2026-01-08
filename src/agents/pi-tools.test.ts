@@ -149,6 +149,14 @@ describe("createClawdbotCodingTools", () => {
     expect(slack.some((tool) => tool.name === "slack")).toBe(true);
   });
 
+  it("scopes matrix tool to matrix provider", () => {
+    const other = createClawdbotCodingTools({ messageProvider: "slack" });
+    expect(other.some((tool) => tool.name === "matrix")).toBe(false);
+
+    const matrix = createClawdbotCodingTools({ messageProvider: "matrix" });
+    expect(matrix.some((tool) => tool.name === "matrix")).toBe(true);
+  });
+
   it("scopes telegram tool to telegram provider", () => {
     const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
     expect(other.some((tool) => tool.name === "telegram")).toBe(false);
