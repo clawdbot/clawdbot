@@ -19,10 +19,12 @@ import {
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
+  formatXHighModelHint,
   normalizeElevatedLevel,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  supportsXHighThinking,
 } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -539,6 +541,26 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 next.providerOverride = resolved.ref.provider;
                 next.modelOverride = resolved.ref.model;
               }
+            }
+          }
+
+          if (next.thinkingLevel === "xhigh") {
+            const resolvedDefault = resolveConfiguredModelRef({
+              cfg,
+              defaultProvider: DEFAULT_PROVIDER,
+              defaultModel: DEFAULT_MODEL,
+            });
+            const effectiveProvider =
+              next.providerOverride ?? resolvedDefault.provider;
+            const effectiveModel = next.modelOverride ?? resolvedDefault.model;
+            if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
+              return {
+                ok: false,
+                error: {
+                  code: ErrorCodes.INVALID_REQUEST,
+                  message: `thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`,
+                },
+              };
             }
           }
 

@@ -24,8 +24,11 @@ import {
 } from "../agents/workspace.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
+  formatThinkingLevels,
+  formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -186,6 +189,15 @@ export async function agentCommand(
     ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  const configuredModel = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+  );
 
   const allowFrom = (cfg.whatsapp?.allowFrom ?? [])
     .map((val) => normalizeE164(val))
@@ -195,12 +207,12 @@ export async function agentCommand(
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
     throw new Error(
-      "Invalid thinking level. Use one of: off, minimal, low, medium, high.",
+      `Invalid thinking level. Use one of: ${thinkingLevelsHint}.`,
     );
   }
   if (opts.thinkingOnce && !thinkOnce) {
     throw new Error(
-      "Invalid one-shot thinking level. Use one of: off, minimal, low, medium, high.",
+      `Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`,
     );
   }
 
@@ -389,6 +401,14 @@ export async function agentCommand(
       model,
       catalog: catalogForThinking,
     });
+  }
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    throw new Error(
+      `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+    );
   }
   const sessionFile = resolveSessionFilePath(sessionId, sessionEntry);
 

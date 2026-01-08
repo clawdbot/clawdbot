@@ -6,6 +6,7 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
@@ -140,6 +141,15 @@ export async function runTui(opts: TuiOptions) {
   root.addChild(footer);
   root.addChild(editor);
 
+  const updateAutocompleteProvider = () => {
+    editor.setAutocompleteProvider(
+      new CombinedAutocompleteProvider(
+        getSlashCommands({ model: sessionInfo.model }),
+        process.cwd(),
+      ),
+    );
+  };
+
   const tui = new TUI(new ProcessTerminal());
   tui.addChild(root);
   tui.setFocus(editor);
@@ -210,6 +220,7 @@ export async function runTui(opts: TuiOptions) {
     } catch (err) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
     }
+    updateAutocompleteProvider();
     updateFooter();
     tui.requestRender();
   };
@@ -514,7 +525,7 @@ export async function runTui(opts: TuiOptions) {
     if (!name) return;
     switch (name) {
       case "help":
-        chatLog.addSystem(helpText());
+        chatLog.addSystem(helpText({ model: sessionInfo.model }));
         break;
       case "status":
         try {
@@ -559,7 +570,12 @@ export async function runTui(opts: TuiOptions) {
         break;
       case "think":
         if (!args) {
-          chatLog.addSystem("usage: /think <off|minimal|low|medium|high>");
+          const levels = formatThinkingLevels(
+            undefined,
+            sessionInfo.model,
+            "|",
+          );
+          chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }
         try {
@@ -696,9 +712,7 @@ export async function runTui(opts: TuiOptions) {
     tui.requestRender();
   };
 
-  editor.setAutocompleteProvider(
-    new CombinedAutocompleteProvider(getSlashCommands(), process.cwd()),
-  );
+  updateAutocompleteProvider();
   editor.onSubmit = (text) => {
     const value = text.trim();
     editor.setText("");

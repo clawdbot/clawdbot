@@ -28,7 +28,11 @@ import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
-import { normalizeThinkLevel } from "../auto-reply/thinking.js";
+import {
+  formatXHighModelHint,
+  normalizeThinkLevel,
+  supportsXHighThinking,
+} from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -241,6 +245,11 @@ export async function runCronIsolatedAgentTurn(params: {
       model,
       catalog,
     });
+  }
+  if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+    throw new Error(
+      `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+    );
   }
 
   const timeoutMs = resolveAgentTimeoutMs({

@@ -1060,7 +1060,7 @@ export type ClawdbotConfig = {
     /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
     contextPruning?: AgentContextPruningConfig;
     /** Default thinking level when no /think directive is present. */
-    thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
+    thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
     /** Default verbose level when no /verbose directive is present. */
     verboseDefault?: "off" | "on";
     /** Default elevated level when no /elevated directive is present. */
