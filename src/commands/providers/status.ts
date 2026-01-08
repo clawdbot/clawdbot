@@ -13,6 +13,8 @@ import {
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
 import { formatAge } from "../../infra/provider-summary.js";
+import { listMatrixAccountIds } from "../../matrix/accounts.js";
+import { resolveMatrixConfig } from "../../matrix/client.js";
 import { listChatProviders } from "../../providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
@@ -86,6 +88,9 @@ export function formatGatewayProvidersStatusLines(
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
       }
+      if (typeof account.authSource === "string" && account.authSource) {
+        bits.push(`auth:${account.authSource}`);
+      }
       if (
         typeof account.botTokenSource === "string" &&
         account.botTokenSource
@@ -134,6 +139,10 @@ export function formatGatewayProvidersStatusLines(
     slack: Array.isArray(payload.slackAccounts)
       ? (payload.slackAccounts as Array<Record<string, unknown>>)
       : undefined,
+    matrix:
+      payload.matrix && typeof payload.matrix === "object"
+        ? [payload.matrix as Record<string, unknown>]
+        : undefined,
     signal: Array.isArray(payload.signalAccounts)
       ? (payload.signalAccounts as Array<Record<string, unknown>>)
       : undefined,
@@ -191,6 +200,9 @@ async function formatConfigProvidersStatusLines(
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
       }
+      if (typeof account.authSource === "string" && account.authSource) {
+        bits.push(`auth:${account.authSource}`);
+      }
       if (
         typeof account.botTokenSource === "string" &&
         account.botTokenSource
@@ -216,6 +228,21 @@ async function formatConfigProvidersStatusLines(
       });
       return `- ${labelText}: ${bits.join(", ")}`;
     });
+
+  const matrixEnabled = cfg.matrix?.enabled !== false;
+  const resolvedMatrix = resolveMatrixConfig(cfg);
+  const matrixConfigured = Boolean(
+    resolvedMatrix.homeserver &&
+      resolvedMatrix.userId &&
+      (resolvedMatrix.accessToken || resolvedMatrix.password),
+  );
+  const matrixAuthSource =
+    process.env.MATRIX_ACCESS_TOKEN?.trim() ||
+    process.env.MATRIX_PASSWORD?.trim()
+      ? "env"
+      : cfg.matrix?.accessToken?.trim() || cfg.matrix?.password?.trim()
+        ? "config"
+        : "none";
 
   const accounts = {
     whatsapp: listWhatsAppAccountIds(cfg).map((accountId) => {
@@ -269,6 +296,13 @@ async function formatConfigProvidersStatusLines(
         appTokenSource: account.appTokenSource,
       };
     }),
+    matrix: listMatrixAccountIds(cfg).map((accountId) => ({
+      accountId,
+      name: resolvedMatrix.userId || undefined,
+      enabled: matrixEnabled,
+      configured: matrixConfigured,
+      authSource: matrixAuthSource,
+    })),
     signal: listSignalAccountIds(cfg).map((accountId) => {
       const account = resolveSignalAccount({ cfg, accountId });
       return {

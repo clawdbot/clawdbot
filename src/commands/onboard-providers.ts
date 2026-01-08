@@ -788,9 +788,7 @@ type SetupProvidersOptions = {
   initialSelection?: ProviderChoice[];
 };
 
-async function noteMatrixTokenHelp(
-  prompter: WizardPrompter,
-): Promise<void> {
+async function noteMatrixTokenHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
       "Matrix uses a user access token (no bot token).",

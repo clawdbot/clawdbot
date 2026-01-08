@@ -394,7 +394,9 @@ const MatrixConfigSchema = z.object({
   storePath: z.string().optional(),
   cryptoStorePath: z.string().optional(),
   encryption: z.boolean().optional(),
-  autoJoin: z.union([z.literal("always"), z.literal("allowlist"), z.literal("off")]).optional(),
+  autoJoin: z
+    .union([z.literal("always"), z.literal("allowlist"), z.literal("off")])
+    .optional(),
   autoJoinAllowlist: z.array(z.string()).optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   allowlistOnly: z.boolean().optional(),
@@ -1264,7 +1266,6 @@ export const ClawdbotSchema = z.object({
   matrix: MatrixConfigSchema.optional(),
   signal: SignalConfigSchema.optional(),
   imessage: IMessageConfigSchema.optional(),
-
 
   bridge: z
     .object({

@@ -219,7 +219,6 @@ export const providersHandlers: GatewayRequestHandlers = {
       matrixLastProbeAt = Date.now();
     }
 
-
     const slackAccounts = await Promise.all(
       listSlackAccountIds(cfg).map(async (accountId) => {
         const account = resolveSlackAccount({ cfg, accountId });

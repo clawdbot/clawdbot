@@ -878,7 +878,6 @@ export function createProviderManager(
   };
 
   const startSignalProvider = async (accountId?: string) => {
-
     const cfg = loadConfig();
     const accountIds = accountId ? [accountId] : listSignalAccountIds(cfg);
     if (!cfg.signal) {

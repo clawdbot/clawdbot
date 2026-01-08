@@ -7,6 +7,8 @@ import {
   listIMessageAccountIds,
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
+import { listMatrixAccountIds } from "../matrix/accounts.js";
+import { resolveMatrixConfig } from "../matrix/client.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   listSignalAccountIds,
@@ -28,8 +30,6 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../web/session.js";
-import { listMatrixAccountIds } from "../matrix/accounts.js";
-import { resolveMatrixConfig } from "../matrix/client.js";
 
 export type ProviderSummaryOptions = {
   colorize?: boolean;
