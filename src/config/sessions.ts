@@ -180,7 +180,7 @@ export const DEFAULT_IDLE_MINUTES = 60;
 export function resolveSessionTranscriptPath(
   sessionId: string,
   agentId?: string,
-  topicId?: number,
+  topicId?: number | string,
 ): string {
   const fileName =
     topicId !== undefined

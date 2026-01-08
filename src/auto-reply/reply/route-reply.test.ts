@@ -93,8 +93,6 @@ describe("routeReply", () => {
       expect.objectContaining({ replyToId: "$evt", threadId: "$thread" }),
     );
   });
-    );
-  });
 
   it("uses replyToId as threadTs for Slack", async () => {
     mocks.sendMessageSlack.mockClear();

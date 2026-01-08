@@ -414,7 +414,7 @@ const MatrixConfigSchema = z.object({
       roomInfo: z.boolean().optional(),
     })
     .optional(),
-  dm: MatrixDmSchema.optional(),
+  dm: MatrixDmSchema.optional().default({ policy: "pairing" }),
   rooms: z.record(z.string(), MatrixRoomSchema.optional()).optional(),
 });
 

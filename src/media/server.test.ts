@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const MEDIA_DIR = path.join(process.cwd(), "tmp-media-test");
 const cleanOldMedia = vi.fn().mockResolvedValue(undefined);
@@ -15,7 +15,7 @@ vi.mock("./store.js", () => ({
 const { startMediaServer } = await import("./server.js");
 
 describe("media server", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     await fs.rm(MEDIA_DIR, { recursive: true, force: true });
     await fs.mkdir(MEDIA_DIR, { recursive: true });
   });
