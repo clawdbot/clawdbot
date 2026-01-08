@@ -286,6 +286,73 @@ enum GatewayLaunchAgentManager {
             self.logger.warning("launchd disable failed: \(msg)")
         }
     }
+
+    private static func extractIntValue(output: String, key: String) -> Int? {
+        // launchctl print commonly emits `pid = 123`
+        guard let range = output.range(of: "\(key) =") else { return nil }
+        var idx = range.upperBound
+        while idx < output.endIndex, output[idx].isWhitespace {
+            idx = output.index(after: idx)
+        }
+        var end = idx
+        while end < output.endIndex, output[end].isNumber {
+            end = output.index(after: end)
+        }
+        guard end > idx else { return nil }
+        return Int(output[idx..<end])
+    }
+
+    private static func extractFlagIntValue(output: String, flag: String) -> Int? {
+        guard let raw = self.extractFlagStringValue(output: output, flag: flag) else { return nil }
+        return Int(raw)
+    }
+
+    private static func extractFlagStringValue(output: String, flag: String) -> String? {
+        guard let range = output.range(of: flag) else { return nil }
+        var idx = range.upperBound
+        while idx < output.endIndex {
+            let ch = output[idx]
+            if ch.isWhitespace || ch == "," || ch == "(" || ch == ")" || ch == "=" || ch == "\"" || ch == "'" {
+                idx = output.index(after: idx)
+                continue
+            }
+            break
+        }
+        guard idx < output.endIndex else { return nil }
+        var end = idx
+        while end < output.endIndex {
+            let ch = output[end]
+            if ch.isWhitespace || ch == "," || ch == "(" || ch == ")" ||
+                ch == "\"" || ch == "'" || ch == "\n" || ch == "\r"
+            {
+                break
+            }
+            end = output.index(after: end)
+        }
+        let token = output[idx..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : String(token)
+    }
+
+    @discardableResult
+    private static func runLaunchctl(_ args: [String]) async -> LaunchctlResult {
+        await Task.detached(priority: .utility) { () -> LaunchctlResult in
+            let process = Process()
+            process.launchPath = "/bin/launchctl"
+            process.arguments = args
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readToEndSafely()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                return LaunchctlResult(status: process.terminationStatus, output: output)
+            } catch {
+                return LaunchctlResult(status: -1, output: error.localizedDescription)
+            }
+        }.value
+    }
 }
 
 #if DEBUG

@@ -700,7 +700,9 @@ extension ConnectionsSettings {
             }
 
             if self.isMatrixAuthLocked {
-                Text("Matrix credentials set via MATRIX_ACCESS_TOKEN/MATRIX_PASSWORD env; config edits won’t override it.")
+                Text(
+                    "Matrix credentials set via MATRIX_ACCESS_TOKEN/MATRIX_PASSWORD env; " +
+                        "config edits won’t override it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

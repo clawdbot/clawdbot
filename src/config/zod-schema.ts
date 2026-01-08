@@ -1265,6 +1265,7 @@ export const ClawdbotSchema = z.object({
   signal: SignalConfigSchema.optional(),
   imessage: IMessageConfigSchema.optional(),
 
+
   bridge: z
     .object({
       enabled: z.boolean().optional(),

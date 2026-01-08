@@ -1,4 +1,4 @@
-import { ClientEvent, SyncState, type MatrixClient } from "matrix-js-sdk";
+import { ClientEvent, type MatrixClient, SyncState } from "matrix-js-sdk";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -44,8 +44,7 @@ export function resolveMatrixConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
   const matrix = cfg.matrix ?? {};
-  const homeserver =
-    clean(env.MATRIX_HOMESERVER) || clean(matrix.homeserver);
+  const homeserver = clean(env.MATRIX_HOMESERVER) || clean(matrix.homeserver);
   const userId = clean(env.MATRIX_USER_ID) || clean(matrix.userId);
   const accessToken =
     clean(env.MATRIX_ACCESS_TOKEN) || clean(matrix.accessToken) || undefined;
@@ -110,8 +109,7 @@ export async function resolveMatrixAuth(params?: {
     identifier: { type: "m.id.user", user: resolved.userId },
     password: resolved.password,
     device_id: resolved.deviceId,
-    initial_device_display_name:
-      resolved.deviceName ?? "Clawdbot Gateway",
+    initial_device_display_name: resolved.deviceName ?? "Clawdbot Gateway",
   });
   const accessToken = login.access_token?.trim();
   if (!accessToken) {

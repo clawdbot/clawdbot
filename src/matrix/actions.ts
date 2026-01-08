@@ -1,3 +1,4 @@
+import type { MatrixClient, MatrixEvent } from "matrix-js-sdk";
 import {
   Direction,
   EventType,
@@ -5,7 +6,6 @@ import {
   MsgType,
   RelationType,
 } from "matrix-js-sdk";
-import type { MatrixClient, MatrixEvent } from "matrix-js-sdk";
 import type {
   ReactionEventContent,
   RoomMessageEventContent,
@@ -249,12 +249,18 @@ export async function readMatrixMessages(
     );
     const mapper = client.getEventMapper();
     const events = res.chunk.map(mapper);
-    await Promise.all(events.map((event) => client.decryptEventIfNeeded(event)));
+    await Promise.all(
+      events.map((event) => client.decryptEventIfNeeded(event)),
+    );
     const messages = events
       .filter((event) => event.getType() === EventType.RoomMessage)
       .filter((event) => !event.isRedacted())
       .map(summarizeMatrixEvent);
-    return { messages, nextBatch: res.end ?? null, prevBatch: res.start ?? null };
+    return {
+      messages,
+      nextBatch: res.end ?? null,
+      prevBatch: res.start ?? null,
+    };
   } finally {
     if (stopOnDone) client.stopClient();
   }
@@ -420,7 +426,9 @@ export async function getMatrixMemberInfo(
       ? await resolveMatrixRoomId(client, opts.roomId)
       : undefined;
     const profile = await client.getProfileInfo(userId);
-    const member = roomId ? client.getRoom(roomId)?.getMember(userId) : undefined;
+    const member = roomId
+      ? client.getRoom(roomId)?.getMember(userId)
+      : undefined;
     return {
       userId,
       profile: {

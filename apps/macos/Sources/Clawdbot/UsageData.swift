@@ -41,7 +41,7 @@ struct UsageRow: Identifiable {
 
     func detailText(now: Date = .init()) -> String {
         if let error, !error.isEmpty { return error }
-        guard let remaining = self.remainingPercent else { return "No data" }
+        guard let remaining = remainingPercent else { return "No data" }
         var parts = ["\(remaining)% left"]
         if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
         if let resetAt {
@@ -69,7 +69,7 @@ struct UsageRow: Identifiable {
 
 extension GatewayUsageSummary {
     func primaryRows() -> [UsageRow] {
-        self.providers.compactMap { provider in
+        providers.compactMap { provider in
             if let error = provider.error, provider.windows.isEmpty {
                 return UsageRow(
                     id: provider.provider,
@@ -96,7 +96,6 @@ extension GatewayUsageSummary {
         }
     }
 }
-
 @MainActor
 enum UsageLoader {
     static func loadSummary() async throws -> GatewayUsageSummary {

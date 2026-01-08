@@ -425,12 +425,9 @@ function hasCrossProviderItems(items: FollowupRun[]): boolean {
       return true;
     }
     keys.add(
-      [
-        channel,
-        to,
-        accountId || "",
-        hasThreadId ? String(threadId) : "",
-      ].join("|"),
+      [channel, to, accountId || "", hasThreadId ? String(threadId) : ""].join(
+        "|",
+      ),
     );
   }
 

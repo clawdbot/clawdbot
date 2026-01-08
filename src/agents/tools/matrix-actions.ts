@@ -9,11 +9,11 @@ import {
   listMatrixPins,
   listMatrixReactions,
   pinMatrixMessage,
+  reactMatrixMessage,
   readMatrixMessages,
   removeMatrixReactions,
   sendMatrixMessage,
   unpinMatrixMessage,
-  reactMatrixMessage,
 } from "../../matrix/actions.js";
 import {
   createActionGate,

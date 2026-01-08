@@ -1,10 +1,3 @@
-import {
-  ClientEvent,
-  EventType,
-  RelationType,
-  RoomEvent,
-  RoomMemberEvent,
-} from "matrix-js-sdk";
 import type {
   AccountDataEvents,
   MatrixClient,
@@ -12,23 +5,33 @@ import type {
   Room,
   RoomMember,
 } from "matrix-js-sdk";
+import {
+  ClientEvent,
+  EventType,
+  RelationType,
+  RoomEvent,
+  RoomMemberEvent,
+} from "matrix-js-sdk";
 import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
 
-import { chunkMarkdownText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
-import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import type { MatrixRoomConfig } from "../config/types.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
+import type { MatrixRoomConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
@@ -46,7 +49,11 @@ import {
   isBunRuntime,
   resolveMatrixAuth,
 } from "./client.js";
-import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "./send.js";
+import {
+  reactMatrixMessage,
+  sendMessageMatrix,
+  sendTypingMatrix,
+} from "./send.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -89,7 +96,7 @@ function resolveMatrixAllowListMatches(params: {
   const userId = normalizeMatrixUser(params.userId);
   const userName = normalizeMatrixUser(params.userName);
   const localPart = userId.startsWith("@")
-    ? userId.slice(1).split(":")[0] ?? ""
+    ? (userId.slice(1).split(":")[0] ?? "")
     : "";
   const candidates = [
     userId,
@@ -171,7 +178,11 @@ async function downloadMatrixMedia(params: {
   mxcUrl: string;
   contentType?: string;
   maxBytes: number;
-}): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
+}): Promise<{
+  path: string;
+  contentType?: string;
+  placeholder: string;
+} | null> {
   const url = params.client.mxcUrlToHttp(
     params.mxcUrl,
     undefined,
@@ -225,8 +236,7 @@ async function deliverMatrixReplies(params: {
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
-    const replyToId =
-      params.replyToMode === "off" ? undefined : replyToIdRaw;
+    const replyToId = params.replyToMode === "off" ? undefined : replyToIdRaw;
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -234,8 +244,7 @@ async function deliverMatrixReplies(params: {
         : [];
 
     const shouldIncludeReply = (id?: string) =>
-      Boolean(id) &&
-      (params.replyToMode === "all" || !hasReplied);
+      Boolean(id) && (params.replyToMode === "all" || !hasReplied);
 
     if (mediaList.length === 0) {
       for (const chunk of chunkMarkdownText(reply.text ?? "", chunkLimit)) {
@@ -255,7 +264,7 @@ async function deliverMatrixReplies(params: {
 
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? reply.text ?? "" : "";
+      const caption = first ? (reply.text ?? "") : "";
       await sendMessageMatrix(params.roomId, caption, {
         client: params.client,
         mediaUrl,
@@ -274,7 +283,9 @@ export async function monitorMatrixProvider(
   opts: MonitorMatrixOpts = {},
 ): Promise<void> {
   if (isBunRuntime()) {
-    throw new Error("Matrix provider requires Node (bun runtime not supported)");
+    throw new Error(
+      "Matrix provider requires Node (bun runtime not supported)",
+    );
   }
   const cfg = loadConfig();
   if (cfg.matrix?.enabled === false) return;
@@ -321,9 +332,7 @@ export async function monitorMatrixProvider(
     directMap.clear();
     for (const [userId, rooms] of Object.entries(content)) {
       if (!Array.isArray(rooms)) continue;
-      const ids = rooms
-        .map((roomId) => String(roomId).trim())
-        .filter(Boolean);
+      const ids = rooms.map((roomId) => String(roomId).trim()).filter(Boolean);
       if (ids.length === 0) continue;
       directMap.set(userId, new Set(ids));
     }
@@ -331,9 +340,7 @@ export async function monitorMatrixProvider(
 
   const initialDirect = client.getAccountData(EventType.Direct);
   if (initialDirect) {
-    updateDirectMap(
-      initialDirect.getContent<MatrixDirectAccountData>() ?? {},
-    );
+    updateDirectMap(initialDirect.getContent<MatrixDirectAccountData>() ?? {});
   }
 
   client.on(ClientEvent.AccountData, (event: MatrixEvent) => {
@@ -345,33 +352,35 @@ export async function monitorMatrixProvider(
   const autoJoinAllowlist = cfg.matrix?.autoJoinAllowlist ?? [];
   client.on(
     RoomMemberEvent.Membership,
-    async (event: MatrixEvent, member: RoomMember) => {
-    if (member.userId !== client.getUserId()) return;
-    if (member.membership !== "invite") return;
-    const roomId = member.roomId;
-    if (autoJoin === "off") return;
-    if (autoJoin === "allowlist") {
-      const invitedRoom = client.getRoom(roomId);
-      const alias = invitedRoom?.getCanonicalAlias?.() ?? "";
-      const altAliases = invitedRoom?.getAltAliases?.() ?? [];
-      const allowed =
-        autoJoinAllowlist.includes("*") ||
-        autoJoinAllowlist.includes(roomId) ||
-        (alias ? autoJoinAllowlist.includes(alias) : false) ||
-        altAliases.some((value) => autoJoinAllowlist.includes(value));
-      if (!allowed) {
-        logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
-        return;
+    async (_event: MatrixEvent, member: RoomMember) => {
+      if (member.userId !== client.getUserId()) return;
+      if (member.membership !== "invite") return;
+      const roomId = member.roomId;
+      if (autoJoin === "off") return;
+      if (autoJoin === "allowlist") {
+        const invitedRoom = client.getRoom(roomId);
+        const alias = invitedRoom?.getCanonicalAlias?.() ?? "";
+        const altAliases = invitedRoom?.getAltAliases?.() ?? [];
+        const allowed =
+          autoJoinAllowlist.includes("*") ||
+          autoJoinAllowlist.includes(roomId) ||
+          (alias ? autoJoinAllowlist.includes(alias) : false) ||
+          altAliases.some((value) => autoJoinAllowlist.includes(value));
+        if (!allowed) {
+          logVerbose(
+            `matrix: invite ignored (not in allowlist) room=${roomId}`,
+          );
+          return;
+        }
       }
-    }
-    try {
-      await client.joinRoom(roomId);
-      logVerbose(`matrix: joined room ${roomId}`);
-    } catch (err) {
-      runtime.error?.(
-        danger(`matrix: failed to join room ${roomId}: ${String(err)}`),
-      );
-    }
+      try {
+        await client.joinRoom(roomId);
+        logVerbose(`matrix: joined room ${roomId}`);
+      } catch (err) {
+        runtime.error?.(
+          danger(`matrix: failed to join room ${roomId}: ${String(err)}`),
+        );
+      }
     },
   );
 
@@ -488,21 +497,31 @@ export async function monitorMatrixProvider(
           userName: senderName,
         });
         if (!userAllowed) {
-          logVerbose(`matrix: blocked sender ${senderId} (room users allowlist)`);
+          logVerbose(
+            `matrix: blocked sender ${senderId} (room users allowlist)`,
+          );
           return;
         }
       }
 
       const rawBody = content.body.trim();
-      let media: { path: string; contentType?: string; placeholder: string } | null = null;
+      let media: {
+        path: string;
+        contentType?: string;
+        placeholder: string;
+      } | null = null;
       const contentUrl =
-        "url" in content && typeof content.url === "string" ? content.url : undefined;
+        "url" in content && typeof content.url === "string"
+          ? content.url
+          : undefined;
       if (!rawBody && !contentUrl && !("file" in content && content.file)) {
         return;
       }
 
       if ("file" in content && content.file) {
-        logVerbose(`matrix: encrypted attachments not supported yet (room=${roomId})`);
+        logVerbose(
+          `matrix: encrypted attachments not supported yet (room=${roomId})`,
+        );
       } else if (contentUrl?.startsWith("mxc://")) {
         try {
           const contentType =
@@ -592,10 +611,13 @@ export async function monitorMatrixProvider(
         },
       });
 
-      const groupSystemPrompt = roomConfigInfo.config?.systemPrompt?.trim() || undefined;
+      const groupSystemPrompt =
+        roomConfigInfo.config?.systemPrompt?.trim() || undefined;
       const ctxPayload = {
         Body: body,
-        From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
+        From: isDirectMessage
+          ? `matrix:${senderId}`
+          : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
@@ -603,8 +625,8 @@ export async function monitorMatrixProvider(
         SenderName: senderName,
         SenderId: senderId,
         SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
-        GroupSubject: isRoom ? roomName ?? roomId : undefined,
-        GroupRoom: isRoom ? room.getCanonicalAlias?.() ?? roomId : undefined,
+        GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
+        GroupRoom: isRoom ? (room.getCanonicalAlias?.() ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         Provider: "matrix" as const,
         Surface: "matrix" as const,
@@ -657,9 +679,13 @@ export async function monitorMatrixProvider(
         return false;
       };
       if (shouldAckReaction() && messageId) {
-        reactMatrixMessage(roomId, messageId, ackReaction, client).catch((err) => {
-          logVerbose(`matrix react failed for room ${roomId}: ${String(err)}`);
-        });
+        reactMatrixMessage(roomId, messageId, ackReaction, client).catch(
+          (err) => {
+            logVerbose(
+              `matrix react failed for room ${roomId}: ${String(err)}`,
+            );
+          },
+        );
       }
 
       const replyTarget = ctxPayload.To;
@@ -697,7 +723,10 @@ export async function monitorMatrixProvider(
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions: { ...replyOptions, skillFilter: roomConfigInfo.config?.skills },
+        replyOptions: {
+          ...replyOptions,
+          skillFilter: roomConfigInfo.config?.skills,
+        },
       });
       markDispatchIdle();
       if (!queuedFinal) return;

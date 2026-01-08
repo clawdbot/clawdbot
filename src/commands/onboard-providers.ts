@@ -253,13 +253,6 @@ async function noteSlackTokenHelp(
 
 export { mergeWhatsAppConfig };
 
-export function setWhatsAppDmPolicy(
-  cfg: ClawdbotConfig,
-  dmPolicy: DmPolicy,
-): ClawdbotConfig {
-  return mergeWhatsAppConfig(cfg, { dmPolicy });
-}
-
 export function setWhatsAppAllowFrom(
   cfg: ClawdbotConfig,
   allowFrom?: string[],
@@ -284,14 +277,10 @@ function setMessagesResponsePrefix(
   };
 }
 
-export function setWhatsAppSelfChatMode(
+function setTelegramDmPolicy(
   cfg: ClawdbotConfig,
-  selfChatMode: boolean,
+  dmPolicy: DmPolicy,
 ): ClawdbotConfig {
-  return mergeWhatsAppConfig(cfg, { selfChatMode });
-}
-
-function setTelegramDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(cfg.telegram?.allowFrom)
@@ -306,7 +295,10 @@ function setTelegramDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
-function setDiscordDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+function setDiscordDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(cfg.discord?.dm?.allowFrom)
@@ -325,7 +317,10 @@ function setDiscordDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
-function setSlackDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+function setSlackDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(cfg.slack?.dm?.allowFrom)
@@ -344,7 +339,10 @@ function setSlackDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
-function setMatrixDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+function setMatrixDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(cfg.matrix?.dm?.allowFrom)
@@ -363,7 +361,10 @@ function setMatrixDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
-function setSignalDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+function setSignalDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(cfg.signal?.allowFrom)
@@ -378,7 +379,10 @@ function setSignalDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
-function setIMessageDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+function setIMessageDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(cfg.imessage?.allowFrom)
@@ -1411,13 +1415,12 @@ export async function setupProviders(
       matrixHomeserverEnv &&
       matrixUserIdEnv &&
       (matrixAccessTokenEnv || matrixPasswordEnv);
-    const hasConfig =
-      Boolean(
-        cfg.matrix?.homeserver ||
-          cfg.matrix?.userId ||
-          cfg.matrix?.accessToken ||
-          cfg.matrix?.password,
-      );
+    const hasConfig = Boolean(
+      cfg.matrix?.homeserver ||
+        cfg.matrix?.userId ||
+        cfg.matrix?.accessToken ||
+        cfg.matrix?.password,
+    );
     if (!matrixConfigured) {
       await noteMatrixTokenHelp(prompter);
     }

@@ -122,7 +122,10 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalledWith("room:!room:example", "hello");
-    expect(results[0]).toMatchObject({ provider: "matrix", roomId: "!room:example" });
+    expect(results[0]).toMatchObject({
+      provider: "matrix",
+      roomId: "!room:example",
+    });
   });
 
   it("normalizes payloads and drops empty entries", () => {

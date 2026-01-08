@@ -1,5 +1,5 @@
-import { EventType, MsgType, RelationType } from "matrix-js-sdk";
 import type { AccountDataEvents, MatrixClient } from "matrix-js-sdk";
+import { EventType, MsgType, RelationType } from "matrix-js-sdk";
 import type {
   ReactionEventContent,
   RoomMessageEventContent,
@@ -79,9 +79,7 @@ async function resolveDirectRoomId(
     : [];
   if (list.length > 0) return list[0];
   const server = await client.getAccountDataFromServer(EventType.Direct);
-  const serverList = Array.isArray(server?.[trimmed])
-    ? server[trimmed]
-    : [];
+  const serverList = Array.isArray(server?.[trimmed]) ? server[trimmed] : [];
   if (serverList.length > 0) return serverList[0];
   throw new Error(
     `No m.direct room found for ${trimmed}. Open a DM first so Matrix can set m.direct.`,

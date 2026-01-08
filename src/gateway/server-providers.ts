@@ -13,9 +13,9 @@ import {
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
 import { monitorIMessageProvider } from "../imessage/index.js";
+import type { createSubsystemLogger } from "../logging.js";
 import { isBunRuntime, resolveMatrixConfig } from "../matrix/client.js";
 import { monitorMatrixProvider } from "../matrix/index.js";
-import type { createSubsystemLogger } from "../logging.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -809,7 +809,9 @@ export function createProviderManager(
         running: false,
         lastError: "bun unsupported",
       };
-      logMatrix.error("matrix provider requires Node (bun runtime not supported)");
+      logMatrix.error(
+        "matrix provider requires Node (bun runtime not supported)",
+      );
       return;
     }
     const resolved = resolveMatrixConfig(cfg);
