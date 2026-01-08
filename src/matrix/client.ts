@@ -51,7 +51,7 @@ function clean(value?: string): string {
 
 export function resolveMatrixConfig(
   cfg: ClawdbotConfig = loadConfig(),
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env
 ): MatrixResolvedConfig {
   const matrix = cfg.matrix ?? {};
   const homeserver = clean(env.MATRIX_HOMESERVER) || clean(matrix.homeserver);
@@ -106,7 +106,7 @@ export async function resolveMatrixAuth(params?: {
   }
   if (!resolved.password) {
     throw new Error(
-      "Matrix access token or password is required (matrix.accessToken or matrix.password)",
+      "Matrix access token or password is required (matrix.accessToken or matrix.password)"
     );
   }
 
@@ -176,7 +176,7 @@ async function createSharedMatrixClient(params: {
     deviceId: params.auth.deviceId,
     localTimeoutMs: params.timeoutMs,
   });
-  await ensureMatrixCrypto(client, params.auth.encryption);
+  await ensureMatrixCrypto(client, params.auth.encryption, params.auth.userId);
   return { client, key: buildSharedClientKey(params.auth), started: false };
 }
 
@@ -215,7 +215,7 @@ export async function resolveSharedMatrixClient(
     timeoutMs?: number;
     auth?: MatrixAuth;
     startClient?: boolean;
-  } = {},
+  } = {}
 ): Promise<MatrixClient> {
   const auth =
     params.auth ??
@@ -271,10 +271,26 @@ export async function resolveSharedMatrixClient(
 export async function ensureMatrixCrypto(
   client: MatrixClient,
   enabled: boolean,
+  userId?: string
 ): Promise<void> {
   if (!enabled) return;
   if (client.getCrypto()) return;
-  await client.initRustCrypto({ useIndexedDB: false });
+
+  // Set up fake-indexeddb for Node.js to enable persistent crypto storage
+  const { setupNodeIndexedDB, sanitizeUserIdForPrefix } = await import(
+    "./crypto-store.js"
+  );
+  await setupNodeIndexedDB();
+
+  // Use a user-specific database prefix to avoid conflicts between accounts
+  const prefix = userId
+    ? `matrix_crypto_${sanitizeUserIdForPrefix(userId)}`
+    : "matrix_crypto";
+
+  await client.initRustCrypto({
+    useIndexedDB: true,
+    cryptoDatabasePrefix: prefix,
+  });
 }
 
 export async function waitForMatrixSync(params: {

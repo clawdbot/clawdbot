@@ -94,6 +94,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
       file-type:
         specifier: ^21.3.0
         version: 21.3.0
@@ -106,12 +109,12 @@ importers:
       long:
         specifier: 5.3.2
         version: 5.3.2
-      matrix-js-sdk:
-        specifier: 39.4.0
-        version: 39.4.0
       markdown-it:
         specifier: ^14.1.0
         version: 14.1.0
+      matrix-js-sdk:
+        specifier: 39.4.0
+        version: 39.4.0
       osc-progress:
         specifier: ^0.2.0
         version: 0.2.0
@@ -1837,6 +1840,10 @@ packages:
 
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
+
+  fake-indexeddb@6.2.5:
+    resolution: {integrity: sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w==}
+    engines: {node: '>=18'}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -4765,6 +4772,8 @@ snapshots:
       - supports-color
 
   extend@3.0.2: {}
+
+  fake-indexeddb@6.2.5: {}
 
   fast-deep-equal@3.1.3: {}
 

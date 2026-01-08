@@ -838,7 +838,7 @@ Matrix runs via the official `matrix-js-sdk` and requires **Node** for Rust cryp
 
 Notes:
 - Matrix is **Node-only** (Bun unsupported due to missing E2EE support).
-- Crypto state is in-memory on Node (no persistent IndexedDB store yet).
+- Crypto state is persisted to `~/.clawdbot/matrix-crypto/` with a user-specific database prefix.
 - DMs prefer `m.direct`; `is_direct` and 1:1 rooms are treated as DMs when possible.
 - Matrix rooms are disabled by default; set `matrix.groupPolicy` to `open` or `allowlist` to enable them.
 - Media uploads are disabled in encrypted rooms (E2EE) for now.
