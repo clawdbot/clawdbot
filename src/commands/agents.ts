@@ -24,6 +24,7 @@ import {
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
+import { resolveDefaultMatrixAccountId } from "../matrix/accounts.js";
 import {
   type ChatProviderId,
   getChatProviderMeta,
@@ -552,6 +553,8 @@ function resolveDefaultAccountId(
       return resolveDefaultDiscordAccountId(cfg) || DEFAULT_ACCOUNT_ID;
     case "slack":
       return resolveDefaultSlackAccountId(cfg) || DEFAULT_ACCOUNT_ID;
+    case "matrix":
+      return resolveDefaultMatrixAccountId(cfg) || DEFAULT_ACCOUNT_ID;
     case "signal":
       return resolveDefaultSignalAccountId(cfg) || DEFAULT_ACCOUNT_ID;
     case "imessage":
