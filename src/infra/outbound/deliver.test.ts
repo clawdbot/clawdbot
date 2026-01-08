@@ -7,7 +7,7 @@ import {
 } from "./deliver.js";
 
 describe("deliverOutboundPayloads", () => {
-  it("chunks telegram markdown and passes account id", async () => {
+  it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi
       .fn()
       .mockResolvedValue({ messageId: "m1", chatId: "c1" });
@@ -28,7 +28,7 @@ describe("deliverOutboundPayloads", () => {
       expect(sendTelegram).toHaveBeenCalledTimes(2);
       for (const call of sendTelegram.mock.calls) {
         expect(call[2]).toEqual(
-          expect.objectContaining({ accountId: "default", verbose: false }),
+          expect.objectContaining({ accountId: undefined, verbose: false }),
         );
       }
       expect(results).toHaveLength(2);
@@ -40,6 +40,30 @@ describe("deliverOutboundPayloads", () => {
         process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
       }
     }
+  });
+
+  it("passes explicit accountId to sendTelegram", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const cfg: ClawdbotConfig = {
+      telegram: { botToken: "tok-1", textChunkLimit: 2 },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      provider: "telegram",
+      to: "123",
+      accountId: "default",
+      payloads: [{ text: "hi" }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({ accountId: "default", verbose: false }),
+    );
   });
 
   it("uses signal media maxBytes from config", async () => {

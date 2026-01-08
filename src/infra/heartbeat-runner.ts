@@ -22,7 +22,6 @@ import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { resolveDefaultTelegramAccountId } from "../telegram/accounts.js";
 import { getActiveWebListener } from "../web/active-listener.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
@@ -316,17 +315,10 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    // Resolve accountId for providers that support multiple accounts
-    const accountId =
-      delivery.provider === "telegram"
-        ? resolveDefaultTelegramAccountId(cfg)
-        : undefined;
-
     await deliverOutboundPayloads({
       cfg,
       provider: delivery.provider,
       to: delivery.to,
-      accountId,
       payloads: [
         {
           text: normalized.text,

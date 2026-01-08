@@ -86,7 +86,8 @@ function createProviderHandler(params: {
   deps: Required<OutboundSendDeps>;
 }): ProviderHandler {
   const { cfg, to, deps } = params;
-  const accountId = normalizeAccountId(params.accountId);
+  const rawAccountId = params.accountId;
+  const accountId = normalizeAccountId(rawAccountId);
   const signalMaxBytes =
     params.provider === "signal"
       ? resolveMediaMaxBytes(cfg, "signal", accountId)
@@ -103,7 +104,7 @@ function createProviderHandler(params: {
         provider: "whatsapp",
         ...(await deps.sendWhatsApp(to, text, {
           verbose: false,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
@@ -111,7 +112,7 @@ function createProviderHandler(params: {
         ...(await deps.sendWhatsApp(to, caption, {
           verbose: false,
           mediaUrl,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
     },
@@ -121,7 +122,7 @@ function createProviderHandler(params: {
         provider: "telegram",
         ...(await deps.sendTelegram(to, text, {
           verbose: false,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
@@ -129,7 +130,7 @@ function createProviderHandler(params: {
         ...(await deps.sendTelegram(to, caption, {
           verbose: false,
           mediaUrl,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
     },
@@ -139,7 +140,7 @@ function createProviderHandler(params: {
         provider: "discord",
         ...(await deps.sendDiscord(to, text, {
           verbose: false,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
@@ -147,7 +148,7 @@ function createProviderHandler(params: {
         ...(await deps.sendDiscord(to, caption, {
           verbose: false,
           mediaUrl,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
     },
@@ -156,14 +157,14 @@ function createProviderHandler(params: {
       sendText: async (text) => ({
         provider: "slack",
         ...(await deps.sendSlack(to, text, {
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
         provider: "slack",
         ...(await deps.sendSlack(to, caption, {
           mediaUrl,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
     },
@@ -173,7 +174,7 @@ function createProviderHandler(params: {
         provider: "signal",
         ...(await deps.sendSignal(to, text, {
           maxBytes: signalMaxBytes,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
@@ -181,7 +182,7 @@ function createProviderHandler(params: {
         ...(await deps.sendSignal(to, caption, {
           mediaUrl,
           maxBytes: signalMaxBytes,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
     },
@@ -191,7 +192,7 @@ function createProviderHandler(params: {
         provider: "imessage",
         ...(await deps.sendIMessage(to, text, {
           maxBytes: imessageMaxBytes,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
@@ -199,7 +200,7 @@ function createProviderHandler(params: {
         ...(await deps.sendIMessage(to, caption, {
           mediaUrl,
           maxBytes: imessageMaxBytes,
-          accountId,
+          accountId: rawAccountId,
         })),
       }),
     },
@@ -220,7 +221,7 @@ export async function deliverOutboundPayloads(params: {
   onPayload?: (payload: NormalizedOutboundPayload) => void;
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, provider, to, payloads } = params;
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = params.accountId;
   const deps = {
     sendWhatsApp: params.deps?.sendWhatsApp ?? sendMessageWhatsApp,
     sendTelegram: params.deps?.sendTelegram ?? sendMessageTelegram,

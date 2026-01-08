@@ -137,7 +137,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
-      expect.objectContaining({ accountId: "default", verbose: false }),
+      expect.objectContaining({ accountId: undefined, verbose: false }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
@@ -158,7 +158,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
-      expect.objectContaining({ accountId: "default", verbose: false }),
+      expect.objectContaining({ accountId: undefined, verbose: false }),
     );
   });
 
@@ -212,7 +212,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
       "hi",
-      expect.objectContaining({ accountId: "default" }),
+      expect.objectContaining({ accountId: undefined }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });

@@ -368,7 +368,7 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("passes telegram token from config to sendTelegram", async () => {
+  it("passes through accountId for telegram heartbeats", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -418,7 +418,74 @@ describe("runHeartbeatOnce", () => {
       expect(sendTelegram).toHaveBeenCalledWith(
         "123456",
         "Hello from heartbeat",
-        expect.objectContaining({ accountId: "default", verbose: false }),
+        expect.objectContaining({ accountId: undefined, verbose: false }),
+      );
+    } finally {
+      replySpy.mockRestore();
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not pre-resolve telegram accountId (allows config-only account tokens)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            main: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastProvider: "telegram",
+              lastTo: "123456",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const cfg: ClawdbotConfig = {
+        agent: {
+          heartbeat: { every: "5m", target: "telegram", to: "123456" },
+        },
+        telegram: {
+          accounts: {
+            work: { botToken: "test-bot-token-123" },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "123456",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendTelegram,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "123456",
+        "Hello from heartbeat",
+        expect.objectContaining({ accountId: undefined, verbose: false }),
       );
     } finally {
       replySpy.mockRestore();

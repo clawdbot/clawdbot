@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos
 - Heartbeat: resolve Telegram account IDs from config-only tokens; cron tool accepts canonical `jobId` and legacy `id` for job actions. (#516) — thanks @YuriNachos
 - Discord: stop provider when gateway reconnects are exhausted and surface errors. (#514) — thanks @joshp123
 - Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123

@@ -56,20 +56,37 @@ export function resolveTelegramAccount(params: {
   cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedTelegramAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const hasExplicitAccountId = Boolean(params.accountId?.trim());
   const baseEnabled = params.cfg.telegram?.enabled !== false;
-  const merged = mergeTelegramAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
-  const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
-  return {
-    accountId,
-    enabled,
-    name: merged.name?.trim() || undefined,
-    token: tokenResolution.token,
-    tokenSource: tokenResolution.source,
-    config: merged,
+
+  const resolve = (accountId: string) => {
+    const merged = mergeTelegramAccountConfig(params.cfg, accountId);
+    const accountEnabled = merged.enabled !== false;
+    const enabled = baseEnabled && accountEnabled;
+    const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
+    return {
+      accountId,
+      enabled,
+      name: merged.name?.trim() || undefined,
+      token: tokenResolution.token,
+      tokenSource: tokenResolution.source,
+      config: merged,
+    } satisfies ResolvedTelegramAccount;
   };
+
+  const normalized = normalizeAccountId(params.accountId);
+  const primary = resolve(normalized);
+  if (hasExplicitAccountId) return primary;
+  if (primary.tokenSource !== "none") return primary;
+
+  // If accountId is omitted, prefer a configured account token over failing on
+  // the implicit "default" account. This keeps env-based setups working (env
+  // still wins) while making config-only tokens work for things like heartbeats.
+  const fallbackId = resolveDefaultTelegramAccountId(params.cfg);
+  if (fallbackId === primary.accountId) return primary;
+  const fallback = resolve(fallbackId);
+  if (fallback.tokenSource === "none") return primary;
+  return fallback;
 }
 
 export function listEnabledTelegramAccounts(
