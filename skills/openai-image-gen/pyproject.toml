@@ -1,0 +1,16 @@
+[project]
+name = "openai-image-gen"
+version = "0.1.0"
+description = "High-performance batch image generation via OpenAI Images API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "openai>=2.14.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "rich>=14.2.0",
+]
+
+[project.scripts]
+openai-image-gen = "scripts.gen:main"
