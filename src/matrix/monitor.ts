@@ -13,6 +13,7 @@ import {
   RoomMemberEvent,
 } from "matrix-js-sdk";
 import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
+import type { EncryptedFile } from "matrix-js-sdk/lib/@types/media.js";
 
 import {
   chunkMarkdownText,
@@ -48,6 +49,7 @@ import {
   resolveMatrixAuth,
   resolveSharedMatrixClient,
 } from "./client.js";
+import { decryptMatrixAttachment } from "./crypto-attachments.js";
 import {
   reactMatrixMessage,
   sendMessageMatrix,
@@ -251,6 +253,31 @@ async function downloadMatrixMedia(params: {
   contentType?: string;
   placeholder: string;
 } | null> {
+  const fetched = await fetchMatrixMediaBuffer({
+    client: params.client,
+    mxcUrl: params.mxcUrl,
+    maxBytes: params.maxBytes,
+  });
+  if (!fetched) return null;
+  const headerType = fetched.headerType ?? params.contentType ?? undefined;
+  const saved = await saveMediaBuffer(
+    fetched.buffer,
+    headerType,
+    "inbound",
+    params.maxBytes,
+  );
+  return {
+    path: saved.path,
+    contentType: saved.contentType,
+    placeholder: "[matrix media]",
+  };
+}
+
+async function fetchMatrixMediaBuffer(params: {
+  client: MatrixClient;
+  mxcUrl: string;
+  maxBytes: number;
+}): Promise<{ buffer: Buffer; headerType?: string } | null> {
   const url = params.client.mxcUrlToHttp(
     params.mxcUrl,
     undefined,
@@ -272,19 +299,23 @@ async function downloadMatrixMedia(params: {
   if (buffer.byteLength > params.maxBytes) {
     throw new Error("Matrix media exceeds configured size limit");
   }
-  const headerType =
-    res.headers.get("content-type") ?? params.contentType ?? undefined;
-  const saved = await saveMediaBuffer(
-    buffer,
-    headerType,
-    "inbound",
-    params.maxBytes,
-  );
-  return {
-    path: saved.path,
-    contentType: saved.contentType,
-    placeholder: "[matrix media]",
-  };
+  const headerType = res.headers.get("content-type") ?? undefined;
+  return { buffer, headerType };
+}
+
+function resolveEncryptedFile(
+  content: RoomMessageEventContent,
+): EncryptedFile | null {
+  if (!("file" in content)) return null;
+  const file = content.file as unknown;
+  if (!file || typeof file !== "object") return null;
+  const value = file as Record<string, unknown>;
+  if (typeof value.url !== "string") return null;
+  if (typeof value.iv !== "string") return null;
+  if (typeof value.v !== "string") return null;
+  if (typeof value.key !== "object" || value.key === null) return null;
+  if (typeof value.hashes !== "object" || value.hashes === null) return null;
+  return file as EncryptedFile;
 }
 
 async function deliverMatrixReplies(params: {
@@ -603,20 +634,48 @@ export async function monitorMatrixProvider(
         "url" in content && typeof content.url === "string"
           ? content.url
           : undefined;
-      if (!rawBody && !contentUrl && !("file" in content && content.file)) {
+      const encryptedFile = resolveEncryptedFile(content);
+      if (!rawBody && !contentUrl && !encryptedFile) {
         return;
       }
 
-      if ("file" in content && content.file) {
-        logVerbose(
-          `matrix: encrypted attachments not supported yet (room=${roomId})`,
-        );
+      const contentType =
+        "info" in content && content.info && "mimetype" in content.info
+          ? content.info.mimetype
+          : undefined;
+      if (encryptedFile) {
+        if (encryptedFile.url.startsWith("mxc://")) {
+          try {
+            const fetched = await fetchMatrixMediaBuffer({
+              client,
+              mxcUrl: encryptedFile.url,
+              maxBytes: mediaMaxBytes,
+            });
+            if (fetched) {
+              const decrypted = await decryptMatrixAttachment({
+                encrypted: fetched.buffer,
+                file: encryptedFile,
+              });
+              const saved = await saveMediaBuffer(
+                Buffer.from(decrypted),
+                contentType,
+                "inbound",
+                mediaMaxBytes,
+              );
+              media = {
+                path: saved.path,
+                contentType: saved.contentType,
+                placeholder: "[matrix media]",
+              };
+            }
+          } catch (err) {
+            logVerbose(
+              `matrix: encrypted media download failed: ${String(err)}`,
+            );
+          }
+        }
       } else if (contentUrl?.startsWith("mxc://")) {
         try {
-          const contentType =
-            "info" in content && content.info && "mimetype" in content.info
-              ? content.info.mimetype
-              : undefined;
           media = await downloadMatrixMedia({
             client,
             mxcUrl: contentUrl,
