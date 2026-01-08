@@ -253,6 +253,13 @@ async function noteSlackTokenHelp(
 
 export { mergeWhatsAppConfig };
 
+export function setWhatsAppDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
+  return mergeWhatsAppConfig(cfg, { dmPolicy });
+}
+
 export function setWhatsAppAllowFrom(
   cfg: ClawdbotConfig,
   allowFrom?: string[],
@@ -275,6 +282,13 @@ function setMessagesResponsePrefix(
       responsePrefix,
     },
   };
+}
+
+export function setWhatsAppSelfChatMode(
+  cfg: ClawdbotConfig,
+  selfChatMode: boolean,
+): ClawdbotConfig {
+  return mergeWhatsAppConfig(cfg, { selfChatMode });
 }
 
 function setTelegramDmPolicy(
