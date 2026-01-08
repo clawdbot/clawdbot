@@ -28,6 +28,8 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../web/session.js";
+import { listMatrixAccountIds } from "../matrix/accounts.js";
+import { resolveMatrixConfig } from "../matrix/client.js";
 
 export type ProviderSummaryOptions = {
   colorize?: boolean;
@@ -209,6 +211,46 @@ export async function buildProviderSummary(
             formatAccountLabel({
               accountId: account.accountId,
               name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
+  }
+
+  const matrixEnabled = effective.matrix?.enabled !== false;
+  if (!matrixEnabled) {
+    lines.push(tint("Matrix: disabled", theme.muted));
+  } else {
+    const resolvedMatrix = resolveMatrixConfig(effective);
+    const configured = Boolean(
+      resolvedMatrix.homeserver &&
+        resolvedMatrix.userId &&
+        (resolvedMatrix.accessToken || resolvedMatrix.password),
+    );
+    lines.push(
+      configured
+        ? tint("Matrix: configured", theme.success)
+        : tint("Matrix: not configured", theme.muted),
+    );
+    if (configured) {
+      const authSource =
+        process.env.MATRIX_ACCESS_TOKEN?.trim() ||
+        process.env.MATRIX_PASSWORD?.trim()
+          ? "env"
+          : effective.matrix?.accessToken?.trim() ||
+              effective.matrix?.password?.trim()
+            ? "config"
+            : "none";
+      for (const accountId of listMatrixAccountIds(effective)) {
+        const details: string[] = [];
+        if (authSource !== "none") details.push(`auth:${authSource}`);
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId,
+              name: resolvedMatrix.userId || undefined,
             }),
             details,
           ),
