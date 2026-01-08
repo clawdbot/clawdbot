@@ -96,7 +96,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - WhatsApp: optional QR login.
    - Telegram: bot token.
    - Discord: bot token.
-   - Matrix: homeserver + access token (Node-only for E2EE).
+   - Matrix: homeserver + access token (wizard prompts for E2EE + device id; Node-only for E2EE).
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
   - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve --provider <provider> <code>` or use allowlists.

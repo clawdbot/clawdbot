@@ -20,6 +20,7 @@ Status: Node-only with E2EE enabled by default (Rust crypto).
 Matrix uses the official `matrix-js-sdk` with Rust crypto. That means:
 - **Node-only** runtime (Bun is unsupported for Matrix).
 - E2EE is **on by default** (`matrix.encryption=true`).
+- The wizard asks whether to enable E2EE; if enabled, it will prompt for `matrix.deviceId`.
 - If you join encrypted rooms, verify the Clawdbot device in your Matrix client so it can decrypt messages.
 - Crypto state is in-memory on Node today (no persistent IndexedDB store), so restarts require re-verification and may not decrypt history until keys are shared again.
 
@@ -40,18 +41,21 @@ curl -sS "https://matrix.example/_matrix/client/v3/login" \
 ```
 
 Then set `matrix.homeserver`, `matrix.userId`, `matrix.accessToken`, and optionally `matrix.deviceId`.
+If you use E2EE, keep the `device_id` from the login response and set `matrix.deviceId` so the device stays consistent.
 
 ### Password login (optional)
 If you set `matrix.password`, Clawdbot will log in at startup to obtain a token.
 For long-running gateways, prefer a pre-generated `accessToken`.
 
 ## DMs + rooms
-- **DM detection uses `m.direct` only.** If `m.direct` isn't set for a user, their chat will be treated as a room.
+- **DM detection prefers `m.direct`.** If it is missing, Clawdbot treats `is_direct` rooms and 1:1 rooms as DMs when possible.
 - DM policy is controlled via `matrix.dm.policy` (pairing/allowlist/open/disabled).
 - Room allowlists + mention defaults live under `matrix.rooms` and `matrix.groupPolicy`.
+- Rooms are disabled by default; set `matrix.groupPolicy` to `open` or `allowlist` to enable them.
 - Set `matrix.allowlistOnly=true` to require explicit allowlists for both rooms and DMs.
 
 ## Threads + replies
+- Thread replies follow the inbound thread when `matrix.threadReplies` allows it.
 - When an inbound message is a **thread reply**, Clawdbot replies in the thread by default.
 - `matrix.threadReplies` controls thread behavior:
   - `inbound` (default): reply in a thread only if the sender opened one.
@@ -79,7 +83,7 @@ For long-running gateways, prefer a pre-generated `accessToken`.
     encryption: true,
     autoJoin: "always", // always | allowlist | off
     autoJoinAllowlist: ["!roomid:example", "#ops:example"],
-    groupPolicy: "open", // open | allowlist | disabled
+    groupPolicy: "disabled", // open | allowlist | disabled
     allowlistOnly: false,
     dm: {
       enabled: true,

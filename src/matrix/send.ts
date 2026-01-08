@@ -17,6 +17,7 @@ import {
   ensureMatrixCrypto,
   isBunRuntime,
   resolveMatrixAuth,
+  resolveSharedMatrixClient,
   waitForMatrixSync,
 } from "./client.js";
 
@@ -235,6 +236,13 @@ async function resolveMatrixClient(opts: {
   if (opts.client) return { client: opts.client, stopOnDone: false };
   const active = getActiveMatrixClient();
   if (active) return { client: active, stopOnDone: false };
+  const shouldShareClient = Boolean(process.env.CLAWDBOT_GATEWAY_PORT);
+  if (shouldShareClient) {
+    const client = await resolveSharedMatrixClient({
+      timeoutMs: opts.timeoutMs,
+    });
+    return { client, stopOnDone: false };
+  }
   const auth = await resolveMatrixAuth();
   const client = await createMatrixClient({
     homeserver: auth.homeserver,
@@ -245,7 +253,7 @@ async function resolveMatrixClient(opts: {
   });
   await ensureMatrixCrypto(client, auth.encryption);
   await client.startClient({
-    initialSyncLimit: auth.initialSyncLimit,
+    initialSyncLimit: 0,
     lazyLoadMembers: true,
     threadSupport: true,
   });
@@ -281,7 +289,7 @@ export async function sendMessageMatrix(
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
     const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
     const threadId = opts.threadId?.trim() || null;
-    const relation = buildReplyRelation(opts.replyToId);
+    const relation = threadId ? undefined : buildReplyRelation(opts.replyToId);
     const sendContent = (content: RoomMessageEventContent) =>
       client.sendMessage(roomId, threadId, content);
 

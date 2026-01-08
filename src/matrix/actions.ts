@@ -22,6 +22,7 @@ import {
   ensureMatrixCrypto,
   isBunRuntime,
   resolveMatrixAuth,
+  resolveSharedMatrixClient,
   waitForMatrixSync,
 } from "./client.js";
 import {
@@ -72,6 +73,14 @@ async function resolveActionClient(
   if (opts.client) return { client: opts.client, stopOnDone: false };
   const active = getActiveMatrixClient();
   if (active) return { client: active, stopOnDone: false };
+  const shouldShareClient = Boolean(process.env.CLAWDBOT_GATEWAY_PORT);
+  if (shouldShareClient) {
+    const client = await resolveSharedMatrixClient({
+      cfg: loadConfig(),
+      timeoutMs: opts.timeoutMs,
+    });
+    return { client, stopOnDone: false };
+  }
   const auth = await resolveMatrixAuth({ cfg: loadConfig() });
   const client = await createMatrixClient({
     homeserver: auth.homeserver,
@@ -82,7 +91,7 @@ async function resolveActionClient(
   });
   await ensureMatrixCrypto(client, auth.encryption);
   await client.startClient({
-    initialSyncLimit: auth.initialSyncLimit,
+    initialSyncLimit: 0,
     lazyLoadMembers: true,
     threadSupport: true,
   });

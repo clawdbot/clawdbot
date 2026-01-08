@@ -589,7 +589,7 @@ export type MatrixConfig = {
   autoJoinAllowlist?: string[];
   /**
    * Controls how room messages are handled:
-   * - "open" (default): rooms bypass allowlists; mention-gating applies
+   * - "open": rooms bypass allowlists; mention-gating applies
    * - "disabled": block all room messages
    * - "allowlist": only allow rooms present in matrix.rooms
    */

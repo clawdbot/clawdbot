@@ -44,10 +44,9 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { setActiveMatrixClient } from "./active-client.js";
 import {
-  createMatrixClient,
-  ensureMatrixCrypto,
   isBunRuntime,
   resolveMatrixAuth,
+  resolveSharedMatrixClient,
 } from "./client.js";
 import {
   reactMatrixMessage,
@@ -139,19 +138,88 @@ function resolveMatrixRoomConfig(params: {
   return { allowed, allowlistConfigured, config: matched };
 }
 
+function isLikelyDirectRoom(params: {
+  room: Room;
+  senderId: string;
+  selfId?: string | null;
+}): boolean {
+  if (!params.selfId) return false;
+  const memberCount = params.room.getJoinedMemberCount?.();
+  if (typeof memberCount !== "number" || memberCount !== 2) return false;
+  const senderMember = params.room.getMember(params.senderId);
+  const selfMember = params.room.getMember(params.selfId);
+  return Boolean(senderMember && selfMember);
+}
+
+function hasDirectFlag(member?: RoomMember | null): boolean {
+  if (!member?.events.member) return false;
+  const content = member.events.member.getContent() as
+    | { is_direct?: boolean }
+    | undefined;
+  if (content?.is_direct === true) return true;
+  const prev = member.events.member.getPrevContent() as
+    | { is_direct?: boolean }
+    | undefined;
+  return prev?.is_direct === true;
+}
+
+function isDirectRoomByFlag(params: {
+  room: Room;
+  senderId: string;
+  selfId?: string | null;
+}): boolean {
+  if (!params.selfId) return false;
+  const selfMember = params.room.getMember(params.selfId);
+  const senderMember = params.room.getMember(params.senderId);
+  if (hasDirectFlag(selfMember) || hasDirectFlag(senderMember)) return true;
+  const inviter = selfMember?.getDMInviter() ?? senderMember?.getDMInviter();
+  return Boolean(inviter);
+}
+
 function resolveMatrixThreadTarget(params: {
   threadReplies: "off" | "inbound" | "always";
   messageId: string;
   threadRootId?: string;
+  isThreadRoot?: boolean;
 }): string | undefined {
   const { threadReplies, messageId, threadRootId } = params;
   if (threadReplies === "off") return undefined;
-  const hasInboundThread = Boolean(threadRootId && threadRootId !== messageId);
+  const isThreadRoot = params.isThreadRoot === true;
+  const hasInboundThread = Boolean(
+    threadRootId && threadRootId !== messageId && !isThreadRoot,
+  );
   if (threadReplies === "inbound") {
     return hasInboundThread ? threadRootId : undefined;
   }
   if (threadReplies === "always") {
     return threadRootId ?? messageId;
+  }
+  return undefined;
+}
+
+function resolveMatrixThreadRootId(params: {
+  event: MatrixEvent;
+  content: RoomMessageEventContent;
+}): string | undefined {
+  const fromThread = params.event.getThread?.()?.id;
+  if (fromThread) return fromThread;
+  const direct = params.event.threadRootId ?? undefined;
+  if (direct) return direct;
+  const relates = params.content["m.relates_to"];
+  if (!relates || typeof relates !== "object") return undefined;
+  if ("rel_type" in relates && relates.rel_type === RelationType.Thread) {
+    if ("event_id" in relates && typeof relates.event_id === "string") {
+      return relates.event_id;
+    }
+    if (
+      "m.in_reply_to" in relates &&
+      typeof relates["m.in_reply_to"] === "object" &&
+      relates["m.in_reply_to"] &&
+      "event_id" in relates["m.in_reply_to"] &&
+      typeof relates["m.in_reply_to"].event_id === "string"
+    ) {
+      return relates["m.in_reply_to"].event_id;
+    }
   }
   return undefined;
 }
@@ -236,7 +304,10 @@ async function deliverMatrixReplies(params: {
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
-    const replyToId = params.replyToMode === "off" ? undefined : replyToIdRaw;
+    const replyToId =
+      params.threadId || params.replyToMode === "off"
+        ? undefined
+        : replyToIdRaw;
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -299,19 +370,17 @@ export async function monitorMatrixProvider(
   };
 
   const auth = await resolveMatrixAuth({ cfg });
-  const client = await createMatrixClient({
-    homeserver: auth.homeserver,
-    userId: auth.userId,
-    accessToken: auth.accessToken,
-    deviceId: auth.deviceId,
+  const client = await resolveSharedMatrixClient({
+    cfg,
+    auth,
+    startClient: false,
   });
-  await ensureMatrixCrypto(client, auth.encryption);
   setActiveMatrixClient(client);
 
   const mentionRegexes = buildMentionRegexes(cfg);
   const logger = getChildLogger({ module: "matrix-auto-reply" });
   const allowlistOnly = cfg.matrix?.allowlistOnly === true;
-  const groupPolicyRaw = cfg.matrix?.groupPolicy ?? "open";
+  const groupPolicyRaw = cfg.matrix?.groupPolicy ?? "disabled";
   const groupPolicy =
     allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
   const replyToMode = opts.replyToMode ?? cfg.matrix?.replyToMode ?? "off";
@@ -326,6 +395,9 @@ export async function monitorMatrixProvider(
   const mediaMaxMb =
     opts.mediaMaxMb ?? cfg.matrix?.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
+  // Avoid replaying backlog messages when the client first syncs.
+  const startupMs = Date.now();
+  const startupGraceMs = 0;
 
   const directMap = new Map<string, Set<string>>();
   const updateDirectMap = (content: MatrixDirectAccountData) => {
@@ -397,6 +469,18 @@ export async function monitorMatrixProvider(
       const senderId = event.getSender();
       if (!senderId) return;
       if (senderId === client.getUserId()) return;
+      const eventTs = event.getTs();
+      const eventAge = event.getAge();
+      if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+        return;
+      }
+      if (
+        typeof eventTs !== "number" &&
+        typeof eventAge === "number" &&
+        eventAge > startupGraceMs
+      ) {
+        return;
+      }
 
       const content = event.getContent<RoomMessageEventContent>();
       const relates = content["m.relates_to"];
@@ -406,7 +490,12 @@ export async function monitorMatrixProvider(
 
       const roomId = room.roomId;
       const directRooms = directMap.get(senderId);
-      const isDirectMessage = Boolean(directRooms?.has(roomId));
+      const selfId = client.getUserId();
+      const isDirectByFlag = isDirectRoomByFlag({ room, senderId, selfId });
+      const isDirectMessage =
+        Boolean(directRooms?.has(roomId)) ||
+        isDirectByFlag ||
+        isLikelyDirectRoom({ room, senderId, selfId });
       const isRoom = !isDirectMessage;
 
       if (!isDirectMessage && groupPolicy === "disabled") return;
@@ -587,11 +676,12 @@ export async function monitorMatrixProvider(
       }
 
       const messageId = event.getId() ?? "";
-      const threadRootId = event.threadRootId ?? undefined;
+      const threadRootId = resolveMatrixThreadRootId({ event, content });
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
         messageId,
         threadRootId,
+        isThreadRoot: event.isThreadRoot,
       });
 
       const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
@@ -632,7 +722,7 @@ export async function monitorMatrixProvider(
         Surface: "matrix" as const,
         WasMentioned: isRoom ? wasMentioned : undefined,
         MessageSid: messageId,
-        ReplyToId: event.replyEventId ?? undefined,
+        ReplyToId: threadTarget ? undefined : (event.replyEventId ?? undefined),
         MessageThreadId: threadTarget,
         Timestamp: event.getTs() ?? undefined,
         MediaPath: media?.path,
@@ -751,11 +841,7 @@ export async function monitorMatrixProvider(
 
   client.on(RoomEvent.Timeline, handleTimeline);
 
-  await client.startClient({
-    initialSyncLimit: opts.initialSyncLimit ?? auth.initialSyncLimit,
-    lazyLoadMembers: true,
-    threadSupport: true,
-  });
+  await resolveSharedMatrixClient({ cfg, auth, startClient: true });
   runtime.log?.(`matrix: logged in as ${auth.userId}`);
 
   await new Promise<void>((resolve) => {

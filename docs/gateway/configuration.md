@@ -812,7 +812,7 @@ Matrix runs via the official `matrix-js-sdk` and requires **Node** for Rust cryp
     encryption: true,
     autoJoin: "always", // always | allowlist | off
     autoJoinAllowlist: ["!roomid:example", "#ops:example"],
-    groupPolicy: "open", // open | allowlist | disabled
+    groupPolicy: "disabled", // open | allowlist | disabled
     allowlistOnly: false,
     dm: {
       enabled: true,
@@ -837,9 +837,10 @@ Matrix runs via the official `matrix-js-sdk` and requires **Node** for Rust cryp
 ```
 
 Notes:
-- Matrix is **Node-only** (Bun unsupported).
+- Matrix is **Node-only** (Bun unsupported due to missing E2EE support).
 - Crypto state is in-memory on Node (no persistent IndexedDB store yet).
-- DMs are detected via `m.direct` only.
+- DMs prefer `m.direct`; `is_direct` and 1:1 rooms are treated as DMs when possible.
+- Matrix rooms are disabled by default; set `matrix.groupPolicy` to `open` or `allowlist` to enable them.
 - Media uploads are disabled in encrypted rooms (E2EE) for now.
 - `autoJoin="allowlist"` requires `autoJoinAllowlist`.
 

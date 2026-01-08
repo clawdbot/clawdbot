@@ -26,6 +26,16 @@ export type MatrixAuth = {
 
 type MatrixSdk = typeof import("matrix-js-sdk");
 
+type SharedMatrixClientState = {
+  client: MatrixClient;
+  key: string;
+  started: boolean;
+};
+
+let sharedClientState: SharedMatrixClientState | null = null;
+let sharedClientPromise: Promise<SharedMatrixClientState> | null = null;
+let sharedClientStartPromise: Promise<void> | null = null;
+
 export function isBunRuntime(): boolean {
   const versions = process.versions as { bun?: string };
   return typeof versions.bun === "string";
@@ -56,7 +66,7 @@ export function resolveMatrixConfig(
   const encryption = matrix.encryption !== false;
   const initialSyncLimit =
     typeof matrix.initialSyncLimit === "number"
-      ? Math.max(1, Math.floor(matrix.initialSyncLimit))
+      ? Math.max(0, Math.floor(matrix.initialSyncLimit))
       : undefined;
   return {
     homeserver,
@@ -143,6 +153,119 @@ export async function createMatrixClient(params: {
     localTimeoutMs: params.localTimeoutMs,
     store,
   });
+}
+
+function buildSharedClientKey(auth: MatrixAuth): string {
+  return [
+    auth.homeserver,
+    auth.userId,
+    auth.deviceId ?? "",
+    auth.accessToken,
+    auth.encryption ? "enc" : "plain",
+  ].join("|");
+}
+
+async function createSharedMatrixClient(params: {
+  auth: MatrixAuth;
+  timeoutMs?: number;
+}): Promise<SharedMatrixClientState> {
+  const client = await createMatrixClient({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    deviceId: params.auth.deviceId,
+    localTimeoutMs: params.timeoutMs,
+  });
+  await ensureMatrixCrypto(client, params.auth.encryption);
+  return { client, key: buildSharedClientKey(params.auth), started: false };
+}
+
+async function ensureSharedClientStarted(params: {
+  state: SharedMatrixClientState;
+  timeoutMs?: number;
+}): Promise<void> {
+  if (params.state.started) return;
+  if (sharedClientStartPromise) {
+    await sharedClientStartPromise;
+    return;
+  }
+  sharedClientStartPromise = (async () => {
+    await params.state.client.startClient({
+      initialSyncLimit: 0,
+      lazyLoadMembers: true,
+      threadSupport: true,
+    });
+    await waitForMatrixSync({
+      client: params.state.client,
+      timeoutMs: params.timeoutMs,
+    });
+    params.state.started = true;
+  })();
+  try {
+    await sharedClientStartPromise;
+  } finally {
+    sharedClientStartPromise = null;
+  }
+}
+
+export async function resolveSharedMatrixClient(
+  params: {
+    cfg?: ClawdbotConfig;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    auth?: MatrixAuth;
+    startClient?: boolean;
+  } = {},
+): Promise<MatrixClient> {
+  const auth =
+    params.auth ??
+    (await resolveMatrixAuth({ cfg: params.cfg, env: params.env }));
+  const key = buildSharedClientKey(auth);
+  const shouldStart = params.startClient !== false;
+
+  if (sharedClientState?.key === key) {
+    if (shouldStart) {
+      await ensureSharedClientStarted({
+        state: sharedClientState,
+        timeoutMs: params.timeoutMs,
+      });
+    }
+    return sharedClientState.client;
+  }
+
+  if (sharedClientPromise) {
+    const pending = await sharedClientPromise;
+    if (pending.key === key) {
+      if (shouldStart) {
+        await ensureSharedClientStarted({
+          state: pending,
+          timeoutMs: params.timeoutMs,
+        });
+      }
+      return pending.client;
+    }
+    pending.client.stopClient();
+    sharedClientState = null;
+    sharedClientPromise = null;
+  }
+
+  sharedClientPromise = createSharedMatrixClient({
+    auth,
+    timeoutMs: params.timeoutMs,
+  });
+  try {
+    const created = await sharedClientPromise;
+    sharedClientState = created;
+    if (shouldStart) {
+      await ensureSharedClientStarted({
+        state: created,
+        timeoutMs: params.timeoutMs,
+      });
+    }
+    return created.client;
+  } finally {
+    sharedClientPromise = null;
+  }
 }
 
 export async function ensureMatrixCrypto(
