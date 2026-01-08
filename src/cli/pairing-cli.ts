@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
+import { sendMessageMSTeams } from "../msteams/send.js";
 import {
   approveProviderPairingCode,
   listProviderPairingRequests,
@@ -20,6 +21,7 @@ const PROVIDERS: PairingProvider[] = [
   "discord",
   "slack",
   "whatsapp",
+  "msteams",
 ];
 
 function parseProvider(raw: unknown): PairingProvider {
@@ -62,6 +64,11 @@ async function notifyApproved(provider: PairingProvider, id: string) {
   }
   if (provider === "imessage") {
     await sendMessageIMessage(id, message);
+    return;
+  }
+  if (provider === "msteams") {
+    const cfg = loadConfig();
+    await sendMessageMSTeams({ cfg, to: id, text: message });
     return;
   }
   // WhatsApp: approval still works (store); notifying requires an active web session.

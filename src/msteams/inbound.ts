@@ -10,6 +10,15 @@ export function normalizeMSTeamsConversationId(raw: string): string {
   return raw.split(";")[0] ?? raw;
 }
 
+export function extractMSTeamsConversationMessageId(
+  raw: string,
+): string | undefined {
+  if (!raw) return undefined;
+  const match = /(?:^|;)messageid=([^;]+)/i.exec(raw);
+  const value = match?.[1]?.trim() ?? "";
+  return value || undefined;
+}
+
 export function parseMSTeamsActivityTimestamp(
   value: unknown,
 ): Date | undefined {

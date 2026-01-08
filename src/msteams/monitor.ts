@@ -15,9 +15,12 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
+  buildMSTeamsGraphMessageUrls,
   buildMSTeamsMediaPayload,
+  downloadMSTeamsGraphMedia,
   downloadMSTeamsImageAttachments,
   type MSTeamsAttachmentLike,
+  summarizeMSTeamsHtmlAttachments,
 } from "./attachments.js";
 import type {
   MSTeamsConversationStore,
@@ -30,6 +33,7 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import {
+  extractMSTeamsConversationMessageId,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -139,6 +143,7 @@ export async function monitorMSTeamsProvider(
       )
       .filter(Boolean)
       .slice(0, 3);
+    const htmlSummary = summarizeMSTeamsHtmlAttachments(attachments);
 
     log.info("received message", {
       rawText: rawText.slice(0, 50),
@@ -148,6 +153,9 @@ export async function monitorMSTeamsProvider(
       from: from?.id,
       conversation: conversation?.id,
     });
+    if (htmlSummary) {
+      log.debug("html attachment summary", htmlSummary);
+    }
 
     if (!rawBody) {
       log.debug("skipping empty message after stripping mentions");
@@ -161,6 +169,8 @@ export async function monitorMSTeamsProvider(
     // Teams conversation.id may include ";messageid=..." suffix - strip it for session key
     const rawConversationId = conversation?.id ?? "";
     const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+    const conversationMessageId =
+      extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const isGroupChat =
       conversationType === "groupChat" || conversation?.isGroup === true;
@@ -302,15 +312,81 @@ export async function monitorMSTeamsProvider(
 
     // Format the message body with envelope
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
-    const mediaList = await downloadMSTeamsImageAttachments({
+    let mediaList = await downloadMSTeamsImageAttachments({
       attachments,
       maxBytes: mediaMaxBytes,
       tokenProvider: {
         getAccessToken: (scope) => tokenProvider.getAccessToken(scope),
       },
     });
+    if (mediaList.length === 0) {
+      const onlyHtmlAttachments =
+        attachments.length > 0 &&
+        attachments.every((att) =>
+          String(att.contentType ?? "").startsWith("text/html"),
+        );
+      if (onlyHtmlAttachments) {
+        const messageUrls = buildMSTeamsGraphMessageUrls({
+          conversationType,
+          conversationId,
+          messageId: activity.id ?? undefined,
+          replyToId: activity.replyToId ?? undefined,
+          conversationMessageId,
+          channelData: activity.channelData,
+        });
+        if (messageUrls.length === 0) {
+          log.debug("graph message url unavailable", {
+            conversationType,
+            hasChannelData: Boolean(activity.channelData),
+            messageId: activity.id ?? undefined,
+            replyToId: activity.replyToId ?? undefined,
+          });
+        } else {
+          const attempts: Array<{
+            url: string;
+            hostedStatus?: number;
+            attachmentStatus?: number;
+            hostedCount?: number;
+            attachmentCount?: number;
+            tokenError?: boolean;
+          }> = [];
+          for (const messageUrl of messageUrls) {
+            const graphMedia = await downloadMSTeamsGraphMedia({
+              messageUrl,
+              tokenProvider: {
+                getAccessToken: (scope) => tokenProvider.getAccessToken(scope),
+              },
+              maxBytes: mediaMaxBytes,
+            });
+            attempts.push({
+              url: messageUrl,
+              hostedStatus: graphMedia.hostedStatus,
+              attachmentStatus: graphMedia.attachmentStatus,
+              hostedCount: graphMedia.hostedCount,
+              attachmentCount: graphMedia.attachmentCount,
+              tokenError: graphMedia.tokenError,
+            });
+            if (graphMedia.media.length > 0) {
+              mediaList = graphMedia.media;
+              break;
+            }
+            if (graphMedia.tokenError) break;
+          }
+          if (mediaList.length === 0) {
+            log.debug("graph media fetch empty", { attempts });
+          }
+        }
+      }
+    }
     if (mediaList.length > 0) {
       log.debug("downloaded image attachments", { count: mediaList.length });
+    } else if (htmlSummary?.imgTags) {
+      log.debug("inline images detected but none downloaded", {
+        imgTags: htmlSummary.imgTags,
+        srcHosts: htmlSummary.srcHosts,
+        dataImages: htmlSummary.dataImages,
+        cidImages: htmlSummary.cidImages,
+      });
     }
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
     const body = formatAgentEnvelope({

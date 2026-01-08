@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildMSTeamsAttachmentPlaceholder,
+  buildMSTeamsGraphMessageUrls,
   buildMSTeamsMediaPayload,
+  downloadMSTeamsGraphMedia,
   downloadMSTeamsImageAttachments,
 } from "./attachments.js";
 
@@ -70,6 +72,26 @@ describe("msteams attachments", () => {
         ]),
       ).toBe("<media:document> (2 files)");
     });
+
+    it("counts inline images in text/html attachments", () => {
+      expect(
+        buildMSTeamsAttachmentPlaceholder([
+          {
+            contentType: "text/html",
+            content: '<p>hi</p><img src="https://x/a.png" />',
+          },
+        ]),
+      ).toBe("<media:image>");
+      expect(
+        buildMSTeamsAttachmentPlaceholder([
+          {
+            contentType: "text/html",
+            content:
+              '<img src="https://x/a.png" /><img src="https://x/b.png" />',
+          },
+        ]),
+      ).toBe("<media:image> (2 images)");
+    });
   });
 
   describe("downloadMSTeamsImageAttachments", () => {
@@ -118,6 +140,45 @@ describe("msteams attachments", () => {
       expect(fetchMock).toHaveBeenCalledWith("https://x/dl");
     });
 
+    it("downloads inline image URLs from html attachments", async () => {
+      const fetchMock = vi.fn(async () => {
+        return new Response(Buffer.from("png"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      });
+
+      const media = await downloadMSTeamsImageAttachments({
+        attachments: [
+          {
+            contentType: "text/html",
+            content: '<img src="https://x/inline.png" />',
+          },
+        ],
+        maxBytes: 1024 * 1024,
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png");
+    });
+
+    it("stores inline data:image base64 payloads", async () => {
+      const base64 = Buffer.from("png").toString("base64");
+      const media = await downloadMSTeamsImageAttachments({
+        attachments: [
+          {
+            contentType: "text/html",
+            content: `<img src="data:image/png;base64,${base64}" />`,
+          },
+        ],
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(media).toHaveLength(1);
+      expect(saveMediaBufferMock).toHaveBeenCalled();
+    });
+
     it("retries with auth when the first request is unauthorized", async () => {
       const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
         const hasAuth = Boolean(
@@ -160,6 +221,77 @@ describe("msteams attachments", () => {
 
       expect(media).toHaveLength(0);
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("buildMSTeamsGraphMessageUrls", () => {
+    it("builds channel message urls", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "channel",
+        conversationId: "19:thread@thread.tacv2",
+        messageId: "123",
+        channelData: { team: { id: "team-id" }, channel: { id: "chan-id" } },
+      });
+      expect(urls[0]).toContain("/teams/team-id/channels/chan-id/messages/123");
+    });
+
+    it("builds channel reply urls when replyToId is present", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "channel",
+        messageId: "reply-id",
+        replyToId: "root-id",
+        channelData: { team: { id: "team-id" }, channel: { id: "chan-id" } },
+      });
+      expect(urls[0]).toContain(
+        "/teams/team-id/channels/chan-id/messages/root-id/replies/reply-id",
+      );
+    });
+
+    it("builds chat message urls", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "groupChat",
+        conversationId: "19:chat@thread.v2",
+        messageId: "456",
+      });
+      expect(urls[0]).toContain("/chats/19%3Achat%40thread.v2/messages/456");
+    });
+  });
+
+  describe("downloadMSTeamsGraphMedia", () => {
+    it("downloads hostedContents images", async () => {
+      const base64 = Buffer.from("png").toString("base64");
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith("/hostedContents")) {
+          return new Response(
+            JSON.stringify({
+              value: [
+                {
+                  id: "1",
+                  contentType: "image/png",
+                  contentBytes: base64,
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/attachments")) {
+          return new Response(JSON.stringify({ value: [] }), { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      const media = await downloadMSTeamsGraphMedia({
+        messageUrl:
+          "https://graph.microsoft.com/v1.0/chats/19%3Achat/messages/123",
+        tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+        maxBytes: 1024 * 1024,
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media.media).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalled();
+      expect(saveMediaBufferMock).toHaveBeenCalled();
     });
   });
 
