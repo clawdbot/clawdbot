@@ -103,6 +103,61 @@ describe("block streaming", () => {
     });
   });
 
+  it("preserves block reply ordering when typing start is slow", async () => {
+    await withTempHome(async (home) => {
+      let releaseTyping: (() => void) | undefined;
+      const typingGate = new Promise<void>((resolve) => {
+        releaseTyping = resolve;
+      });
+      const onReplyStart = vi.fn(() => typingGate);
+      const seen: string[] = [];
+      const onBlockReply = vi.fn(async (payload) => {
+        seen.push(payload.text ?? "");
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
+        void params.onBlockReply?.({ text: "first" });
+        void params.onBlockReply?.({ text: "second" });
+        return {
+          payloads: [{ text: "first" }, { text: "second" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        };
+      });
+
+      const replyPromise = getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-125",
+          Provider: "telegram",
+        },
+        {
+          onReplyStart,
+          onBlockReply,
+        },
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          telegram: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      await waitForCalls(() => onReplyStart.mock.calls.length, 1);
+      releaseTyping?.();
+
+      const res = await replyPromise;
+      expect(res).toBeUndefined();
+      expect(seen).toEqual(["first", "second"]);
+    });
+  });
+
   it("drops final payloads when block replies streamed", async () => {
     await withTempHome(async (home) => {
       const onBlockReply = vi.fn().mockResolvedValue(undefined);
