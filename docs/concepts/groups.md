@@ -242,7 +242,8 @@ The agent system prompt includes a group intro on the first turn of a new group 
 
 ## Matrix specifics
 - Prefer room ids (`!roomid:server`) in allowlists and delivery targets.
-- DMs are detected from `m.direct` only; rooms not flagged there are treated as group rooms.
+- DMs prefer `m.direct`; `is_direct` and 1:1 rooms are treated as DMs when possible.
+- Rooms are disabled by default; set `matrix.groupPolicy` to `open` or `allowlist` to enable them.
 - Thread replies stay in-thread when the inbound message is threaded (`matrix.threadReplies`).
 
 ## WhatsApp specifics

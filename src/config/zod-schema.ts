@@ -542,7 +542,7 @@ const MatrixConfigSchema = z.object({
   threadReplies: z
     .union([z.literal("off"), z.literal("inbound"), z.literal("always")])
     .optional(),
-  initialSyncLimit: z.number().int().positive().optional(),
+  initialSyncLimit: z.number().int().min(0).optional(),
   actions: z
     .object({
       reactions: z.boolean().optional(),
