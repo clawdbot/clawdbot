@@ -44,7 +44,7 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events",
     gateway:
-      "Restart, apply config, or run updates on the running ClaudeBot process",
+      "Restart, apply config, or run updates on the running Clawdbot process",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
@@ -129,7 +129,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
 
   const lines = [
-    "You are a personal assistant running inside ClaudeBot.",
+    "You are a personal assistant running inside Clawdbot.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -157,13 +157,13 @@ export function buildAgentSystemPrompt(params: {
     "## Skills",
     `Skills provide task-specific instructions. Use \`read\` to load from ${params.workspaceDir}/skills/<name>/SKILL.md when needed.`,
     "",
-    hasGateway ? "## ClaudeBot Self-Update" : "",
+    hasGateway ? "## Clawdbot Self-Update" : "",
     hasGateway
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
-          "After restart, ClaudeBot pings the last active session automatically.",
+          "After restart, Clawdbot pings the last active session automatically.",
         ].join("\n")
       : "",
     hasGateway ? "" : "",
@@ -212,7 +212,7 @@ export function buildAgentSystemPrompt(params: {
     ownerLine ?? "",
     ownerLine ? "" : "",
     "## Workspace Files (injected)",
-    "These user-editable files are loaded by ClaudeBot and included below in Project Context.",
+    "These user-editable files are loaded by Clawdbot and included below in Project Context.",
     "",
     userTimezone || userTime
       ? `Time: assume UTC unless stated. User TZ=${userTimezone ?? "unknown"}. Current user time (converted)=${userTime ?? "unknown"}.`
@@ -251,7 +251,7 @@ export function buildAgentSystemPrompt(params: {
     heartbeatPromptLine,
     "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
     "HEARTBEAT_OK",
-    'ClaudeBot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
+    'Clawdbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
     'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
     "",
     "## Runtime",
