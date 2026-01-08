@@ -152,8 +152,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     },
   };
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch);
+  const isBun = "Bun" in globalThis || Boolean(process?.versions?.bun);
+  const shouldProvideFetch = Boolean(opts.proxyFetch) || isBun;
   const client: ApiClientOptions | undefined = fetchImpl
-    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    ? shouldProvideFetch
+      ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+      : undefined
     : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);

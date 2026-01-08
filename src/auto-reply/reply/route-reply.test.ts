@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { ClawdbotConfig } from "../../config/config.js";
+
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageIMessage: vi.fn(async () => ({ messageId: "ok" })),
+  sendMessageMSTeams: vi.fn(async () => ({
+    messageId: "m1",
+    conversationId: "c1",
+  })),
   sendMessageSignal: vi.fn(async () => ({ messageId: "t1" })),
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
@@ -14,6 +20,9 @@ vi.mock("../../discord/send.js", () => ({
 }));
 vi.mock("../../imessage/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
+}));
+vi.mock("../../msteams/send.js", () => ({
+  sendMessageMSTeams: mocks.sendMessageMSTeams,
 }));
 vi.mock("../../signal/send.js", () => ({
   sendMessageSignal: mocks.sendMessageSignal,
@@ -126,5 +135,26 @@ describe("routeReply", () => {
       "hi",
       expect.objectContaining({ accountId: "acc-1", verbose: false }),
     );
+  });
+
+  it("routes MS Teams via proactive sender", async () => {
+    mocks.sendMessageMSTeams.mockClear();
+    const cfg = {
+      msteams: {
+        enabled: true,
+      },
+    } as unknown as ClawdbotConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "msteams",
+      to: "conversation:19:abc@thread.tacv2",
+      cfg,
+    });
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:19:abc@thread.tacv2",
+      text: "hi",
+      mediaUrl: undefined,
+    });
   });
 });

@@ -195,7 +195,8 @@ export function isRoutableChannel(
   | "discord"
   | "signal"
   | "imessage"
-  | "whatsapp" {
+  | "whatsapp"
+  | "msteams" {
   if (!channel) return false;
   return [
     "telegram",
@@ -204,5 +205,6 @@ export function isRoutableChannel(
     "signal",
     "imessage",
     "whatsapp",
+    "msteams",
   ].includes(channel);
 }
