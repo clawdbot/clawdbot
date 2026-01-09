@@ -791,6 +791,36 @@ describe("talk.voiceAliases", () => {
   });
 });
 
+describe("agent.soulEvil", () => {
+  it("accepts chance and purge config", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      agent: {
+        soulEvil: {
+          file: "SOUL_EVIL.md",
+          chance: 0.25,
+          purge: { at: "06:00", duration: "10m" },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects purge with missing duration", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      agent: {
+        soulEvil: {
+          purge: { at: "06:00" },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("legacy config detection", () => {
   it("rejects routing.allowFrom", async () => {
     vi.resetModules();

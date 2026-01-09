@@ -76,6 +76,7 @@ import {
   extractAssistantThinking,
   formatReasoningMarkdown,
 } from "./pi-embedded-utils.js";
+import { applySoulEvilOverride } from "./soul-evil.js";
 import { setContextPruningRuntime } from "./pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "./pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "./pi-extensions/context-pruning/tools.js";
@@ -841,7 +842,13 @@ export async function compactEmbeddedPiSession(params: {
 
         const bootstrapFiles =
           await loadWorkspaceBootstrapFiles(effectiveWorkspace);
-        const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+        const resolvedBootstrapFiles = await applySoulEvilOverride({
+          files: bootstrapFiles,
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          log,
+        });
+        const contextFiles = buildBootstrapContextFiles(resolvedBootstrapFiles);
         const tools = createClawdbotCodingTools({
           bash: {
             ...params.config?.agent?.bash,
@@ -1152,7 +1159,15 @@ export async function runEmbeddedPiAgent(params: {
 
           const bootstrapFiles =
             await loadWorkspaceBootstrapFiles(effectiveWorkspace);
-          const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+          const resolvedBootstrapFiles = await applySoulEvilOverride({
+            files: bootstrapFiles,
+            workspaceDir: effectiveWorkspace,
+            config: params.config,
+            log,
+          });
+          const contextFiles = buildBootstrapContextFiles(
+            resolvedBootstrapFiles,
+          );
           // Tool schemas must be provider-compatible (OpenAI requires top-level `type: "object"`).
           // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
           const tools = createClawdbotCodingTools({

@@ -14,6 +14,7 @@ import {
   type EmbeddedContextFile,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { applySoulEvilOverride } from "./soul-evil.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
@@ -352,7 +353,13 @@ export async function runClaudeCliAgent(params: {
     .join("\n");
 
   const bootstrapFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
-  const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+  const resolvedBootstrapFiles = await applySoulEvilOverride({
+    files: bootstrapFiles,
+    workspaceDir,
+    config: params.config,
+    log,
+  });
+  const contextFiles = buildBootstrapContextFiles(resolvedBootstrapFiles);
   const systemPrompt = buildSystemPrompt({
     workspaceDir,
     config: params.config,

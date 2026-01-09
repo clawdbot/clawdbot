@@ -98,6 +98,11 @@ const FIELD_LABELS: Record<string, string> = {
   "agent.model.fallbacks": "Model Fallbacks",
   "agent.imageModel.primary": "Image Model",
   "agent.imageModel.fallbacks": "Image Model Fallbacks",
+  "agent.soulEvil": "SOUL Evil Mode",
+  "agent.soulEvil.file": "SOUL Evil File",
+  "agent.soulEvil.chance": "SOUL Evil Chance",
+  "agent.soulEvil.purge.at": "SOUL Evil Purge At",
+  "agent.soulEvil.purge.duration": "SOUL Evil Purge Duration",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
   "commands.restart": "Allow Restart",
@@ -163,6 +168,14 @@ const FIELD_HELP: Record<string, string> = {
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agent.imageModel.fallbacks":
     "Ordered fallback image models (provider/model).",
+  "agent.soulEvil":
+    "Optional SOUL_EVIL.md swap that can activate on random chance or purge windows.",
+  "agent.soulEvil.file":
+    "Alternate SOUL filename to use when evil mode is active (default: SOUL_EVIL.md).",
+  "agent.soulEvil.chance": "Random chance (0-1) per message to use SOUL_EVIL.",
+  "agent.soulEvil.purge.at": "Daily purge start time (HH:mm, 24h).",
+  "agent.soulEvil.purge.duration":
+    "Purge duration after start time (duration like 2m).",
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",

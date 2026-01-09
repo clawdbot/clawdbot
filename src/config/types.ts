@@ -1097,6 +1097,20 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type SoulEvilConfig = {
+  /** Alternate SOUL file name (default: SOUL_EVIL.md). */
+  file?: string;
+  /** Random chance (0-1) to use SOUL_EVIL on any message. */
+  chance?: number;
+  /** Daily purge window (static time each day). */
+  purge?: {
+    /** Start time in 24h HH:mm format. */
+    at?: string;
+    /** Duration (e.g. 10m, 1h). */
+    duration?: string;
+  };
+};
+
 export type ClawdbotConfig = {
   auth?: AuthConfig;
   env?: {
@@ -1150,6 +1164,8 @@ export type ClawdbotConfig = {
     userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
+    /** Optional alternate SOUL persona config (SOUL_EVIL.md). */
+    soulEvil?: SoulEvilConfig;
     /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
     contextPruning?: AgentContextPruningConfig;
     /** Default thinking level when no /think directive is present. */

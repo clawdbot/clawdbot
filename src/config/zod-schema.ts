@@ -604,6 +604,55 @@ const HeartbeatSchema = z
   })
   .optional();
 
+const SoulEvilPurgeSchema = z
+  .object({
+    at: z.string().optional(),
+    duration: z.string().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (!val.at && !val.duration) return;
+    if (!val.at) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["at"],
+        message: "purge.at requires purge.duration",
+      });
+      return;
+    }
+    if (!val.duration) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["duration"],
+        message: "purge.duration requires purge.at",
+      });
+      return;
+    }
+    if (!/^([01]?\d|2[0-3]):([0-5]\d)$/.test(val.at.trim())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["at"],
+        message: "invalid time (use HH:mm)",
+      });
+    }
+    try {
+      parseDurationMs(val.duration, { defaultUnit: "m" });
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["duration"],
+        message: "invalid duration (use ms, s, m, h)",
+      });
+    }
+  });
+
+const SoulEvilSchema = z
+  .object({
+    file: z.string().optional(),
+    chance: z.number().min(0).max(1).optional(),
+    purge: SoulEvilPurgeSchema.optional(),
+  })
+  .optional();
+
 const SandboxDockerSchema = z
   .object({
     image: z.string().optional(),
@@ -982,6 +1031,7 @@ export const ClawdbotSchema = z.object({
       skipBootstrap: z.boolean().optional(),
       userTimezone: z.string().optional(),
       contextTokens: z.number().int().positive().optional(),
+      soulEvil: SoulEvilSchema,
       contextPruning: z
         .object({
           mode: z
