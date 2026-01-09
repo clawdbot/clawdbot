@@ -3,14 +3,17 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import { getProviderPlugin } from "../../providers/plugins/index.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 import type { ProviderId } from "../../providers/plugins/types.js";
-import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import { resolveMessageProviderSelection } from "./provider-selection.js";
 import type { OutboundProvider } from "./targets.js";
 import { resolveOutboundTarget } from "./targets.js";
 
@@ -95,15 +98,19 @@ function resolveGatewayOptions(opts?: MessageGatewayOptions) {
 export async function sendMessage(
   params: MessageSendParams,
 ): Promise<MessageSendResult> {
-  const provider = normalizeMessageProvider(params.provider) ?? "whatsapp";
   const cfg = params.cfg ?? loadConfig();
+  const provider =
+    params.provider && params.provider.trim()
+      ? normalizeProviderId(params.provider)
+      : (await resolveMessageProviderSelection({ cfg })).provider;
+  if (!provider) {
+    throw new Error(`Unknown provider: ${params.provider}`);
+  }
   const plugin = getProviderPlugin(provider as ProviderId);
   if (!plugin) {
     throw new Error(`Unknown provider: ${provider}`);
   }
-  const deliveryMode =
-    plugin?.outbound?.deliveryMode ??
-    (provider === "whatsapp" ? "gateway" : "direct");
+  const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
 
   if (params.dryRun) {
     return {
@@ -116,14 +123,13 @@ export async function sendMessage(
   }
 
   if (deliveryMode !== "gateway") {
-    if (provider === "none") {
-      throw new Error("Provider 'none' cannot send messages.");
-    }
     const outboundProvider = provider as Exclude<OutboundProvider, "none">;
     const resolvedTarget = resolveOutboundTarget({
       provider: outboundProvider,
       to: params.to,
       cfg,
+      accountId: params.accountId,
+      mode: "explicit",
     });
     if (!resolvedTarget.ok) throw resolvedTarget.error;
 
@@ -178,13 +184,13 @@ export async function sendMessage(
 export async function sendPoll(
   params: MessagePollParams,
 ): Promise<MessagePollResult> {
-  const provider = normalizeMessageProvider(params.provider) ?? "whatsapp";
-  if (
-    provider !== "whatsapp" &&
-    provider !== "discord" &&
-    provider !== "msteams"
-  ) {
-    throw new Error(`Unsupported poll provider: ${provider}`);
+  const cfg = params.cfg ?? loadConfig();
+  const provider =
+    params.provider && params.provider.trim()
+      ? normalizeProviderId(params.provider)
+      : (await resolveMessageProviderSelection({ cfg })).provider;
+  if (!provider) {
+    throw new Error(`Unknown provider: ${params.provider}`);
   }
 
   const pollInput: PollInput = {
@@ -193,8 +199,14 @@ export async function sendPoll(
     maxSelections: params.maxSelections,
     durationHours: params.durationHours,
   };
-  const maxOptions = provider === "discord" ? 10 : 12;
-  const normalized = normalizePollInput(pollInput, { maxOptions });
+  const plugin = getProviderPlugin(provider as ProviderId);
+  const outbound = plugin?.outbound;
+  if (!outbound?.sendPoll) {
+    throw new Error(`Unsupported poll provider: ${provider}`);
+  }
+  const normalized = outbound.pollMaxOptions
+    ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
+    : normalizePollInput(pollInput);
 
   if (params.dryRun) {
     return {

@@ -14,6 +14,7 @@ import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import { collectDiscordStatusIssues } from "./status-issues/discord.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("discord");
@@ -49,6 +50,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: null,
+    pollMaxOptions: 10,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {
@@ -91,6 +93,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       lastStopAt: null,
       lastError: null,
     },
+    collectStatusIssues: collectDiscordStatusIssues,
     buildProviderSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       tokenSource: snapshot.tokenSource ?? "none",

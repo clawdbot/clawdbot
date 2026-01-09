@@ -26,11 +26,6 @@ import {
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
 import {
-  chunkMarkdownText,
-  chunkText,
-  resolveTextChunkLimit,
-} from "../auto-reply/chunk.js";
-import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
@@ -48,13 +43,12 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
-import { parseTelegramTarget } from "../telegram/targets.js";
-import { resolveTelegramToken } from "../telegram/token.js";
-import { normalizeE164, truncateUtf16Safe } from "../utils.js";
-import {
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "../whatsapp/normalize.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { resolveMessageProviderSelection } from "../infra/outbound/provider-selection.js";
+import { resolveOutboundTarget, type OutboundProvider } from "../infra/outbound/targets.js";
+import { normalizeProviderId } from "../providers/plugins/index.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { CronJob } from "./types.js";
 
 export type RunCronAgentTurnResult = {
@@ -109,53 +103,7 @@ function isHeartbeatOnlyResponse(
   });
 }
 
-function getMediaList(payload: DeliveryPayload) {
-  return payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-}
-
-async function deliverPayloadsWithMedia(params: {
-  payloads: DeliveryPayload[];
-  sendText: (text: string) => Promise<unknown>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<unknown>;
-}) {
-  for (const payload of params.payloads) {
-    const mediaList = getMediaList(payload);
-    if (mediaList.length === 0) {
-      await params.sendText(payload.text ?? "");
-      continue;
-    }
-    let first = true;
-    for (const url of mediaList) {
-      const caption = first ? (payload.text ?? "") : "";
-      first = false;
-      await params.sendMedia(caption, url);
-    }
-  }
-}
-
-async function deliverChunkedPayloads(params: {
-  payloads: DeliveryPayload[];
-  chunkText: (text: string) => string[];
-  sendText: (text: string) => Promise<unknown>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<unknown>;
-}) {
-  for (const payload of params.payloads) {
-    const mediaList = getMediaList(payload);
-    if (mediaList.length === 0) {
-      for (const chunk of params.chunkText(payload.text ?? "")) {
-        await params.sendText(chunk);
-      }
-      continue;
-    }
-    let first = true;
-    for (const url of mediaList) {
-      const caption = first ? (payload.text ?? "") : "";
-      first = false;
-      await params.sendMedia(caption, url);
-    }
-  }
-}
-function resolveDeliveryTarget(
+async function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
   jobPayload: {
     provider?:
@@ -169,9 +117,16 @@ function resolveDeliveryTarget(
       | "msteams";
     to?: string;
   },
-) {
-  const requestedProvider =
+): Promise<{
+  provider: string;
+  to?: string;
+  accountId?: string;
+  mode: "explicit" | "implicit";
+  error?: Error;
+}> {
+  const requestedRaw =
     typeof jobPayload.provider === "string" ? jobPayload.provider : "last";
+  const requestedProvider = normalizeMessageProvider(requestedRaw) ?? requestedRaw;
   const explicitTo =
     typeof jobPayload.to === "string" && jobPayload.to.trim()
       ? jobPayload.to.trim()
@@ -185,59 +140,45 @@ function resolveDeliveryTarget(
   const main = store[mainSessionKey];
   const lastProvider =
     main?.lastProvider && main.lastProvider !== "webchat"
-      ? main.lastProvider
+      ? normalizeProviderId(main.lastProvider) ?? main.lastProvider
       : undefined;
   const lastTo = typeof main?.lastTo === "string" ? main.lastTo.trim() : "";
+  const lastAccountId = main?.lastAccountId;
 
-  const provider = (() => {
-    if (
-      requestedProvider === "whatsapp" ||
-      requestedProvider === "telegram" ||
-      requestedProvider === "discord" ||
-      requestedProvider === "slack" ||
-      requestedProvider === "signal" ||
-      requestedProvider === "imessage"
-    ) {
-      return requestedProvider;
+  let provider =
+    requestedProvider === "last"
+      ? lastProvider
+      : requestedProvider === "webchat"
+        ? undefined
+        : normalizeProviderId(requestedProvider);
+  if (!provider) {
+    try {
+      const selection = await resolveMessageProviderSelection({ cfg });
+      provider = selection.provider;
+    } catch {
+      provider = lastProvider ?? "whatsapp";
     }
-    return lastProvider ?? "whatsapp";
-  })();
+  }
 
-  const rawTo = explicitTo ?? (lastTo || undefined);
-  const telegramTarget =
-    provider === "telegram" && rawTo ? parseTelegramTarget(rawTo) : undefined;
+  const toCandidate = explicitTo ?? lastTo || undefined;
+  const mode: "explicit" | "implicit" = explicitTo ? "explicit" : "implicit";
+  if (!toCandidate) {
+    return { provider, to: undefined, accountId: lastAccountId, mode };
+  }
 
-  const sanitizedWhatsappTo = (() => {
-    if (provider !== "whatsapp") return rawTo;
-    if (rawTo && isWhatsAppGroupJid(rawTo)) {
-      return normalizeWhatsAppTarget(rawTo) ?? rawTo;
-    }
-    const rawAllow = cfg.whatsapp?.allowFrom ?? [];
-    if (rawAllow.includes("*")) {
-      return rawTo ? (normalizeWhatsAppTarget(rawTo) ?? rawTo) : rawTo;
-    }
-    const allowFrom = rawAllow
-      .map((val) => normalizeE164(val))
-      .filter((val) => val.length > 1);
-    if (allowFrom.length === 0) {
-      return rawTo ? (normalizeWhatsAppTarget(rawTo) ?? rawTo) : rawTo;
-    }
-    if (!rawTo) return allowFrom[0];
-    const normalized = normalizeWhatsAppTarget(rawTo);
-    if (normalized && allowFrom.includes(normalized)) return normalized;
-    return allowFrom[0];
-  })();
-
-  const to = (() => {
-    if (provider === "telegram" && telegramTarget) return telegramTarget.chatId;
-    if (provider === "whatsapp") return sanitizedWhatsappTo;
-    return rawTo;
-  })();
-
+  const resolved = resolveOutboundTarget({
+    provider: provider as Exclude<OutboundProvider, "none">,
+    to: toCandidate,
+    cfg,
+    accountId: provider === lastProvider ? lastAccountId : undefined,
+    mode,
+  });
   return {
     provider,
-    to,
-    messageThreadId: telegramTarget?.messageThreadId,
+    to: resolved.ok ? resolved.to : undefined,
+    accountId: provider === lastProvider ? lastAccountId : undefined,
+    mode,
+    error: resolved.ok ? undefined : resolved.error,
   };
 }
 
@@ -389,7 +330,7 @@ export async function runCronIsolatedAgentTurn(params: {
     params.job.payload.kind === "agentTurn" &&
     params.job.payload.bestEffortDeliver === true;
 
-  const resolvedDelivery = resolveDeliveryTarget(params.cfg, {
+  const resolvedDelivery = await resolveDeliveryTarget(params.cfg, {
     provider:
       params.job.payload.kind === "agentTurn"
         ? params.job.payload.provider
@@ -399,7 +340,6 @@ export async function runCronIsolatedAgentTurn(params: {
         ? params.job.payload.to
         : undefined,
   });
-  const { token: telegramToken } = resolveTelegramToken(params.cfg);
 
   const base =
     `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
@@ -546,194 +486,45 @@ export async function runCronIsolatedAgentTurn(params: {
     delivery && isHeartbeatOnlyResponse(payloads, Math.max(0, ackMaxChars));
 
   if (delivery && !skipHeartbeatDelivery) {
-    if (resolvedDelivery.provider === "whatsapp") {
-      if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver)
-          return {
-            status: "error",
-            summary,
-            error: "Cron delivery to WhatsApp requires a recipient.",
-          };
+    if (!resolvedDelivery.to) {
+      const reason =
+        resolvedDelivery.error?.message ??
+        "Cron delivery requires a recipient (--to).";
+      if (!bestEffortDeliver) {
         return {
-          status: "skipped",
-          summary: "Delivery skipped (no WhatsApp recipient).",
+          status: "error",
+          summary,
+          error: reason,
         };
       }
-      const rawTo = resolvedDelivery.to;
-      const to = normalizeWhatsAppTarget(rawTo) ?? rawTo;
-      try {
-        await deliverPayloadsWithMedia({
-          payloads,
-          sendText: (text) =>
-            params.deps.sendMessageWhatsApp(to, text, { verbose: false }),
-          sendMedia: (caption, mediaUrl) =>
-            params.deps.sendMessageWhatsApp(to, caption, {
-              verbose: false,
-              mediaUrl,
-            }),
-        });
-      } catch (err) {
-        if (!bestEffortDeliver)
-          return { status: "error", summary, error: String(err) };
-        return { status: "ok", summary };
+      return {
+        status: "skipped",
+        summary: `Delivery skipped (${reason}).`,
+      };
+    }
+    try {
+      await deliverOutboundPayloads({
+        cfg: params.cfg,
+        provider: resolvedDelivery.provider as Exclude<OutboundProvider, "none">,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+        payloads,
+        bestEffort: bestEffortDeliver,
+        deps: {
+          sendWhatsApp: params.deps.sendMessageWhatsApp,
+          sendTelegram: params.deps.sendMessageTelegram,
+          sendDiscord: params.deps.sendMessageDiscord,
+          sendSlack: params.deps.sendMessageSlack,
+          sendSignal: params.deps.sendMessageSignal,
+          sendIMessage: params.deps.sendMessageIMessage,
+          sendMSTeams: params.deps.sendMessageMSTeams,
+        },
+      });
+    } catch (err) {
+      if (!bestEffortDeliver) {
+        return { status: "error", summary, error: String(err) };
       }
-    } else if (resolvedDelivery.provider === "telegram") {
-      if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver)
-          return {
-            status: "error",
-            summary,
-            error: "Cron delivery to Telegram requires a chatId.",
-          };
-        return {
-          status: "skipped",
-          summary: "Delivery skipped (no Telegram chatId).",
-        };
-      }
-      const chatId = resolvedDelivery.to;
-      const messageThreadId = resolvedDelivery.messageThreadId;
-      const textLimit = resolveTextChunkLimit(params.cfg, "telegram");
-      try {
-        await deliverChunkedPayloads({
-          payloads,
-          chunkText: (text) => chunkMarkdownText(text, textLimit),
-          sendText: (text) =>
-            params.deps.sendMessageTelegram(chatId, text, {
-              verbose: false,
-              token: telegramToken || undefined,
-              messageThreadId,
-            }),
-          sendMedia: (caption, mediaUrl) =>
-            params.deps.sendMessageTelegram(chatId, caption, {
-              verbose: false,
-              mediaUrl,
-              token: telegramToken || undefined,
-              messageThreadId,
-            }),
-        });
-      } catch (err) {
-        if (!bestEffortDeliver)
-          return { status: "error", summary, error: String(err) };
-        return { status: "ok", summary };
-      }
-    } else if (resolvedDelivery.provider === "discord") {
-      if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver)
-          return {
-            status: "error",
-            summary,
-            error:
-              "Cron delivery to Discord requires --provider discord and --to <channelId|user:ID>",
-          };
-        return {
-          status: "skipped",
-          summary: "Delivery skipped (no Discord destination).",
-        };
-      }
-      const discordTarget = resolvedDelivery.to;
-      try {
-        await deliverPayloadsWithMedia({
-          payloads,
-          sendText: (text) =>
-            params.deps.sendMessageDiscord(discordTarget, text, {
-              token: process.env.DISCORD_BOT_TOKEN,
-            }),
-          sendMedia: (caption, mediaUrl) =>
-            params.deps.sendMessageDiscord(discordTarget, caption, {
-              token: process.env.DISCORD_BOT_TOKEN,
-              mediaUrl,
-            }),
-        });
-      } catch (err) {
-        if (!bestEffortDeliver)
-          return { status: "error", summary, error: String(err) };
-        return { status: "ok", summary };
-      }
-    } else if (resolvedDelivery.provider === "slack") {
-      if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver)
-          return {
-            status: "error",
-            summary,
-            error:
-              "Cron delivery to Slack requires --provider slack and --to <channelId|user:ID>",
-          };
-        return {
-          status: "skipped",
-          summary: "Delivery skipped (no Slack destination).",
-        };
-      }
-      const slackTarget = resolvedDelivery.to;
-      const textLimit = resolveTextChunkLimit(params.cfg, "slack");
-      try {
-        await deliverChunkedPayloads({
-          payloads,
-          chunkText: (text) => chunkMarkdownText(text, textLimit),
-          sendText: (text) => params.deps.sendMessageSlack(slackTarget, text),
-          sendMedia: (caption, mediaUrl) =>
-            params.deps.sendMessageSlack(slackTarget, caption, { mediaUrl }),
-        });
-      } catch (err) {
-        if (!bestEffortDeliver)
-          return { status: "error", summary, error: String(err) };
-        return { status: "ok", summary };
-      }
-    } else if (resolvedDelivery.provider === "signal") {
-      if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver)
-          return {
-            status: "error",
-            summary,
-            error: "Cron delivery to Signal requires a recipient.",
-          };
-        return {
-          status: "skipped",
-          summary: "Delivery skipped (no Signal recipient).",
-        };
-      }
-      const to = resolvedDelivery.to;
-      const textLimit = resolveTextChunkLimit(params.cfg, "signal");
-      try {
-        await deliverChunkedPayloads({
-          payloads,
-          chunkText: (text) => chunkText(text, textLimit),
-          sendText: (text) => params.deps.sendMessageSignal(to, text),
-          sendMedia: (caption, mediaUrl) =>
-            params.deps.sendMessageSignal(to, caption, { mediaUrl }),
-        });
-      } catch (err) {
-        if (!bestEffortDeliver)
-          return { status: "error", summary, error: String(err) };
-        return { status: "ok", summary };
-      }
-    } else if (resolvedDelivery.provider === "imessage") {
-      if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver)
-          return {
-            status: "error",
-            summary,
-            error: "Cron delivery to iMessage requires a recipient.",
-          };
-        return {
-          status: "skipped",
-          summary: "Delivery skipped (no iMessage recipient).",
-        };
-      }
-      const to = resolvedDelivery.to;
-      const textLimit = resolveTextChunkLimit(params.cfg, "imessage");
-      try {
-        await deliverChunkedPayloads({
-          payloads,
-          chunkText: (text) => chunkText(text, textLimit),
-          sendText: (text) => params.deps.sendMessageIMessage(to, text),
-          sendMedia: (caption, mediaUrl) =>
-            params.deps.sendMessageIMessage(to, caption, { mediaUrl }),
-        });
-      } catch (err) {
-        if (!bestEffortDeliver)
-          return { status: "error", summary, error: String(err) };
-        return { status: "ok", summary };
-      }
+      return { status: "ok", summary };
     }
   }
 

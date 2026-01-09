@@ -15,6 +15,7 @@ import { monitorTelegramProvider } from "../../telegram/monitor.js";
 import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { getChatProviderMeta } from "../registry.js";
+import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("telegram");
@@ -85,6 +86,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
       lastStopAt: null,
       lastError: null,
     },
+    collectStatusIssues: collectTelegramStatusIssues,
     buildProviderSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       tokenSource: snapshot.tokenSource ?? "none",

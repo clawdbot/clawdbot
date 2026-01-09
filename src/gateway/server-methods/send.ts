@@ -3,9 +3,11 @@ import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import type { OutboundProvider } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
-import { getProviderPlugin } from "../../providers/plugins/index.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 import type { ProviderId } from "../../providers/plugins/types.js";
-import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import {
   ErrorCodes,
   errorShape,
@@ -49,7 +51,23 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const message = request.message.trim();
-    const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
+    const providerInput =
+      typeof request.provider === "string" ? request.provider : undefined;
+    const normalizedProvider = providerInput
+      ? normalizeProviderId(providerInput)
+      : null;
+    if (providerInput && !normalizedProvider) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unsupported provider: ${providerInput}`,
+        ),
+      );
+      return;
+    }
+    const provider = normalizedProvider ?? "whatsapp";
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
@@ -80,8 +98,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       const resolved = resolveOutboundTarget({
         provider: outboundProvider,
         to,
-        allowFrom: cfg.whatsapp?.allowFrom ?? [],
         cfg,
+        accountId,
+        mode: "explicit",
       });
       if (!resolved.ok) {
         respond(
@@ -165,7 +184,23 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const to = request.to.trim();
-    const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
+    const providerInput =
+      typeof request.provider === "string" ? request.provider : undefined;
+    const normalizedProvider = providerInput
+      ? normalizeProviderId(providerInput)
+      : null;
+    if (providerInput && !normalizedProvider) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unsupported poll provider: ${providerInput}`,
+        ),
+      );
+      return;
+    }
+    const provider = normalizedProvider ?? "whatsapp";
     const poll = {
       question: request.question,
       options: request.options,
@@ -205,8 +240,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       const resolved = resolveOutboundTarget({
         provider: provider as Exclude<OutboundProvider, "none">,
         to,
-        allowFrom: cfg.whatsapp?.allowFrom ?? [],
         cfg,
+        accountId,
+        mode: "explicit",
       });
       if (!resolved.ok) {
         respond(
@@ -218,7 +254,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
       const normalized = outbound.pollMaxOptions
         ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
-        : poll;
+        : normalizePollInput(poll);
       const result = await outbound.sendPoll({
         cfg,
         to: resolved.to,

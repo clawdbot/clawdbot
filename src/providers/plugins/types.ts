@@ -9,6 +9,21 @@ import type { ChatProviderId } from "../registry.js";
 
 export type ProviderId = ChatProviderId | "msteams";
 
+export type ProviderOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
+
+export type ProviderStatusIssue = {
+  provider: ProviderId;
+  accountId: string;
+  kind: "intent" | "permissions" | "config" | "auth" | "runtime";
+  message: string;
+  fix?: string;
+};
+
+export type ProviderHeartbeatDeps = {
+  webAuthExists?: () => Promise<boolean>;
+  hasActiveWebListener?: () => boolean;
+};
+
 export type ProviderMeta = {
   id: ProviderId;
   label: string;
@@ -86,6 +101,10 @@ export type ProviderConfigAdapter<ResolvedAccount> = {
     account: ResolvedAccount,
     cfg: ClawdbotConfig,
   ) => ProviderAccountSnapshot;
+  resolveAllowFrom?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+  }) => string[] | undefined;
 };
 
 export type ProviderOutboundContext = {
@@ -121,6 +140,8 @@ export type ProviderOutboundAdapter = {
     cfg?: ClawdbotConfig;
     to?: string;
     allowFrom?: string[];
+    accountId?: string | null;
+    mode?: ProviderOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };
   sendText?: (ctx: ProviderOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ProviderOutboundContext) => Promise<OutboundDeliveryResult>;
@@ -153,6 +174,9 @@ export type ProviderStatusAdapter<ResolvedAccount> = {
     probe?: unknown;
     audit?: unknown;
   }) => ProviderAccountSnapshot | Promise<ProviderAccountSnapshot>;
+  collectStatusIssues?: (
+    accounts: ProviderAccountSnapshot[],
+  ) => ProviderStatusIssue[];
 };
 
 export type ProviderGatewayContext<ResolvedAccount = unknown> = {
@@ -178,6 +202,14 @@ export type ProviderGatewayAdapter<ResolvedAccount = unknown> = {
   stopAccount?: (ctx: ProviderGatewayContext<ResolvedAccount>) => Promise<void>;
 };
 
+export type ProviderHeartbeatAdapter = {
+  checkReady?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    deps?: ProviderHeartbeatDeps;
+  }) => Promise<{ ok: boolean; reason: string }>;
+};
+
 export type ProviderCapabilities = {
   chatTypes: Array<"direct" | "group" | "channel" | "thread">;
   polls?: boolean;
@@ -196,4 +228,5 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;
   gateway?: ProviderGatewayAdapter<ResolvedAccount>;
+  heartbeat?: ProviderHeartbeatAdapter;
 };

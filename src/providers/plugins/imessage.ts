@@ -7,8 +7,10 @@ import {
 import { monitorIMessageProvider } from "../../imessage/index.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { chunkText } from "../../auto-reply/chunk.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("imessage");
@@ -40,6 +42,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
+    chunker: chunkText,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {
@@ -52,17 +55,29 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps }) => {
+    sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendIMessage ?? sendMessageIMessage;
+      const maxBytes = resolveProviderMediaMaxBytes({
+        cfg,
+        provider: "imessage",
+        accountId,
+      });
       const result = await send(to, text, {
+        maxBytes,
         accountId: accountId ?? undefined,
       });
       return { provider: "imessage", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
       const send = deps?.sendIMessage ?? sendMessageIMessage;
+      const maxBytes = resolveProviderMediaMaxBytes({
+        cfg,
+        provider: "imessage",
+        accountId,
+      });
       const result = await send(to, text, {
         mediaUrl,
+        maxBytes,
         accountId: accountId ?? undefined,
       });
       return { provider: "imessage", ...result };

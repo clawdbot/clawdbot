@@ -10,6 +10,7 @@ import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { getChatProviderMeta } from "../registry.js";
+import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("signal");
@@ -54,17 +55,29 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps }) => {
+    sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendSignal ?? sendMessageSignal;
+      const maxBytes = resolveProviderMediaMaxBytes({
+        cfg,
+        provider: "signal",
+        accountId,
+      });
       const result = await send(to, text, {
+        maxBytes,
         accountId: accountId ?? undefined,
       });
       return { provider: "signal", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
       const send = deps?.sendSignal ?? sendMessageSignal;
+      const maxBytes = resolveProviderMediaMaxBytes({
+        cfg,
+        provider: "signal",
+        accountId,
+      });
       const result = await send(to, text, {
         mediaUrl,
+        maxBytes,
         accountId: accountId ?? undefined,
       });
       return { provider: "signal", ...result };

@@ -8,6 +8,7 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
+import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
@@ -16,6 +17,7 @@ import {
 } from "../../web/session.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
+import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("whatsapp");
@@ -52,18 +54,40 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
   },
   outbound: {
     deliveryMode: "gateway",
     chunker: chunkText,
-    resolveTarget: ({ to, allowFrom }) => {
-      const trimmed = to?.trim();
+    pollMaxOptions: 12,
+    resolveTarget: ({ to, allowFrom, mode }) => {
+      const trimmed = to?.trim() ?? "";
+      const allowListRaw = (allowFrom ?? [])
+        .map((entry) => String(entry).trim())
+        .filter(Boolean);
+      const hasWildcard = allowListRaw.includes("*");
+      const allowList = allowListRaw
+        .filter((entry) => entry !== "*")
+        .map((entry) => normalizeE164(entry))
+        .filter((entry) => entry.length > 1);
+
       if (trimmed) {
-        return { ok: true, to: normalizeE164(trimmed) };
+        const normalizedTo = normalizeE164(trimmed);
+        if (mode === "implicit" || mode === "heartbeat") {
+          if (hasWildcard || allowList.length === 0) {
+            return { ok: true, to: normalizedTo };
+          }
+          if (allowList.includes(normalizedTo)) {
+            return { ok: true, to: normalizedTo };
+          }
+          return { ok: true, to: allowList[0] };
+        }
+        return { ok: true, to: normalizedTo };
       }
-      const fallback = allowFrom?.[0]?.trim();
-      if (fallback) {
-        return { ok: true, to: normalizeE164(fallback) };
+
+      if (allowList.length > 0) {
+        return { ok: true, to: allowList[0] };
       }
       return {
         ok: false,
@@ -97,6 +121,27 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         accountId: accountId ?? undefined,
       }),
   },
+  heartbeat: {
+    checkReady: async ({ cfg, accountId, deps }) => {
+      if (cfg.web?.enabled === false) {
+        return { ok: false, reason: "whatsapp-disabled" };
+      }
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      const authExists = await (deps?.webAuthExists ?? webAuthExists)(
+        account.authDir,
+      );
+      if (!authExists) {
+        return { ok: false, reason: "whatsapp-not-linked" };
+      }
+      const listenerActive = deps?.hasActiveWebListener
+        ? deps.hasActiveWebListener()
+        : Boolean(getActiveWebListener());
+      if (!listenerActive) {
+        return { ok: false, reason: "whatsapp-not-running" };
+      }
+      return { ok: true, reason: "ok" };
+    },
+  },
   status: {
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
@@ -109,6 +154,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       lastEventAt: null,
       lastError: null,
     },
+    collectStatusIssues: collectWhatsAppStatusIssues,
     buildProviderSummary: async ({ account, snapshot }) => {
       const authDir = account.authDir;
       const linked =

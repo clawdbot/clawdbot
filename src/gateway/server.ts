@@ -76,6 +76,7 @@ import {
 } from "../infra/restart-sentinel.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { normalizeProviderId } from "../providers/plugins/index.js";
 import {
   listSystemPresence,
   upsertPresence,
@@ -1893,7 +1894,11 @@ export async function startGatewayServer(
         : undefined;
     const lastTo = entry?.lastTo?.trim();
     const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
-    const provider = lastProvider ?? parsedTarget?.provider;
+    const providerRaw = lastProvider ?? parsedTarget?.provider;
+    const provider =
+      providerRaw && providerRaw !== "webchat"
+        ? normalizeProviderId(providerRaw) ?? providerRaw
+        : undefined;
     const to = lastTo || parsedTarget?.to;
     if (!provider || !to) {
       enqueueSystemEvent(message, { sessionKey });
@@ -1901,18 +1906,11 @@ export async function startGatewayServer(
     }
 
     const resolved = resolveOutboundTarget({
-      provider: provider as
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams"
-        | "webchat",
+      provider,
       to,
-      allowFrom: cfg.whatsapp?.allowFrom ?? [],
       cfg,
+      accountId: parsedTarget?.accountId ?? entry?.lastAccountId,
+      mode: "implicit",
     });
     if (!resolved.ok) {
       enqueueSystemEvent(message, { sessionKey });
