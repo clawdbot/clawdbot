@@ -1,5 +1,5 @@
 import { writeConfigFile } from "../../config/config.js";
-import { normalizeChatProviderId } from "../../providers/registry.js";
+import { normalizeProviderId } from "../../providers/plugins/index.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -114,14 +114,17 @@ export async function providersAddCommand(
     return;
   }
 
-  const provider = normalizeChatProviderId(opts.provider);
+  const provider = normalizeProviderId(opts.provider);
   if (!provider) {
     runtime.error(`Unknown provider: ${String(opts.provider ?? "")}`);
     runtime.exit(1);
     return;
   }
 
-  const accountId = normalizeAccountId(opts.account);
+  const accountId =
+    provider === "msteams"
+      ? DEFAULT_ACCOUNT_ID
+      : normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
 
   if (provider === "telegram") {

@@ -3,45 +3,15 @@ import {
   type ClawdbotConfig,
   readConfigFileSnapshot,
 } from "../../config/config.js";
-import {
-  listDiscordAccountIds,
-  resolveDiscordAccount,
-} from "../../discord/accounts.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  listIMessageAccountIds,
-  resolveIMessageAccount,
-} from "../../imessage/accounts.js";
 import { formatAge } from "../../infra/provider-summary.js";
 import { collectProvidersStatusIssues } from "../../infra/providers-status-issues.js";
-import { resolveMSTeamsCredentials } from "../../msteams/token.js";
-import { listChatProviders } from "../../providers/registry.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { listProviderPlugins } from "../../providers/plugins/index.js";
+import { buildProviderAccountSnapshot } from "../../providers/plugins/status.js";
+import type { ProviderAccountSnapshot } from "../../providers/plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  listSignalAccountIds,
-  resolveSignalAccount,
-} from "../../signal/accounts.js";
-import {
-  listSlackAccountIds,
-  resolveSlackAccount,
-} from "../../slack/accounts.js";
-import {
-  listTelegramAccountIds,
-  resolveTelegramAccount,
-} from "../../telegram/accounts.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { normalizeE164 } from "../../utils.js";
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAccount,
-} from "../../web/accounts.js";
-import {
-  getWebAuthAgeMs,
-  readWebSelfId,
-  webAuthExists,
-} from "../../web/session.js";
 import {
   type ChatProvider,
   formatProviderAccountLabel,
@@ -155,33 +125,22 @@ export function formatGatewayProvidersStatusLines(
       return `- ${labelText}: ${bits.join(", ")}`;
     });
 
+  const plugins = listProviderPlugins();
   const accountPayloads: Partial<
-    Record<ChatProvider, Array<Record<string, unknown>>>
-  > = {
-    whatsapp: Array.isArray(payload.whatsappAccounts)
-      ? (payload.whatsappAccounts as Array<Record<string, unknown>>)
-      : undefined,
-    telegram: Array.isArray(payload.telegramAccounts)
-      ? (payload.telegramAccounts as Array<Record<string, unknown>>)
-      : undefined,
-    discord: Array.isArray(payload.discordAccounts)
-      ? (payload.discordAccounts as Array<Record<string, unknown>>)
-      : undefined,
-    slack: Array.isArray(payload.slackAccounts)
-      ? (payload.slackAccounts as Array<Record<string, unknown>>)
-      : undefined,
-    signal: Array.isArray(payload.signalAccounts)
-      ? (payload.signalAccounts as Array<Record<string, unknown>>)
-      : undefined,
-    imessage: Array.isArray(payload.imessageAccounts)
-      ? (payload.imessageAccounts as Array<Record<string, unknown>>)
-      : undefined,
-  };
+    Record<string, Array<Record<string, unknown>>>
+  > = {};
+  for (const plugin of plugins) {
+    const key = `${plugin.id}Accounts`;
+    const raw = payload[key];
+    if (Array.isArray(raw)) {
+      accountPayloads[plugin.id] = raw as Array<Record<string, unknown>>;
+    }
+  }
 
-  for (const meta of listChatProviders()) {
-    const accounts = accountPayloads[meta.id];
+  for (const plugin of plugins) {
+    const accounts = accountPayloads[plugin.id];
     if (accounts && accounts.length > 0) {
-      lines.push(...accountLines(meta.id, accounts));
+      lines.push(...accountLines(plugin.id as ChatProvider, accounts));
     }
   }
 
@@ -264,115 +223,21 @@ async function formatConfigProvidersStatusLines(
       return `- ${labelText}: ${bits.join(", ")}`;
     });
 
-  const accounts = {
-    whatsapp: listWhatsAppAccountIds(cfg).map((accountId) => {
-      const account = resolveWhatsAppAccount({ cfg, accountId });
-      const dmPolicy = account.dmPolicy ?? cfg.whatsapp?.dmPolicy ?? "pairing";
-      const allowFrom = (account.allowFrom ?? cfg.whatsapp?.allowFrom ?? [])
-        .map(normalizeE164)
-        .filter(Boolean)
-        .slice(0, 2);
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: true,
-        linked: undefined,
-        dmPolicy,
-        allowFrom,
-      };
-    }),
-    telegram: listTelegramAccountIds(cfg).map((accountId) => {
-      const account = resolveTelegramAccount({ cfg, accountId });
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.token?.trim()),
-        tokenSource: account.tokenSource,
-        mode: account.config.webhookUrl ? "webhook" : "polling",
-      };
-    }),
-    discord: listDiscordAccountIds(cfg).map((accountId) => {
-      const account = resolveDiscordAccount({ cfg, accountId });
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.token?.trim()),
-        tokenSource: account.tokenSource,
-      };
-    }),
-    slack: listSlackAccountIds(cfg).map((accountId) => {
-      const account = resolveSlackAccount({ cfg, accountId });
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured:
-          Boolean(account.botToken?.trim()) &&
-          Boolean(account.appToken?.trim()),
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
-      };
-    }),
-    signal: listSignalAccountIds(cfg).map((accountId) => {
-      const account = resolveSignalAccount({ cfg, accountId });
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-        baseUrl: account.baseUrl,
-      };
-    }),
-    imessage: listIMessageAccountIds(cfg).map((accountId) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      const imsgConfigured = Boolean(
-        account.config.cliPath ||
-          account.config.dbPath ||
-          account.config.allowFrom ||
-          account.config.service ||
-          account.config.region,
-      );
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: imsgConfigured,
-      };
-    }),
-    msteams: [
-      {
-        accountId: DEFAULT_ACCOUNT_ID,
-        enabled: cfg.msteams?.enabled !== false,
-        configured: Boolean(resolveMSTeamsCredentials(cfg.msteams)),
-        dmPolicy: cfg.msteams?.dmPolicy ?? "pairing",
-        allowFrom: (cfg.msteams?.allowFrom ?? [])
-          .map((value) => String(value ?? "").trim())
-          .filter(Boolean)
-          .slice(0, 2),
-      },
-    ],
-  } satisfies Partial<Record<ChatProvider, Array<Record<string, unknown>>>>;
-
-  // WhatsApp linked info (config-only best-effort).
-  try {
-    const webLinked = await webAuthExists();
-    const authAgeMs = getWebAuthAgeMs();
-    const authAge = authAgeMs === null ? "" : ` auth ${formatAge(authAgeMs)}`;
-    const { e164 } = readWebSelfId();
-    lines.push(
-      `WhatsApp: ${webLinked ? "linked" : "not linked"}${e164 ? ` ${e164}` : ""}${webLinked ? authAge : ""}`,
-    );
-  } catch {
-    // ignore
-  }
-
-  for (const meta of listChatProviders()) {
-    const providerAccounts = accounts[meta.id];
-    if (providerAccounts && providerAccounts.length > 0) {
-      lines.push(...accountLines(meta.id, providerAccounts));
+  const plugins = listProviderPlugins();
+  for (const plugin of plugins) {
+    const accountIds = plugin.config.listAccountIds(cfg);
+    if (!accountIds.length) continue;
+    const snapshots: ProviderAccountSnapshot[] = [];
+    for (const accountId of accountIds) {
+      const snapshot = await buildProviderAccountSnapshot({
+        plugin,
+        cfg,
+        accountId,
+      });
+      snapshots.push(snapshot);
+    }
+    if (snapshots.length > 0) {
+      lines.push(...accountLines(plugin.id as ChatProvider, snapshots));
     }
   }
 

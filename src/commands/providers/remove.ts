@@ -1,19 +1,14 @@
 import { type ClawdbotConfig, writeConfigFile } from "../../config/config.js";
-import { listDiscordAccountIds } from "../../discord/accounts.js";
-import { listIMessageAccountIds } from "../../imessage/accounts.js";
 import {
-  listChatProviders,
-  normalizeChatProviderId,
-} from "../../providers/registry.js";
+  getProviderPlugin,
+  listProviderPlugins,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { listSignalAccountIds } from "../../signal/accounts.js";
-import { listSlackAccountIds } from "../../slack/accounts.js";
-import { listTelegramAccountIds } from "../../telegram/accounts.js";
-import { listWhatsAppAccountIds } from "../../web/accounts.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import {
   type ChatProvider,
@@ -29,22 +24,9 @@ export type ProvidersRemoveOptions = {
 };
 
 function listAccountIds(cfg: ClawdbotConfig, provider: ChatProvider): string[] {
-  switch (provider) {
-    case "whatsapp":
-      return listWhatsAppAccountIds(cfg);
-    case "telegram":
-      return listTelegramAccountIds(cfg);
-    case "discord":
-      return listDiscordAccountIds(cfg);
-    case "slack":
-      return listSlackAccountIds(cfg);
-    case "signal":
-      return listSignalAccountIds(cfg);
-    case "imessage":
-      return listIMessageAccountIds(cfg);
-    case "msteams":
-      return [DEFAULT_ACCOUNT_ID];
-  }
+  const plugin = getProviderPlugin(provider);
+  if (!plugin) return [];
+  return plugin.config.listAccountIds(cfg);
 }
 
 export async function providersRemoveCommand(
@@ -57,7 +39,7 @@ export async function providersRemoveCommand(
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
-  let provider = normalizeChatProviderId(opts.provider);
+  let provider = normalizeProviderId(opts.provider);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 
@@ -65,9 +47,9 @@ export async function providersRemoveCommand(
     await prompter.intro("Remove provider account");
     provider = (await prompter.select({
       message: "Provider",
-      options: listChatProviders().map((meta) => ({
-        value: meta.id,
-        label: meta.label,
+      options: listProviderPlugins().map((plugin) => ({
+        value: plugin.id,
+        label: plugin.meta.label,
       })),
     })) as ChatProvider;
 
@@ -110,6 +92,10 @@ export async function providersRemoveCommand(
     }
   }
 
+  if (provider === "msteams") {
+    accountId = DEFAULT_ACCOUNT_ID;
+  }
+
   let next = { ...cfg };
   const accountKey = accountId || DEFAULT_ACCOUNT_ID;
 
@@ -126,6 +112,16 @@ export async function providersRemoveCommand(
               enabled,
             },
           },
+        },
+      };
+      return;
+    }
+    if (key === "msteams") {
+      next = {
+        ...next,
+        msteams: {
+          ...next.msteams,
+          enabled,
         },
       };
       return;
@@ -177,6 +173,12 @@ export async function providersRemoveCommand(
           accounts: Object.keys(accounts).length ? accounts : undefined,
         },
       };
+      return;
+    }
+    if (key === "msteams") {
+      const clone = { ...next } as Record<string, unknown>;
+      delete clone.msteams;
+      next = clone as ClawdbotConfig;
       return;
     }
     const base = (next as Record<string, unknown>)[key] as

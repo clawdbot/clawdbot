@@ -1,11 +1,11 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import type { ChatProviderId } from "../../providers/registry.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../routing/session-key.js";
 
-type ChatProvider = ChatProviderId;
+type ChatProvider = ProviderId;
 
 function providerHasAccounts(cfg: ClawdbotConfig, provider: ChatProvider) {
   if (provider === "whatsapp") return true;
@@ -336,6 +336,16 @@ export function applyProviderAccountConfig(params: {
             ...(params.region ? { region: params.region } : {}),
           },
         },
+      },
+    };
+  }
+
+  if (params.provider === "msteams") {
+    return {
+      ...next,
+      msteams: {
+        ...next.msteams,
+        enabled: true,
       },
     };
   }

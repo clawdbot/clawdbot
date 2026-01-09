@@ -5,43 +5,18 @@ import {
 } from "../../agents/auth-profiles.js";
 import { withProgress } from "../../cli/progress.js";
 import {
-  listDiscordAccountIds,
-  resolveDiscordAccount,
-} from "../../discord/accounts.js";
-import {
-  listIMessageAccountIds,
-  resolveIMessageAccount,
-} from "../../imessage/accounts.js";
-import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../../infra/provider-usage.js";
-import { resolveMSTeamsCredentials } from "../../msteams/token.js";
-import {
-  type ChatProviderId,
-  listChatProviders,
-} from "../../providers/registry.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { listProviderPlugins } from "../../providers/plugins/index.js";
+import { buildProviderAccountSnapshot } from "../../providers/plugins/status.js";
+import type {
+  ProviderAccountSnapshot,
+  ProviderPlugin,
+} from "../../providers/plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  listSignalAccountIds,
-  resolveSignalAccount,
-} from "../../signal/accounts.js";
-import {
-  listSlackAccountIds,
-  resolveSlackAccount,
-} from "../../slack/accounts.js";
-import {
-  listTelegramAccountIds,
-  resolveTelegramAccount,
-} from "../../telegram/accounts.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAuthDir,
-} from "../../web/accounts.js";
-import { webAuthExists } from "../../web/session.js";
 import { formatProviderAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ProvidersListOptions = {
@@ -77,6 +52,50 @@ function formatLinked(value: boolean): string {
   return value ? theme.success("linked") : theme.warn("not linked");
 }
 
+function shouldShowConfigured(provider: ProviderPlugin): boolean {
+  return provider.id !== "whatsapp" && provider.id !== "imessage";
+}
+
+function formatAccountLine(params: {
+  provider: ProviderPlugin;
+  snapshot: ProviderAccountSnapshot;
+}): string {
+  const { provider, snapshot } = params;
+  const label = formatProviderAccountLabel({
+    provider: provider.id,
+    accountId: snapshot.accountId,
+    name: snapshot.name,
+    providerStyle: theme.accent,
+    accountStyle: theme.heading,
+  });
+  const bits: string[] = [];
+  if (snapshot.linked !== undefined) {
+    bits.push(formatLinked(snapshot.linked));
+  }
+  if (
+    shouldShowConfigured(provider) &&
+    typeof snapshot.configured === "boolean"
+  ) {
+    bits.push(formatConfigured(snapshot.configured));
+  }
+  if (snapshot.tokenSource) {
+    bits.push(formatTokenSource(snapshot.tokenSource));
+  }
+  if (snapshot.botTokenSource) {
+    bits.push(formatSource("bot", snapshot.botTokenSource));
+  }
+  if (snapshot.appTokenSource) {
+    bits.push(formatSource("app", snapshot.appTokenSource));
+  }
+  if (snapshot.baseUrl) {
+    bits.push(`base=${theme.muted(snapshot.baseUrl)}`);
+  }
+  if (typeof snapshot.enabled === "boolean") {
+    bits.push(formatEnabled(snapshot.enabled));
+  }
+  return `- ${label}: ${bits.join(", ")}`;
+}
+
 async function loadUsageWithProgress(
   runtime: RuntimeEnv,
 ): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
@@ -99,118 +118,7 @@ export async function providersListCommand(
   if (!cfg) return;
   const includeUsage = opts.usage !== false;
 
-  const accountIdsByProvider: Record<ChatProviderId, string[]> = {
-    whatsapp: listWhatsAppAccountIds(cfg),
-    telegram: listTelegramAccountIds(cfg),
-    discord: listDiscordAccountIds(cfg),
-    slack: listSlackAccountIds(cfg),
-    signal: listSignalAccountIds(cfg),
-    imessage: listIMessageAccountIds(cfg),
-    msteams: [DEFAULT_ACCOUNT_ID],
-  };
-
-  const lineBuilders: Record<
-    ChatProviderId,
-    (accountId: string) => Promise<string>
-  > = {
-    telegram: async (accountId) => {
-      const account = resolveTelegramAccount({ cfg, accountId });
-      const label = formatProviderAccountLabel({
-        provider: "telegram",
-        accountId,
-        name: account.name,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      return `- ${label}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
-        account.tokenSource,
-      )}, ${formatEnabled(account.enabled)}`;
-    },
-    whatsapp: async (accountId) => {
-      const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
-      const linked = await webAuthExists(authDir);
-      const name = cfg.whatsapp?.accounts?.[accountId]?.name;
-      const label = formatProviderAccountLabel({
-        provider: "whatsapp",
-        accountId,
-        name,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      return `- ${label}: ${formatLinked(linked)}, ${formatEnabled(
-        cfg.whatsapp?.accounts?.[accountId]?.enabled ??
-          cfg.web?.enabled ??
-          true,
-      )}`;
-    },
-    discord: async (accountId) => {
-      const account = resolveDiscordAccount({ cfg, accountId });
-      const label = formatProviderAccountLabel({
-        provider: "discord",
-        accountId,
-        name: account.name,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      return `- ${label}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
-        account.tokenSource,
-      )}, ${formatEnabled(account.enabled)}`;
-    },
-    slack: async (accountId) => {
-      const account = resolveSlackAccount({ cfg, accountId });
-      const configured = Boolean(account.botToken && account.appToken);
-      const label = formatProviderAccountLabel({
-        provider: "slack",
-        accountId,
-        name: account.name,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      return `- ${label}: ${formatConfigured(configured)}, ${formatSource(
-        "bot",
-        account.botTokenSource,
-      )}, ${formatSource("app", account.appTokenSource)}, ${formatEnabled(
-        account.enabled,
-      )}`;
-    },
-    signal: async (accountId) => {
-      const account = resolveSignalAccount({ cfg, accountId });
-      const label = formatProviderAccountLabel({
-        provider: "signal",
-        accountId,
-        name: account.name,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      return `- ${label}: ${formatConfigured(account.configured)}, base=${theme.muted(
-        account.baseUrl,
-      )}, ${formatEnabled(account.enabled)}`;
-    },
-    imessage: async (accountId) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      const label = formatProviderAccountLabel({
-        provider: "imessage",
-        accountId,
-        name: account.name,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      return `- ${label}: ${formatEnabled(account.enabled)}`;
-    },
-    msteams: async (accountId) => {
-      const label = formatProviderAccountLabel({
-        provider: "msteams",
-        accountId,
-        providerStyle: theme.accent,
-        accountStyle: theme.heading,
-      });
-      const configured = Boolean(resolveMSTeamsCredentials(cfg.msteams));
-      const enabled = cfg.msteams?.enabled !== false;
-      return `- ${label}: ${formatConfigured(configured)}, ${formatEnabled(
-        enabled,
-      )}`;
-    },
-  };
+  const plugins = listProviderPlugins();
 
   const authStore = loadAuthProfileStore();
   const authProfiles = Object.entries(authStore.profiles).map(
@@ -225,19 +133,11 @@ export async function providersListCommand(
   );
   if (opts.json) {
     const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
-    const payload = {
-      chat: {
-        whatsapp: accountIdsByProvider.whatsapp,
-        telegram: accountIdsByProvider.telegram,
-        discord: accountIdsByProvider.discord,
-        slack: accountIdsByProvider.slack,
-        signal: accountIdsByProvider.signal,
-        imessage: accountIdsByProvider.imessage,
-        msteams: accountIdsByProvider.msteams,
-      },
-      auth: authProfiles,
-      ...(usage ? { usage } : {}),
-    };
+    const chat: Record<string, string[]> = {};
+    for (const plugin of plugins) {
+      chat[plugin.id] = plugin.config.listAccountIds(cfg);
+    }
+    const payload = { chat, auth: authProfiles, ...(usage ? { usage } : {}) };
     runtime.log(JSON.stringify(payload, null, 2));
     return;
   }
@@ -245,12 +145,21 @@ export async function providersListCommand(
   const lines: string[] = [];
   lines.push(theme.heading("Chat providers:"));
 
-  for (const meta of listChatProviders()) {
-    const accounts = accountIdsByProvider[meta.id];
+  for (const plugin of plugins) {
+    const accounts = plugin.config.listAccountIds(cfg);
     if (!accounts || accounts.length === 0) continue;
     for (const accountId of accounts) {
-      const line = await lineBuilders[meta.id](accountId);
-      lines.push(line);
+      const snapshot = await buildProviderAccountSnapshot({
+        plugin,
+        cfg,
+        accountId,
+      });
+      lines.push(
+        formatAccountLine({
+          provider: plugin,
+          snapshot,
+        }),
+      );
     }
   }
 

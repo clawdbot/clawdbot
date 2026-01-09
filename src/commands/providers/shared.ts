@@ -3,13 +3,14 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import {
-  type ChatProviderId,
-  getChatProviderMeta,
-} from "../../providers/registry.js";
+  getProviderPlugin,
+  type ProviderId,
+} from "../../providers/plugins/index.js";
+import { getChatProviderMeta } from "../../providers/registry.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 
-export type ChatProvider = ChatProviderId;
+export type ChatProvider = ProviderId;
 
 export async function requireValidConfig(
   runtime: RuntimeEnv = defaultRuntime,
@@ -39,8 +40,11 @@ export function formatAccountLabel(params: {
   return base;
 }
 
-export const providerLabel = (provider: ChatProvider) =>
-  getChatProviderMeta(provider).label;
+export const providerLabel = (provider: ChatProvider) => {
+  const plugin = getProviderPlugin(provider);
+  if (plugin) return plugin.meta.label;
+  return getChatProviderMeta(provider as never).label;
+};
 
 export function formatProviderAccountLabel(params: {
   provider: ChatProvider;
