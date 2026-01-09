@@ -10,6 +10,10 @@ export async function resolveAnnounceTarget(params: {
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
   const fallback = parsed ?? parsedDisplay ?? null;
 
+  if (fallback && fallback.provider !== "whatsapp") {
+    return fallback;
+  }
+
   try {
     const list = (await callGateway({
       method: "sessions.list",

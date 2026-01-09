@@ -226,14 +226,13 @@ export async function runHeartbeatOnce(opts: {
       : undefined;
   const senderProvider =
     delivery.provider !== "none" ? delivery.provider : lastProvider;
-  const senderAllowFrom =
-    senderProvider
-      ? (getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
-          cfg,
-          accountId:
-            senderProvider === lastProvider ? entry?.lastAccountId : undefined,
-        }) ?? [])
-      : [];
+  const senderAllowFrom = senderProvider
+    ? (getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
+        cfg,
+        accountId:
+          senderProvider === lastProvider ? entry?.lastAccountId : undefined,
+      }) ?? [])
+    : [];
   const sender = resolveHeartbeatSender({
     allowFrom: senderAllowFrom,
     lastTo: entry?.lastTo,
