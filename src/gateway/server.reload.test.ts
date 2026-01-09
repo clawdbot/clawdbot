@@ -106,7 +106,7 @@ const hoisted = vi.hoisted(() => {
     stopIMessageProvider: vi.fn(async () => {}),
     startMSTeamsProvider: vi.fn(async () => {}),
     stopMSTeamsProvider: vi.fn(async () => {}),
-    markWhatsAppLoggedOut: vi.fn(),
+    markProviderLoggedOut: vi.fn(),
   };
 
   const createProviderManager = vi.fn(() => providerManager);

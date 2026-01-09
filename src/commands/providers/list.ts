@@ -53,7 +53,7 @@ function formatLinked(value: boolean): string {
 }
 
 function shouldShowConfigured(provider: ProviderPlugin): boolean {
-  return provider.id !== "whatsapp" && provider.id !== "imessage";
+  return provider.meta.showConfigured !== false;
 }
 
 function formatAccountLine(params: {

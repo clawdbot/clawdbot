@@ -18,6 +18,7 @@ export type ProviderMeta = {
   blurb: string;
   aliases?: string[];
   order?: number;
+  showConfigured?: boolean;
 };
 
 export type ProviderAccountSnapshot = {
@@ -71,10 +72,16 @@ export type ProviderConfigAdapter<ResolvedAccount> = {
     accountId?: string | null,
   ) => ResolvedAccount;
   defaultAccountId?: (cfg: ClawdbotConfig) => string;
+  isEnabled?: (account: ResolvedAccount, cfg: ClawdbotConfig) => boolean;
+  disabledReason?: (account: ResolvedAccount, cfg: ClawdbotConfig) => string;
   isConfigured?: (
     account: ResolvedAccount,
     cfg: ClawdbotConfig,
   ) => boolean | Promise<boolean>;
+  unconfiguredReason?: (
+    account: ResolvedAccount,
+    cfg: ClawdbotConfig,
+  ) => string;
   describeAccount?: (
     account: ResolvedAccount,
     cfg: ClawdbotConfig,
@@ -121,6 +128,13 @@ export type ProviderOutboundAdapter = {
 };
 
 export type ProviderStatusAdapter<ResolvedAccount> = {
+  defaultRuntime?: ProviderAccountSnapshot;
+  buildProviderSummary?: (params: {
+    account: ResolvedAccount;
+    cfg: ClawdbotConfig;
+    defaultAccountId: string;
+    snapshot: ProviderAccountSnapshot;
+  }) => Record<string, unknown> | Promise<Record<string, unknown>>;
   probeAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;

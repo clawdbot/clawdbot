@@ -1,11 +1,4 @@
-export type ProviderId =
-  | "discord"
-  | "telegram"
-  | "whatsapp"
-  | "slack"
-  | "signal"
-  | "imessage"
-  | "msteams";
+import type { ProviderId } from "../providers/plugins/types.js";
 export type ProviderDirection = "inbound" | "outbound";
 
 type ActivityEntry = {

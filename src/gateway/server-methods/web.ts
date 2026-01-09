@@ -105,7 +105,7 @@ export const webHandlers: GatewayRequestHandlers = {
         isLegacyAuthDir: account.isLegacyAuthDir,
         runtime: defaultRuntime,
       });
-      context.markWhatsAppLoggedOut(cleared, account.accountId);
+      context.markProviderLoggedOut("whatsapp", cleared, account.accountId);
       respond(true, { cleared }, undefined);
     } catch (err) {
       respond(

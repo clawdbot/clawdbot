@@ -81,7 +81,11 @@ export type GatewayRequestContext = {
   stopSignalProvider: (accountId?: string) => Promise<void>;
   startIMessageProvider: (accountId?: string) => Promise<void>;
   stopIMessageProvider: (accountId?: string) => Promise<void>;
-  markWhatsAppLoggedOut: (cleared: boolean, accountId?: string) => void;
+  markProviderLoggedOut: (
+    providerId: import("../../providers/plugins/types.js").ProviderId,
+    cleared: boolean,
+    accountId?: string,
+  ) => void;
   wizardRunner: (
     opts: import("../../commands/onboard-types.js").OnboardOptions,
     runtime: import("../../runtime.js").RuntimeEnv,

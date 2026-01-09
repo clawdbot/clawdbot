@@ -22,8 +22,9 @@ export async function buildProviderAccountSnapshot<ResolvedAccount>(params: {
       audit: params.audit,
     });
   }
-  const enabled =
-    account && typeof account === "object"
+  const enabled = params.plugin.config.isEnabled
+    ? params.plugin.config.isEnabled(account, params.cfg)
+    : account && typeof account === "object"
       ? (account as { enabled?: boolean }).enabled
       : undefined;
   const configured = params.plugin.config.isConfigured

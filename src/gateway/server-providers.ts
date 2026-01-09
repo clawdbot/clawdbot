@@ -9,7 +9,6 @@ import {
 import type { ProviderAccountSnapshot } from "../providers/plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveDefaultWhatsAppAccountId } from "../web/accounts.js";
 
 export type ProviderRuntimeSnapshot = {
   [K in ProviderId]?: ProviderAccountSnapshot;
@@ -23,65 +22,6 @@ type ProviderRuntimeStore = {
   aborts: Map<string, AbortController>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ProviderAccountSnapshot>;
-};
-
-const DEFAULT_RUNTIME: Record<ProviderId, ProviderAccountSnapshot> = {
-  whatsapp: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    connected: false,
-    reconnectAttempts: 0,
-    lastConnectedAt: null,
-    lastDisconnect: null,
-    lastMessageAt: null,
-    lastEventAt: null,
-    lastError: null,
-  },
-  telegram: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  },
-  discord: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  },
-  slack: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  },
-  signal: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  },
-  imessage: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    cliPath: null,
-    dbPath: null,
-  },
-  msteams: {
-    accountId: DEFAULT_ACCOUNT_ID,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    port: null,
-  },
 };
 
 function createRuntimeStore(): ProviderRuntimeStore {
@@ -98,11 +38,18 @@ function isAccountEnabled(account: unknown): boolean {
   return enabled !== false;
 }
 
+function resolveDefaultRuntime(
+  providerId: ProviderId,
+): ProviderAccountSnapshot {
+  const plugin = getProviderPlugin(providerId);
+  return plugin?.status?.defaultRuntime ?? { accountId: DEFAULT_ACCOUNT_ID };
+}
+
 function cloneDefaultRuntime(
   providerId: ProviderId,
   accountId: string,
 ): ProviderAccountSnapshot {
-  return { ...DEFAULT_RUNTIME[providerId], accountId };
+  return { ...resolveDefaultRuntime(providerId), accountId };
 }
 
 type ProviderManagerOptions = {
@@ -142,7 +89,11 @@ export type ProviderManager = {
   stopIMessageProvider: (accountId?: string) => Promise<void>;
   startMSTeamsProvider: () => Promise<void>;
   stopMSTeamsProvider: () => Promise<void>;
-  markWhatsAppLoggedOut: (cleared: boolean, accountId?: string) => void;
+  markProviderLoggedOut: (
+    providerId: ProviderId,
+    cleared: boolean,
+    accountId?: string,
+  ) => void;
 };
 
 export function createProviderManager(
@@ -232,14 +183,15 @@ export function createProviderManager(
       accountIds.map(async (id) => {
         if (store.tasks.has(id)) return;
         const account = plugin.config.resolveAccount(cfg, id);
-        const enabled =
-          isAccountEnabled(account) &&
-          !(providerId === "whatsapp" && cfg.web?.enabled === false);
+        const enabled = plugin.config.isEnabled
+          ? plugin.config.isEnabled(account, cfg)
+          : isAccountEnabled(account);
         if (!enabled) {
           setRuntime(providerId, id, {
             accountId: id,
             running: false,
-            lastError: "disabled",
+            lastError:
+              plugin.config.disabledReason?.(account, cfg) ?? "disabled",
           });
           return;
         }
@@ -253,7 +205,8 @@ export function createProviderManager(
             accountId: id,
             running: false,
             lastError:
-              providerId === "whatsapp" ? "not linked" : "not configured",
+              plugin.config.unconfiguredReason?.(account, cfg) ??
+              "not configured",
           });
           return;
         }
@@ -353,16 +306,29 @@ export function createProviderManager(
     }
   };
 
-  const markWhatsAppLoggedOut = (cleared: boolean, accountId?: string) => {
+  const markProviderLoggedOut = (
+    providerId: ProviderId,
+    cleared: boolean,
+    accountId?: string,
+  ) => {
+    const plugin = getProviderPlugin(providerId);
+    if (!plugin) return;
     const cfg = loadConfig();
-    const resolvedId = accountId ?? resolveDefaultWhatsAppAccountId(cfg);
-    const current = getRuntime("whatsapp", resolvedId);
-    setRuntime("whatsapp", resolvedId, {
+    const resolvedId =
+      accountId ??
+      plugin.config.defaultAccountId?.(cfg) ??
+      plugin.config.listAccountIds(cfg)[0] ??
+      DEFAULT_ACCOUNT_ID;
+    const current = getRuntime(providerId, resolvedId);
+    const next: ProviderAccountSnapshot = {
       accountId: resolvedId,
       running: false,
-      connected: false,
       lastError: cleared ? "logged out" : current.lastError,
-    });
+    };
+    if (typeof current.connected === "boolean") {
+      next.connected = false;
+    }
+    setRuntime(providerId, resolvedId, next);
   };
 
   const getRuntimeSnapshot = (): ProviderRuntimeSnapshot => {
@@ -378,17 +344,23 @@ export function createProviderManager(
       const accounts: Record<string, ProviderAccountSnapshot> = {};
       for (const id of accountIds) {
         const account = plugin.config.resolveAccount(cfg, id);
-        const enabled =
-          isAccountEnabled(account) &&
-          !(plugin.id === "whatsapp" && cfg.web?.enabled === false);
+        const enabled = plugin.config.isEnabled
+          ? plugin.config.isEnabled(account, cfg)
+          : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
         const configured = described?.configured;
         const current =
           store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
         if (!next.running) {
-          if (!enabled) next.lastError ??= "disabled";
-          else if (configured === false) next.lastError ??= "not configured";
+          if (!enabled) {
+            next.lastError ??=
+              plugin.config.disabledReason?.(account, cfg) ?? "disabled";
+          } else if (configured === false) {
+            next.lastError ??=
+              plugin.config.unconfiguredReason?.(account, cfg) ??
+              "not configured";
+          }
         }
         accounts[id] = next;
       }
@@ -431,6 +403,6 @@ export function createProviderManager(
       stopProvider("imessage", accountId),
     startMSTeamsProvider: () => startProvider("msteams"),
     stopMSTeamsProvider: () => stopProvider("msteams"),
-    markWhatsAppLoggedOut,
+    markProviderLoggedOut,
   };
 }
