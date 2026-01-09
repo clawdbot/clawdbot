@@ -1,28 +1,30 @@
+import {
+  listProviderPlugins,
+  normalizeProviderId,
+  type ProviderId,
+} from "../providers/plugins/index.js";
+
+export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
+export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
+
+const PROVIDER_PLUGINS = listProviderPlugins();
+const PROVIDER_ALIASES = PROVIDER_PLUGINS.flatMap(
+  (plugin) => plugin.meta.aliases ?? [],
+);
+
 export function normalizeMessageProvider(
   raw?: string | null,
 ): string | undefined {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) return undefined;
-  if (normalized === "imsg") return "imessage";
-  if (normalized === "teams") return "msteams";
-  return normalized;
+  if (normalized === INTERNAL_MESSAGE_PROVIDER) return INTERNAL_MESSAGE_PROVIDER;
+  return normalizeProviderId(normalized) ?? normalized;
 }
 
-export const DELIVERABLE_MESSAGE_PROVIDERS = [
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "msteams",
-] as const;
+export const DELIVERABLE_MESSAGE_PROVIDERS =
+  PROVIDER_PLUGINS.map((plugin) => plugin.id) as ProviderId[];
 
-export type DeliverableMessageProvider =
-  (typeof DELIVERABLE_MESSAGE_PROVIDERS)[number];
-
-export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
-export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
+export type DeliverableMessageProvider = ProviderId;
 
 export type GatewayMessageProvider =
   | DeliverableMessageProvider
@@ -30,23 +32,20 @@ export type GatewayMessageProvider =
 
 export const GATEWAY_MESSAGE_PROVIDERS = [
   ...DELIVERABLE_MESSAGE_PROVIDERS,
-  "webchat",
+  INTERNAL_MESSAGE_PROVIDER,
 ] as const;
 
-export const GATEWAY_AGENT_PROVIDER_ALIASES = ["imsg", "teams"] as const;
-export type GatewayAgentProviderAlias =
-  (typeof GATEWAY_AGENT_PROVIDER_ALIASES)[number];
+export const GATEWAY_AGENT_PROVIDER_ALIASES = PROVIDER_ALIASES;
 
-export type GatewayAgentProviderHint =
-  | GatewayMessageProvider
-  | "last"
-  | GatewayAgentProviderAlias;
+export type GatewayAgentProviderHint = GatewayMessageProvider | "last" | string;
 
-export const GATEWAY_AGENT_PROVIDER_VALUES = [
-  ...GATEWAY_MESSAGE_PROVIDERS,
-  "last",
-  ...GATEWAY_AGENT_PROVIDER_ALIASES,
-] as const;
+export const GATEWAY_AGENT_PROVIDER_VALUES = Array.from(
+  new Set([
+    ...GATEWAY_MESSAGE_PROVIDERS,
+    "last",
+    ...GATEWAY_AGENT_PROVIDER_ALIASES,
+  ]),
+);
 
 export function isGatewayMessageProvider(
   value: string,
