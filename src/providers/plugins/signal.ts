@@ -1,4 +1,5 @@
 import { chunkText } from "../../auto-reply/chunk.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
   listSignalAccountIds,
   type ResolvedSignalAccount,
@@ -70,6 +71,23 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
     },
   },
   status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
+    buildProviderSummary: ({ snapshot }) => ({
+      configured: snapshot.configured ?? false,
+      baseUrl: snapshot.baseUrl ?? null,
+      running: snapshot.running ?? false,
+      lastStartAt: snapshot.lastStartAt ?? null,
+      lastStopAt: snapshot.lastStopAt ?? null,
+      lastError: snapshot.lastError ?? null,
+      probe: snapshot.probe,
+      lastProbeAt: snapshot.lastProbeAt ?? null,
+    }),
     probeAccount: async ({ account, timeoutMs }) => {
       const baseUrl = account.baseUrl;
       return await probeSignal(baseUrl, timeoutMs);

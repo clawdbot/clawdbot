@@ -1,5 +1,6 @@
 import { chunkText } from "../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   listWhatsAppAccountIds,
@@ -8,7 +9,11 @@ import {
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
-import { readWebSelfId, webAuthExists } from "../../web/session.js";
+import {
+  getWebAuthAgeMs,
+  readWebSelfId,
+  webAuthExists,
+} from "../../web/session.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
 import type { ProviderPlugin } from "./types.js";
@@ -20,6 +25,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   meta: {
     ...meta,
     aliases: [],
+    showConfigured: false,
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -33,7 +39,11 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveWhatsAppAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultWhatsAppAccountId(cfg),
+    isEnabled: (account, cfg) =>
+      account.enabled !== false && cfg.web?.enabled !== false,
+    disabledReason: () => "disabled",
     isConfigured: async (account) => await webAuthExists(account.authDir),
+    unconfiguredReason: () => "not linked",
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
@@ -88,6 +98,43 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       }),
   },
   status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      connected: false,
+      reconnectAttempts: 0,
+      lastConnectedAt: null,
+      lastDisconnect: null,
+      lastMessageAt: null,
+      lastEventAt: null,
+      lastError: null,
+    },
+    buildProviderSummary: async ({ account, snapshot }) => {
+      const authDir = account.authDir;
+      const linked =
+        typeof snapshot.linked === "boolean"
+          ? snapshot.linked
+          : authDir
+            ? await webAuthExists(authDir)
+            : false;
+      const authAgeMs = linked && authDir ? getWebAuthAgeMs(authDir) : null;
+      const self =
+        linked && authDir ? readWebSelfId(authDir) : { e164: null, jid: null };
+      return {
+        configured: linked,
+        linked,
+        authAgeMs,
+        self,
+        running: snapshot.running ?? false,
+        connected: snapshot.connected ?? false,
+        lastConnectedAt: snapshot.lastConnectedAt ?? null,
+        lastDisconnect: snapshot.lastDisconnect ?? null,
+        reconnectAttempts: snapshot.reconnectAttempts,
+        lastMessageAt: snapshot.lastMessageAt ?? null,
+        lastEventAt: snapshot.lastEventAt ?? null,
+        lastError: snapshot.lastError ?? null,
+      };
+    },
     buildAccountSnapshot: async ({ account, runtime }) => {
       const linked = await webAuthExists(account.authDir);
       return {

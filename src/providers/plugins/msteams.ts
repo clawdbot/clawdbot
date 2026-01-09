@@ -104,6 +104,24 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
     },
   },
   status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      port: null,
+    },
+    buildProviderSummary: ({ snapshot }) => ({
+      configured: snapshot.configured ?? false,
+      running: snapshot.running ?? false,
+      lastStartAt: snapshot.lastStartAt ?? null,
+      lastStopAt: snapshot.lastStopAt ?? null,
+      lastError: snapshot.lastError ?? null,
+      port: snapshot.port ?? null,
+      probe: snapshot.probe,
+      lastProbeAt: snapshot.lastProbeAt ?? null,
+    }),
     buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: account.accountId,
       enabled: account.enabled,
