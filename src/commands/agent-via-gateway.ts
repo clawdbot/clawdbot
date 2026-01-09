@@ -7,6 +7,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
@@ -124,7 +125,7 @@ export async function agentViaGatewayCommand(
     sessionId: opts.sessionId,
   });
 
-  const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
+  const provider = normalizeMessageProvider(opts.provider) ?? DEFAULT_CHAT_PROVIDER;
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
   const response = await withProgress(

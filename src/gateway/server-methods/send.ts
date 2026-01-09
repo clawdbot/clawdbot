@@ -3,6 +3,7 @@ import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import type { OutboundProvider } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
+import { DEFAULT_CHAT_PROVIDER } from "../../providers/registry.js";
 import {
   getProviderPlugin,
   normalizeProviderId,
@@ -67,7 +68,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const provider = normalizedProvider ?? "whatsapp";
+    const provider = normalizedProvider ?? DEFAULT_CHAT_PROVIDER;
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
@@ -200,7 +201,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const provider = normalizedProvider ?? "whatsapp";
+    const provider = normalizedProvider ?? DEFAULT_CHAT_PROVIDER;
     const poll = {
       question: request.question,
       options: request.options,

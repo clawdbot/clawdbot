@@ -12,6 +12,8 @@ export const CHAT_PROVIDER_ORDER = [
 
 export type ChatProviderId = (typeof CHAT_PROVIDER_ORDER)[number];
 
+export const DEFAULT_CHAT_PROVIDER: ChatProviderId = "whatsapp";
+
 export type ChatProviderMeta = {
   id: ChatProviderId;
   label: string;
