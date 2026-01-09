@@ -86,11 +86,11 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
 
 const WEBSITE_URL = "https://clawd.bot";
 
-const CHAT_PROVIDER_ALIASES: Record<string, ChatProviderId> = {
+export const CHAT_PROVIDER_ALIASES = {
   imsg: "imessage",
   teams: "msteams",
   web: "whatsapp",
-};
+} satisfies Record<string, ChatProviderId>;
 
 const normalizeProviderKey = (raw?: string | null): string | undefined => {
   const normalized = raw?.trim().toLowerCase();
@@ -99,6 +99,10 @@ const normalizeProviderKey = (raw?: string | null): string | undefined => {
 
 export function listChatProviders(): ChatProviderMeta[] {
   return CHAT_PROVIDER_ORDER.map((id) => CHAT_PROVIDER_META[id]);
+}
+
+export function listChatProviderAliases(): string[] {
+  return Object.keys(CHAT_PROVIDER_ALIASES);
 }
 
 export function getChatProviderMeta(id: ChatProviderId): ChatProviderMeta {

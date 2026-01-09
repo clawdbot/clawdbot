@@ -1,16 +1,11 @@
 import {
-  listProviderPlugins,
-  normalizeProviderId,
-  type ProviderId,
-} from "../providers/plugins/index.js";
+  PROVIDER_IDS,
+  listChatProviderAliases,
+  normalizeChatProviderId,
+} from "../providers/registry.js";
 
 export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
 export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
-
-const PROVIDER_PLUGINS = listProviderPlugins();
-const PROVIDER_ALIASES = PROVIDER_PLUGINS.flatMap(
-  (plugin) => plugin.meta.aliases ?? [],
-);
 
 export function normalizeMessageProvider(
   raw?: string | null,
@@ -19,14 +14,13 @@ export function normalizeMessageProvider(
   if (!normalized) return undefined;
   if (normalized === INTERNAL_MESSAGE_PROVIDER)
     return INTERNAL_MESSAGE_PROVIDER;
-  return normalizeProviderId(normalized) ?? normalized;
+  return normalizeChatProviderId(normalized) ?? normalized;
 }
 
-export const DELIVERABLE_MESSAGE_PROVIDERS = PROVIDER_PLUGINS.map(
-  (plugin) => plugin.id,
-) as ProviderId[];
+export const DELIVERABLE_MESSAGE_PROVIDERS = PROVIDER_IDS;
 
-export type DeliverableMessageProvider = ProviderId;
+export type DeliverableMessageProvider =
+  (typeof DELIVERABLE_MESSAGE_PROVIDERS)[number];
 
 export type GatewayMessageProvider =
   | DeliverableMessageProvider
@@ -37,9 +31,9 @@ export const GATEWAY_MESSAGE_PROVIDERS = [
   INTERNAL_MESSAGE_PROVIDER,
 ] as const;
 
-export const GATEWAY_AGENT_PROVIDER_ALIASES = PROVIDER_ALIASES;
+export const GATEWAY_AGENT_PROVIDER_ALIASES = listChatProviderAliases();
 
-export type GatewayAgentProviderHint = GatewayMessageProvider | "last" | string;
+export type GatewayAgentProviderHint = GatewayMessageProvider | "last";
 
 export const GATEWAY_AGENT_PROVIDER_VALUES = Array.from(
   new Set([
