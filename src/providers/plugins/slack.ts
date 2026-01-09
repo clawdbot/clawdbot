@@ -55,17 +55,19 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId }) => {
       const send = deps?.sendSlack ?? sendMessageSlack;
       const result = await send(to, text, {
+        threadTs: replyToId ?? undefined,
         accountId: accountId ?? undefined,
       });
       return { provider: "slack", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
       const send = deps?.sendSlack ?? sendMessageSlack;
       const result = await send(to, text, {
         mediaUrl,
+        threadTs: replyToId ?? undefined,
         accountId: accountId ?? undefined,
       });
       return { provider: "slack", ...result };

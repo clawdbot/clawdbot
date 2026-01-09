@@ -113,6 +113,8 @@ export type ProviderOutboundContext = {
   text: string;
   mediaUrl?: string;
   gifPlayback?: boolean;
+  replyToId?: string | null;
+  threadId?: number | null;
   accountId?: string | null;
   deps?: OutboundSendDeps;
 };

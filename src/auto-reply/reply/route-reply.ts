@@ -10,13 +10,10 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { sendMessageDiscord } from "../../discord/send.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
-import { sendMessageMSTeams } from "../../msteams/send.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
-import { sendMessageWhatsApp } from "../../web/outbound.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -93,6 +90,26 @@ export async function routeReply(
     return { ok: true };
   }
 
+  if (channel === "webchat") {
+    return {
+      ok: false,
+      error: "Webchat routing not supported for queued replies",
+    };
+  }
+
+  const provider = normalizeProviderId(channel) ?? null;
+  if (!provider) {
+    return { ok: false, error: `Unknown channel: ${String(channel)}` };
+  }
+  const plugin = getProviderPlugin(provider);
+  const outbound = plugin?.outbound;
+  if (!outbound?.sendText || !outbound?.sendMedia) {
+    return {
+      ok: false,
+      error: `Reply routing not configured for ${provider}`,
+    };
+  }
+
   const sendOne = async (params: {
     text: string;
     mediaUrl?: string;
@@ -101,88 +118,27 @@ export async function routeReply(
       return { ok: false, error: "Reply routing aborted" };
     }
     const { text, mediaUrl } = params;
-    switch (channel) {
-      case "telegram": {
-        const replyToMessageId = replyToId
-          ? Number.parseInt(replyToId, 10)
-          : undefined;
-        const resolvedReplyToMessageId = Number.isFinite(replyToMessageId)
-          ? replyToMessageId
-          : undefined;
-        const result = await sendMessageTelegram(to, text, {
-          mediaUrl,
-          messageThreadId: threadId,
-          replyToMessageId: resolvedReplyToMessageId,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "slack": {
-        const result = await sendMessageSlack(to, text, {
-          mediaUrl,
-          threadTs: replyToId,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "discord": {
-        const result = await sendMessageDiscord(to, text, {
-          mediaUrl,
-          replyTo: replyToId,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "signal": {
-        const result = await sendMessageSignal(to, text, {
-          mediaUrl,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "imessage": {
-        const result = await sendMessageIMessage(to, text, {
-          mediaUrl,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "whatsapp": {
-        const result = await sendMessageWhatsApp(to, text, {
-          verbose: false,
-          mediaUrl,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "webchat": {
-        return {
-          ok: false,
-          error: `Webchat routing not supported for queued replies`,
-        };
-      }
-
-      case "msteams": {
-        const result = await sendMessageMSTeams({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      default: {
-        const _exhaustive: never = channel;
-        return { ok: false, error: `Unknown channel: ${String(_exhaustive)}` };
-      }
+    if (mediaUrl) {
+      const result = await outbound.sendMedia({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        accountId,
+        replyToId,
+        threadId,
+      });
+      return { ok: true, messageId: result.messageId };
     }
+    const result = await outbound.sendText({
+      cfg,
+      to,
+      text,
+      accountId,
+      replyToId,
+      threadId,
+    });
+    return { ok: true, messageId: result.messageId };
   };
 
   try {
@@ -222,22 +178,10 @@ export async function routeReply(
  */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
-): channel is
-  | "telegram"
-  | "slack"
-  | "discord"
-  | "signal"
-  | "imessage"
-  | "whatsapp"
-  | "msteams" {
-  if (!channel) return false;
-  return [
-    "telegram",
-    "slack",
-    "discord",
-    "signal",
-    "imessage",
-    "whatsapp",
-    "msteams",
-  ].includes(channel);
+): channel is Exclude<OriginatingChannelType, "webchat"> {
+  if (!channel || channel === "webchat") return false;
+  const provider = normalizeProviderId(channel);
+  if (!provider) return false;
+  const plugin = getProviderPlugin(provider);
+  return Boolean(plugin?.outbound?.sendText && plugin?.outbound?.sendMedia);
 }

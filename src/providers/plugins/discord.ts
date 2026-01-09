@@ -63,19 +63,28 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId }) => {
       const send = deps?.sendDiscord ?? sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
+        replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
       });
       return { provider: "discord", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      accountId,
+      deps,
+      replyToId,
+    }) => {
       const send = deps?.sendDiscord ?? sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
+        replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
       });
       return { provider: "discord", ...result };

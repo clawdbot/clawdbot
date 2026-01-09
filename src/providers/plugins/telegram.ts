@@ -60,19 +60,43 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
       const send = deps?.sendTelegram ?? sendMessageTelegram;
+      const replyToMessageId = replyToId
+        ? Number.parseInt(replyToId, 10)
+        : undefined;
+      const resolvedReplyToMessageId = Number.isFinite(replyToMessageId)
+        ? replyToMessageId
+        : undefined;
       const result = await send(to, text, {
         verbose: false,
+        messageThreadId: threadId ?? undefined,
+        replyToMessageId: resolvedReplyToMessageId,
         accountId: accountId ?? undefined,
       });
       return { provider: "telegram", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+    }) => {
       const send = deps?.sendTelegram ?? sendMessageTelegram;
+      const replyToMessageId = replyToId
+        ? Number.parseInt(replyToId, 10)
+        : undefined;
+      const resolvedReplyToMessageId = Number.isFinite(replyToMessageId)
+        ? replyToMessageId
+        : undefined;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
+        messageThreadId: threadId ?? undefined,
+        replyToMessageId: resolvedReplyToMessageId,
         accountId: accountId ?? undefined,
       });
       return { provider: "telegram", ...result };
