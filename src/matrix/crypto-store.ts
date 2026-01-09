@@ -11,7 +11,7 @@ let indexedDBSetup = false;
  */
 export function resolveMatrixCryptoDir(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, os.homedir)
+  stateDir: string = resolveStateDir(env, os.homedir),
 ): string {
   const override = env.CLAWDBOT_MATRIX_CRYPTO_DIR?.trim();
   if (override) {
@@ -29,7 +29,7 @@ export function resolveMatrixCryptoDir(
  * Ensure the crypto directory exists.
  */
 export function ensureMatrixCryptoDir(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   const dir = resolveMatrixCryptoDir(env);
   fs.mkdirSync(dir, { recursive: true });
@@ -52,7 +52,7 @@ export function sanitizeUserIdForPrefix(userId: string): string {
  * The crypto store will be persisted to ~/.clawdbot/matrix-crypto/.
  */
 export async function setupNodeIndexedDB(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   if (indexedDBSetup) return;
 

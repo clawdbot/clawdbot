@@ -35,7 +35,11 @@ export async function pollCommand(
   runtime: RuntimeEnv,
 ) {
   const provider = (opts.provider ?? "whatsapp").toLowerCase();
-  if (provider !== "whatsapp" && provider !== "discord") {
+  if (
+    provider !== "whatsapp" &&
+    provider !== "discord" &&
+    provider !== "matrix"
+  ) {
     throw new Error(`Unsupported poll provider: ${provider}`);
   }
 
@@ -48,12 +52,18 @@ export async function pollCommand(
     maxSelections,
     durationHours,
   };
-  const maxOptions = provider === "discord" ? 10 : 12;
+  // Matrix polls support any number of options, Discord max 10, WhatsApp max 12
+  const maxOptions =
+    provider === "discord" ? 10 : provider === "matrix" ? 20 : 12;
   const normalized = normalizePollInput(pollInput, { maxOptions });
 
   if (opts.dryRun) {
     runtime.log(
-      `[dry-run] would send poll via ${provider} -> ${opts.to}:\n  Question: ${normalized.question}\n  Options: ${normalized.options.join(", ")}\n  Max selections: ${normalized.maxSelections}`,
+      `[dry-run] would send poll via ${provider} -> ${opts.to}:\n  Question: ${
+        normalized.question
+      }\n  Options: ${normalized.options.join(", ")}\n  Max selections: ${
+        normalized.maxSelections
+      }`,
     );
     return;
   }

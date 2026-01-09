@@ -51,7 +51,7 @@ function clean(value?: string): string {
 
 export function resolveMatrixConfig(
   cfg: ClawdbotConfig = loadConfig(),
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
   const matrix = cfg.matrix ?? {};
   const homeserver = clean(env.MATRIX_HOMESERVER) || clean(matrix.homeserver);
@@ -106,7 +106,7 @@ export async function resolveMatrixAuth(params?: {
   }
   if (!resolved.password) {
     throw new Error(
-      "Matrix access token or password is required (matrix.accessToken or matrix.password)"
+      "Matrix access token or password is required (matrix.accessToken or matrix.password)",
     );
   }
 
@@ -215,7 +215,7 @@ export async function resolveSharedMatrixClient(
     timeoutMs?: number;
     auth?: MatrixAuth;
     startClient?: boolean;
-  } = {}
+  } = {},
 ): Promise<MatrixClient> {
   const auth =
     params.auth ??
@@ -271,7 +271,7 @@ export async function resolveSharedMatrixClient(
 export async function ensureMatrixCrypto(
   client: MatrixClient,
   enabled: boolean,
-  userId?: string
+  userId?: string,
 ): Promise<void> {
   if (!enabled) return;
   if (client.getCrypto()) return;

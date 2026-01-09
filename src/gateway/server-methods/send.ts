@@ -2,6 +2,7 @@ import { loadConfig } from "../../config/config.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/index.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { sendMessageIMessage } from "../../imessage/index.js";
+import { sendPollMatrix } from "../../matrix/index.js";
 import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -27,7 +28,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid send params: ${formatValidationErrors(validateSendParams.errors)}`,
+          `invalid send params: ${formatValidationErrors(
+            validateSendParams.errors,
+          )}`,
         ),
       );
       return;
@@ -185,7 +188,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid poll params: ${formatValidationErrors(validatePollParams.errors)}`,
+          `invalid poll params: ${formatValidationErrors(
+            validatePollParams.errors,
+          )}`,
         ),
       );
       return;
@@ -210,7 +215,11 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
-    if (provider !== "whatsapp" && provider !== "discord") {
+    if (
+      provider !== "whatsapp" &&
+      provider !== "discord" &&
+      provider !== "matrix"
+    ) {
       respond(
         false,
         undefined,
@@ -238,6 +247,20 @@ export const sendHandlers: GatewayRequestHandlers = {
           runId: idem,
           messageId: result.messageId,
           channelId: result.channelId,
+          provider,
+        };
+        context.dedupe.set(`poll:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { provider });
+      } else if (provider === "matrix") {
+        const result = await sendPollMatrix(to, poll);
+        const payload = {
+          runId: idem,
+          eventId: result.eventId,
+          roomId: result.roomId,
           provider,
         };
         context.dedupe.set(`poll:${idem}`, {
