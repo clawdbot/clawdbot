@@ -536,14 +536,17 @@ export function scheduleFollowupDrain(
   })();
 }
 function defaultQueueModeForProvider(provider?: string): QueueMode {
+  // Default to "steer" — injects messages into running agent context in real-time.
+  // This prevents message loss during gateway restarts (vs "collect" which batches
+  // in-memory and can lose queued messages if the process restarts).
   const normalized = provider?.trim().toLowerCase();
-  if (normalized === "discord") return "collect";
-  if (normalized === "webchat") return "collect";
-  if (normalized === "whatsapp") return "collect";
-  if (normalized === "telegram") return "collect";
-  if (normalized === "imessage") return "collect";
-  if (normalized === "signal") return "collect";
-  return "collect";
+  if (normalized === "discord") return "steer";
+  if (normalized === "webchat") return "steer";
+  if (normalized === "whatsapp") return "steer";
+  if (normalized === "telegram") return "steer";
+  if (normalized === "imessage") return "steer";
+  if (normalized === "signal") return "steer";
+  return "steer";
 }
 export function resolveQueueSettings(params: {
   cfg: ClawdbotConfig;

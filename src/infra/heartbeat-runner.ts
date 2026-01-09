@@ -43,6 +43,7 @@ type HeartbeatDeps = OutboundSendDeps & {
 
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
+let heartbeatRunCount = 0;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
@@ -67,8 +68,9 @@ export function resolveHeartbeatIntervalMs(
   return ms;
 }
 
-export function resolveHeartbeatPrompt(cfg: ClawdbotConfig) {
-  return resolveHeartbeatPromptText(cfg.agent?.heartbeat?.prompt);
+export function resolveHeartbeatPrompt(cfg: ClawdbotConfig, runCount: number) {
+  const base = resolveHeartbeatPromptText(cfg.agent?.heartbeat?.prompt);
+  return runCount === 0 ? `${base} START` : base;
 }
 
 function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig) {
@@ -227,7 +229,8 @@ export async function runHeartbeatOnce(opts: {
     lastTo: entry?.lastTo,
     lastProvider: entry?.lastProvider,
   });
-  const prompt = resolveHeartbeatPrompt(cfg);
+  const prompt = resolveHeartbeatPrompt(cfg, heartbeatRunCount);
+  heartbeatRunCount++;
   const ctx = {
     Body: prompt,
     From: sender,

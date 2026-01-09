@@ -258,6 +258,7 @@ export function buildAgentSystemPrompt(params: {
     "HEARTBEAT_OK",
     'Clawdbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
     'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+    'The first heartbeat after gateway start will say "HEARTBEAT START"; subsequent ones say "HEARTBEAT".',
     "",
     "## Runtime",
     `Runtime: ${[
