@@ -1,5 +1,5 @@
-import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import { normalizeProviderId } from "../../providers/plugins/index.js";
+import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import {
   ErrorCodes,
   errorShape,

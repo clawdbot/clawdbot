@@ -4,13 +4,13 @@ import type {
   GroupKeyResolution,
   SessionEntry,
 } from "../../config/sessions.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { normalizeGroupActivation } from "../group-activation.js";
-import type { TemplateContext } from "../templating.js";
 import {
   getProviderPlugin,
   normalizeProviderId,
 } from "../../providers/plugins/index.js";
+import { resolveSlackAccount } from "../../slack/accounts.js";
+import { normalizeGroupActivation } from "../group-activation.js";
+import type { TemplateContext } from "../templating.js";
 
 function normalizeDiscordSlug(value?: string | null) {
   if (!value) return "";

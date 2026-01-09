@@ -12,8 +12,8 @@ import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
-  logWebSelfId,
   logoutWeb,
+  logWebSelfId,
   readWebSelfId,
   webAuthExists,
 } from "../../web/session.js";

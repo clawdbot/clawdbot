@@ -15,13 +15,15 @@ import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
-  type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
-import { getProviderPlugin, normalizeProviderId } from "../providers/plugins/index.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../providers/plugins/index.js";
 import type { ProviderHeartbeatDeps } from "../providers/plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
@@ -34,11 +36,12 @@ import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
 
-type HeartbeatDeps = OutboundSendDeps & ProviderHeartbeatDeps & {
-  runtime?: RuntimeEnv;
-  getQueueSize?: (lane?: string) => number;
-  nowMs?: () => number;
-};
+type HeartbeatDeps = OutboundSendDeps &
+  ProviderHeartbeatDeps & {
+    runtime?: RuntimeEnv;
+    getQueueSize?: (lane?: string) => number;
+    nowMs?: () => number;
+  };
 
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
@@ -219,16 +222,17 @@ export async function runHeartbeatOnce(opts: {
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
   const lastProvider =
     entry?.lastProvider && entry.lastProvider !== "webchat"
-      ? normalizeProviderId(entry.lastProvider) ?? entry.lastProvider
+      ? (normalizeProviderId(entry.lastProvider) ?? entry.lastProvider)
       : undefined;
-  const senderProvider = delivery.provider !== "none" ? delivery.provider : lastProvider;
+  const senderProvider =
+    delivery.provider !== "none" ? delivery.provider : lastProvider;
   const senderAllowFrom =
     senderProvider && senderProvider !== "webchat"
-      ? getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
+      ? (getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
           cfg,
           accountId:
             senderProvider === lastProvider ? entry?.lastAccountId : undefined,
-        }) ?? []
+        }) ?? [])
       : [];
   const sender = resolveHeartbeatSender({
     allowFrom: senderAllowFrom,
@@ -328,7 +332,9 @@ export async function runHeartbeatOnce(opts: {
         ? entry?.lastAccountId
         : undefined;
     const heartbeatPlugin =
-      delivery.provider !== "none" ? getProviderPlugin(delivery.provider) : undefined;
+      delivery.provider !== "none"
+        ? getProviderPlugin(delivery.provider)
+        : undefined;
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,

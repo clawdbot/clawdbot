@@ -1,7 +1,4 @@
-import type {
-  ProviderAccountSnapshot,
-  ProviderStatusIssue,
-} from "../types.js";
+import type { ProviderAccountSnapshot, ProviderStatusIssue } from "../types.js";
 import { asString, isRecord } from "./shared.js";
 
 type TelegramAccountStatus = {

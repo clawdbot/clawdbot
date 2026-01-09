@@ -3,12 +3,12 @@ import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import type { OutboundProvider } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
-import { DEFAULT_CHAT_PROVIDER } from "../../providers/registry.js";
 import {
   getProviderPlugin,
   normalizeProviderId,
 } from "../../providers/plugins/index.js";
 import type { ProviderId } from "../../providers/plugins/types.js";
+import { DEFAULT_CHAT_PROVIDER } from "../../providers/registry.js";
 import {
   ErrorCodes,
   errorShape,

@@ -196,16 +196,15 @@ export async function buildProviderSummary(
         ? summaryRecord.configured
         : configuredEntries.length > 0;
 
-    const status =
-      !anyEnabled
-        ? "disabled"
-        : linked !== null
-          ? linked
-            ? "linked"
-            : "not linked"
-          : configured
-            ? "configured"
-            : "not configured";
+    const status = !anyEnabled
+      ? "disabled"
+      : linked !== null
+        ? linked
+          ? "linked"
+          : "not linked"
+        : configured
+          ? "configured"
+          : "not configured";
 
     const statusColor =
       status === "linked" || status === "configured"

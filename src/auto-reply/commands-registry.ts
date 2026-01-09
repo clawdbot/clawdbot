@@ -401,7 +401,10 @@ export function maybeResolveTextAlias(raw: string, cfg?: ClawdbotConfig) {
   return match[0].trim();
 }
 
-export function resolveTextCommand(raw: string, cfg?: ClawdbotConfig): {
+export function resolveTextCommand(
+  raw: string,
+  cfg?: ClawdbotConfig,
+): {
   command: ChatCommandDefinition;
   args?: string;
 } | null {

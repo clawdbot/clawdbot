@@ -77,11 +77,6 @@ import {
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
-  listProviderPlugins,
-  normalizeProviderId,
-  type ProviderId,
-} from "../providers/plugins/index.js";
-import {
   listSystemPresence,
   upsertPresence,
 } from "../infra/system-presence.js";
@@ -109,6 +104,11 @@ import {
   runtimeForLogger,
 } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  listProviderPlugins,
+  normalizeProviderId,
+  type ProviderId,
+} from "../providers/plugins/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
@@ -1867,7 +1867,7 @@ export async function startGatewayServer(
     const providerRaw = lastProvider ?? parsedTarget?.provider;
     const provider =
       providerRaw && providerRaw !== "webchat"
-        ? normalizeProviderId(providerRaw) ?? providerRaw
+        ? (normalizeProviderId(providerRaw) ?? providerRaw)
         : undefined;
     const to = lastTo || parsedTarget?.to;
     if (!provider || !to) {

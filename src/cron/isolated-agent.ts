@@ -45,7 +45,10 @@ import {
 import { registerAgentRunContext } from "../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveMessageProviderSelection } from "../infra/outbound/provider-selection.js";
-import { resolveOutboundTarget, type OutboundProvider } from "../infra/outbound/targets.js";
+import {
+  type OutboundProvider,
+  resolveOutboundTarget,
+} from "../infra/outbound/targets.js";
 import { normalizeProviderId } from "../providers/plugins/index.js";
 import type { ProviderId } from "../providers/plugins/types.js";
 import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
@@ -120,7 +123,8 @@ async function resolveDeliveryTarget(
 }> {
   const requestedRaw =
     typeof jobPayload.provider === "string" ? jobPayload.provider : "last";
-  const requestedProvider = normalizeMessageProvider(requestedRaw) ?? requestedRaw;
+  const requestedProvider =
+    normalizeMessageProvider(requestedRaw) ?? requestedRaw;
   const explicitTo =
     typeof jobPayload.to === "string" && jobPayload.to.trim()
       ? jobPayload.to.trim()
@@ -134,7 +138,7 @@ async function resolveDeliveryTarget(
   const main = store[mainSessionKey];
   const lastProvider =
     main?.lastProvider && main.lastProvider !== "webchat"
-      ? normalizeProviderId(main.lastProvider) ?? main.lastProvider
+      ? (normalizeProviderId(main.lastProvider) ?? main.lastProvider)
       : undefined;
   const lastTo = typeof main?.lastTo === "string" ? main.lastTo.trim() : "";
   const lastAccountId = main?.lastAccountId;
@@ -499,7 +503,10 @@ export async function runCronIsolatedAgentTurn(params: {
     try {
       await deliverOutboundPayloads({
         cfg: params.cfg,
-        provider: resolvedDelivery.provider as Exclude<OutboundProvider, "none">,
+        provider: resolvedDelivery.provider as Exclude<
+          OutboundProvider,
+          "none"
+        >,
         to: resolvedDelivery.to,
         accountId: resolvedDelivery.accountId,
         payloads,

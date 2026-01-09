@@ -33,8 +33,8 @@ import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
-import { normalizeProviderId } from "../providers/plugins/index.js";
 import { clearCommandLane } from "../process/command-queue.js";
+import { normalizeProviderId } from "../providers/plugins/index.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {

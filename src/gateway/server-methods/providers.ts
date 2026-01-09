@@ -253,9 +253,7 @@ export const providersHandlers: GatewayRequestHandlers = {
     }
     const rawProvider = (params as { provider?: unknown }).provider;
     const providerId =
-      typeof rawProvider === "string"
-        ? normalizeProviderId(rawProvider)
-        : null;
+      typeof rawProvider === "string" ? normalizeProviderId(rawProvider) : null;
     if (!providerId) {
       respond(
         false,

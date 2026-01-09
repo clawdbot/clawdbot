@@ -73,14 +73,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       });
       return { provider: "discord", ...result };
     },
-    sendMedia: async ({
-      to,
-      text,
-      mediaUrl,
-      accountId,
-      deps,
-      replyToId,
-    }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
       const send = deps?.sendDiscord ?? sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,

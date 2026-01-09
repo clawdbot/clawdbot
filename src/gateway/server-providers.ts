@@ -73,11 +73,7 @@ export type ProviderManager = {
 export function createProviderManager(
   opts: ProviderManagerOptions,
 ): ProviderManager {
-  const {
-    loadConfig,
-    providerLogs,
-    providerRuntimeEnvs,
-  } = opts;
+  const { loadConfig, providerLogs, providerRuntimeEnvs } = opts;
 
   const providerStores = new Map<ProviderId, ProviderRuntimeStore>();
 

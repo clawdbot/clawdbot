@@ -99,10 +99,9 @@ export async function sendMessage(
   params: MessageSendParams,
 ): Promise<MessageSendResult> {
   const cfg = params.cfg ?? loadConfig();
-  const provider =
-    params.provider && params.provider.trim()
-      ? normalizeProviderId(params.provider)
-      : (await resolveMessageProviderSelection({ cfg })).provider;
+  const provider = params.provider?.trim()
+    ? normalizeProviderId(params.provider)
+    : (await resolveMessageProviderSelection({ cfg })).provider;
   if (!provider) {
     throw new Error(`Unknown provider: ${params.provider}`);
   }
@@ -185,10 +184,9 @@ export async function sendPoll(
   params: MessagePollParams,
 ): Promise<MessagePollResult> {
   const cfg = params.cfg ?? loadConfig();
-  const provider =
-    params.provider && params.provider.trim()
-      ? normalizeProviderId(params.provider)
-      : (await resolveMessageProviderSelection({ cfg })).provider;
+  const provider = params.provider?.trim()
+    ? normalizeProviderId(params.provider)
+    : (await resolveMessageProviderSelection({ cfg })).provider;
   if (!provider) {
     throw new Error(`Unknown provider: ${params.provider}`);
   }
