@@ -217,25 +217,25 @@ export const PollParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-	export const AgentParamsSchema = Type.Object(
-	  {
-	    message: NonEmptyString,
-	    to: Type.Optional(Type.String()),
-	    sessionId: Type.Optional(Type.String()),
-	    sessionKey: Type.Optional(Type.String()),
-	    thinking: Type.Optional(Type.String()),
-	    deliver: Type.Optional(Type.Boolean()),
-	    attachments: Type.Optional(Type.Array(Type.Unknown())),
-	    provider: Type.Optional(Type.String()),
-	    timeout: Type.Optional(Type.Integer({ minimum: 0 })),
-	    lane: Type.Optional(Type.String()),
-	    extraSystemPrompt: Type.Optional(Type.String()),
-	    idempotencyKey: NonEmptyString,
-	    label: Type.Optional(SessionLabelString),
-	    spawnedBy: Type.Optional(Type.String()),
-	  },
-	  { additionalProperties: false },
-	);
+export const AgentParamsSchema = Type.Object(
+  {
+    message: NonEmptyString,
+    to: Type.Optional(Type.String()),
+    sessionId: Type.Optional(Type.String()),
+    sessionKey: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    deliver: Type.Optional(Type.Boolean()),
+    attachments: Type.Optional(Type.Array(Type.Unknown())),
+    provider: Type.Optional(Type.String()),
+    timeout: Type.Optional(Type.Integer({ minimum: 0 })),
+    lane: Type.Optional(Type.String()),
+    extraSystemPrompt: Type.Optional(Type.String()),
+    idempotencyKey: NonEmptyString,
+    label: Type.Optional(SessionLabelString),
+    spawnedBy: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
 
 export const AgentWaitParamsSchema = Type.Object(
   {
