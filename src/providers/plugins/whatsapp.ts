@@ -38,6 +38,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     media: true,
   },
   reload: { configPrefixes: ["web"] },
+  gatewayMethods: ["web.login.start", "web.login.wait"],
   config: {
     listAccountIds: (cfg) => listWhatsAppAccountIds(cfg),
     resolveAccount: (cfg, accountId) =>
