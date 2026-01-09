@@ -7,6 +7,7 @@ import {
 import { monitorIMessageProvider } from "../../imessage/index.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -17,6 +18,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
   meta: {
     ...meta,
     aliases: ["imsg"],
+    showConfigured: false,
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -67,6 +69,26 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
     },
   },
   status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      cliPath: null,
+      dbPath: null,
+    },
+    buildProviderSummary: ({ snapshot }) => ({
+      configured: snapshot.configured ?? false,
+      running: snapshot.running ?? false,
+      lastStartAt: snapshot.lastStartAt ?? null,
+      lastStopAt: snapshot.lastStopAt ?? null,
+      lastError: snapshot.lastError ?? null,
+      cliPath: snapshot.cliPath ?? null,
+      dbPath: snapshot.dbPath ?? null,
+      probe: snapshot.probe,
+      lastProbeAt: snapshot.lastProbeAt ?? null,
+    }),
     probeAccount: async ({ timeoutMs }) => probeIMessage(timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,

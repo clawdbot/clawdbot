@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
   listSlackAccountIds,
   type ResolvedSlackAccount,
@@ -71,6 +72,24 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
     },
   },
   status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
+    buildProviderSummary: ({ snapshot }) => ({
+      configured: snapshot.configured ?? false,
+      botTokenSource: snapshot.botTokenSource ?? "none",
+      appTokenSource: snapshot.appTokenSource ?? "none",
+      running: snapshot.running ?? false,
+      lastStartAt: snapshot.lastStartAt ?? null,
+      lastStopAt: snapshot.lastStopAt ?? null,
+      lastError: snapshot.lastError ?? null,
+      probe: snapshot.probe,
+      lastProbeAt: snapshot.lastProbeAt ?? null,
+    }),
     probeAccount: async ({ account, timeoutMs }) => {
       const token = account.botToken?.trim();
       if (!token) return { ok: false, error: "missing token" };
