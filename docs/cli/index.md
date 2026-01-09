@@ -255,7 +255,7 @@ Subcommands:
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `providers login`: interactive provider login (WhatsApp Web only).
-- `providers logout`: log out of a provider session (WhatsApp Web only).
+- `providers logout`: log out of a provider session (if supported).
 
 Common options:
 - `--provider <name>`: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
@@ -268,7 +268,7 @@ Common options:
 - `--verbose`
 
 `providers logout` options:
-- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
+- `--provider <provider>` (default `whatsapp`)
 - `--account <id>`
 
 `providers list` options:

@@ -1,8 +1,12 @@
 import { loadConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
-import { loginWeb, logoutWeb } from "../provider-web.js";
+import { loginWeb } from "../provider-web.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../providers/plugins/index.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
 
 type ProviderAuthOptions = {
   provider?: string;
@@ -10,7 +14,7 @@ type ProviderAuthOptions = {
   verbose?: boolean;
 };
 
-function normalizeProvider(raw?: string): "whatsapp" | "web" {
+function normalizeLoginProvider(raw?: string): "whatsapp" | "web" {
   const value = String(raw ?? "whatsapp")
     .trim()
     .toLowerCase();
@@ -22,7 +26,7 @@ export async function runProviderLogin(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const provider = normalizeProvider(opts.provider);
+  const provider = normalizeLoginProvider(opts.provider);
   // Auth-only flow: do not mutate provider config here.
   setVerbose(Boolean(opts.verbose));
   await loginWeb(
@@ -38,16 +42,27 @@ export async function runProviderLogout(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const _provider = normalizeProvider(opts.provider);
+  const providerInput = opts.provider ?? "whatsapp";
+  const providerId = normalizeProviderId(providerInput);
+  if (!providerId) {
+    throw new Error(`Unsupported provider: ${providerInput}`);
+  }
+  const plugin = getProviderPlugin(providerId);
+  if (!plugin?.gateway?.logoutAccount) {
+    throw new Error(`Provider ${providerId} does not support logout`);
+  }
   // Auth-only flow: resolve account + clear session state only.
   const cfg = loadConfig();
-  const account = resolveWhatsAppAccount({
+  const accountId =
+    opts.account?.trim() ||
+    plugin.config.defaultAccountId?.(cfg) ||
+    plugin.config.listAccountIds(cfg)[0] ||
+    DEFAULT_ACCOUNT_ID;
+  const account = plugin.config.resolveAccount(cfg, accountId);
+  await plugin.gateway.logoutAccount({
     cfg,
-    accountId: opts.account,
-  });
-  await logoutWeb({
+    accountId,
+    account,
     runtime,
-    authDir: account.authDir,
-    isLegacyAuthDir: account.isLegacyAuthDir,
   });
 }

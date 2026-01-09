@@ -1,5 +1,3 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
-import { getProviderPlugin } from "../../providers/plugins/index.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import {
   ErrorCodes,
@@ -9,7 +7,6 @@ import {
   validateWebLoginWaitParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import { logoutProviderAccount } from "./providers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const webHandlers: GatewayRequestHandlers = {
@@ -77,54 +74,6 @@ export const webHandlers: GatewayRequestHandlers = {
         await context.startProvider("whatsapp", accountId);
       }
       respond(true, result, undefined);
-    } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-      );
-    }
-  },
-  "web.logout": async ({ params, respond, context }) => {
-    try {
-      const rawAccountId =
-        params && typeof params === "object" && "accountId" in params
-          ? (params as { accountId?: unknown }).accountId
-          : undefined;
-      const accountId =
-        typeof rawAccountId === "string" ? rawAccountId.trim() : "";
-      const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.valid) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "config invalid; fix it before logging out",
-          ),
-        );
-        return;
-      }
-      const plugin = getProviderPlugin("whatsapp");
-      if (!plugin?.gateway?.logoutAccount) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "whatsapp does not support logout",
-          ),
-        );
-        return;
-      }
-      const payload = await logoutProviderAccount({
-        providerId: "whatsapp",
-        accountId: accountId || undefined,
-        cfg: snapshot.config ?? {},
-        context,
-        plugin,
-      });
-      respond(true, { cleared: Boolean(payload.cleared) }, undefined);
     } catch (err) {
       respond(
         false,
