@@ -31,6 +31,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    nativeCommands: true,
   },
   reload: { configPrefixes: ["discord"] },
   config: {

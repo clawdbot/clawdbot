@@ -20,10 +20,10 @@ Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and
 ## Plugin Contract (high-level)
 Each `ProviderPlugin` bundles:
 - `meta`: id/labels/docs/aliases/sort order.
-- `capabilities`: chatTypes + optional features (polls, media, etc.).
-- `config`: list/resolve/default/isConfigured/describeAccount + isEnabled + (un)configured reasons + `resolveAllowFrom`.
+- `capabilities`: chatTypes + optional features (polls, media, nativeCommands, etc.).
+- `config`: list/resolve/default/isConfigured/describeAccount + isEnabled + (un)configured reasons + `resolveAllowFrom` + `formatAllowFrom`.
 - `outbound`: deliveryMode + chunker + resolveTarget (mode-aware) + sendText/sendMedia/sendPoll + pollMaxOptions.
-- `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary + collectStatusIssues.
+- `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary + logSelfId + collectStatusIssues.
 - `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`).
 - `heartbeat`: optional readiness checks (e.g., WhatsApp linked + running).
 - `reload`: `configPrefixes` that map to hot restarts.

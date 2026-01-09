@@ -105,6 +105,11 @@ export type ProviderConfigAdapter<ResolvedAccount> = {
     cfg: ClawdbotConfig;
     accountId?: string | null;
   }) => string[] | undefined;
+  formatAllowFrom?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    allowFrom: Array<string | number>;
+  }) => string[];
 };
 
 export type ProviderOutboundContext = {
@@ -176,6 +181,12 @@ export type ProviderStatusAdapter<ResolvedAccount> = {
     probe?: unknown;
     audit?: unknown;
   }) => ProviderAccountSnapshot | Promise<ProviderAccountSnapshot>;
+  logSelfId?: (params: {
+    account: ResolvedAccount;
+    cfg: ClawdbotConfig;
+    runtime: RuntimeEnv;
+    includeProviderPrefix?: boolean;
+  }) => void;
   collectStatusIssues?: (
     accounts: ProviderAccountSnapshot[],
   ) => ProviderStatusIssue[];
@@ -218,6 +229,7 @@ export type ProviderCapabilities = {
   reactions?: boolean;
   threads?: boolean;
   media?: boolean;
+  nativeCommands?: boolean;
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: registry aggregates heterogeneous account types.

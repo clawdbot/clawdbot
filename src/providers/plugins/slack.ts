@@ -24,6 +24,7 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    nativeCommands: true,
   },
   reload: { configPrefixes: ["slack"] },
   config: {

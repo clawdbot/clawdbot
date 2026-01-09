@@ -31,6 +31,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    nativeCommands: true,
   },
   reload: { configPrefixes: ["telegram"] },
   config: {

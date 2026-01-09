@@ -12,6 +12,7 @@ import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
+  logWebSelfId,
   readWebSelfId,
   webAuthExists,
 } from "../../web/session.js";
@@ -56,6 +57,12 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => (entry === "*" ? entry : normalizeE164(entry)))
+        .filter(Boolean),
   },
   outbound: {
     deliveryMode: "gateway",
@@ -200,6 +207,9 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         dmPolicy: account.dmPolicy,
         allowFrom: account.allowFrom,
       };
+    },
+    logSelfId: ({ account, runtime, includeProviderPrefix }) => {
+      logWebSelfId(account.authDir, runtime, includeProviderPrefix);
     },
   },
   gateway: {
