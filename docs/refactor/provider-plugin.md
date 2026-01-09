@@ -66,7 +66,7 @@ Each `ProviderPlugin` bundles:
 - Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
 - Outbound delivery results accept `meta` for provider-specific fields to avoid core type churn in new plugins.
 - Agent gateway routing sets `deliveryTargetMode` and uses `resolveOutboundTarget` for implicit fallback targets when `to` is missing.
-- Elevated tool allowlists can fall back to `plugin.elevated.allowFromFallback` (ex: Discord DM allowFrom).
+- Elevated tool allowlists (`tools.elevated.allowFrom`) are a record keyed by provider id (no schema update needed when adding providers).
 - Block streaming defaults live on the plugin (`capabilities.blockStreaming`, `streaming.blockStreamingCoalesceDefaults`) instead of hardcoded provider checks.
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
 - WhatsApp web login aliases (ex: `web`) live in `src/providers/registry.ts` so gateway API inputs stay stable.
