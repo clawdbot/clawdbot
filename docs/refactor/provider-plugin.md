@@ -37,6 +37,7 @@ Each `ProviderPlugin` bundles:
 - `providers.status` summary objects now come from `status.buildProviderSummary` (no per-provider branching in the handler).
 - `providers.status` warnings now flow through `status.collectStatusIssues` per plugin.
 - CLI list uses `meta.showConfigured` to decide whether to show configured state.
+- `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
