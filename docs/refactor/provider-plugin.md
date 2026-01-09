@@ -30,6 +30,7 @@ Each `ProviderPlugin` bundles:
 
 ## Key Integration Notes
 - `listProviderPlugins()` is now the single source of truth for provider UX and wiring.
+- `DEFAULT_CHAT_PROVIDER` lives in `src/providers/registry.ts` and is used anywhere we need a fallback delivery surface.
 - Provider reload rules are computed lazily to avoid static init cycles in tests.
 - Signal/iMessage media size limits are now resolved inside their plugins.
 - `normalizeProviderId()` handles aliases (ex: `imsg`, `teams`) so CLI and API inputs stay stable.
@@ -37,8 +38,10 @@ Each `ProviderPlugin` bundles:
 - `providers.status` summary objects now come from `status.buildProviderSummary` (no per-provider branching in the handler).
 - `providers.status` warnings now flow through `status.collectStatusIssues` per plugin.
 - CLI list uses `meta.showConfigured` to decide whether to show configured state.
+- CLI provider options and prompt provider lists are generated from `listProviderPlugins()` (avoid hardcoded arrays).
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
+- WhatsApp web login aliases are handled by the plugin (`meta.aliases: ["web"]`) so gateway API inputs can stay stable.
 
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
