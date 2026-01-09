@@ -50,12 +50,17 @@ describe("gateway server providers", () => {
     }
   });
 
-  test("web.logout reports no session when missing", async () => {
+  test("providers.logout reports no session when missing", async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const res = await rpcReq<{ cleared?: boolean }>(ws, "web.logout");
+    const res = await rpcReq<{ cleared?: boolean; provider?: string }>(
+      ws,
+      "providers.logout",
+      { provider: "whatsapp" },
+    );
     expect(res.ok).toBe(true);
+    expect(res.payload?.provider).toBe("whatsapp");
     expect(res.payload?.cleared).toBe(false);
 
     ws.close();

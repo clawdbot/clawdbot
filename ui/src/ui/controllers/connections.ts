@@ -113,7 +113,7 @@ export async function logoutWhatsApp(state: ConnectionsState) {
   if (!state.client || !state.connected || state.whatsappBusy) return;
   state.whatsappBusy = true;
   try {
-    await state.client.request("web.logout", {});
+    await state.client.request("providers.logout", { provider: "whatsapp" });
     state.whatsappLoginMessage = "Logged out.";
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;
