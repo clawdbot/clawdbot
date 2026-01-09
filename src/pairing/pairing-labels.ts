@@ -7,4 +7,5 @@ export const PROVIDER_ID_LABELS: Record<PairingProvider, string> = {
   signal: "signalNumber",
   imessage: "imessageSenderId",
   whatsapp: "whatsappSenderId",
+  msteams: "msteamsUserId",
 };
