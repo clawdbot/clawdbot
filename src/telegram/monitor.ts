@@ -35,6 +35,8 @@ export function createTelegramRunnerOptions(
         // Match grammY defaults
         timeout: 30,
       },
+      // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
+      silent: true,
     },
   };
 }

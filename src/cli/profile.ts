@@ -33,11 +33,17 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   const out: string[] = argv.slice(0, 2);
   let profile: string | null = null;
   let sawDev = false;
+  let sawCommand = false;
 
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) continue;
+
+    if (sawCommand) {
+      out.push(arg);
+      continue;
+    }
 
     if (arg === "--dev") {
       if (profile && profile !== "dev") {
@@ -63,6 +69,12 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
         };
       }
       profile = value;
+      continue;
+    }
+
+    if (!arg.startsWith("-")) {
+      sawCommand = true;
+      out.push(arg);
       continue;
     }
 

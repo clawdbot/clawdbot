@@ -37,6 +37,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
+import { listChatProviders } from "../providers/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -78,9 +79,7 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  detectBrowserOpenSupport,
   ensureWorkspaceAndSessions,
-  formatControlUiSshHint,
   guardCancel,
   openUrl,
   printWizardHeader,
@@ -106,6 +105,8 @@ type WizardSection =
   | "workspace"
   | "skills"
   | "health";
+
+type ProvidersWizardMode = "configure" | "remove";
 
 type ConfigureWizardParams = {
   command: "configure" | "update";
@@ -351,6 +352,7 @@ async function promptAuthConfig(
     runtime,
   ) as
     | "oauth"
+    | "setup-token"
     | "claude-cli"
     | "token"
     | "openai-codex"
@@ -402,7 +404,68 @@ async function promptAuthConfig(
       provider: "anthropic",
       mode: "token",
     });
-  } else if (authChoice === "token" || authChoice === "oauth") {
+  } else if (authChoice === "setup-token" || authChoice === "oauth") {
+    note(
+      [
+        "This will run `claude setup-token` to create a long-lived Anthropic token.",
+        "Requires an interactive TTY and a Claude Pro/Max subscription.",
+      ].join("\n"),
+      "Anthropic setup-token",
+    );
+
+    if (!process.stdin.isTTY) {
+      note(
+        "`claude setup-token` requires an interactive TTY.",
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    const runNow = guardCancel(
+      await confirm({
+        message: "Run `claude setup-token` now?",
+        initialValue: true,
+      }),
+      runtime,
+    );
+    if (!runNow) return next;
+
+    const res = await (async () => {
+      const { spawnSync } = await import("node:child_process");
+      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+    })();
+    if (res.error) {
+      note(
+        `Failed to run claude: ${String(res.error)}`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+    if (typeof res.status === "number" && res.status !== 0) {
+      note(
+        `claude setup-token failed (exit ${res.status})`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: true,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      note(
+        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    next = applyAuthProfileConfig(next, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "token",
+    });
+  } else if (authChoice === "token") {
     const provider = guardCancel(
       await select({
         message: "Token provider",
@@ -725,6 +788,7 @@ async function promptAuthConfig(
       : (next.agents?.defaults?.model?.primary ?? "");
   const preferAnthropic =
     authChoice === "claude-cli" ||
+    authChoice === "setup-token" ||
     authChoice === "token" ||
     authChoice === "oauth" ||
     authChoice === "apiKey";
@@ -861,6 +925,74 @@ async function maybeInstallDaemon(params: {
         "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
       requireConfirm: true,
     });
+  }
+}
+
+async function removeProviderConfigWizard(
+  cfg: ClawdbotConfig,
+  runtime: RuntimeEnv,
+): Promise<ClawdbotConfig> {
+  let next = { ...cfg };
+
+  const listConfiguredProviders = () =>
+    listChatProviders().filter((meta) => {
+      const value = (next as Record<string, unknown>)[meta.id];
+      return value !== undefined;
+    });
+
+  while (true) {
+    const configured = listConfiguredProviders();
+    if (configured.length === 0) {
+      note(
+        [
+          "No provider config found in clawdbot.json.",
+          "Tip: `clawdbot providers status` shows what is configured and enabled.",
+        ].join("\n"),
+        "Remove provider",
+      );
+      return next;
+    }
+
+    const provider = guardCancel(
+      await select({
+        message: "Remove which provider config?",
+        options: [
+          ...configured.map((meta) => ({
+            value: meta.id,
+            label: meta.label,
+            hint: "Deletes tokens + settings from config (credentials stay on disk)",
+          })),
+          { value: "done", label: "Done" },
+        ],
+      }),
+      runtime,
+    ) as string;
+
+    if (provider === "done") return next;
+
+    const label =
+      listChatProviders().find((meta) => meta.id === provider)?.label ??
+      provider;
+    const confirmed = guardCancel(
+      await confirm({
+        message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
+        initialValue: false,
+      }),
+      runtime,
+    );
+    if (!confirmed) continue;
+
+    const clone = { ...next } as Record<string, unknown>;
+    delete clone[provider];
+    next = clone as ClawdbotConfig;
+
+    note(
+      [
+        `${label} removed from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
+      "Provider removed",
+    );
   }
 }
 
@@ -1053,10 +1185,34 @@ export async function runConfigureWizard(
   }
 
   if (selected.includes("providers")) {
-    nextConfig = await setupProviders(nextConfig, runtime, prompter, {
-      allowDisable: true,
-      allowSignalInstall: true,
-    });
+    const providerMode = guardCancel(
+      await select({
+        message: "Providers",
+        options: [
+          {
+            value: "configure",
+            label: "Configure/link",
+            hint: "Add/update providers; disable unselected accounts",
+          },
+          {
+            value: "remove",
+            label: "Remove provider config",
+            hint: "Delete provider tokens/settings from clawdbot.json",
+          },
+        ],
+        initialValue: "configure",
+      }),
+      runtime,
+    ) as ProvidersWizardMode;
+
+    if (providerMode === "configure") {
+      nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+        allowDisable: true,
+        allowSignalInstall: true,
+      });
+    } else {
+      nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+    }
   }
 
   if (selected.includes("skills")) {
@@ -1141,41 +1297,6 @@ export async function runConfigureWizard(
     ].join("\n"),
     "Control UI",
   );
-
-  const browserSupport = await detectBrowserOpenSupport();
-  if (gatewayProbe.ok) {
-    if (!browserSupport.ok) {
-      note(
-        formatControlUiSshHint({
-          port: gatewayPort,
-          basePath: nextConfig.gateway?.controlUi?.basePath,
-          token: gatewayToken,
-        }),
-        "Open Control UI",
-      );
-    } else {
-      const wantsOpen = guardCancel(
-        await confirm({
-          message: "Open Control UI now?",
-          initialValue: false,
-        }),
-        runtime,
-      );
-      if (wantsOpen) {
-        const opened = await openUrl(links.httpUrl);
-        if (!opened) {
-          note(
-            formatControlUiSshHint({
-              port: gatewayPort,
-              basePath: nextConfig.gateway?.controlUi?.basePath,
-              token: gatewayToken,
-            }),
-            "Open Control UI",
-          );
-        }
-      }
-    }
-  }
 
   outro("Configure complete.");
 }

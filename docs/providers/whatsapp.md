@@ -59,6 +59,9 @@ When the wizard asks for your personal WhatsApp number, enter the phone you will
 }
 ```
 
+Tip: if you set the routed agent’s `identity.name`, you can omit
+`messages.responsePrefix` and it will default to `[{identity.name}]`.
+
 ### Number sourcing tips
 - **Local eSIM** from your country's mobile carrier (most reliable)
   - Austria: [hot.at](https://www.hot.at)

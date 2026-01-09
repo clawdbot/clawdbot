@@ -4,7 +4,10 @@ import {
   type SlackEventMiddlewareArgs,
 } from "@slack/bolt";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { resolveAckReaction } from "../agents/identity.js";
+import {
+  resolveAckReaction,
+  resolveEffectiveMessagesConfig,
+} from "../agents/identity.js";
 import {
   chunkMarkdownText,
   resolveTextChunkLimit,
@@ -55,7 +58,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
+import { resolveSlackThreadTargets } from "./threading.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
+import type {
+  SlackAppMentionEvent,
+  SlackFile,
+  SlackMessageEvent,
+} from "./types.js";
 
 export type MonitorSlackOpts = {
   botToken?: string;
@@ -66,43 +75,6 @@ export type MonitorSlackOpts = {
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
-};
-
-type SlackFile = {
-  id?: string;
-  name?: string;
-  mimetype?: string;
-  size?: number;
-  url_private?: string;
-  url_private_download?: string;
-};
-
-type SlackMessageEvent = {
-  type: "message";
-  user?: string;
-  bot_id?: string;
-  subtype?: string;
-  username?: string;
-  text?: string;
-  ts?: string;
-  thread_ts?: string;
-  parent_user_id?: string;
-  channel: string;
-  channel_type?: "im" | "mpim" | "channel" | "group";
-  files?: SlackFile[];
-};
-
-type SlackAppMentionEvent = {
-  type: "app_mention";
-  user?: string;
-  bot_id?: string;
-  username?: string;
-  text?: string;
-  ts?: string;
-  thread_ts?: string;
-  parent_user_id?: string;
-  channel: string;
-  channel_type?: "im" | "mpim" | "channel" | "group";
 };
 
 type SlackReactionEvent = {
@@ -506,6 +478,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
+  const replyToMode = slackCfg.replyToMode ?? "off";
   const slashCommand = resolveSlackSlashCommandConfig(
     opts.slashCommand ?? slackCfg.slashCommand,
   );
@@ -1096,9 +1069,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
-    // Only thread replies if the incoming message was in a thread.
-    const incomingThreadTs = message.thread_ts;
-    const statusThreadTs = message.thread_ts ?? message.ts;
+    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+      message,
+      replyToMode,
+    });
     let didSetStatus = false;
     const onReplyStart = async () => {
       didSetStatus = true;
@@ -1110,7 +1084,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     };
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
-        responsePrefix: cfg.messages?.responsePrefix,
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
         deliver: async (payload) => {
           await deliverReplies({
             replies: [payload],
@@ -1119,7 +1094,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             accountId: account.accountId,
             runtime,
             textLimit,
-            threadTs: incomingThreadTs,
+            replyThreadTs,
           });
         },
         onError: (err, info) => {
@@ -1922,10 +1897,11 @@ async function deliverReplies(params: {
   accountId?: string;
   runtime: RuntimeEnv;
   textLimit: number;
-  threadTs?: string;
+  replyThreadTs?: string;
 }) {
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
+    const threadTs = payload.replyToId ?? params.replyThreadTs;
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
@@ -1937,7 +1913,7 @@ async function deliverReplies(params: {
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
-          threadTs: params.threadTs,
+          threadTs,
           accountId: params.accountId,
         });
       }
@@ -1949,7 +1925,7 @@ async function deliverReplies(params: {
         await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
-          threadTs: params.threadTs,
+          threadTs,
           accountId: params.accountId,
         });
       }

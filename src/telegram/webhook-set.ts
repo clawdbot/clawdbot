@@ -11,10 +11,7 @@ export async function setTelegramWebhook(opts: {
   const client: ApiClientOptions | undefined = fetchImpl
     ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
     : undefined;
-  const bot = new Bot(
-    opts.token,
-    client ? { client } : undefined,
-  );
+  const bot = new Bot(opts.token, client ? { client } : undefined);
   await bot.api.setWebhook(opts.url, {
     secret_token: opts.secret,
     drop_pending_updates: opts.dropPendingUpdates ?? false,
@@ -26,9 +23,6 @@ export async function deleteTelegramWebhook(opts: { token: string }) {
   const client: ApiClientOptions | undefined = fetchImpl
     ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
     : undefined;
-  const bot = new Bot(
-    opts.token,
-    client ? { client } : undefined,
-  );
+  const bot = new Bot(opts.token, client ? { client } : undefined);
   await bot.api.deleteWebhook();
 }

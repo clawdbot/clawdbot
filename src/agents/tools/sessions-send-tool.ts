@@ -9,6 +9,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -29,11 +30,25 @@ import {
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
 
-const SessionsSendToolSchema = Type.Object({
-  sessionKey: Type.String(),
-  message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-});
+const SessionsSendToolSchema = Type.Union([
+  Type.Object(
+    {
+      sessionKey: Type.String(),
+      message: Type.String(),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      label: Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH }),
+      agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      message: Type.String(),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
@@ -43,13 +58,11 @@ export function createSessionsSendTool(opts?: {
   return {
     label: "Session Send",
     name: "sessions_send",
-    description: "Send a message into another session.",
+    description:
+      "Send a message into another session. Use sessionKey or label to identify the target.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const sessionKey = readStringParam(params, "sessionKey", {
-        required: true,
-      });
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -63,42 +76,172 @@ export function createSessionsSendTool(opts?: {
               mainKey,
             })
           : undefined;
-      const resolvedKey = resolveInternalSessionKey({
-        key: sessionKey,
-        alias,
-        mainKey,
-      });
       const restrictToSpawned =
         opts?.sandboxed === true &&
         visibility === "spawned" &&
         requesterInternalKey &&
         !isSubagentSessionKey(requesterInternalKey);
-      if (restrictToSpawned) {
-        try {
-          const list = (await callGateway({
-            method: "sessions.list",
-            params: {
-              includeGlobal: false,
-              includeUnknown: false,
-              limit: 500,
-              spawnedBy: requesterInternalKey,
-            },
-          })) as { sessions?: Array<Record<string, unknown>> };
-          const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-          const ok = sessions.some((entry) => entry?.key === resolvedKey);
-          if (!ok) {
+
+      const routingA2A = cfg.tools?.agentToAgent;
+      const a2aEnabled = routingA2A?.enabled === true;
+      const allowPatterns = Array.isArray(routingA2A?.allow)
+        ? routingA2A.allow
+        : [];
+      const matchesAllow = (agentId: string) => {
+        if (allowPatterns.length === 0) return true;
+        return allowPatterns.some((pattern) => {
+          const raw = String(pattern ?? "").trim();
+          if (!raw) return false;
+          if (raw === "*") return true;
+          if (!raw.includes("*")) return raw === agentId;
+          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
+          return re.test(agentId);
+        });
+      };
+
+      const sessionKeyParam = readStringParam(params, "sessionKey");
+      const labelParam = readStringParam(params, "label")?.trim() || undefined;
+      const labelAgentIdParam =
+        readStringParam(params, "agentId")?.trim() || undefined;
+      if (sessionKeyParam && labelParam) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Provide either sessionKey or label (not both).",
+        });
+      }
+
+      const listSessions = async (listParams: Record<string, unknown>) => {
+        const result = (await callGateway({
+          method: "sessions.list",
+          params: listParams,
+          timeoutMs: 10_000,
+        })) as { sessions?: Array<Record<string, unknown>> };
+        return Array.isArray(result?.sessions) ? result.sessions : [];
+      };
+
+      let sessionKey = sessionKeyParam;
+      if (!sessionKey && labelParam) {
+        const requesterAgentId = requesterInternalKey
+          ? normalizeAgentId(
+              parseAgentSessionKey(requesterInternalKey)?.agentId,
+            )
+          : undefined;
+        const requestedAgentId = labelAgentIdParam
+          ? normalizeAgentId(labelAgentIdParam)
+          : undefined;
+
+        if (
+          restrictToSpawned &&
+          requestedAgentId &&
+          requesterAgentId &&
+          requestedAgentId !== requesterAgentId
+        ) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Sandboxed sessions_send label lookup is limited to this agent",
+          });
+        }
+
+        if (
+          requesterAgentId &&
+          requestedAgentId &&
+          requestedAgentId !== requesterAgentId
+        ) {
+          if (!a2aEnabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
-              sessionKey: resolveDisplaySessionKey({
-                key: sessionKey,
-                alias,
-                mainKey,
-              }),
+              error:
+                "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
             });
           }
-        } catch {
+          if (
+            !matchesAllow(requesterAgentId) ||
+            !matchesAllow(requestedAgentId)
+          ) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error:
+                "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+            });
+          }
+        }
+
+        const resolveParams: Record<string, unknown> = {
+          label: labelParam,
+          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          ...(restrictToSpawned ? { spawnedBy: requesterInternalKey } : {}),
+        };
+        let resolvedKey = "";
+        try {
+          const resolved = (await callGateway({
+            method: "sessions.resolve",
+            params: resolveParams,
+            timeoutMs: 10_000,
+          })) as { key?: unknown };
+          resolvedKey =
+            typeof resolved?.key === "string" ? resolved.key.trim() : "";
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (restrictToSpawned) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error: `Session not visible from this sandboxed agent session: label=${labelParam}`,
+            });
+          }
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: msg || `No session found with label: ${labelParam}`,
+          });
+        }
+
+        if (!resolvedKey) {
+          if (restrictToSpawned) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error: `Session not visible from this sandboxed agent session: label=${labelParam}`,
+            });
+          }
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `No session found with label: ${labelParam}`,
+          });
+        }
+        sessionKey = resolvedKey;
+      }
+
+      if (!sessionKey) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Either sessionKey or label is required",
+        });
+      }
+
+      const resolvedKey = resolveInternalSessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+
+      if (restrictToSpawned) {
+        const sessions = await listSessions({
+          includeGlobal: false,
+          includeUnknown: false,
+          limit: 500,
+          spawnedBy: requesterInternalKey,
+        });
+        const ok = sessions.some((entry) => entry?.key === resolvedKey);
+        if (!ok) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
@@ -125,24 +268,6 @@ export function createSessionsSendTool(opts?: {
         alias,
         mainKey,
       });
-
-      const routingA2A = cfg.tools?.agentToAgent;
-      const a2aEnabled = routingA2A?.enabled === true;
-      const allowPatterns = Array.isArray(routingA2A?.allow)
-        ? routingA2A.allow
-        : [];
-      const matchesAllow = (agentId: string) => {
-        if (allowPatterns.length === 0) return true;
-        return allowPatterns.some((pattern) => {
-          const raw = String(pattern ?? "").trim();
-          if (!raw) return false;
-          if (raw === "*") return true;
-          if (!raw.includes("*")) return raw === agentId;
-          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-          return re.test(agentId);
-        });
-      };
       const requesterAgentId = normalizeAgentId(
         parseAgentSessionKey(requesterInternalKey)?.agentId,
       );

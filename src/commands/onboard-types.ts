@@ -3,7 +3,9 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
 export type AuthChoice =
+  // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
+  | "setup-token"
   | "claude-cli"
   | "token"
   | "openai-codex"
@@ -27,6 +29,14 @@ export type OnboardOptions = {
   workspace?: string;
   nonInteractive?: boolean;
   authChoice?: AuthChoice;
+  /** Used when `authChoice=token` in non-interactive mode. */
+  tokenProvider?: string;
+  /** Used when `authChoice=token` in non-interactive mode. */
+  token?: string;
+  /** Used when `authChoice=token` in non-interactive mode. */
+  tokenProfileId?: string;
+  /** Used when `authChoice=token` in non-interactive mode. */
+  tokenExpiresIn?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   geminiApiKey?: string;

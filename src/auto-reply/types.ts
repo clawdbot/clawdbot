@@ -28,6 +28,7 @@ export type ReplyPayload = {
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
+  replyToTag?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;

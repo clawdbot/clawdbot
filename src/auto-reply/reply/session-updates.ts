@@ -91,7 +91,7 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    sessionStore[sessionKey] = nextEntry;
+    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
     if (storePath) {
       await saveSessionStore(storePath, sessionStore);
     }
@@ -123,7 +123,7 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    sessionStore[sessionKey] = nextEntry;
+    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
     if (storePath) {
       await saveSessionStore(storePath, sessionStore);
     }

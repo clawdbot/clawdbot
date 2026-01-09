@@ -10,6 +10,11 @@ export async function onboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   assertSupportedRuntime(runtime);
+  const authChoice =
+    opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
+  const normalizedOpts =
+    authChoice === opts.authChoice ? opts : { ...opts, authChoice };
+
   if (process.platform === "win32") {
     runtime.log(
       [
@@ -20,12 +25,12 @@ export async function onboardCommand(
     );
   }
 
-  if (opts.nonInteractive) {
-    await runNonInteractiveOnboarding(opts, runtime);
+  if (normalizedOpts.nonInteractive) {
+    await runNonInteractiveOnboarding(normalizedOpts, runtime);
     return;
   }
 
-  await runInteractiveOnboarding(opts, runtime);
+  await runInteractiveOnboarding(normalizedOpts, runtime);
 }
 
 export type { OnboardOptions } from "./onboard-types.js";

@@ -49,7 +49,7 @@ import {
 import { registerAgentRunContext } from "../infra/agent-events.js";
 import { parseTelegramTarget } from "../telegram/targets.js";
 import { resolveTelegramToken } from "../telegram/token.js";
-import { normalizeE164 } from "../utils.js";
+import { normalizeE164, truncateUtf16Safe } from "../utils.js";
 import type { CronJob } from "./types.js";
 
 export type RunCronAgentTurnResult = {
@@ -68,7 +68,7 @@ function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
   if (!clean) return undefined;
   const limit = 2000;
-  return clean.length > limit ? `${clean.slice(0, limit)}…` : clean;
+  return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
 }
 
 function pickSummaryFromPayloads(

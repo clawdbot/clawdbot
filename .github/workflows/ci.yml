@@ -6,7 +6,7 @@ on:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +91,7 @@ jobs:
         run: ${{ matrix.command }}
 
   checks-windows:
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     defaults:
       run:
         shell: bash
@@ -412,7 +412,7 @@ jobs:
           PY
 
   android:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:

@@ -642,6 +642,17 @@ describe("gateway server node/bridge", () => {
     expect(typeof payload.count).toBe("number");
     expect(typeof payload.path).toBe("string");
 
+    const resolveRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "r2",
+      method: "sessions.resolve",
+      paramsJSON: JSON.stringify({ key: "main" }),
+    });
+    expect(resolveRes?.ok).toBe(true);
+    const resolvedPayload = JSON.parse(
+      String((resolveRes as { payloadJSON?: string }).payloadJSON ?? "{}"),
+    ) as { key?: string };
+    expect(resolvedPayload.key).toBe("agent:main:main");
+
     await server.close();
   });
 

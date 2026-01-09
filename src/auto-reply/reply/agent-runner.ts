@@ -50,7 +50,7 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import {
-  createReplyToModeFilter,
+  createReplyToModeFilterForChannel,
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -260,7 +260,10 @@ export async function runReplyAgent(params: {
     followupRun.run.config,
     replyToChannel,
   );
-  const applyReplyToMode = createReplyToModeFilter(replyToMode);
+  const applyReplyToMode = createReplyToModeFilterForChannel(
+    replyToMode,
+    replyToChannel,
+  );
   const cfg = followupRun.run.config;
 
   if (shouldSteer && isStreaming) {
@@ -716,7 +719,8 @@ export async function runReplyAgent(params: {
 
     const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
       payloads: sanitizedPayloads,
-      applyReplyToMode,
+      replyToMode,
+      replyToChannel,
       currentMessageId: sessionCtx.MessageSid,
     })
       .map((payload) => {

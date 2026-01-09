@@ -11,6 +11,7 @@ export type SubagentRunRecord = {
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
+  label?: string;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -83,6 +84,7 @@ function ensureListener() {
         ? (evt.data.endedAt as number)
         : Date.now();
     entry.endedAt = endedAt;
+
     if (!beginSubagentAnnounce(evt.runId)) {
       if (entry.cleanup === "delete") {
         subagentRuns.delete(evt.runId);
@@ -101,6 +103,7 @@ function ensureListener() {
       waitForCompletion: false,
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
+      label: entry.label,
     });
     if (entry.cleanup === "delete") {
       subagentRuns.delete(evt.runId);
@@ -124,6 +127,7 @@ export function registerSubagentRun(params: {
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
+  label?: string;
 }) {
   const now = Date.now();
   const archiveAfterMs = resolveArchiveAfterMs();
@@ -136,6 +140,7 @@ export function registerSubagentRun(params: {
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,
+    label: params.label,
     createdAt: now,
     startedAt: now,
     archiveAtMs,
@@ -175,6 +180,7 @@ async function probeImmediateCompletion(runId: string) {
       waitForCompletion: false,
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
+      label: entry.label,
     });
     if (entry.cleanup === "delete") {
       subagentRuns.delete(runId);

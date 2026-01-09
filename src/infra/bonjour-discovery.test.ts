@@ -7,6 +7,7 @@ import { WIDE_AREA_DISCOVERY_DOMAIN } from "./widearea-dns.js";
 describe("bonjour-discovery", () => {
   it("discovers beacons on darwin across local + wide-area domains", async () => {
     const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
+    const studioInstance = "Peter’s Mac Studio Bridge";
 
     const run = vi.fn(
       async (argv: string[], options: { timeoutMs: number }) => {
@@ -17,7 +18,7 @@ describe("bonjour-discovery", () => {
           if (domain === "local.") {
             return {
               stdout: [
-                "Add 2 3 local. _clawdbot-bridge._tcp. Studio Bridge",
+                "Add 2 3 local. _clawdbot-bridge._tcp. Peter\\226\\128\\153s Mac Studio Bridge",
                 "Add 2 3 local. _clawdbot-bridge._tcp. Laptop Bridge",
                 "",
               ].join("\n"),
@@ -44,16 +45,20 @@ describe("bonjour-discovery", () => {
         if (argv[0] === "dns-sd" && argv[1] === "-L") {
           const instance = argv[2] ?? "";
           const host =
-            instance === "Studio Bridge"
+            instance === studioInstance
               ? "studio.local"
               : instance === "Laptop Bridge"
                 ? "laptop.local"
                 : "tailnet.local";
           const tailnetDns =
             instance === "Tailnet Bridge" ? "studio.tailnet.ts.net" : "";
+          const displayName =
+            instance === studioInstance
+              ? "Peter’s\\032Mac\\032Studio"
+              : instance.replace(" Bridge", "");
           const txtParts = [
             "txtvers=1",
-            `displayName=${instance.replace(" Bridge", "")}`,
+            `displayName=${displayName}`,
             `lanHost=${host}`,
             "gatewayPort=18789",
             "bridgePort=18790",
@@ -85,6 +90,14 @@ describe("bonjour-discovery", () => {
     });
 
     expect(beacons).toHaveLength(3);
+    expect(beacons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          instanceName: studioInstance,
+          displayName: "Peter’s Mac Studio",
+        }),
+      ]),
+    );
     expect(beacons.map((b) => b.domain)).toEqual(
       expect.arrayContaining(["local.", WIDE_AREA_DISCOVERY_DOMAIN]),
     );
@@ -96,6 +109,68 @@ describe("bonjour-discovery", () => {
       expect.arrayContaining(["local.", WIDE_AREA_DISCOVERY_DOMAIN]),
     );
     expect(browseCalls.every((c) => c.timeoutMs === 1234)).toBe(true);
+  });
+
+  it("decodes dns-sd octal escapes in TXT displayName", async () => {
+    const run = vi.fn(
+      async (argv: string[], options: { timeoutMs: number }) => {
+        if (options.timeoutMs < 0) throw new Error("invalid timeout");
+
+        const domain = argv[3] ?? "";
+        if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
+          return {
+            stdout: [
+              "Add 2 3 local. _clawdbot-bridge._tcp. Studio Bridge",
+              "",
+            ].join("\n"),
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
+
+        if (argv[0] === "dns-sd" && argv[1] === "-L") {
+          return {
+            stdout: [
+              "Studio Bridge._clawdbot-bridge._tcp. can be reached at studio.local:18790",
+              "txtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18789 bridgePort=18790 sshPort=22",
+              "",
+            ].join("\n"),
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
+
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      },
+    );
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 800,
+      domains: ["local."],
+      run: run as unknown as typeof runCommandWithTimeout,
+    });
+
+    expect(beacons).toEqual([
+      expect.objectContaining({
+        domain: "local.",
+        instanceName: "Studio Bridge",
+        displayName: "Peter’s Mac Studio",
+        txt: expect.objectContaining({
+          displayName: "Peter’s Mac Studio",
+        }),
+      }),
+    ]);
   });
 
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {

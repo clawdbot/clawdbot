@@ -168,6 +168,42 @@ describe("gateway-cli coverage", () => {
     expect(runtimeLogs.join("\n")).toContain("ws://");
   });
 
+  it("registers gateway discover and prints human output with details on new lines", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    discoverGatewayBeacons.mockReset();
+    discoverGatewayBeacons.mockResolvedValueOnce([
+      {
+        instanceName: "Studio (Clawdbot)",
+        displayName: "Studio",
+        domain: "clawdbot.internal.",
+        host: "studio.clawdbot.internal",
+        lanHost: "studio.local",
+        tailnetDns: "studio.tailnet.ts.net",
+        gatewayPort: 18789,
+        bridgePort: 18790,
+        sshPort: 22,
+      },
+    ]);
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await program.parseAsync(["gateway", "discover", "--timeout", "1"], {
+      from: "user",
+    });
+
+    const out = runtimeLogs.join("\n");
+    expect(out).toContain("Gateway Discovery");
+    expect(out).toContain("Found 1 gateway(s)");
+    expect(out).toContain("- Studio clawdbot.internal.");
+    expect(out).toContain("  tailnet: studio.tailnet.ts.net");
+    expect(out).toContain("  host: studio.clawdbot.internal");
+    expect(out).toContain("  ws: ws://studio.tailnet.ts.net:18789");
+  });
+
   it("validates gateway discover timeout", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;

@@ -1,15 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  modelKey,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-  resolveThinkingDefault,
-} from "../agents/model-selection.js";
+import { resolveThinkingDefault } from "../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -17,13 +9,6 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
-import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
-import {
-  normalizeElevatedLevel,
-  normalizeReasoningLevel,
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-} from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -39,7 +24,6 @@ import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
-  resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
@@ -49,9 +33,7 @@ import {
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
 import { clearCommandLane } from "../process/command-queue.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
   ErrorCodes,
@@ -62,6 +44,7 @@ import {
   type SessionsListParams,
   type SessionsPatchParams,
   type SessionsResetParams,
+  type SessionsResolveParams,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatSendParams,
@@ -74,6 +57,7 @@ import {
   validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsResetParams,
+  validateSessionsResolveParams,
   validateTalkModeParams,
 } from "./protocol/index.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -87,12 +71,16 @@ import {
   archiveFileOnDisk,
   capArrayByJsonBytes,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   readSessionMessages,
+  resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
 } from "./session-utils.js";
+import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
 import { formatForLog } from "./ws-log.js";
 
 export type BridgeHandlersContext = {
@@ -304,8 +292,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           }
           const p = params as SessionsListParams;
           const cfg = loadConfig();
-          const storePath = resolveStorePath(cfg.session?.store);
-          const store = loadSessionStore(storePath);
+          const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
           const result = listSessionsFromStore({
             cfg,
             storePath,
@@ -313,6 +300,36 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             opts: p,
           });
           return { ok: true, payloadJSON: JSON.stringify(result) };
+        }
+        case "sessions.resolve": {
+          const params = parseParams();
+          if (!validateSessionsResolveParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.resolve params: ${formatValidationErrors(validateSessionsResolveParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as SessionsResolveParams;
+          const cfg = loadConfig();
+          const resolved = resolveSessionKeyFromResolveParams({ cfg, p });
+          if (!resolved.ok) {
+            return {
+              ok: false,
+              error: {
+                code: resolved.error.code,
+                message: resolved.error.message,
+                details: resolved.error.details,
+              },
+            };
+          }
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ ok: true, key: resolved.key }),
+          };
         }
         case "sessions.patch": {
           const params = parseParams();
@@ -339,255 +356,40 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           }
 
           const cfg = loadConfig();
-          const storePath = resolveStorePath(cfg.session?.store);
+          const target = resolveGatewaySessionStoreTarget({ cfg, key });
+          const storePath = target.storePath;
           const store = loadSessionStore(storePath);
-          const now = Date.now();
-
-          const existing = store[key];
-          const next: SessionEntry = existing
-            ? {
-                ...existing,
-                updatedAt: Math.max(existing.updatedAt ?? 0, now),
-              }
-            : { sessionId: randomUUID(), updatedAt: now };
-
-          if ("spawnedBy" in p) {
-            const raw = p.spawnedBy;
-            if (raw === null) {
-              if (existing?.spawnedBy) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: "spawnedBy cannot be cleared once set",
-                  },
-                };
-              }
-            } else if (raw !== undefined) {
-              const trimmed = String(raw).trim();
-              if (!trimmed) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: "invalid spawnedBy: empty",
-                  },
-                };
-              }
-              if (!isSubagentSessionKey(key)) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message:
-                      "spawnedBy is only supported for subagent:* sessions",
-                  },
-                };
-              }
-              if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: "spawnedBy cannot be changed once set",
-                  },
-                };
-              }
-              next.spawnedBy = trimmed;
-            }
+          const primaryKey = target.storeKeys[0] ?? key;
+          const existingKey = target.storeKeys.find(
+            (candidate) => store[candidate],
+          );
+          if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+            store[primaryKey] = store[existingKey];
+            delete store[existingKey];
           }
-
-          if ("thinkingLevel" in p) {
-            const raw = p.thinkingLevel;
-            if (raw === null) {
-              delete next.thinkingLevel;
-            } else if (raw !== undefined) {
-              const normalized = normalizeThinkLevel(String(raw));
-              if (!normalized) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid thinkingLevel: ${String(raw)}`,
-                  },
-                };
-              }
-              next.thinkingLevel = normalized;
-            }
+          const applied = await applySessionsPatchToStore({
+            cfg,
+            store,
+            storeKey: primaryKey,
+            patch: p,
+            loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          });
+          if (!applied.ok) {
+            return {
+              ok: false,
+              error: {
+                code: applied.error.code,
+                message: applied.error.message,
+                details: applied.error.details,
+              },
+            };
           }
-
-          if ("verboseLevel" in p) {
-            const raw = p.verboseLevel;
-            if (raw === null) {
-              delete next.verboseLevel;
-            } else if (raw !== undefined) {
-              const normalized = normalizeVerboseLevel(String(raw));
-              if (!normalized) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid verboseLevel: ${String(raw)}`,
-                  },
-                };
-              }
-              next.verboseLevel = normalized;
-            }
-          }
-
-          if ("reasoningLevel" in p) {
-            const raw = p.reasoningLevel;
-            if (raw === null) {
-              delete next.reasoningLevel;
-            } else if (raw !== undefined) {
-              const normalized = normalizeReasoningLevel(String(raw));
-              if (!normalized) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid reasoningLevel: ${String(raw)} (use on|off|stream)`,
-                  },
-                };
-              }
-              if (normalized === "off") delete next.reasoningLevel;
-              else next.reasoningLevel = normalized;
-            }
-          }
-
-          if ("elevatedLevel" in p) {
-            const raw = p.elevatedLevel;
-            if (raw === null) {
-              delete next.elevatedLevel;
-            } else if (raw !== undefined) {
-              const normalized = normalizeElevatedLevel(String(raw));
-              if (!normalized) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid elevatedLevel: ${String(raw)}`,
-                  },
-                };
-              }
-              next.elevatedLevel = normalized;
-            }
-          }
-
-          if ("model" in p) {
-            const raw = p.model;
-            if (raw === null) {
-              delete next.providerOverride;
-              delete next.modelOverride;
-            } else if (raw !== undefined) {
-              const trimmed = String(raw).trim();
-              if (!trimmed) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: "invalid model: empty",
-                  },
-                };
-              }
-              const resolvedDefault = resolveConfiguredModelRef({
-                cfg,
-                defaultProvider: DEFAULT_PROVIDER,
-                defaultModel: DEFAULT_MODEL,
-              });
-              const aliasIndex = buildModelAliasIndex({
-                cfg,
-                defaultProvider: resolvedDefault.provider,
-              });
-              const resolved = resolveModelRefFromString({
-                raw: trimmed,
-                defaultProvider: resolvedDefault.provider,
-                aliasIndex,
-              });
-              if (!resolved) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid model: ${trimmed}`,
-                  },
-                };
-              }
-              const catalog = await ctx.loadGatewayModelCatalog();
-              const allowed = buildAllowedModelSet({
-                cfg,
-                catalog,
-                defaultProvider: resolvedDefault.provider,
-                defaultModel: resolvedDefault.model,
-              });
-              const key = modelKey(resolved.ref.provider, resolved.ref.model);
-              if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `model not allowed: ${key}`,
-                  },
-                };
-              }
-              if (
-                resolved.ref.provider === resolvedDefault.provider &&
-                resolved.ref.model === resolvedDefault.model
-              ) {
-                delete next.providerOverride;
-                delete next.modelOverride;
-              } else {
-                next.providerOverride = resolved.ref.provider;
-                next.modelOverride = resolved.ref.model;
-              }
-            }
-          }
-
-          if ("sendPolicy" in p) {
-            const raw = p.sendPolicy;
-            if (raw === null) {
-              delete next.sendPolicy;
-            } else if (raw !== undefined) {
-              const normalized = normalizeSendPolicy(String(raw));
-              if (!normalized) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: 'invalid sendPolicy (use "allow"|"deny")',
-                  },
-                };
-              }
-              next.sendPolicy = normalized;
-            }
-          }
-
-          if ("groupActivation" in p) {
-            const raw = p.groupActivation;
-            if (raw === null) {
-              delete next.groupActivation;
-            } else if (raw !== undefined) {
-              const normalized = normalizeGroupActivation(String(raw));
-              if (!normalized) {
-                return {
-                  ok: false,
-                  error: {
-                    code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid groupActivation: ${String(raw)}`,
-                  },
-                };
-              }
-              next.groupActivation = normalized;
-            }
-          }
-
-          store[key] = next;
           await saveSessionStore(storePath, store);
           const payload: SessionsPatchResult = {
             ok: true,
             path: storePath,
-            key,
-            entry: next,
+            key: target.canonicalKey,
+            entry: applied.entry,
           };
           return { ok: true, payloadJSON: JSON.stringify(payload) };
         }
@@ -628,6 +430,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             model: entry?.model,
             contextTokens: entry?.contextTokens,
             sendPolicy: entry?.sendPolicy,
+            label: entry?.label,
             displayName: entry?.displayName,
             chatType: entry?.chatType,
             provider: entry?.provider,

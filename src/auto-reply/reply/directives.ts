@@ -170,7 +170,7 @@ export function extractStatusDirective(body?: string): {
   hasDirective: boolean;
 } {
   if (!body) return { cleaned: "", hasDirective: false };
-  return extractSimpleDirective(body, ["status"]);
+  return extractSimpleDirective(body, ["status", "usage"]);
 }
 
 export type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel };

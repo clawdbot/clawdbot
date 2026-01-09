@@ -111,7 +111,7 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { normalizeControlUiBasePath } from "./control-ui.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { type HookMessageProvider, resolveHooksConfig } from "./hooks.js";
 import {
   isLoopbackAddress,
   isLoopbackHost,
@@ -496,15 +496,7 @@ export async function startGatewayServer(
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    provider:
-      | "last"
-      | "whatsapp"
-      | "telegram"
-      | "discord"
-      | "slack"
-      | "signal"
-      | "imessage"
-      | "msteams";
+    provider: HookMessageProvider;
     to?: string;
     model?: string;
     thinking?: string;

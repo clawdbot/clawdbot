@@ -82,6 +82,12 @@ export type ProfileUsageStats = {
 export type AuthProfileStore = {
   version: number;
   profiles: Record<string, AuthProfileCredential>;
+  /**
+   * Optional per-agent preferred profile order overrides.
+   * This lets you lock/override auth rotation for a specific agent without
+   * changing the global config.
+   */
+  order?: Record<string, string[]>;
   lastGood?: Record<string, string>;
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
@@ -133,6 +139,7 @@ function syncAuthProfileStore(
 ): void {
   target.version = source.version;
   target.profiles = source.profiles;
+  target.order = source.order;
   target.lastGood = source.lastGood;
   target.usageStats = source.usageStats;
 }
@@ -270,9 +277,25 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
     if (!typed.provider) continue;
     normalized[key] = typed as AuthProfileCredential;
   }
+  const order =
+    record.order && typeof record.order === "object"
+      ? Object.entries(record.order as Record<string, unknown>).reduce(
+          (acc, [provider, value]) => {
+            if (!Array.isArray(value)) return acc;
+            const list = value
+              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+              .filter(Boolean);
+            if (list.length === 0) return acc;
+            acc[provider] = list;
+            return acc;
+          },
+          {} as Record<string, string[]>,
+        )
+      : undefined;
   return {
     version: Number(record.version ?? AUTH_STORE_VERSION),
     profiles: normalized,
+    order,
     lastGood:
       record.lastGood && typeof record.lastGood === "object"
         ? (record.lastGood as Record<string, string>)
@@ -680,10 +703,45 @@ export function saveAuthProfileStore(
   const payload = {
     version: AUTH_STORE_VERSION,
     profiles: store.profiles,
+    order: store.order ?? undefined,
     lastGood: store.lastGood ?? undefined,
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+}
+
+export async function setAuthProfileOrder(params: {
+  agentDir?: string;
+  provider: string;
+  order?: string[] | null;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = normalizeProviderId(params.provider);
+  const sanitized =
+    params.order && Array.isArray(params.order)
+      ? params.order.map((entry) => String(entry).trim()).filter(Boolean)
+      : [];
+
+  const deduped: string[] = [];
+  for (const entry of sanitized) {
+    if (!deduped.includes(entry)) deduped.push(entry);
+  }
+
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      store.order = store.order ?? {};
+      if (deduped.length === 0) {
+        if (!store.order[providerKey]) return false;
+        delete store.order[providerKey];
+        if (Object.keys(store.order).length === 0) {
+          store.order = undefined;
+        }
+        return true;
+      }
+      store.order[providerKey] = deduped;
+      return true;
+    },
+  });
 }
 
 export function upsertAuthProfile(params: {
@@ -863,6 +921,14 @@ export function resolveAuthProfileOrder(params: {
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
+  const storedOrder = (() => {
+    const order = store.order;
+    if (!order) return undefined;
+    for (const [key, value] of Object.entries(order)) {
+      if (normalizeProviderId(key) === providerKey) return value;
+    }
+    return undefined;
+  })();
   const configuredOrder = (() => {
     const order = cfg?.auth?.order;
     if (!order) return undefined;
@@ -871,6 +937,7 @@ export function resolveAuthProfileOrder(params: {
     }
     return undefined;
   })();
+  const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(
@@ -880,7 +947,7 @@ export function resolveAuthProfileOrder(params: {
         .map(([profileId]) => profileId)
     : [];
   const baseOrder =
-    configuredOrder ??
+    explicitOrder ??
     (explicitProfiles.length > 0
       ? explicitProfiles
       : listProfilesForProvider(store, providerKey));
@@ -895,8 +962,10 @@ export function resolveAuthProfileOrder(params: {
     if (!deduped.includes(entry)) deduped.push(entry);
   }
 
-  // If user specified explicit order in config, respect it exactly
-  if (configuredOrder && configuredOrder.length > 0) {
+  // If user specified explicit order (store override or config), respect it
+  // exactly, but still apply cooldown sorting to avoid repeatedly selecting
+  // known-bad/rate-limited keys as the first candidate.
+  if (explicitOrder && explicitOrder.length > 0) {
     // ...but still respect cooldown tracking to avoid repeatedly selecting a
     // known-bad/rate-limited key as the first candidate.
     const now = Date.now();
@@ -1118,8 +1187,8 @@ export async function markAuthProfileGood(params: {
   saveAuthProfileStore(store, agentDir);
 }
 
-export function resolveAuthStorePathForDisplay(): string {
-  const pathname = resolveAuthStorePath();
+export function resolveAuthStorePathForDisplay(agentDir?: string): string {
+  const pathname = resolveAuthStorePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 

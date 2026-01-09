@@ -448,6 +448,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { dispatcher, replyOptions, markDispatchIdle } =
       createMSTeamsReplyDispatcher({
         cfg,
+        agentId: route.agentId,
         runtime,
         log,
         adapter,

@@ -11,7 +11,7 @@ import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
-  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { normalizeE164 } from "../utils.js";
 import {
@@ -113,6 +113,7 @@ export type SessionEntry = {
   contextTokens?: number;
   compactionCount?: number;
   claudeCliSessionId?: string;
+  label?: string;
   displayName?: string;
   provider?: string;
   subject?: string;
@@ -231,12 +232,7 @@ export function resolveMainSessionKey(cfg?: {
   return buildAgentMainSessionKey({ agentId, mainKey });
 }
 
-export function resolveAgentIdFromSessionKey(
-  sessionKey?: string | null,
-): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
-}
+export { resolveAgentIdFromSessionKey };
 
 export function resolveAgentMainSessionKey(params: {
   cfg?: { session?: { mainKey?: string } };

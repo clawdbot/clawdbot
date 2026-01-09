@@ -426,6 +426,8 @@ public struct AgentParams: Codable, Sendable {
     public let lane: String?
     public let extrasystemprompt: String?
     public let idempotencykey: String
+    public let label: String?
+    public let spawnedby: String?
 
     public init(
         message: String,
@@ -438,7 +440,9 @@ public struct AgentParams: Codable, Sendable {
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
-        idempotencykey: String
+        idempotencykey: String,
+        label: String?,
+        spawnedby: String?
     ) {
         self.message = message
         self.to = to
@@ -451,6 +455,8 @@ public struct AgentParams: Codable, Sendable {
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
         self.idempotencykey = idempotencykey
+        self.label = label
+        self.spawnedby = spawnedby
     }
     private enum CodingKeys: String, CodingKey {
         case message
@@ -464,6 +470,8 @@ public struct AgentParams: Codable, Sendable {
         case lane
         case extrasystemprompt = "extraSystemPrompt"
         case idempotencykey = "idempotencyKey"
+        case label
+        case spawnedby = "spawnedBy"
     }
 }
 
@@ -663,6 +671,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let activeminutes: Int?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let label: String?
     public let spawnedby: String?
     public let agentid: String?
 
@@ -671,6 +680,7 @@ public struct SessionsListParams: Codable, Sendable {
         activeminutes: Int?,
         includeglobal: Bool?,
         includeunknown: Bool?,
+        label: String?,
         spawnedby: String?,
         agentid: String?
     ) {
@@ -678,6 +688,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.label = label
         self.spawnedby = spawnedby
         self.agentid = agentid
     }
@@ -686,13 +697,48 @@ public struct SessionsListParams: Codable, Sendable {
         case activeminutes = "activeMinutes"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case label
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
     }
 }
 
+public struct SessionsResolveParams: Codable, Sendable {
+    public let key: String?
+    public let label: String?
+    public let agentid: String?
+    public let spawnedby: String?
+    public let includeglobal: Bool?
+    public let includeunknown: Bool?
+
+    public init(
+        key: String?,
+        label: String?,
+        agentid: String?,
+        spawnedby: String?,
+        includeglobal: Bool?,
+        includeunknown: Bool?
+    ) {
+        self.key = key
+        self.label = label
+        self.agentid = agentid
+        self.spawnedby = spawnedby
+        self.includeglobal = includeglobal
+        self.includeunknown = includeunknown
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case label
+        case agentid = "agentId"
+        case spawnedby = "spawnedBy"
+        case includeglobal = "includeGlobal"
+        case includeunknown = "includeUnknown"
+    }
+}
+
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
+    public let label: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
     public let reasoninglevel: AnyCodable?
@@ -705,6 +751,7 @@ public struct SessionsPatchParams: Codable, Sendable {
 
     public init(
         key: String,
+        label: AnyCodable?,
         thinkinglevel: AnyCodable?,
         verboselevel: AnyCodable?,
         reasoninglevel: AnyCodable?,
@@ -716,6 +763,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         groupactivation: AnyCodable?
     ) {
         self.key = key
+        self.label = label
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
         self.reasoninglevel = reasoninglevel
@@ -728,6 +776,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     }
     private enum CodingKeys: String, CodingKey {
         case key
+        case label
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
         case reasoninglevel = "reasoningLevel"

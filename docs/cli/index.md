@@ -147,6 +147,14 @@ clawdbot [--dev] [--profile <name>] <command>
   tui
 ```
 
+## Chat slash commands
+
+Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
+
+Highlights:
+- `/status` for quick diagnostics.
+- `/debug` for runtime-only config overrides (memory, not disk).
+
 ## Setup + onboarding
 
 ### `setup`
@@ -169,7 +177,11 @@ Options:
 - `--workspace <dir>`
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--auth-choice <oauth|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip>`
+- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip>`
+- `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
+- `--token <token>` (non-interactive; used with `--auth-choice token`)
+- `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
+- `--token-expires-in <duration>` (non-interactive; e.g. `365d`, `12h`)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
 - `--gemini-api-key <key>`
@@ -369,7 +381,7 @@ Options:
 Clawdbot can surface provider usage/quota when OAuth/API creds are available.
 
 Surfaces:
-- `/status` (adds a short usage line when available)
+- `/status` (alias: `/usage`; adds a short usage line when available)
 - `clawdbot status --usage` (prints full provider breakdown)
 - macOS menu bar (Usage section under Context)
 
@@ -411,7 +423,7 @@ Options:
 - `--tailscale-reset-on-exit`
 - `--allow-unconfigured`
 - `--dev`
-- `--reset`
+- `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
 - `--ws-log <auto|full|compact>`
@@ -467,6 +479,13 @@ Common RPCs:
 ## Models
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
+
+Preferred Anthropic auth (CLI token, not API key):
+
+```bash
+claude setup-token
+clawdbot models status
+```
 
 ### `models` (root)
 `clawdbot models` is an alias for `models status`.
@@ -653,5 +672,6 @@ Options:
 - `--session <key>`
 - `--deliver`
 - `--thinking <level>`
+- `--message <text>`
 - `--timeout-ms <ms>`
 - `--history-limit <n>`

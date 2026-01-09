@@ -6,7 +6,10 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveAckReaction } from "../agents/identity.js";
+import {
+  resolveAckReaction,
+  resolveEffectiveMessagesConfig,
+} from "../agents/identity.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
   chunkMarkdownText,
@@ -726,7 +729,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
-        responsePrefix: cfg.messages?.responsePrefix,
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             await flushDraft();

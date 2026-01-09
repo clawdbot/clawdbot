@@ -26,6 +26,7 @@ import {
   resolveConfigPath,
   resolveStateDir,
 } from "./paths.js";
+import { applyConfigOverrides } from "./runtime-overrides.js";
 import type {
   ClawdbotConfig,
   ConfigFileSnapshot,
@@ -195,7 +196,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         });
       }
 
-      return cfg;
+      return applyConfigOverrides(cfg);
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);

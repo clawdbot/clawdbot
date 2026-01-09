@@ -264,7 +264,7 @@ export async function initSessionState(params: {
       ctx.MessageThreadId,
     );
   }
-  sessionStore[sessionKey] = sessionEntry;
+  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
   await saveSessionStore(storePath, sessionStore);
 
   const sessionCtx: TemplateContext = {

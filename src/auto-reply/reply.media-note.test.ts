@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { getReplyFromConfig } from "./reply.js";
 
@@ -28,27 +27,19 @@ function makeResult(text: string) {
 }
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-note-"));
-  const previousHome = process.env.HOME;
-  const previousBundledSkills = process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
-  process.env.HOME = base;
-  process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = path.join(base, "bundled-skills");
-  try {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    if (previousBundledSkills === undefined) {
-      delete process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
-    } else {
-      process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = previousBundledSkills;
-    }
-    try {
-      await fs.rm(base, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures in tests
-    }
-  }
+  return withTempHomeBase(
+    async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      return await fn(home);
+    },
+    {
+      env: {
+        CLAWDBOT_BUNDLED_SKILLS_DIR: (home) =>
+          path.join(home, "bundled-skills"),
+      },
+      prefix: "clawdbot-media-note-",
+    },
+  );
 }
 
 function makeCfg(home: string) {

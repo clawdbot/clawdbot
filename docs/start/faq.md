@@ -280,6 +280,15 @@ Use the `/model` command as a standalone message:
 
 You can list available models with `/model`, `/model list`, or `/model status`.
 
+You can also force a specific auth profile for the provider (per session):
+
+```
+/model opus@anthropic:claude-cli
+/model opus@anthropic:default
+```
+
+Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
+
 ### Why do I see “Model … is not allowed” and then no reply?
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and any
@@ -412,6 +421,28 @@ Clawdbot uses provider‑prefixed IDs like:
 ### Can I control which auth profile is tried first?
 
 Yes. Config supports optional metadata for profiles and an ordering per provider (`auth.order.<provider>`). This does **not** store secrets; it maps IDs to provider/mode and sets rotation order.
+
+You can also set a **per-agent** order override (stored in that agent’s `auth-profiles.json`) via the CLI:
+
+```bash
+# Defaults to the configured default agent (omit --agent)
+clawdbot models auth order get --provider anthropic
+
+# Lock rotation to a single profile (only try this one)
+clawdbot models auth order set --provider anthropic anthropic:claude-cli
+
+# Or set an explicit order (fallback within provider)
+clawdbot models auth order set --provider anthropic anthropic:claude-cli anthropic:default
+
+# Clear override (fall back to config auth.order / round-robin)
+clawdbot models auth order clear --provider anthropic
+```
+
+To target a specific agent:
+
+```bash
+clawdbot models auth order set --provider anthropic --agent main anthropic:claude-cli
+```
 
 ### OAuth vs API key: what’s the difference?
 

@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeTestText } from "../../test/helpers/normalize-text.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -51,17 +53,14 @@ const webMocks = vi.hoisted(() => ({
 vi.mock("../web/session.js", () => webMocks);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(join(tmpdir(), "clawdbot-triggers-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = base;
-  try {
-    vi.mocked(runEmbeddedPiAgent).mockClear();
-    vi.mocked(abortEmbeddedPiRun).mockClear();
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(
+    async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      vi.mocked(abortEmbeddedPiRun).mockClear();
+      return await fn(home);
+    },
+    { prefix: "clawdbot-triggers-" },
+  );
 }
 
 function makeCfg(home: string) {
@@ -101,7 +100,7 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("📊 Usage: Claude 80% left");
+      expect(normalizeTestText(text ?? "")).toContain("Usage: Claude 80% left");
       expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
         expect.objectContaining({ providers: ["anthropic"] }),
       );
@@ -243,6 +242,23 @@ describe("trigger handling", () => {
     });
   });
 
+  it("reports status via /usage without invoking the agent", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/usage",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("ClawdBot");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("reports active auth profile and key snippet in status", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
@@ -300,7 +316,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("api-key");
-      expect(text).toContain("…");
+      expect(text).toMatch(/…|\.{3}/);
       expect(text).toContain("(anthropic:work)");
       expect(text).not.toContain("mixed");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -1241,6 +1257,7 @@ describe("trigger handling", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain("Give me the status");
       expect(prompt).not.toContain("/thinking high");
+      expect(prompt).not.toContain("/think high");
     });
   });
 

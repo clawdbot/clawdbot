@@ -6,6 +6,7 @@ import {
   type HookMappingConfig,
   type HooksConfig,
 } from "../config/config.js";
+import type { HookMessageProvider } from "./hooks.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -18,15 +19,7 @@ export type HookMappingResolved = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  provider?:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams";
+  provider?: HookMessageProvider;
   to?: string;
   model?: string;
   thinking?: string;
@@ -59,15 +52,7 @@ export type HookAction =
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       deliver?: boolean;
-      provider?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams";
+      provider?: HookMessageProvider;
       to?: string;
       model?: string;
       thinking?: string;
@@ -105,14 +90,7 @@ type HookTransformResult = Partial<{
   name: string;
   sessionKey: string;
   deliver: boolean;
-  provider:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage";
+  provider: HookMessageProvider;
   to: string;
   model: string;
   thinking: string;

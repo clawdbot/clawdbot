@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  CLAUDE_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -48,6 +49,13 @@ type ClaudeUsageResponse = {
   seven_day_sonnet?: { utilization?: number };
   seven_day_opus?: { utilization?: number };
 };
+
+type ClaudeWebOrganizationsResponse = Array<{
+  uuid?: string;
+  name?: string;
+}>;
+
+type ClaudeWebUsageResponse = ClaudeUsageResponse;
 
 type CopilotUsageResponse = {
   quota_snapshots?: {
@@ -106,6 +114,7 @@ type UsageSummaryOptions = {
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
+  agentDir?: string;
   fetch?: typeof fetch;
 };
 
@@ -188,6 +197,20 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
     month: "short",
     day: "numeric",
   }).format(new Date(targetMs));
+}
+
+function resolveClaudeWebSessionKey(): string | undefined {
+  const direct =
+    process.env.CLAUDE_AI_SESSION_KEY?.trim() ??
+    process.env.CLAUDE_WEB_SESSION_KEY?.trim();
+  if (direct?.startsWith("sk-ant-")) return direct;
+
+  const cookieHeader = process.env.CLAUDE_WEB_COOKIE?.trim();
+  if (!cookieHeader) return undefined;
+  const stripped = cookieHeader.replace(/^cookie:\\s*/i, "");
+  const match = stripped.match(/(?:^|;\\s*)sessionKey=([^;\\s]+)/i);
+  const value = match?.[1]?.trim();
+  return value?.startsWith("sk-ant-") ? value : undefined;
 }
 
 function pickPrimaryWindow(windows: UsageWindow[]): UsageWindow | undefined {
@@ -295,6 +318,9 @@ async function fetchClaudeUsage(
     {
       headers: {
         Authorization: `Bearer ${token}`,
+        "User-Agent": "clawdbot",
+        Accept: "application/json",
+        "anthropic-version": "2023-06-01",
         "anthropic-beta": "oauth-2025-04-20",
       },
     },
@@ -303,11 +329,37 @@ async function fetchClaudeUsage(
   );
 
   if (!res.ok) {
+    let message: string | undefined;
+    try {
+      const data = (await res.json()) as {
+        error?: { message?: unknown } | null;
+      };
+      const raw = data?.error?.message;
+      if (typeof raw === "string" && raw.trim()) message = raw.trim();
+    } catch {
+      // ignore parse errors
+    }
+
+    // Claude CLI setup-token yields tokens that can be used for inference
+    // but may not include user:profile scope required by the OAuth usage endpoint.
+    // When a claude.ai browser sessionKey is available, fall back to the web API.
+    if (
+      res.status === 403 &&
+      message?.includes("scope requirement user:profile")
+    ) {
+      const sessionKey = resolveClaudeWebSessionKey();
+      if (sessionKey) {
+        const web = await fetchClaudeWebUsage(sessionKey, timeoutMs, fetchFn);
+        if (web) return web;
+      }
+    }
+
+    const suffix = message ? `: ${message}` : "";
     return {
       provider: "anthropic",
       displayName: PROVIDER_LABELS.anthropic,
       windows: [],
-      error: `HTTP ${res.status}`,
+      error: `HTTP ${res.status}${suffix}`,
     };
   }
 
@@ -342,6 +394,75 @@ async function fetchClaudeUsage(
     });
   }
 
+  return {
+    provider: "anthropic",
+    displayName: PROVIDER_LABELS.anthropic,
+    windows,
+  };
+}
+
+async function fetchClaudeWebUsage(
+  sessionKey: string,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<ProviderUsageSnapshot | null> {
+  const headers: Record<string, string> = {
+    Cookie: `sessionKey=${sessionKey}`,
+    Accept: "application/json",
+  };
+
+  const orgRes = await fetchJson(
+    "https://claude.ai/api/organizations",
+    { headers },
+    timeoutMs,
+    fetchFn,
+  );
+  if (!orgRes.ok) return null;
+
+  const orgs = (await orgRes.json()) as ClaudeWebOrganizationsResponse;
+  const orgId = orgs?.[0]?.uuid?.trim();
+  if (!orgId) return null;
+
+  const usageRes = await fetchJson(
+    `https://claude.ai/api/organizations/${orgId}/usage`,
+    { headers },
+    timeoutMs,
+    fetchFn,
+  );
+  if (!usageRes.ok) return null;
+
+  const data = (await usageRes.json()) as ClaudeWebUsageResponse;
+  const windows: UsageWindow[] = [];
+
+  if (data.five_hour?.utilization !== undefined) {
+    windows.push({
+      label: "5h",
+      usedPercent: clampPercent(data.five_hour.utilization),
+      resetAt: data.five_hour.resets_at
+        ? new Date(data.five_hour.resets_at).getTime()
+        : undefined,
+    });
+  }
+
+  if (data.seven_day?.utilization !== undefined) {
+    windows.push({
+      label: "Week",
+      usedPercent: clampPercent(data.seven_day.utilization),
+      resetAt: data.seven_day.resets_at
+        ? new Date(data.seven_day.resets_at).getTime()
+        : undefined,
+    });
+  }
+
+  const modelWindow = data.seven_day_sonnet || data.seven_day_opus;
+  if (modelWindow?.utilization !== undefined) {
+    windows.push({
+      label: data.seven_day_sonnet ? "Sonnet" : "Opus",
+      usedPercent: clampPercent(modelWindow.utilization),
+    });
+  }
+
+  if (windows.length === 0) return null;
   return {
     provider: "anthropic",
     displayName: PROVIDER_LABELS.anthropic,
@@ -670,23 +791,38 @@ function resolveZaiApiKey(): string | undefined {
 
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
+  agentDir?: string;
 }): Promise<ProviderAuth | null> {
   const cfg = loadConfig();
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
     provider: params.provider,
   });
 
-  for (const profileId of order) {
+  // Claude CLI creds are the only Anthropic tokens that reliably include the
+  // `user:profile` scope required for the OAuth usage endpoint.
+  const candidates =
+    params.provider === "anthropic" ? [CLAUDE_CLI_PROFILE_ID, ...order] : order;
+  const deduped: string[] = [];
+  for (const entry of candidates) {
+    if (!deduped.includes(entry)) deduped.push(entry);
+  }
+
+  for (const profileId of deduped) {
     const cred = store.profiles[profileId];
-    if (!cred || cred.type !== "oauth") continue;
+    if (!cred || (cred.type !== "oauth" && cred.type !== "token")) continue;
     try {
       const resolved = await resolveApiKeyForProfile({
-        cfg,
+        // Usage snapshots should work even if config profile metadata is stale.
+        // (e.g. config says api_key but the store has a token profile.)
+        cfg: undefined,
         store,
         profileId,
+        agentDir: params.agentDir,
       });
       if (!resolved?.apiKey) continue;
       let token = resolved.apiKey;
@@ -711,15 +847,20 @@ async function resolveOAuthToken(params: {
   return null;
 }
 
-function resolveOAuthProviders(): UsageProviderId[] {
-  const store = ensureAuthProfileStore();
+function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const cfg = loadConfig();
   const providers = usageProviders.filter((provider) => provider !== "zai");
+  const isOAuthLikeCredential = (id: string) => {
+    const cred = store.profiles[id];
+    return cred?.type === "oauth" || cred?.type === "token";
+  };
   return providers.filter((provider) => {
-    const profiles = listProfilesForProvider(store, provider).filter((id) => {
-      const cred = store.profiles[id];
-      return cred?.type === "oauth";
-    });
+    const profiles = listProfilesForProvider(store, provider).filter(
+      isOAuthLikeCredential,
+    );
     if (profiles.length > 0) return true;
     const normalized = normalizeProviderId(provider);
     const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
@@ -727,7 +868,7 @@ function resolveOAuthProviders(): UsageProviderId[] {
         ([, profile]) => normalizeProviderId(profile.provider) === normalized,
       )
       .map(([id]) => id)
-      .filter((id) => store.profiles[id]?.type === "oauth");
+      .filter(isOAuthLikeCredential);
     return configuredProfiles.length > 0;
   });
 }
@@ -738,7 +879,7 @@ async function resolveProviderAuths(
   if (opts.auth) return opts.auth;
 
   const targetProviders = opts.providers ?? usageProviders;
-  const oauthProviders = resolveOAuthProviders();
+  const oauthProviders = resolveOAuthProviders(opts.agentDir);
   const auths: ProviderAuth[] = [];
 
   for (const provider of targetProviders) {
@@ -749,7 +890,7 @@ async function resolveProviderAuths(
     }
 
     if (!oauthProviders.includes(provider)) continue;
-    const auth = await resolveOAuthToken({ provider });
+    const auth = await resolveOAuthToken({ provider, agentDir: opts.agentDir });
     if (auth) auths.push(auth);
   }
 

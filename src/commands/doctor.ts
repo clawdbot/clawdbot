@@ -114,10 +114,13 @@ export async function doctorCommand(
         .join("\n"),
       "Legacy config keys detected",
     );
-    const migrate = await prompter.confirm({
-      message: "Migrate legacy config entries now?",
-      initialValue: true,
-    });
+    const migrate =
+      options.nonInteractive === true
+        ? true
+        : await prompter.confirm({
+            message: "Migrate legacy config entries now?",
+            initialValue: true,
+          });
     if (migrate) {
       // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
       const { config: migrated, changes } = migrateLegacyConfig(

@@ -40,7 +40,7 @@ Notes:
 - `--tailscale <off|serve|funnel>`: expose the Gateway via Tailscale.
 - `--tailscale-reset-on-exit`: reset Tailscale serve/funnel config on shutdown.
 - `--dev`: create a dev config + workspace if missing (skips BOOTSTRAP.md).
-- `--reset`: recreate the dev config (requires `--dev`).
+- `--reset`: reset dev config + credentials + sessions + workspace (requires `--dev`).
 - `--force`: kill any existing listener on the selected port before starting.
 - `--verbose`: verbose logs.
 - `--claude-cli-logs`: only show claude-cli logs in the console (and enable its stdout/stderr).

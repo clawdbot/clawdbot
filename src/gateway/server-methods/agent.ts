@@ -52,6 +52,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       idempotencyKey: string;
       timeout?: number;
+      label?: string;
+      spawnedBy?: string;
     };
     const idem = request.idempotencyKey;
     const cached = context.dedupe.get(`agent:${idem}`);
@@ -78,6 +80,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       cfgForAgent = cfg;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
+      const labelValue = request.label?.trim() || entry?.label;
+      const spawnedByValue = request.spawnedBy?.trim() || entry?.spawnedBy;
       const nextEntry: SessionEntry = {
         sessionId,
         updatedAt: now,
@@ -91,6 +95,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         lastTo: entry?.lastTo,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
+        label: labelValue,
+        spawnedBy: spawnedByValue,
       };
       sessionEntry = nextEntry;
       const sendPolicy = resolveSendPolicy({

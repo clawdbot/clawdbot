@@ -196,6 +196,7 @@ export async function runSubagentAnnounceFlow(params: {
   waitForCompletion?: boolean;
   startedAt?: number;
   endedAt?: number;
+  label?: string;
 }) {
   try {
     let reply = params.roundOneReply;
@@ -273,6 +274,18 @@ export async function runSubagentAnnounceFlow(params: {
   } catch {
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
+    // Patch label after all writes complete
+    if (params.label) {
+      try {
+        await callGateway({
+          method: "sessions.patch",
+          params: { key: params.childSessionKey, label: params.label },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort
+      }
+    }
     if (params.cleanup === "delete") {
       try {
         await callGateway({

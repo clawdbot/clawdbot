@@ -64,16 +64,22 @@ export function buildAuthChoiceOptions(params: {
   if (claudeCli?.type === "oauth" || claudeCli?.type === "token") {
     options.push({
       value: "claude-cli",
-      label: "Anthropic OAuth (Claude CLI)",
+      label: "Anthropic token (Claude CLI)",
       hint: formatOAuthHint(claudeCli.expires),
     });
   } else if (params.includeClaudeCliIfMissing && platform === "darwin") {
     options.push({
       value: "claude-cli",
-      label: "Anthropic OAuth (Claude CLI)",
+      label: "Anthropic token (Claude CLI)",
       hint: "requires Keychain access",
     });
   }
+
+  options.push({
+    value: "setup-token",
+    label: "Anthropic token (run setup-token)",
+    hint: "Runs `claude setup-token`",
+  });
 
   options.push({
     value: "token",

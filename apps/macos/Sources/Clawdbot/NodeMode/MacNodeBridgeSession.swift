@@ -1,6 +1,7 @@
 import ClawdbotKit
 import Foundation
 import Network
+import OSLog
 
 actor MacNodeBridgeSession {
     private struct TimeoutError: LocalizedError {
@@ -15,14 +16,18 @@ actor MacNodeBridgeSession {
         case failed(message: String)
     }
 
+    private let logger = Logger(subsystem: "com.clawdbot", category: "node.bridge-session")
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let clock = ContinuousClock()
 
     private var connection: NWConnection?
     private var queue: DispatchQueue?
     private var buffer = Data()
     private var pendingRPC: [String: CheckedContinuation<BridgeRPCResponse, Error>] = [:]
     private var serverEventSubscribers: [UUID: AsyncStream<BridgeEventFrame>.Continuation] = [:]
+    private var pingTask: Task<Void, Never>?
+    private var lastPongAt: ContinuousClock.Instant?
 
     private(set) var state: State = .idle
 
@@ -38,6 +43,12 @@ actor MacNodeBridgeSession {
 
         let params = NWParameters.tcp
         params.includePeerToPeer = true
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 30
+        tcpOptions.keepaliveInterval = 15
+        tcpOptions.keepaliveCount = 3
+        params.defaultProtocolStack.transportProtocol = tcpOptions
         let connection = NWConnection(to: endpoint, using: params)
         let queue = DispatchQueue(label: "com.clawdbot.macos.bridge-session")
         self.connection = connection
@@ -47,6 +58,10 @@ actor MacNodeBridgeSession {
         connection.start(queue: queue)
 
         try await Self.waitForReady(stateStream, timeoutSeconds: 6)
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            Task { await self.handleConnectionState(state) }
+        }
 
         try await AsyncTimeout.withTimeout(
             seconds: 6,
@@ -77,6 +92,7 @@ actor MacNodeBridgeSession {
         if base.type == "hello-ok" {
             let ok = try self.decoder.decode(BridgeHelloOk.self, from: data)
             self.state = .connected(serverName: ok.serverName)
+            self.startPingLoop()
             await onConnected?(ok.serverName)
         } else if base.type == "error" {
             let err = try self.decoder.decode(BridgeErrorFrame.self, from: data)
@@ -112,6 +128,10 @@ actor MacNodeBridgeSession {
             case "ping":
                 let ping = try self.decoder.decode(BridgePing.self, from: nextData)
                 try await self.send(BridgePong(type: "pong", id: ping.id))
+
+            case "pong":
+                let pong = try self.decoder.decode(BridgePong.self, from: nextData)
+                self.notePong(pong)
 
             case "invoke":
                 let req = try self.decoder.decode(BridgeInvokeRequest.self, from: nextData)
@@ -182,6 +202,10 @@ actor MacNodeBridgeSession {
     }
 
     func disconnect() async {
+        self.pingTask?.cancel()
+        self.pingTask = nil
+        self.lastPongAt = nil
+
         self.connection?.cancel()
         self.connection = nil
         self.queue = nil
@@ -239,12 +263,17 @@ actor MacNodeBridgeSession {
     }
 
     private func send(_ obj: some Encodable) async throws {
+        guard let connection = self.connection else {
+            throw NSError(domain: "Bridge", code: 15, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
         let data = try self.encoder.encode(obj)
         var line = Data()
         line.append(data)
         line.append(0x0A)
         try await withCheckedThrowingContinuation(isolation: self) { (cont: CheckedContinuation<Void, Error>) in
-            self.connection?.send(content: line, completion: .contentProcessed { err in
+            connection.send(content: line, completion: .contentProcessed { err in
                 if let err { cont.resume(throwing: err) } else { cont.resume(returning: ()) }
             })
         }
@@ -277,6 +306,63 @@ actor MacNodeBridgeSession {
                 }
                 cont.resume(returning: data ?? Data())
             }
+        }
+    }
+
+    private func startPingLoop() {
+        self.pingTask?.cancel()
+        self.lastPongAt = self.clock.now
+        self.pingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runPingLoop()
+        }
+    }
+
+    private func runPingLoop() async {
+        let interval: Duration = .seconds(15)
+        let timeout: Duration = .seconds(45)
+
+        while !Task.isCancelled {
+            try? await Task.sleep(for: interval)
+
+            guard self.connection != nil else { return }
+
+            if let last = self.lastPongAt {
+                let now = self.clock.now
+                if now > last.advanced(by: timeout) {
+                    let age = last.duration(to: now)
+                    self.logger.warning("Node bridge heartbeat timed out; disconnecting (age: \(String(describing: age), privacy: .public)).")
+                    await self.disconnect()
+                    return
+                }
+            }
+
+            let id = UUID().uuidString
+            do {
+                try await self.send(BridgePing(type: "ping", id: id))
+            } catch {
+                self.logger.warning("Node bridge ping send failed; disconnecting (error: \(String(describing: error), privacy: .public)).")
+                await self.disconnect()
+                return
+            }
+        }
+    }
+
+    private func notePong(_ pong: BridgePong) {
+        _ = pong
+        self.lastPongAt = self.clock.now
+    }
+
+    private func handleConnectionState(_ state: NWConnection.State) async {
+        switch state {
+        case let .failed(error):
+            self.logger.warning("Node bridge connection failed; disconnecting (error: \(String(describing: error), privacy: .public)).")
+            await self.disconnect()
+        case .cancelled:
+            self.logger.warning("Node bridge connection cancelled; disconnecting.")
+            await self.disconnect()
+        default:
+            break
         }
     }
 

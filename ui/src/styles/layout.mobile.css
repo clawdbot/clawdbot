@@ -1,0 +1,275 @@
+/* Mobile-specific improvements */
+@media (max-width: 600px) {
+  .shell {
+    --shell-pad: 8px;
+    --shell-gap: 8px;
+  }
+
+  /* Compact topbar for mobile */
+  .topbar {
+    padding: 10px 12px;
+    border-radius: 12px;
+    gap: 8px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .brand {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .brand-title {
+    font-size: 15px;
+    letter-spacing: 0.3px;
+  }
+
+  .brand-sub {
+    display: none;
+  }
+
+  .topbar-status {
+    gap: 6px;
+    width: auto;
+    flex-wrap: nowrap;
+  }
+
+  .topbar-status .pill {
+    padding: 4px 8px;
+    font-size: 11px;
+    gap: 4px;
+  }
+
+  .topbar-status .pill .mono {
+    display: none;
+  }
+
+  .topbar-status .pill span:nth-child(2) {
+    display: none;
+  }
+
+  /* Horizontal scrollable nav for mobile */
+  .nav {
+    padding: 8px;
+    border-radius: 12px;
+    gap: 8px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-group {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .nav-label {
+    display: none;
+  }
+
+  .nav-item {
+    padding: 7px 10px;
+    font-size: 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .nav-item::before {
+    display: none;
+  }
+
+  /* Hide page title on mobile - nav already shows where you are */
+  .content-header {
+    display: none;
+  }
+
+  .content {
+    padding: 4px 4px 16px;
+    gap: 12px;
+  }
+
+  /* Smaller cards on mobile */
+  .card {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .card-title {
+    font-size: 14px;
+  }
+
+  /* Stat grid adjustments */
+  .stat-grid {
+    gap: 8px;
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stat {
+    padding: 10px;
+    border-radius: 10px;
+  }
+
+  .stat-label {
+    font-size: 10px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  /* Notes grid */
+  .note-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* Form fields */
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .field input,
+  .field textarea,
+  .field select {
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* Pills */
+  .pill {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+
+  /* Chat-specific mobile improvements */
+  .chat-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .chat-header__left {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-header__right {
+    justify-content: space-between;
+  }
+
+  .chat-session {
+    min-width: unset;
+    width: 100%;
+  }
+
+  .chat-thread {
+    margin-top: 8px;
+    padding: 10px 8px;
+    border-radius: 12px;
+  }
+
+  .chat-msg {
+    max-width: 92%;
+  }
+
+  .chat-bubble {
+    padding: 8px 10px;
+    border-radius: 12px;
+  }
+
+  .chat-compose {
+    gap: 8px;
+  }
+
+  .chat-compose__field textarea {
+    min-height: 60px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+
+  /* Log stream mobile */
+  .log-stream {
+    border-radius: 10px;
+    max-height: 400px;
+  }
+
+  .log-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .log-time {
+    font-size: 10px;
+  }
+
+  .log-level {
+    font-size: 9px;
+  }
+
+  .log-subsystem {
+    font-size: 11px;
+  }
+
+  .log-message {
+    font-size: 12px;
+  }
+
+  /* Hide docs link on mobile - saves space */
+  .docs-link {
+    display: none;
+  }
+
+  /* List items */
+  .list-item {
+    padding: 10px;
+    border-radius: 10px;
+  }
+
+  .list-title {
+    font-size: 14px;
+  }
+
+  .list-sub {
+    font-size: 11px;
+  }
+
+  /* Code blocks */
+  .code-block {
+    padding: 8px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
+
+  /* Theme toggle smaller */
+  .theme-toggle {
+    --theme-item: 24px;
+    --theme-gap: 4px;
+    --theme-pad: 4px;
+  }
+
+  .theme-icon {
+    width: 14px;
+    height: 14px;
+  }
+}
+

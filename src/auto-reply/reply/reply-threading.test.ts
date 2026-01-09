@@ -40,6 +40,13 @@ describe("createReplyToModeFilter", () => {
     expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBeUndefined();
   });
 
+  it("keeps replyToId when mode is off and reply tags are allowed", () => {
+    const filter = createReplyToModeFilter("off", { allowTagsWhenOff: true });
+    expect(
+      filter({ text: "hi", replyToId: "1", replyToTag: true }).replyToId,
+    ).toBe("1");
+  });
+
   it("keeps replyToId when mode is all", () => {
     const filter = createReplyToModeFilter("all");
     expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");

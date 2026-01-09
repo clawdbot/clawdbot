@@ -9,6 +9,11 @@ export {
   modelsAuthSetupTokenCommand,
 } from "./models/auth.js";
 export {
+  modelsAuthOrderClearCommand,
+  modelsAuthOrderGetCommand,
+  modelsAuthOrderSetCommand,
+} from "./models/auth-order.js";
+export {
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,

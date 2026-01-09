@@ -103,6 +103,8 @@ import {
   SessionsPatchParamsSchema,
   type SessionsResetParams,
   SessionsResetParamsSchema,
+  type SessionsResolveParams,
+  SessionsResolveParamsSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsInstallParams,
@@ -200,6 +202,9 @@ export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(
 );
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(
   SessionsListParamsSchema,
+);
+export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
+  SessionsResolveParamsSchema,
 );
 export const validateSessionsPatchParams = ajv.compile<SessionsPatchParams>(
   SessionsPatchParamsSchema,
@@ -417,6 +422,7 @@ export type {
   NodeListParams,
   NodeInvokeParams,
   SessionsListParams,
+  SessionsResolveParams,
   SessionsPatchParams,
   SessionsResetParams,
   SessionsDeleteParams,

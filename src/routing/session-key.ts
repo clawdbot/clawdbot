@@ -7,6 +7,13 @@ export type ParsedAgentSessionKey = {
   rest: string;
 };
 
+export function resolveAgentIdFromSessionKey(
+  sessionKey: string | undefined | null,
+): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+}
+
 export function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return DEFAULT_AGENT_ID;

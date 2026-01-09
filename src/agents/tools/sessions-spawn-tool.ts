@@ -126,17 +126,7 @@ export function createSessionsSpawnTool(opts?: {
         }
       }
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
-      if (opts?.sandboxed === true) {
-        try {
-          await callGateway({
-            method: "sessions.patch",
-            params: { key: childSessionKey, spawnedBy: requesterInternalKey },
-            timeoutMs: 10_000,
-          });
-        } catch {
-          // best-effort; scoping relies on this metadata but spawning still works without it
-        }
-      }
+      const shouldPatchSpawnedBy = opts?.sandboxed === true;
       if (model) {
         try {
           await callGateway({
@@ -185,6 +175,8 @@ export function createSessionsSpawnTool(opts?: {
             lane: "subagent",
             extraSystemPrompt: childSystemPrompt,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
+            label: label || undefined,
+            spawnedBy: shouldPatchSpawnedBy ? requesterInternalKey : undefined,
           },
           timeoutMs: 10_000,
         })) as { runId?: string };
@@ -214,6 +206,7 @@ export function createSessionsSpawnTool(opts?: {
         requesterDisplayKey,
         task,
         cleanup,
+        label: label || undefined,
       });
 
       return jsonResult({

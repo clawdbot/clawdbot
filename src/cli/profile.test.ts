@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
 describe("parseCliProfileArgs", () => {
-  it("strips --dev anywhere in argv", () => {
+  it("leaves gateway --dev for subcommands", () => {
     const res = parseCliProfileArgs([
       "node",
       "clawdbot",
@@ -12,13 +12,21 @@ describe("parseCliProfileArgs", () => {
       "--allow-unconfigured",
     ]);
     if (!res.ok) throw new Error(res.error);
-    expect(res.profile).toBe("dev");
+    expect(res.profile).toBeNull();
     expect(res.argv).toEqual([
       "node",
       "clawdbot",
       "gateway",
+      "--dev",
       "--allow-unconfigured",
     ]);
+  });
+
+  it("still accepts global --dev before subcommand", () => {
+    const res = parseCliProfileArgs(["node", "clawdbot", "--dev", "gateway"]);
+    if (!res.ok) throw new Error(res.error);
+    expect(res.profile).toBe("dev");
+    expect(res.argv).toEqual(["node", "clawdbot", "gateway"]);
   });
 
   it("parses --profile value and strips it", () => {

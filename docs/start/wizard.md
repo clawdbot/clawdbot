@@ -70,6 +70,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Full reset (also removes workspace)
 
 2) **Model/Auth**
+   - **Preferred Anthropic setup:** install Claude CLI on the gateway host and run `claude setup-token` (the wizard can run it for you and reuse the token).
    - **Anthropic OAuth (Claude CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
    - **Anthropic token (paste setup-token)**: run `claude setup-token` in your terminal, then paste the token (you can name it; blank = default).
    - **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.

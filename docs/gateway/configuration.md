@@ -935,6 +935,14 @@ Controls inbound/outbound prefixes and optional ack reactions.
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across providers unless already present.
 
+If `messages.responsePrefix` is unset and the routed agent has `identity.name`
+set, Clawdbot defaults the prefix to `[{identity.name}]`.
+
+If `messages.messagePrefix` is unset, the default stays **unchanged**:
+`"[clawdbot]"` when `whatsapp.allowFrom` is empty, otherwise `""` (no prefix).
+When using `"[clawdbot]"`, Clawdbot will instead use `[{identity.name}]` when
+the routed agent has `identity.name` set.
+
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
 on providers that support reactions (Slack/Discord/Telegram). Defaults to the
 active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.

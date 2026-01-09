@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import {
@@ -28,28 +28,18 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-reply-"));
-  const previousHome = process.env.HOME;
-  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.HOME = base;
-  process.env.CLAWDBOT_STATE_DIR = path.join(base, ".clawdbot");
-  process.env.CLAWDBOT_AGENT_DIR = path.join(base, ".clawdbot", "agent");
-  process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
-  try {
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
-    else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-    if (previousAgentDir === undefined) delete process.env.CLAWDBOT_AGENT_DIR;
-    else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
-    if (previousPiAgentDir === undefined)
-      delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(
+    async (home) => {
+      return await fn(home);
+    },
+    {
+      env: {
+        CLAWDBOT_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+        PI_CODING_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+      },
+      prefix: "clawdbot-reply-",
+    },
+  );
 }
 
 describe("directive behavior", () => {
@@ -227,6 +217,42 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello [[reply_to_current]]" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-123",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload?.text).toBe("hello");
+      expect(payload?.replyToId).toBe("msg-123");
+    });
+  });
+
+  it("strips reply tags with whitespace and maps reply_to_current to MessageSid", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello [[ reply_to_current ]]" }],
         meta: {
           durationMs: 5,
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
@@ -1131,7 +1157,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
-      const authDir = path.join(home, ".clawdbot", "agent");
+      const authDir = path.join(home, ".clawdbot", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
       await fs.writeFile(
         path.join(authDir, "auth-profiles.json"),

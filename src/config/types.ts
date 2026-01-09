@@ -891,8 +891,8 @@ export type AudioConfig = {
 };
 
 export type MessagesConfig = {
-  messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
-  responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
+  messagePrefix?: string; // Prefix added to all inbound messages (default: "[{agents.list[].identity.name}]" or "[clawdbot]" if no allowFrom, else "")
+  responsePrefix?: string; // Prefix auto-added to all outbound replies (default: "[{agents.list[].identity.name}]" when set, else none)
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
@@ -1202,13 +1202,14 @@ export type AgentDefaultsConfig = {
     every?: string;
     /** Heartbeat model override (provider/model). */
     model?: string;
-    /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|none). */
+    /** Delivery target (last|whatsapp|telegram|discord|slack|msteams|signal|imessage|none). */
     target?:
       | "last"
       | "whatsapp"
       | "telegram"
       | "discord"
       | "slack"
+      | "msteams"
       | "signal"
       | "imessage"
       | "none";

@@ -28,6 +28,7 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
+import { listChatCommands } from "./commands-registry.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -357,6 +358,33 @@ export function buildHelpMessage(): string {
   return [
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink (if enabled)",
-    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off",
+    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off | /debug show",
+    "More: /commands for all slash commands",
   ].join("\n");
+}
+
+export function buildCommandsMessage(): string {
+  const lines = ["ℹ️ Slash commands"];
+  for (const command of listChatCommands()) {
+    const primary = command.nativeName
+      ? `/${command.nativeName}`
+      : command.textAliases[0]?.trim() || `/${command.key}`;
+    const seen = new Set<string>();
+    const aliases = command.textAliases
+      .map((alias) => alias.trim())
+      .filter(Boolean)
+      .filter((alias) => alias.toLowerCase() !== primary.toLowerCase())
+      .filter((alias) => {
+        const key = alias.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    const aliasLabel = aliases.length
+      ? ` (aliases: ${aliases.join(", ")})`
+      : "";
+    const scopeLabel = command.scope === "text" ? " (text-only)" : "";
+    lines.push(`${primary}${aliasLabel}${scopeLabel} - ${command.description}`);
+  }
+  return lines.join("\n");
 }

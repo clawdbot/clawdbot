@@ -222,6 +222,7 @@ export function buildAgentSystemPrompt(params: {
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
     "- [[reply_to_current]] replies to the triggering message.",
     "- [[reply_to:<id>]] replies to a specific message id when you have it.",
+    "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
     "Tags are stripped before sending; support depends on the current provider config.",
     "",
     "## Messaging",

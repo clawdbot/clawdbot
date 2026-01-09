@@ -8,6 +8,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
 import { logInfo } from "../logger.js";
+import { sliceUtf16Safe } from "../utils.js";
 import {
   addSession,
   appendOutput,
@@ -1041,7 +1042,7 @@ function chunkString(input: string, limit = CHUNK_LIMIT) {
 function truncateMiddle(str: string, max: number) {
   if (str.length <= max) return str;
   const half = Math.floor((max - 3) / 2);
-  return `${str.slice(0, half)}...${str.slice(str.length - half)}`;
+  return `${sliceUtf16Safe(str, 0, half)}...${sliceUtf16Safe(str, -half)}`;
 }
 
 function sliceLogLines(

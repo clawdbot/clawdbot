@@ -99,6 +99,33 @@ describe("routeReply", () => {
     );
   });
 
+  it("derives responsePrefix from agent identity when routing", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "rich",
+            identity: { name: "Richbot", theme: "lion bot", emoji: "🦁" },
+          },
+        ],
+      },
+      messages: {},
+    } as unknown as ClawdbotConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      sessionKey: "agent:rich:main",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "[Richbot] hi",
+      expect.any(Object),
+    );
+  });
+
   it("passes thread id to Telegram sends", async () => {
     mocks.sendMessageTelegram.mockClear();
     await routeReply({

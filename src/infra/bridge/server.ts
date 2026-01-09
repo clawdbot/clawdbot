@@ -160,6 +160,14 @@ function isTestEnv() {
   return process.env.NODE_ENV === "test" || Boolean(process.env.VITEST);
 }
 
+export function configureNodeBridgeSocket(socket: {
+  setNoDelay: (noDelay?: boolean) => void;
+  setKeepAlive: (enable?: boolean, initialDelay?: number) => void;
+}) {
+  socket.setNoDelay(true);
+  socket.setKeepAlive(true, 15_000);
+}
+
 function encodeLine(frame: AnyBridgeFrame) {
   return `${JSON.stringify(frame)}\n`;
 }
@@ -228,7 +236,7 @@ export async function startNodeBridgeServer(
   const loopbackHost = "127.0.0.1";
 
   const onConnection = (socket: net.Socket) => {
-    socket.setNoDelay(true);
+    configureNodeBridgeSocket(socket);
 
     let buffer = "";
     let isAuthenticated = false;

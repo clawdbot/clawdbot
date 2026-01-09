@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hasControlCommand } from "./command-detection.js";
+import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
 
@@ -37,14 +38,23 @@ describe("control command parsing", () => {
   });
 
   it("treats bare commands as non-control", () => {
-    expect(hasControlCommand("/send")).toBe(true);
     expect(hasControlCommand("send")).toBe(false);
-    expect(hasControlCommand("/help")).toBe(true);
-    expect(hasControlCommand("/help:")).toBe(true);
     expect(hasControlCommand("help")).toBe(false);
-    expect(hasControlCommand("/status")).toBe(true);
-    expect(hasControlCommand("/status:")).toBe(true);
+    expect(hasControlCommand("/commands")).toBe(true);
+    expect(hasControlCommand("/commands:")).toBe(true);
+    expect(hasControlCommand("commands")).toBe(false);
+    expect(hasControlCommand("/compact")).toBe(true);
+    expect(hasControlCommand("/compact:")).toBe(true);
+    expect(hasControlCommand("compact")).toBe(false);
     expect(hasControlCommand("status")).toBe(false);
+    expect(hasControlCommand("usage")).toBe(false);
+
+    for (const command of listChatCommands()) {
+      for (const alias of command.textAliases) {
+        expect(hasControlCommand(alias)).toBe(true);
+        expect(hasControlCommand(`${alias}:`)).toBe(true);
+      }
+    }
   });
 
   it("requires commands to be the full message", () => {

@@ -138,19 +138,40 @@ export type HookAgentPayload = {
   wakeMode: "now" | "next-heartbeat";
   sessionKey: string;
   deliver: boolean;
-  provider:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage";
+  provider: HookMessageProvider;
   to?: string;
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
 };
+
+const HOOK_PROVIDER_VALUES = [
+  "last",
+  "whatsapp",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "msteams",
+] as const;
+
+export type HookMessageProvider = (typeof HOOK_PROVIDER_VALUES)[number];
+
+const hookProviderSet = new Set<string>(HOOK_PROVIDER_VALUES);
+export const HOOK_PROVIDER_ERROR = `provider must be ${HOOK_PROVIDER_VALUES.join("|")}`;
+
+export function resolveHookProvider(raw: unknown): HookMessageProvider | null {
+  if (raw === undefined) return "last";
+  if (typeof raw !== "string") return null;
+  const normalized = normalizeMessageProvider(raw);
+  if (!normalized || !hookProviderSet.has(normalized)) return null;
+  return normalized as HookMessageProvider;
+}
+
+export function resolveHookDeliver(raw: unknown): boolean {
+  return raw !== false;
+}
 
 export function normalizeAgentPayload(
   payload: Record<string, unknown>,
@@ -175,30 +196,8 @@ export function normalizeAgentPayload(
     typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()
       ? sessionKeyRaw.trim()
       : `hook:${idFactory()}`;
-  const providerRaw = payload.provider;
-  const providerNormalized =
-    typeof providerRaw === "string"
-      ? normalizeMessageProvider(providerRaw)
-      : undefined;
-  const provider =
-    providerNormalized === "whatsapp" ||
-    providerNormalized === "telegram" ||
-    providerNormalized === "discord" ||
-    providerNormalized === "slack" ||
-    providerNormalized === "signal" ||
-    providerNormalized === "imessage" ||
-    providerNormalized === "last"
-      ? providerNormalized
-      : providerRaw === undefined
-        ? "last"
-        : null;
-  if (provider === null) {
-    return {
-      ok: false,
-      error:
-        "provider must be last|whatsapp|telegram|discord|slack|signal|imessage",
-    };
-  }
+  const provider = resolveHookProvider(payload.provider);
+  if (!provider) return { ok: false, error: HOOK_PROVIDER_ERROR };
   const toRaw = payload.to;
   const to =
     typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
@@ -210,7 +209,7 @@ export function normalizeAgentPayload(
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
-  const deliver = payload.deliver === true;
+  const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking =
     typeof thinkingRaw === "string" && thinkingRaw.trim()

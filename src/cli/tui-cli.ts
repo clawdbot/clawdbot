@@ -18,6 +18,7 @@ export function registerTuiCli(program: Command) {
     )
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")
+    .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms", "30000")
     .option("--history-limit <n>", "History entries to load", "200")
     .action(async (opts) => {
@@ -37,6 +38,7 @@ export function registerTuiCli(program: Command) {
           session: opts.session as string | undefined,
           deliver: Boolean(opts.deliver),
           thinking: opts.thinking as string | undefined,
+          message: opts.message as string | undefined,
           timeoutMs: Number.isNaN(timeoutMs) ? undefined : timeoutMs,
           historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
         });

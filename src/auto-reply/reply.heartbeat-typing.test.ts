@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 
@@ -43,16 +43,13 @@ vi.mock("../web/session.js", () => webMocks);
 import { getReplyFromConfig } from "./reply.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(join(tmpdir(), "clawdbot-typing-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = base;
-  try {
-    runEmbeddedPiAgentMock.mockClear();
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(
+    async (home) => {
+      runEmbeddedPiAgentMock.mockClear();
+      return await fn(home);
+    },
+    { prefix: "clawdbot-typing-" },
+  );
 }
 
 function makeCfg(home: string) {

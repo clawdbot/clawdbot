@@ -119,6 +119,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       expect.anything(),
       expect.objectContaining({
         sink: { concurrency: 3 },
+        runner: expect.objectContaining({ silent: true }),
       }),
     );
   });

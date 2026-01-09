@@ -24,6 +24,7 @@ import {
 import { createClawdbotTools } from "./clawdbot-tools.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -154,128 +155,6 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   return existing;
 }
 
-// Check if an anyOf array contains only literal values that can be flattened
-// TypeBox Type.Literal generates { const: "value", type: "string" }
-// Some schemas may use { enum: ["value"], type: "string" }
-// Both patterns are flattened to { type: "string", enum: ["a", "b", ...] }
-function tryFlattenLiteralAnyOf(
-  anyOf: unknown[],
-): { type: string; enum: unknown[] } | null {
-  if (anyOf.length === 0) return null;
-
-  const allValues: unknown[] = [];
-  let commonType: string | null = null;
-
-  for (const variant of anyOf) {
-    if (!variant || typeof variant !== "object") return null;
-    const v = variant as Record<string, unknown>;
-
-    // Extract the literal value - either from const or single-element enum
-    let literalValue: unknown;
-    if ("const" in v) {
-      literalValue = v.const;
-    } else if (Array.isArray(v.enum) && v.enum.length === 1) {
-      literalValue = v.enum[0];
-    } else {
-      return null; // Not a literal pattern
-    }
-
-    // Must have consistent type (usually "string")
-    const variantType = typeof v.type === "string" ? v.type : null;
-    if (!variantType) return null;
-    if (commonType === null) commonType = variantType;
-    else if (commonType !== variantType) return null;
-
-    allValues.push(literalValue);
-  }
-
-  if (commonType && allValues.length > 0) {
-    return { type: commonType, enum: allValues };
-  }
-  return null;
-}
-
-function cleanSchemaForGemini(schema: unknown): unknown {
-  if (!schema || typeof schema !== "object") return schema;
-  if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
-
-  const obj = schema as Record<string, unknown>;
-  const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
-
-  // Try to flatten anyOf of literals to a single enum BEFORE processing
-  // This handles Type.Union([Type.Literal("a"), Type.Literal("b")]) patterns
-  if (hasAnyOf) {
-    const flattened = tryFlattenLiteralAnyOf(obj.anyOf as unknown[]);
-    if (flattened) {
-      // Return flattened enum, preserving metadata (description, title, default, examples)
-      const result: Record<string, unknown> = {
-        type: flattened.type,
-        enum: flattened.enum,
-      };
-      for (const key of ["description", "title", "default", "examples"]) {
-        if (key in obj && obj[key] !== undefined) {
-          result[key] = obj[key];
-        }
-      }
-      return result;
-    }
-  }
-
-  const cleaned: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(obj)) {
-    // Skip unsupported schema features for Gemini:
-    // - patternProperties: not in OpenAPI 3.0 subset
-    // - const: convert to enum with single value instead
-    if (key === "patternProperties") {
-      // Gemini doesn't support patternProperties - skip it
-      continue;
-    }
-
-    // Convert const to enum (Gemini doesn't support const)
-    if (key === "const") {
-      cleaned.enum = [value];
-      continue;
-    }
-
-    // Skip 'type' if we have 'anyOf' — Gemini doesn't allow both
-    if (key === "type" && hasAnyOf) {
-      continue;
-    }
-
-    if (key === "properties" && value && typeof value === "object") {
-      // Recursively clean nested properties
-      const props = value as Record<string, unknown>;
-      cleaned[key] = Object.fromEntries(
-        Object.entries(props).map(([k, v]) => [k, cleanSchemaForGemini(v)]),
-      );
-    } else if (key === "items" && value && typeof value === "object") {
-      // Recursively clean array items schema
-      cleaned[key] = cleanSchemaForGemini(value);
-    } else if (key === "anyOf" && Array.isArray(value)) {
-      // Clean each anyOf variant
-      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
-    } else if (key === "oneOf" && Array.isArray(value)) {
-      // Clean each oneOf variant
-      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
-    } else if (key === "allOf" && Array.isArray(value)) {
-      // Clean each allOf variant
-      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
-    } else if (
-      key === "additionalProperties" &&
-      value &&
-      typeof value === "object"
-    ) {
-      // Recursively clean additionalProperties schema
-      cleaned[key] = cleanSchemaForGemini(value);
-    } else {
-      cleaned[key] = value;
-    }
-  }
-
-  return cleaned;
-}
-
 function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
@@ -392,6 +271,10 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
         "additionalProperties" in schema ? schema.additionalProperties : true,
     }),
   };
+}
+
+function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
+  return cleanSchemaForGemini(schema);
 }
 
 function normalizeToolNames(list?: string[]) {
@@ -612,6 +495,10 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
     },
   };
 }
+
+export const __testing = {
+  cleanToolSchemaForGemini,
+} as const;
 
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;

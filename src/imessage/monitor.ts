@@ -1,3 +1,4 @@
+import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
@@ -24,6 +25,7 @@ import {
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
@@ -413,14 +415,15 @@ export async function monitorIMessageProvider(
     }
 
     if (shouldLogVerbose()) {
-      const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+      const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
       logVerbose(
         `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
       );
     }
 
     const dispatcher = createReplyDispatcher({
-      responsePrefix: cfg.messages?.responsePrefix,
+      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+        .responsePrefix,
       deliver: async (payload) => {
         await deliverReplies({
           replies: [payload],

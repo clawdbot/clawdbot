@@ -1,3 +1,4 @@
+import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ClawdbotConfig, MSTeamsReplyStyle } from "../config/types.js";
 import { danger } from "../globals.js";
@@ -18,6 +19,7 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: ClawdbotConfig;
+  agentId: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   adapter: MSTeamsAdapter;
@@ -36,7 +38,8 @@ export function createMSTeamsReplyDispatcher(params: {
   };
 
   return createReplyDispatcherWithTyping({
-    responsePrefix: params.cfg.messages?.responsePrefix,
+    responsePrefix: resolveEffectiveMessagesConfig(params.cfg, params.agentId)
+      .responsePrefix,
     deliver: async (payload) => {
       const messages = renderReplyPayloadsToMessages([payload], {
         textChunkLimit: params.textLimit,

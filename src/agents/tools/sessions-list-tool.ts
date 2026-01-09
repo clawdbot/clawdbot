@@ -25,6 +25,7 @@ type SessionListRow = {
   key: string;
   kind: SessionKind;
   provider: string;
+  label?: string;
   displayName?: string;
   updatedAt?: number | null;
   sessionId?: string;
@@ -205,6 +206,7 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           provider: derivedProvider,
+          label: typeof entry.label === "string" ? entry.label : undefined,
           displayName:
             typeof entry.displayName === "string"
               ? entry.displayName

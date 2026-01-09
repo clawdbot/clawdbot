@@ -240,7 +240,23 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: oauth|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip",
+      "Auth: setup-token|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip",
+    )
+    .option(
+      "--token-provider <id>",
+      "Token provider id (non-interactive; used with --auth-choice token)",
+    )
+    .option(
+      "--token <token>",
+      "Token value (non-interactive; used with --auth-choice token)",
+    )
+    .option(
+      "--token-profile-id <id>",
+      "Auth profile id (non-interactive; default: <provider>:manual)",
+    )
+    .option(
+      "--token-expires-in <duration>",
+      "Optional token expiry duration (e.g. 365d, 12h)",
     )
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--openai-api-key <key>", "OpenAI API key")
@@ -270,6 +286,7 @@ export function buildProgram() {
             mode: opts.mode as "local" | "remote" | undefined,
             authChoice: opts.authChoice as
               | "oauth"
+              | "setup-token"
               | "claude-cli"
               | "token"
               | "openai-codex"
@@ -282,6 +299,10 @@ export function buildProgram() {
               | "minimax"
               | "skip"
               | undefined,
+            tokenProvider: opts.tokenProvider as string | undefined,
+            token: opts.token as string | undefined,
+            tokenProfileId: opts.tokenProfileId as string | undefined,
+            tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
             openaiApiKey: opts.openaiApiKey as string | undefined,
             geminiApiKey: opts.geminiApiKey as string | undefined,

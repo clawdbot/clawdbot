@@ -1,3 +1,4 @@
+import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
@@ -268,7 +269,10 @@ export async function runHeartbeatOnce(opts: {
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg);
     const normalized = normalizeHeartbeatReply(
       replyPayload,
-      cfg.messages?.responsePrefix,
+      resolveEffectiveMessagesConfig(
+        cfg,
+        resolveAgentIdFromSessionKey(sessionKey),
+      ).responsePrefix,
       ackMaxChars,
     );
     if (normalized.shouldSkip && !normalized.hasMedia) {

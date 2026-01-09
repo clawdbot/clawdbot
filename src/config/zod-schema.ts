@@ -601,6 +601,7 @@ const HeartbeatSchema = z
         z.literal("telegram"),
         z.literal("discord"),
         z.literal("slack"),
+        z.literal("msteams"),
         z.literal("signal"),
         z.literal("imessage"),
         z.literal("none"),

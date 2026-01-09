@@ -34,6 +34,7 @@ export type TuiOptions = {
   thinking?: string;
   timeoutMs?: number;
   historyLimit?: number;
+  message?: string;
 };
 
 type ChatEvent = {
@@ -146,6 +147,8 @@ export async function runTui(opts: TuiOptions) {
   let toolsExpanded = false;
   let showThinking = false;
   let deliverDefault = Boolean(opts.deliver);
+  const autoMessage = opts.message?.trim();
+  let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
 
@@ -976,6 +979,10 @@ export async function runTui(opts: TuiOptions) {
         await loadHistory();
         chatLog.addSystem("gateway connected");
         tui.requestRender();
+        if (!autoMessageSent && autoMessage) {
+          autoMessageSent = true;
+          await sendMessage(autoMessage);
+        }
       } else {
         chatLog.addSystem("gateway reconnected");
       }

@@ -582,6 +582,7 @@ export async function getReplyFromConfig(
     directives,
     effectiveModelDirective,
     cfg,
+    agentDir,
     sessionEntry,
     sessionStore,
     sessionKey,

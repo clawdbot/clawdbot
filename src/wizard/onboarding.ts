@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import {
   applyAuthChoice,
   warnIfModelConfigLooksOff,
@@ -52,6 +54,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -654,6 +657,11 @@ export async function runOnboardingWizard(
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
     : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+  const bootstrapPath = path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const hasBootstrap = await fs
+    .access(bootstrapPath)
+    .then(() => true)
+    .catch(() => false);
 
   await prompter.note(
     [
@@ -668,33 +676,58 @@ export async function runOnboardingWizard(
     "Control UI",
   );
 
-  const browserSupport = await detectBrowserOpenSupport();
   if (gatewayProbe.ok) {
-    if (!browserSupport.ok) {
+    if (hasBootstrap) {
       await prompter.note(
-        formatControlUiSshHint({
-          port,
-          basePath: baseConfig.gateway?.controlUi?.basePath,
-          token: authMode === "token" ? gatewayToken : undefined,
-        }),
-        "Open Control UI",
+        [
+          "This is the defining action that makes your agent you.",
+          "Please take your time.",
+          "The more you tell it, the better the experience will be.",
+          'We will send: "Wake up, my friend!"',
+        ].join("\n"),
+        "Start TUI (best option!)",
       );
-    } else {
-      const wantsOpen = await prompter.confirm({
-        message: "Open Control UI now?",
+      const wantsTui = await prompter.confirm({
+        message: "Start TUI now? (best option!)",
         initialValue: true,
       });
-      if (wantsOpen) {
-        const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
-        if (!opened) {
-          await prompter.note(
-            formatControlUiSshHint({
-              port,
-              basePath: baseConfig.gateway?.controlUi?.basePath,
-              token: authMode === "token" ? gatewayToken : undefined,
-            }),
-            "Open Control UI",
-          );
+      if (wantsTui) {
+        await runTui({
+          url: links.wsUrl,
+          token: authMode === "token" ? gatewayToken : undefined,
+          password:
+            authMode === "password" ? baseConfig.gateway?.auth?.password : "",
+          message: "Wake up, my friend!",
+        });
+      }
+    } else {
+      const browserSupport = await detectBrowserOpenSupport();
+      if (!browserSupport.ok) {
+        await prompter.note(
+          formatControlUiSshHint({
+            port,
+            basePath: baseConfig.gateway?.controlUi?.basePath,
+            token: authMode === "token" ? gatewayToken : undefined,
+          }),
+          "Open Control UI",
+        );
+      } else {
+        const wantsOpen = await prompter.confirm({
+          message: "Open Control UI now?",
+          initialValue: true,
+        });
+        if (wantsOpen) {
+          const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
+          if (!opened) {
+            await prompter.note(
+              formatControlUiSshHint({
+                port,
+                basePath: baseConfig.gateway?.controlUi?.basePath,
+                token: authMode === "token" ? gatewayToken : undefined,
+              }),
+              "Open Control UI",
+            );
+          }
         }
       }
     }

@@ -216,7 +216,68 @@ export async function applyAuthChoice(params: {
       provider: "anthropic",
       mode: "token",
     });
-  } else if (params.authChoice === "token" || params.authChoice === "oauth") {
+  } else if (
+    params.authChoice === "setup-token" ||
+    params.authChoice === "oauth"
+  ) {
+    await params.prompter.note(
+      [
+        "This will run `claude setup-token` to create a long-lived Anthropic token.",
+        "Requires an interactive TTY and a Claude Pro/Max subscription.",
+      ].join("\n"),
+      "Anthropic setup-token",
+    );
+
+    if (!process.stdin.isTTY) {
+      await params.prompter.note(
+        "`claude setup-token` requires an interactive TTY.",
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    const proceed = await params.prompter.confirm({
+      message: "Run `claude setup-token` now?",
+      initialValue: true,
+    });
+    if (!proceed) return { config: nextConfig, agentModelOverride };
+
+    const res = await (async () => {
+      const { spawnSync } = await import("node:child_process");
+      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+    })();
+    if (res.error) {
+      await params.prompter.note(
+        `Failed to run claude: ${String(res.error)}`,
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+    if (typeof res.status === "number" && res.status !== 0) {
+      await params.prompter.note(
+        `claude setup-token failed (exit ${res.status})`,
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: true,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      await params.prompter.note(
+        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "token",
+    });
+  } else if (params.authChoice === "token") {
     const provider = (await params.prompter.select({
       message: "Token provider",
       options: [{ value: "anthropic", label: "Anthropic (only supported)" }],

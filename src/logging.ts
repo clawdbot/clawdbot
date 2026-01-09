@@ -503,13 +503,19 @@ function formatConsoleLine(opts: {
 }
 
 function writeConsoleLine(level: Level, line: string) {
+  const sanitized =
+    process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
+      ? line
+          .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?")
+          .replace(/[\uD800-\uDFFF]/g, "?")
+      : line;
   const sink = rawConsole ?? console;
   if (forceConsoleToStderr || level === "error" || level === "fatal") {
-    (sink.error ?? console.error)(line);
+    (sink.error ?? console.error)(sanitized);
   } else if (level === "warn") {
-    (sink.warn ?? console.warn)(line);
+    (sink.warn ?? console.warn)(sanitized);
   } else {
-    (sink.log ?? console.log)(line);
+    (sink.log ?? console.log)(sanitized);
   }
 }
 

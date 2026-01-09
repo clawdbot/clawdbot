@@ -3,13 +3,11 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace.js";
+
+export { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 type AgentEntry = NonNullable<
   NonNullable<ClawdbotConfig["agents"]>["list"]
@@ -28,13 +26,6 @@ type ResolvedAgentConfig = {
 };
 
 let defaultAgentWarned = false;
-
-export function resolveAgentIdFromSessionKey(
-  sessionKey?: string | null,
-): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
-}
 
 function listAgents(cfg: ClawdbotConfig): AgentEntry[] {
   const list = cfg.agents?.list;

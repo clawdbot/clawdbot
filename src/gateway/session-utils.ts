@@ -34,6 +34,7 @@ export type GatewaySessionsDefaults = {
 export type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
+  label?: string;
   displayName?: string;
   provider?: string;
   subject?: string;
@@ -434,6 +435,7 @@ export function listSessionsFromStore(params: {
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+  const label = typeof opts.label === "string" ? opts.label.trim() : "";
   const agentId =
     typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const activeMinutes =
@@ -458,6 +460,10 @@ export function listSessionsFromStore(params: {
       if (!spawnedBy) return true;
       if (key === "unknown" || key === "global") return false;
       return entry?.spawnedBy === spawnedBy;
+    })
+    .filter(([, entry]) => {
+      if (!label) return true;
+      return entry?.label === label;
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
@@ -485,6 +491,7 @@ export function listSessionsFromStore(params: {
       return {
         key,
         kind: classifySessionKey(key, entry),
+        label: entry?.label,
         displayName,
         provider,
         subject,

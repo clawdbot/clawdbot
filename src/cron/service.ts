@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { truncateUtf16Safe } from "../utils.js";
 import { computeNextRunAtMs } from "./schedule.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type {
@@ -61,7 +62,7 @@ function normalizeOptionalText(raw: unknown) {
 
 function truncateText(input: string, maxLen: number) {
   if (input.length <= maxLen) return input;
-  return `${input.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+  return `${truncateUtf16Safe(input, Math.max(0, maxLen - 1)).trimEnd()}…`;
 }
 
 function inferLegacyName(job: {

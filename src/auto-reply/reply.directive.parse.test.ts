@@ -144,6 +144,12 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("thats not /tmp/hello");
   });
 
+  it("preserves spacing when stripping usage directives before paths", () => {
+    const res = extractStatusDirective("thats not /usage:/tmp/hello");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("thats not /tmp/hello");
+  });
+
   it("parses queue options and modes", () => {
     const res = extractQueueDirective(
       "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
@@ -162,8 +168,20 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("ok");
   });
 
+  it("extracts reply_to_current tag with whitespace", () => {
+    const res = extractReplyToTag("ok [[ reply_to_current ]]", "msg-1");
+    expect(res.replyToId).toBe("msg-1");
+    expect(res.cleaned).toBe("ok");
+  });
+
   it("extracts reply_to id tag", () => {
     const res = extractReplyToTag("see [[reply_to:12345]] now", "msg-1");
+    expect(res.replyToId).toBe("12345");
+    expect(res.cleaned).toBe("see now");
+  });
+
+  it("extracts reply_to id tag with whitespace", () => {
+    const res = extractReplyToTag("see [[ reply_to : 12345 ]] now", "msg-1");
     expect(res.replyToId).toBe("12345");
     expect(res.cleaned).toBe("see now");
   });
