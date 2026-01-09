@@ -7,6 +7,10 @@ import type {
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 
 function normalizeDiscordSlug(value?: string | null) {
   if (!value) return "";
@@ -199,10 +203,11 @@ export function buildGroupIntro(params: {
   const provider = params.sessionCtx.Provider?.trim().toLowerCase();
   const providerLabel = (() => {
     if (!provider) return "chat";
-    if (provider === "whatsapp") return "WhatsApp";
-    if (provider === "telegram") return "Telegram";
-    if (provider === "discord") return "Discord";
     if (provider === "webchat") return "WebChat";
+    const normalized = normalizeProviderId(provider);
+    if (normalized) {
+      return getProviderPlugin(normalized)?.meta.label ?? normalized;
+    }
     return `${provider.at(0)?.toUpperCase() ?? ""}${provider.slice(1)}`;
   })();
   const subjectLine = subject
