@@ -29,6 +29,7 @@ import {
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
+import { CHAT_PROVIDER_ORDER } from "../providers/registry.js";
 import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
