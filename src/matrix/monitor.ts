@@ -51,6 +51,12 @@ import {
 } from "./client.js";
 import { decryptMatrixAttachment } from "./crypto-attachments.js";
 import {
+  formatPollAsText,
+  isPollStartType,
+  type PollStartContent,
+  parsePollStartContent,
+} from "./poll-types.js";
+import {
   reactMatrixMessage,
   sendMessageMatrix,
   sendTypingMatrix,
@@ -495,7 +501,10 @@ export async function monitorMatrixProvider(
     try {
       if (!room) return;
       if (toStartOfTimeline) return;
-      if (event.getType() !== EventType.RoomMessage) return;
+      // Handle both regular messages and poll events
+      const eventType = event.getType();
+      const isPollEvent = isPollStartType(eventType);
+      if (eventType !== EventType.RoomMessage && !isPollEvent) return;
       if (event.isRedacted()) return;
       const senderId = event.getSender();
       if (!senderId) return;
@@ -513,7 +522,28 @@ export async function monitorMatrixProvider(
         return;
       }
 
-      const content = event.getContent<RoomMessageEventContent>();
+      // For poll events, parse the poll content and convert to text
+      let content = event.getContent<RoomMessageEventContent>();
+      if (isPollEvent) {
+        const pollStartContent = event.getContent<PollStartContent>();
+        const pollSummary = parsePollStartContent(pollStartContent);
+        if (pollSummary) {
+          pollSummary.eventId = event.getId() ?? "";
+          pollSummary.roomId = room.roomId;
+          pollSummary.sender = senderId;
+          pollSummary.senderName = room.getMember(senderId)?.name ?? senderId;
+          const pollText = formatPollAsText(pollSummary);
+          // Create synthetic content for downstream processing
+          content = {
+            msgtype: "m.text",
+            body: pollText,
+          } as unknown as RoomMessageEventContent;
+        } else {
+          // Couldn't parse poll, skip
+          return;
+        }
+      }
+
       const relates = content["m.relates_to"];
       if (relates && "rel_type" in relates) {
         if (relates.rel_type === RelationType.Replace) return;
@@ -600,7 +630,9 @@ export async function monitorMatrixProvider(
                   );
                 } catch (err) {
                   logVerbose(
-                    `matrix pairing reply failed for ${senderId}: ${String(err)}`,
+                    `matrix pairing reply failed for ${senderId}: ${String(
+                      err,
+                    )}`,
                   );
                 }
               }
@@ -883,7 +915,9 @@ export async function monitorMatrixProvider(
       if (shouldLogVerbose()) {
         const finalCount = counts.final;
         logVerbose(
-          `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
+          `matrix: delivered ${finalCount} reply${
+            finalCount === 1 ? "" : "ies"
+          } to ${replyTarget}`,
         );
       }
       if (didSendReply) {
