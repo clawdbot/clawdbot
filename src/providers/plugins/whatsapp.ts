@@ -28,7 +28,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
   meta: {
     ...meta,
-    aliases: [],
+    aliases: ["web"],
     showConfigured: false,
   },
   capabilities: {

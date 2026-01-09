@@ -1,4 +1,5 @@
 import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
+import { normalizeProviderId } from "../../providers/plugins/index.js";
 import {
   ErrorCodes,
   errorShape,
@@ -27,7 +28,19 @@ export const webHandlers: GatewayRequestHandlers = {
         typeof (params as { accountId?: unknown }).accountId === "string"
           ? (params as { accountId?: string }).accountId
           : undefined;
-      await context.stopProvider("whatsapp", accountId);
+      const providerId = normalizeProviderId("web");
+      if (!providerId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "web provider is not available",
+          ),
+        );
+        return;
+      }
+      await context.stopProvider(providerId, accountId);
       const result = await startWebLoginWithQr({
         force: Boolean((params as { force?: boolean }).force),
         timeoutMs:
@@ -71,7 +84,19 @@ export const webHandlers: GatewayRequestHandlers = {
         accountId,
       });
       if (result.connected) {
-        await context.startProvider("whatsapp", accountId);
+        const providerId = normalizeProviderId("web");
+        if (!providerId) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "web provider is not available",
+            ),
+          );
+          return;
+        }
+        await context.startProvider(providerId, accountId);
       }
       respond(true, result, undefined);
     } catch (err) {
