@@ -1,7 +1,7 @@
 import {
   getProviderPlugin,
   normalizeProviderId,
-} from "../providers/plugins/index.js";
+} from "../../providers/plugins/index.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
 export type OutboundDeliveryJson = {

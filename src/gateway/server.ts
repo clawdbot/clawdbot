@@ -1867,7 +1867,7 @@ export async function startGatewayServer(
     const providerRaw = lastProvider ?? parsedTarget?.provider;
     const provider =
       providerRaw && providerRaw !== "webchat"
-        ? (normalizeProviderId(providerRaw) ?? providerRaw)
+        ? normalizeProviderId(providerRaw)
         : undefined;
     const to = lastTo || parsedTarget?.to;
     if (!provider || !to) {

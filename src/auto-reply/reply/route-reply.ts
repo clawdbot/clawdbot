@@ -103,7 +103,9 @@ export async function routeReply(
   }
   const plugin = getProviderPlugin(provider);
   const outbound = plugin?.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  const sendText = outbound?.sendText;
+  const sendMedia = outbound?.sendMedia;
+  if (!sendText || !sendMedia) {
     return {
       ok: false,
       error: `Reply routing not configured for ${provider}`,
@@ -119,7 +121,7 @@ export async function routeReply(
     }
     const { text, mediaUrl } = params;
     if (mediaUrl) {
-      const result = await outbound.sendMedia({
+      const result = await sendMedia({
         cfg,
         to,
         text,
@@ -130,7 +132,7 @@ export async function routeReply(
       });
       return { ok: true, messageId: result.messageId };
     }
-    const result = await outbound.sendText({
+    const result = await sendText({
       cfg,
       to,
       text,

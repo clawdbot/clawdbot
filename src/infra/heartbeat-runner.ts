@@ -222,12 +222,12 @@ export async function runHeartbeatOnce(opts: {
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
   const lastProvider =
     entry?.lastProvider && entry.lastProvider !== "webchat"
-      ? (normalizeProviderId(entry.lastProvider) ?? entry.lastProvider)
+      ? normalizeProviderId(entry.lastProvider)
       : undefined;
   const senderProvider =
     delivery.provider !== "none" ? delivery.provider : lastProvider;
   const senderAllowFrom =
-    senderProvider && senderProvider !== "webchat"
+    senderProvider
       ? (getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
           cfg,
           accountId:
@@ -328,13 +328,8 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const deliveryAccountId =
-      delivery.provider !== "none" && delivery.provider === lastProvider
-        ? entry?.lastAccountId
-        : undefined;
-    const heartbeatPlugin =
-      delivery.provider !== "none"
-        ? getProviderPlugin(delivery.provider)
-        : undefined;
+      delivery.provider === lastProvider ? entry?.lastAccountId : undefined;
+    const heartbeatPlugin = getProviderPlugin(delivery.provider);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,

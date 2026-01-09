@@ -74,14 +74,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      if (provider === "none") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unsupported provider: none"),
-        );
-        return;
-      }
       const outboundProvider = provider as Exclude<OutboundProvider, "none">;
       const plugin = getProviderPlugin(provider as ProviderId);
       if (!plugin) {
@@ -213,17 +205,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      if (provider === "none") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "unsupported poll provider: none",
-          ),
-        );
-        return;
-      }
       const plugin = getProviderPlugin(provider as ProviderId);
       const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
