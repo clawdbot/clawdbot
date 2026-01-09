@@ -82,7 +82,6 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "routing", kind: "none" },
   { prefix: "messages", kind: "none" },
   { prefix: "session", kind: "none" },
-  { prefix: "whatsapp", kind: "none" },
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
   { prefix: "ui", kind: "none" },
@@ -97,14 +96,21 @@ let cachedReloadRules: ReloadRule[] | null = null;
 function listReloadRules(): ReloadRule[] {
   if (cachedReloadRules) return cachedReloadRules;
   const providerReloadRules: ReloadRule[] = listProviderPlugins().flatMap(
-    (plugin) =>
-      (plugin.reload?.configPrefixes ?? []).map(
+    (plugin) => [
+      ...(plugin.reload?.configPrefixes ?? []).map(
         (prefix): ReloadRule => ({
           prefix,
           kind: "hot",
           actions: [`restart-provider:${plugin.id}` as ReloadAction],
         }),
       ),
+      ...(plugin.reload?.noopPrefixes ?? []).map(
+        (prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        }),
+      ),
+    ],
   );
   const rules = [
     ...BASE_RELOAD_RULES,

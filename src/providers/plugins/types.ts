@@ -256,7 +256,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   id: ProviderId;
   meta: ProviderMeta;
   capabilities: ProviderCapabilities;
-  reload?: { configPrefixes: string[] };
+  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   config: ProviderConfigAdapter<ResolvedAccount>;
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;
