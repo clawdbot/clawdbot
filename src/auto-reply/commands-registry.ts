@@ -267,9 +267,8 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
 
 const NATIVE_COMMAND_SURFACES = new Set(
   listProviderPlugins()
-    .flatMap((plugin) => plugin.capabilities?.nativeCommands ?? [])
-    .map((surface) => surface.trim().toLowerCase())
-    .filter(Boolean),
+    .filter((plugin) => plugin.capabilities.nativeCommands)
+    .map((plugin) => plugin.id),
 );
 
 const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {

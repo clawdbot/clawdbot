@@ -34,6 +34,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     nativeCommands: true,
   },
   reload: { configPrefixes: ["telegram"] },
+  gatewayMethods: ["telegram.logout"],
   config: {
     listAccountIds: (cfg) => listTelegramAccountIds(cfg),
     resolveAccount: (cfg, accountId) =>

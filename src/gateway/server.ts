@@ -228,7 +228,7 @@ type Client = {
   presenceKey?: string;
 };
 
-const METHODS = [
+const BASE_METHODS = [
   "health",
   "logs.tail",
   "providers.status",
@@ -283,12 +283,17 @@ const METHODS = [
   "web.login.start",
   "web.login.wait",
   "web.logout",
-  "telegram.logout",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
   "chat.send",
 ];
+
+const PROVIDER_METHODS = listProviderPlugins().flatMap(
+  (plugin) => plugin.gatewayMethods ?? [],
+);
+
+const METHODS = Array.from(new Set([...BASE_METHODS, ...PROVIDER_METHODS]));
 
 const EVENTS = [
   "agent",
@@ -1828,8 +1833,8 @@ export async function startGatewayServer(
     }
   }
 
-  // Launch configured providers (WhatsApp Web, Discord, Slack, Telegram) so gateway replies via the
-  // surface the message came from. Tests can opt out via CLAWDBOT_SKIP_PROVIDERS.
+  // Launch configured providers so gateway replies via the surface the message came from.
+  // Tests can opt out via CLAWDBOT_SKIP_PROVIDERS.
   if (process.env.CLAWDBOT_SKIP_PROVIDERS !== "1") {
     try {
       await startProviders();
