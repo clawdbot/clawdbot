@@ -95,7 +95,6 @@ function formatAccountLine(params: {
   }
   return `- ${label}: ${bits.join(", ")}`;
 }
-
 async function loadUsageWithProgress(
   runtime: RuntimeEnv,
 ): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
