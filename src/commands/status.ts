@@ -10,7 +10,11 @@ import {
 } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
+import {
+  type ClawdbotConfig,
+  loadConfig,
+  resolveGatewayPort,
+} from "../config/config.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
@@ -40,12 +44,12 @@ import {
 } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getProviderPlugin } from "../providers/plugins/index.js";
+import type { ProviderAccountSnapshot } from "../providers/plugins/types.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
-import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
 import type { HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
@@ -87,11 +91,61 @@ export type StatusSummary = {
   };
 };
 
+type WebStatusContext = {
+  linked: boolean;
+  authAgeMs: number | null;
+  account?: unknown;
+  accountId?: string;
+  plugin?: ReturnType<typeof getProviderPlugin>;
+};
+
+async function resolveWebStatusContext(
+  cfg: ClawdbotConfig,
+): Promise<WebStatusContext> {
+  const plugin = getProviderPlugin("whatsapp");
+  if (!plugin) {
+    return { linked: false, authAgeMs: null };
+  }
+  const accountIds = plugin.config.listAccountIds(cfg);
+  const defaultAccountId =
+    plugin.config.defaultAccountId?.(cfg) ?? accountIds[0] ?? "default";
+  const account = plugin.config.resolveAccount(cfg, defaultAccountId);
+  const enabled = plugin.config.isEnabled
+    ? plugin.config.isEnabled(account, cfg)
+    : true;
+  const configured = plugin.config.isConfigured
+    ? await plugin.config.isConfigured(account, cfg)
+    : true;
+  const snapshot = plugin.config.describeAccount
+    ? plugin.config.describeAccount(account, cfg)
+    : ({
+        accountId: defaultAccountId,
+        enabled,
+        configured,
+      } as ProviderAccountSnapshot);
+  const summary = plugin.status?.buildProviderSummary
+    ? await plugin.status.buildProviderSummary({
+        account,
+        cfg,
+        defaultAccountId,
+        snapshot,
+      })
+    : undefined;
+  const summaryRecord = summary as Record<string, unknown> | undefined;
+  const linked =
+    summaryRecord && typeof summaryRecord.linked === "boolean"
+      ? summaryRecord.linked
+      : configured && enabled;
+  const authAgeMs =
+    summaryRecord && typeof summaryRecord.authAgeMs === "number"
+      ? summaryRecord.authAgeMs
+      : null;
+  return { linked, authAgeMs, account, accountId: defaultAccountId, plugin };
+}
+
 export async function getStatusSummary(): Promise<StatusSummary> {
   const cfg = loadConfig();
-  const account = resolveWhatsAppAccount({ cfg });
-  const linked = await webAuthExists(account.authDir);
-  const authAgeMs = getWebAuthAgeMs(account.authDir);
+  const webContext = await resolveWebStatusContext(cfg);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
   const providerSummary = await buildProviderSummary(cfg, {
     colorize: true,
@@ -161,7 +215,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const recent = sessions.slice(0, 5);
 
   return {
-    web: { linked, authAgeMs },
+    web: { linked: webContext.linked, authAgeMs: webContext.authAgeMs },
     heartbeatSeconds,
     providerSummary,
     queuedSystemEvents,
