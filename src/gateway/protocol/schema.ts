@@ -1,5 +1,4 @@
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
-import { listProviderPlugins } from "../../providers/plugins/index.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 
 const NonEmptyString = Type.String({ minLength: 1 });
@@ -729,7 +728,7 @@ export const CronPayloadSchema = Type.Union([
       provider: Type.Optional(
         Type.Union([
           Type.Literal("last"),
-          ...listProviderPlugins().map((plugin) => Type.Literal(plugin.id)),
+          NonEmptyString,
         ]),
       ),
       to: Type.Optional(Type.String()),
