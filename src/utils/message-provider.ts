@@ -17,12 +17,14 @@ export function normalizeMessageProvider(
 ): string | undefined {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) return undefined;
-  if (normalized === INTERNAL_MESSAGE_PROVIDER) return INTERNAL_MESSAGE_PROVIDER;
+  if (normalized === INTERNAL_MESSAGE_PROVIDER)
+    return INTERNAL_MESSAGE_PROVIDER;
   return normalizeProviderId(normalized) ?? normalized;
 }
 
-export const DELIVERABLE_MESSAGE_PROVIDERS =
-  PROVIDER_PLUGINS.map((plugin) => plugin.id) as ProviderId[];
+export const DELIVERABLE_MESSAGE_PROVIDERS = PROVIDER_PLUGINS.map(
+  (plugin) => plugin.id,
+) as ProviderId[];
 
 export type DeliverableMessageProvider = ProviderId;
 
