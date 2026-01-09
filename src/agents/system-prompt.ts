@@ -1,6 +1,11 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listProviderPlugins } from "../providers/plugins/index.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+
+const MESSAGE_PROVIDER_OPTIONS = listProviderPlugins()
+  .map((plugin) => plugin.id)
+  .join("|");
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
@@ -312,7 +317,7 @@ export function buildAgentSystemPrompt(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + provider actions (polls, reactions, etc.).",
-          "- If multiple providers are configured, pass `provider` (whatsapp|telegram|discord|slack|signal|imessage|msteams).",
+          `- If multiple providers are configured, pass \`provider\` (${MESSAGE_PROVIDER_OPTIONS}).`,
           telegramInlineButtonsEnabled
             ? "- Telegram: inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
             : runtimeProvider === "telegram"
