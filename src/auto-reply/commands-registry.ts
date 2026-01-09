@@ -424,7 +424,9 @@ export function getCommandDetection(_cfg?: ClawdbotConfig): {
   }
   cachedDetection = {
     exact,
-    regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
+    regex: patterns.length
+      ? new RegExp(`^(?:${patterns.join("|")})$`, "i")
+      : /$^/,
   };
   return cachedDetection;
 }
@@ -463,7 +465,7 @@ export function resolveTextCommand(
   return { command, args: args || undefined };
 }
 
-export function isNativeCommandSurface(surface: string): boolean {
+export function isNativeCommandSurface(surface?: string): boolean {
   if (!surface) return false;
   return getNativeCommandSurfaces().has(surface.toLowerCase());
 }
