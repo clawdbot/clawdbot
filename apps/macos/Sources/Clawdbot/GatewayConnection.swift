@@ -13,6 +13,7 @@ enum GatewayAgentProvider: String, Codable, CaseIterable, Sendable {
     case slack
     case signal
     case imessage
+    case msteams
     case webchat
 
     init(raw: String?) {
