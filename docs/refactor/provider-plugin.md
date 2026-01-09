@@ -43,6 +43,7 @@ Each `ProviderPlugin` bundles:
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
 - WhatsApp web login aliases are handled by the plugin (`meta.aliases: ["web"]`) so gateway API inputs can stay stable.
+- Gateway message-provider normalization now uses plugin aliases (including `web`) to keep CLI/API inputs aligned with plugin metadata.
 
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
