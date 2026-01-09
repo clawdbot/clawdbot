@@ -241,6 +241,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   config: ProviderConfigAdapter<ResolvedAccount>;
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;
+  gatewayMethods?: string[];
   gateway?: ProviderGatewayAdapter<ResolvedAccount>;
   heartbeat?: ProviderHeartbeatAdapter;
 };
