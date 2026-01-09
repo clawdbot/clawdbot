@@ -1,7 +1,7 @@
 import {
-  PROVIDER_IDS,
   listChatProviderAliases,
   normalizeChatProviderId,
+  PROVIDER_IDS,
 } from "../providers/registry.js";
 
 export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
