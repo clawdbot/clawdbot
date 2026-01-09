@@ -29,7 +29,8 @@ Each `ProviderPlugin` bundles:
 - `reload`: `configPrefixes` that map to hot restarts.
 
 ## Key Integration Notes
-- `listProviderPlugins()` is now the single source of truth for provider UX and wiring.
+- `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
+- Gateway protocol schema + system prompt use `PROVIDER_IDS` (static list) to avoid plugin init cycles; keep it in sync with the plugin registry.
 - `DEFAULT_CHAT_PROVIDER` lives in `src/providers/registry.ts` and is used anywhere we need a fallback delivery surface.
 - Provider reload rules are computed lazily to avoid static init cycles in tests.
 - Signal/iMessage media size limits are now resolved inside their plugins.
