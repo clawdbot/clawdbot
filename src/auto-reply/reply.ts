@@ -29,6 +29,7 @@ import {
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
+import { CHAT_PROVIDER_ORDER } from "../providers/registry.js";
 import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
@@ -130,10 +131,16 @@ function slugAllowToken(value?: string) {
 function stripSenderPrefix(value?: string) {
   if (!value) return "";
   const trimmed = value.trim();
-  return trimmed.replace(
-    /^(whatsapp|telegram|discord|signal|imessage|webchat|user|group|channel):/i,
-    "",
-  );
+  const prefixes = [
+    ...CHAT_PROVIDER_ORDER,
+    "msteams",
+    "webchat",
+    "user",
+    "group",
+    "channel",
+  ];
+  const pattern = new RegExp(`^(${prefixes.join("|")}):`, "i");
+  return trimmed.replace(pattern, "");
 }
 
 function resolveElevatedAllowList(
@@ -141,27 +148,14 @@ function resolveElevatedAllowList(
   provider: string,
   discordFallback?: Array<string | number>,
 ): Array<string | number> | undefined {
-  switch (provider) {
-    case "whatsapp":
-      return allowFrom?.whatsapp;
-    case "telegram":
-      return allowFrom?.telegram;
-    case "discord": {
-      const hasExplicit = Boolean(
-        allowFrom && Object.hasOwn(allowFrom, "discord"),
-      );
-      if (hasExplicit) return allowFrom?.discord;
-      return discordFallback;
-    }
-    case "signal":
-      return allowFrom?.signal;
-    case "imessage":
-      return allowFrom?.imessage;
-    case "webchat":
-      return allowFrom?.webchat;
-    default:
-      return undefined;
+  if (!allowFrom) return provider === "discord" ? discordFallback : undefined;
+  if (provider === "discord") {
+    const hasExplicit = Object.hasOwn(allowFrom, "discord");
+    if (hasExplicit) return allowFrom.discord;
+    return discordFallback;
   }
+  const value = allowFrom[provider as keyof AgentElevatedAllowFromConfig];
+  return Array.isArray(value) ? value : undefined;
 }
 
 function isApprovedElevatedSender(params: {
