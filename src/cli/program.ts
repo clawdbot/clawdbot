@@ -533,7 +533,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/message", "docs.clawd.bot/message")}`
 
   const withMessageBase = (command: Command) =>
     command
-      .option("--provider <provider>", `Provider: ${messageProviderOptions}`)
+      .option(
+        "--provider <provider>",
+        `Provider: ${messageProviderOptions}`,
+      )
       .option("--account <id>", "Provider account id")
       .option("--json", "Output result as JSON", false)
       .option("--dry-run", "Print payload and skip sending", false)
