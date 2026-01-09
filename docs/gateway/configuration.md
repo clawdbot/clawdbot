@@ -436,8 +436,8 @@ Inbound messages are routed to an agent via bindings.
   - `workspace`: default `~/clawd-<agentId>` (for `main`, falls back to `agents.defaults.workspace`).
   - `agentDir`: default `~/.clawdbot/agents/<agentId>/agent`.
   - `model`: per-agent default model, overrides `agents.defaults.model` for that agent.
-    - string form: `"provider/model"`
-    - object form: `{ primary, fallbacks }` (fallbacks override `agents.defaults.model.fallbacks`; `[]` disables global fallbacks for that agent)
+    - string form: `"provider/model"`, overrides only `agents.defaults.model.primary`
+    - object form: `{ primary, fallbacks }` overrides fallbacks as well
   - `identity`: per-agent name/theme/emoji (used for mention patterns + ack reactions).
   - `groupChat`: per-agent mention-gating (`mentionPatterns`).
   - `sandbox`: per-agent sandbox config (overrides `agents.defaults.sandbox`).
