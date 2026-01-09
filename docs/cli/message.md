@@ -24,7 +24,7 @@ Provider selection:
 Target formats (`--to`):
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
-- Discord/Slack: `channel:<id>` or `user:<id>` (raw id ok)
+- Discord/Slack: `channel:<id>` or `user:<id>` (raw id is ambiguous for Discord)
 - Signal: E.164, `group:<id>`, or `signal:+E.164`
 - iMessage: handle or `chat_id:<id>`
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
