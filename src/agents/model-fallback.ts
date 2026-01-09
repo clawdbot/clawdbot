@@ -116,6 +116,8 @@ function resolveFallbackCandidates(params: {
   cfg: ClawdbotConfig | undefined;
   provider: string;
   model: string;
+  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+  fallbacksOverride?: string[];
 }): ModelCandidate[] {
   const provider = params.provider.trim() || DEFAULT_PROVIDER;
   const model = params.model.trim() || DEFAULT_MODEL;
@@ -142,6 +144,7 @@ function resolveFallbackCandidates(params: {
   addCandidate({ provider, model }, false);
 
   const modelFallbacks = (() => {
+    if (params.fallbacksOverride !== undefined) return params.fallbacksOverride;
     const model = params.cfg?.agents?.defaults?.model as
       | { fallbacks?: string[] }
       | string
@@ -167,6 +170,8 @@ export async function runWithModelFallback<T>(params: {
   cfg: ClawdbotConfig | undefined;
   provider: string;
   model: string;
+  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+  fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
   onError?: (attempt: {
     provider: string;
@@ -181,7 +186,12 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
 }> {
-  const candidates = resolveFallbackCandidates(params);
+  const candidates = resolveFallbackCandidates({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    fallbacksOverride: params.fallbacksOverride,
+  });
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 

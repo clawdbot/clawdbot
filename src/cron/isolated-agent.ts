@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  resolveAgentModelFallbacksOverride,
+  resolveAgentModelPrimary,
+} from "../agents/agent-scope.js";
 import { runClaudeCliAgent } from "../agents/claude-cli-runner.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
@@ -269,6 +273,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const agentCfg = params.cfg.agents?.defaults;
   const workspaceDirRaw = agentCfg?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
@@ -277,8 +282,27 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   const workspaceDir = workspace.dir;
 
+  const agentModelPrimary = resolveAgentModelPrimary(params.cfg, agentId);
+  const cfgForModelSelection = agentModelPrimary
+    ? {
+        ...params.cfg,
+        agents: {
+          ...params.cfg.agents,
+          defaults: {
+            ...params.cfg.agents?.defaults,
+            model: {
+              ...(typeof params.cfg.agents?.defaults?.model === "object"
+                ? params.cfg.agents.defaults.model
+                : undefined),
+              primary: agentModelPrimary,
+            },
+          },
+        },
+      }
+    : params.cfg;
+
   const resolvedDefault = resolveConfiguredModelRef({
-    cfg: params.cfg,
+    cfg: cfgForModelSelection,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -429,6 +453,10 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: params.cfg,
       provider,
       model,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        params.cfg,
+        agentId,
+      ),
       run: (providerOverride, modelOverride) => {
         if (providerOverride === "claude-cli") {
           return runClaudeCliAgent({

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runClaudeCliAgent } from "../../agents/claude-cli-runner.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -12,6 +13,7 @@ import {
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
   saveSessionStore,
@@ -330,6 +332,10 @@ export async function runReplyAgent(params: {
         cfg: followupRun.run.config,
         provider: followupRun.run.provider,
         model: followupRun.run.model,
+        fallbacksOverride: resolveAgentModelFallbacksOverride(
+          followupRun.run.config,
+          resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+        ),
         run: (provider, model) => {
           if (provider === "claude-cli") {
             const startedAt = Date.now();

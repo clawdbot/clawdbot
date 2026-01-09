@@ -19,7 +19,7 @@ type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
-  model?: string;
+  model?: AgentEntry["model"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
@@ -78,7 +78,11 @@ export function resolveAgentConfig(
     workspace:
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
-    model: typeof entry.model === "string" ? entry.model : undefined,
+    model:
+      typeof entry.model === "string" ||
+      (entry.model && typeof entry.model === "object")
+        ? entry.model
+        : undefined,
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents:
@@ -88,6 +92,28 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentModelPrimary(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): string | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  if (!raw) return undefined;
+  if (typeof raw === "string") return raw.trim() || undefined;
+  const primary = raw.primary?.trim();
+  return primary || undefined;
+}
+
+export function resolveAgentModelFallbacksOverride(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): string[] | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  if (!raw || typeof raw === "string") return undefined;
+  // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
+  if (!Object.hasOwn(raw, "fallbacks")) return undefined;
+  return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
 export function resolveAgentWorkspaceDir(cfg: ClawdbotConfig, agentId: string) {

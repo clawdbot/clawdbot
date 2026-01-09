@@ -733,13 +733,21 @@ const AgentToolsSchema = z
   })
   .optional();
 
+const AgentModelSchema = z.union([
+  z.string(),
+  z.object({
+    primary: z.string().optional(),
+    fallbacks: z.array(z.string()).optional(),
+  }),
+]);
+
 const AgentEntrySchema = z.object({
   id: z.string(),
   default: z.boolean().optional(),
   name: z.string().optional(),
   workspace: z.string().optional(),
   agentDir: z.string().optional(),
-  model: z.string().optional(),
+  model: AgentModelSchema.optional(),
   identity: IdentitySchema,
   groupChat: GroupChatSchema,
   subagents: z

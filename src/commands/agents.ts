@@ -168,7 +168,15 @@ function resolveAgentModel(cfg: ClawdbotConfig, agentId: string) {
   const entry = listAgentEntries(cfg).find(
     (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
   );
-  if (entry?.model?.trim()) return entry.model.trim();
+  if (entry?.model) {
+    if (typeof entry.model === "string" && entry.model.trim()) {
+      return entry.model.trim();
+    }
+    if (typeof entry.model === "object") {
+      const primary = entry.model.primary?.trim();
+      if (primary) return primary;
+    }
+  }
   const raw = cfg.agents?.defaults?.model;
   if (typeof raw === "string") return raw;
   return raw?.primary?.trim() || undefined;

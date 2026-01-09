@@ -3,7 +3,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { resolveAgentModelPrimary } from "../agents/agent-scope.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
@@ -59,7 +59,7 @@ export async function warnIfModelConfigLooksOff(
   options?: { agentId?: string; agentDir?: string },
 ) {
   const agentModelOverride = options?.agentId
-    ? resolveAgentConfig(config, options.agentId)?.model?.trim()
+    ? resolveAgentModelPrimary(config, options.agentId)
     : undefined;
   const configWithModel =
     agentModelOverride && agentModelOverride.length > 0

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import {
   resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentModelPrimary,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
@@ -313,9 +315,28 @@ export async function agentCommand(
     await saveSessionStore(storePath, sessionStore);
   }
 
+  const agentModelPrimary = resolveAgentModelPrimary(cfg, sessionAgentId);
+  const cfgForModelSelection = agentModelPrimary
+    ? {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: {
+              ...(typeof cfg.agents?.defaults?.model === "object"
+                ? cfg.agents.defaults.model
+                : undefined),
+              primary: agentModelPrimary,
+            },
+          },
+        },
+      }
+    : cfg;
+
   const { provider: defaultProvider, model: defaultModel } =
     resolveConfiguredModelRef({
-      cfg,
+      cfg: cfgForModelSelection,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
@@ -421,6 +442,10 @@ export async function agentCommand(
       cfg,
       provider,
       model,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        cfg,
+        sessionAgentId,
+      ),
       run: (providerOverride, modelOverride) => {
         if (providerOverride === "claude-cli") {
           return runClaudeCliAgent({

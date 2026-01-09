@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  type SessionEntry,
+  saveSessionStore,
+} from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -132,6 +137,10 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
           provider: queued.run.provider,
           model: queued.run.model,
+          fallbacksOverride: resolveAgentModelFallbacksOverride(
+            queued.run.config,
+            resolveAgentIdFromSessionKey(queued.run.sessionKey),
+          ),
           run: (provider, model) =>
             runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
