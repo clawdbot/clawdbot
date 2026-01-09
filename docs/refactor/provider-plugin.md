@@ -21,19 +21,21 @@ Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and
 Each `ProviderPlugin` bundles:
 - `meta`: id/labels/docs/aliases/sort order.
 - `capabilities`: chatTypes + optional features (polls, media, etc.).
-- `config`: list/resolve/default/isConfigured/describeAccount + isEnabled + (un)configured reasons.
-- `outbound`: deliveryMode + chunker + resolveTarget + sendText/sendMedia/sendPoll + pollMaxOptions.
-- `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary.
+- `config`: list/resolve/default/isConfigured/describeAccount + isEnabled + (un)configured reasons + `resolveAllowFrom`.
+- `outbound`: deliveryMode + chunker + resolveTarget (mode-aware) + sendText/sendMedia/sendPoll + pollMaxOptions.
+- `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary + collectStatusIssues.
 - `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`).
+- `heartbeat`: optional readiness checks (e.g., WhatsApp linked + running).
 - `reload`: `configPrefixes` that map to hot restarts.
 
 ## Key Integration Notes
 - `listProviderPlugins()` is now the single source of truth for provider UX and wiring.
 - Provider reload rules are computed lazily to avoid static init cycles in tests.
-- Outbound path still preserves Signal/iMessage media maxBytes (wrapped deps), even when using plugin outbound.
+- Signal/iMessage media size limits are now resolved inside their plugins.
 - `normalizeProviderId()` handles aliases (ex: `imsg`, `teams`) so CLI and API inputs stay stable.
 - Gateway runtime defaults (`status.defaultRuntime`) replace the old per-provider runtime map.
 - `providers.status` summary objects now come from `status.buildProviderSummary` (no per-provider branching in the handler).
+- `providers.status` warnings now flow through `status.collectStatusIssues` per plugin.
 - CLI list uses `meta.showConfigured` to decide whether to show configured state.
 
 ## Adding a Provider (checklist)
