@@ -1,16 +1,11 @@
 import { loadConfig } from "../../config/config.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../discord/index.js";
-import { shouldLogVerbose } from "../../globals.js";
-import { sendMessageIMessage } from "../../imessage/index.js";
-import { createMSTeamsPollStoreFs } from "../../msteams/polls.js";
-import { sendMessageMSTeams, sendPollMSTeams } from "../../msteams/send.js";
+import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import type { OutboundProvider } from "../../infra/outbound/targets.js";
+import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
-import { sendMessageSignal } from "../../signal/index.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
+import { getProviderPlugin } from "../../providers/plugins/index.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import { normalizeMessageProvider } from "../../utils/message-provider.js";
-import { resolveDefaultWhatsAppAccountId } from "../../web/accounts.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   ErrorCodes,
   errorShape,
@@ -60,133 +55,71 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      if (provider === "telegram") {
-        const result = await sendMessageTelegram(to, message, {
-          mediaUrl: request.mediaUrl,
-          verbose: shouldLogVerbose(),
-          accountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          chatId: result.chatId,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else if (provider === "discord") {
-        const result = await sendMessageDiscord(to, message, {
-          mediaUrl: request.mediaUrl,
-          accountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          channelId: result.channelId,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else if (provider === "slack") {
-        const result = await sendMessageSlack(to, message, {
-          mediaUrl: request.mediaUrl,
-          accountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          channelId: result.channelId,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else if (provider === "signal") {
-        const result = await sendMessageSignal(to, message, {
-          mediaUrl: request.mediaUrl,
-          accountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else if (provider === "imessage") {
-        const result = await sendMessageIMessage(to, message, {
-          mediaUrl: request.mediaUrl,
-          accountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else if (provider === "msteams") {
-        const cfg = loadConfig();
-        const result = await sendMessageMSTeams({
-          cfg,
-          to,
-          text: message,
-          mediaUrl: request.mediaUrl,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          conversationId: result.conversationId,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else {
-        const cfg = loadConfig();
-        const targetAccountId =
-          accountId ?? resolveDefaultWhatsAppAccountId(cfg);
-        const result = await sendMessageWhatsApp(to, message, {
-          mediaUrl: request.mediaUrl,
-          verbose: shouldLogVerbose(),
-          gifPlayback: request.gifPlayback,
-          accountId: targetAccountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          toJid: result.toJid ?? `${to}@s.whatsapp.net`,
-          provider,
-        };
-        context.dedupe.set(`send:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
+      if (provider === "none") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unsupported provider: none"),
+        );
+        return;
       }
+      const outboundProvider = provider as Exclude<OutboundProvider, "none">;
+      const plugin = getProviderPlugin(provider as ProviderId);
+      if (!plugin) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unsupported provider: ${provider}`,
+          ),
+        );
+        return;
+      }
+      const cfg = loadConfig();
+      const resolved = resolveOutboundTarget({
+        provider: outboundProvider,
+        to,
+        allowFrom: cfg.whatsapp?.allowFrom ?? [],
+        cfg,
+      });
+      if (!resolved.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
+        );
+        return;
+      }
+      const results = await deliverOutboundPayloads({
+        cfg,
+        provider: outboundProvider,
+        to: resolved.to,
+        accountId,
+        payloads: [{ text: message, mediaUrl: request.mediaUrl }],
+        gifPlayback: request.gifPlayback,
+      });
+      const result = results.at(-1);
+      if (!result) {
+        throw new Error("No delivery result");
+      }
+      const payload: Record<string, unknown> = {
+        runId: idem,
+        messageId: result.messageId,
+        provider,
+      };
+      if ("chatId" in result) payload.chatId = result.chatId;
+      if ("channelId" in result) payload.channelId = result.channelId;
+      if ("toJid" in result) payload.toJid = result.toJid;
+      if ("conversationId" in result) {
+        payload.conversationId = result.conversationId;
+      }
+      context.dedupe.set(`send:${idem}`, {
+        ts: Date.now(),
+        ok: true,
+        payload,
+      });
+      respond(true, payload, undefined, { provider });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       context.dedupe.set(`send:${idem}`, {
@@ -233,21 +166,6 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
-    if (
-      provider !== "whatsapp" &&
-      provider !== "discord" &&
-      provider !== "msteams"
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unsupported poll provider: ${provider}`,
-        ),
-      );
-      return;
-    }
     const poll = {
       question: request.question,
       options: request.options,
@@ -259,78 +177,69 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      if (provider === "discord") {
-        const result = await sendPollDiscord(to, poll, { accountId });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          channelId: result.channelId,
-          provider,
-        };
-        context.dedupe.set(`poll:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else if (provider === "msteams") {
-        const cfg = loadConfig();
-        const normalized = normalizePollInput(poll, { maxOptions: 12 });
-        const result = await sendPollMSTeams({
-          cfg,
-          to,
-          question: normalized.question,
-          options: normalized.options,
-          maxSelections: normalized.maxSelections,
-        });
-        const pollStore = createMSTeamsPollStoreFs();
-        await pollStore.createPoll({
-          id: result.pollId,
-          question: normalized.question,
-          options: normalized.options,
-          maxSelections: normalized.maxSelections,
-          createdAt: new Date().toISOString(),
-          conversationId: result.conversationId,
-          messageId: result.messageId,
-          votes: {},
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          conversationId: result.conversationId,
-          pollId: result.pollId,
-          provider,
-        };
-        context.dedupe.set(`poll:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
-      } else {
-        const cfg = loadConfig();
-        const accountId =
-          typeof request.accountId === "string" &&
-          request.accountId.trim().length > 0
-            ? request.accountId.trim()
-            : resolveDefaultWhatsAppAccountId(cfg);
-        const result = await sendPollWhatsApp(to, poll, {
-          verbose: shouldLogVerbose(),
-          accountId,
-        });
-        const payload = {
-          runId: idem,
-          messageId: result.messageId,
-          toJid: result.toJid ?? `${to}@s.whatsapp.net`,
-          provider,
-        };
-        context.dedupe.set(`poll:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
-        respond(true, payload, undefined, { provider });
+      if (provider === "none") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "unsupported poll provider: none",
+          ),
+        );
+        return;
       }
+      const plugin = getProviderPlugin(provider as ProviderId);
+      const outbound = plugin?.outbound;
+      if (!outbound?.sendPoll) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unsupported poll provider: ${provider}`,
+          ),
+        );
+        return;
+      }
+      const cfg = loadConfig();
+      const resolved = resolveOutboundTarget({
+        provider: provider as Exclude<OutboundProvider, "none">,
+        to,
+        allowFrom: cfg.whatsapp?.allowFrom ?? [],
+        cfg,
+      });
+      if (!resolved.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
+        );
+        return;
+      }
+      const normalized = outbound.pollMaxOptions
+        ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
+        : poll;
+      const result = await outbound.sendPoll({
+        cfg,
+        to: resolved.to,
+        poll: normalized,
+        accountId,
+      });
+      const payload: Record<string, unknown> = {
+        runId: idem,
+        messageId: result.messageId,
+        provider,
+      };
+      if (result.toJid) payload.toJid = result.toJid;
+      if (result.channelId) payload.channelId = result.channelId;
+      if (result.conversationId) payload.conversationId = result.conversationId;
+      if (result.pollId) payload.pollId = result.pollId;
+      context.dedupe.set(`poll:${idem}`, {
+        ts: Date.now(),
+        ok: true,
+        payload,
+      });
+      respond(true, payload, undefined, { provider });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       context.dedupe.set(`poll:${idem}`, {

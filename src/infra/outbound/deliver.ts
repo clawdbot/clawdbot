@@ -8,6 +8,8 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { sendMessageMSTeams } from "../../msteams/send.js";
+import { getProviderPlugin } from "../../providers/plugins/index.js";
+import type { ProviderOutboundAdapter } from "../../providers/plugins/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
@@ -94,18 +96,50 @@ function createProviderHandler(params: {
   to: string;
   accountId?: string;
   deps: Required<OutboundSendDeps>;
+  gifPlayback?: boolean;
 }): ProviderHandler {
-  const { cfg, to, deps } = params;
   const rawAccountId = params.accountId;
   const accountId = normalizeAccountId(rawAccountId);
   const signalMaxBytes =
     params.provider === "signal"
-      ? resolveMediaMaxBytes(cfg, "signal", accountId)
+      ? resolveMediaMaxBytes(params.cfg, "signal", accountId)
       : undefined;
   const imessageMaxBytes =
     params.provider === "imessage"
-      ? resolveMediaMaxBytes(cfg, "imessage", accountId)
+      ? resolveMediaMaxBytes(params.cfg, "imessage", accountId)
       : undefined;
+  const depsWithLimits: Required<OutboundSendDeps> = {
+    ...params.deps,
+    sendSignal: signalMaxBytes
+      ? (to, text, opts) =>
+          params.deps.sendSignal(to, text, {
+            ...opts,
+            maxBytes: signalMaxBytes,
+          })
+      : params.deps.sendSignal,
+    sendIMessage: imessageMaxBytes
+      ? (to, text, opts) =>
+          params.deps.sendIMessage(to, text, {
+            ...opts,
+            maxBytes: imessageMaxBytes,
+          })
+      : params.deps.sendIMessage,
+  };
+  const plugin = getProviderPlugin(params.provider);
+  const outbound = plugin?.outbound;
+  const pluginHandler = createPluginHandler({
+    outbound,
+    cfg: params.cfg,
+    provider: params.provider,
+    to: params.to,
+    accountId: params.accountId,
+    deps: depsWithLimits,
+    gifPlayback: params.gifPlayback,
+  });
+  if (pluginHandler) return pluginHandler;
+
+  const { to } = params;
+  const deps = depsWithLimits;
 
   const handlers: Record<Exclude<OutboundProvider, "none">, ProviderHandler> = {
     whatsapp: {
@@ -115,6 +149,7 @@ function createProviderHandler(params: {
         ...(await deps.sendWhatsApp(to, text, {
           verbose: false,
           accountId: rawAccountId,
+          gifPlayback: params.gifPlayback,
         })),
       }),
       sendMedia: async (caption, mediaUrl) => ({
@@ -123,6 +158,7 @@ function createProviderHandler(params: {
           verbose: false,
           mediaUrl,
           accountId: rawAccountId,
+          gifPlayback: params.gifPlayback,
         })),
       }),
     },
@@ -230,6 +266,47 @@ function createProviderHandler(params: {
   return handlers[params.provider];
 }
 
+function createPluginHandler(params: {
+  outbound?: ProviderOutboundAdapter;
+  cfg: ClawdbotConfig;
+  provider: Exclude<OutboundProvider, "none">;
+  to: string;
+  accountId?: string;
+  deps: Required<OutboundSendDeps>;
+  gifPlayback?: boolean;
+}): ProviderHandler | null {
+  const outbound = params.outbound;
+  if (!outbound?.sendText || !outbound?.sendMedia) return null;
+  const sendText = outbound.sendText;
+  const sendMedia = outbound.sendMedia;
+  const chunker =
+    outbound.chunker === undefined
+      ? providerCaps[params.provider].chunker
+      : outbound.chunker;
+  return {
+    chunker,
+    sendText: async (text) =>
+      sendText({
+        cfg: params.cfg,
+        to: params.to,
+        text,
+        accountId: params.accountId,
+        gifPlayback: params.gifPlayback,
+        deps: params.deps,
+      }),
+    sendMedia: async (caption, mediaUrl) =>
+      sendMedia({
+        cfg: params.cfg,
+        to: params.to,
+        text: caption,
+        mediaUrl,
+        accountId: params.accountId,
+        gifPlayback: params.gifPlayback,
+        deps: params.deps,
+      }),
+  };
+}
+
 export async function deliverOutboundPayloads(params: {
   cfg: ClawdbotConfig;
   provider: Exclude<OutboundProvider, "none">;
@@ -237,6 +314,7 @@ export async function deliverOutboundPayloads(params: {
   accountId?: string;
   payloads: ReplyPayload[];
   deps?: OutboundSendDeps;
+  gifPlayback?: boolean;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
@@ -264,6 +342,7 @@ export async function deliverOutboundPayloads(params: {
     to,
     deps,
     accountId,
+    gifPlayback: params.gifPlayback,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, provider, accountId)

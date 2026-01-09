@@ -1,4 +1,11 @@
-export type ProviderId = "discord" | "telegram" | "whatsapp";
+export type ProviderId =
+  | "discord"
+  | "telegram"
+  | "whatsapp"
+  | "slack"
+  | "signal"
+  | "imessage"
+  | "msteams";
 export type ProviderDirection = "inbound" | "outbound";
 
 type ActivityEntry = {

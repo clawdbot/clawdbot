@@ -3,12 +3,15 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
+import { getProviderPlugin } from "../../providers/plugins/index.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { OutboundProvider } from "./targets.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 type GatewayCallMode = "cli" | "agent";
@@ -94,37 +97,43 @@ export async function sendMessage(
 ): Promise<MessageSendResult> {
   const provider = normalizeMessageProvider(params.provider) ?? "whatsapp";
   const cfg = params.cfg ?? loadConfig();
+  const plugin = getProviderPlugin(provider as ProviderId);
+  if (!plugin) {
+    throw new Error(`Unknown provider: ${provider}`);
+  }
+  const deliveryMode =
+    plugin?.outbound?.deliveryMode ??
+    (provider === "whatsapp" ? "gateway" : "direct");
 
   if (params.dryRun) {
     return {
       provider,
       to: params.to,
-      via: provider === "whatsapp" ? "gateway" : "direct",
+      via: deliveryMode === "gateway" ? "gateway" : "direct",
       mediaUrl: params.mediaUrl ?? null,
       dryRun: true,
     };
   }
 
-  if (
-    provider === "telegram" ||
-    provider === "discord" ||
-    provider === "slack" ||
-    provider === "signal" ||
-    provider === "imessage" ||
-    provider === "msteams"
-  ) {
+  if (deliveryMode !== "gateway") {
+    if (provider === "none") {
+      throw new Error("Provider 'none' cannot send messages.");
+    }
+    const outboundProvider = provider as Exclude<OutboundProvider, "none">;
     const resolvedTarget = resolveOutboundTarget({
-      provider,
+      provider: outboundProvider,
       to: params.to,
+      cfg,
     });
     if (!resolvedTarget.ok) throw resolvedTarget.error;
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider,
+      provider: outboundProvider,
       to: resolvedTarget.to,
       accountId: params.accountId,
       payloads: [{ text: params.content, mediaUrl: params.mediaUrl }],
+      gifPlayback: params.gifPlayback,
       deps: params.deps,
       bestEffort: params.bestEffort,
     });

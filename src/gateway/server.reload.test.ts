@@ -90,6 +90,8 @@ const hoisted = vi.hoisted(() => {
       },
     })),
     startProviders: vi.fn(async () => {}),
+    startProvider: vi.fn(async () => {}),
+    stopProvider: vi.fn(async () => {}),
     startWhatsAppProvider: vi.fn(async () => {}),
     stopWhatsAppProvider: vi.fn(async () => {}),
     startTelegramProvider: vi.fn(async () => {}),
@@ -265,33 +267,35 @@ describe("gateway hot reload", () => {
     expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
     expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
 
-    expect(hoisted.providerManager.stopWhatsAppProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledTimes(5);
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledTimes(5);
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "whatsapp",
     );
-    expect(hoisted.providerManager.startWhatsAppProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "whatsapp",
     );
-    expect(hoisted.providerManager.stopTelegramProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "telegram",
     );
-    expect(hoisted.providerManager.startTelegramProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "telegram",
     );
-    expect(hoisted.providerManager.stopDiscordProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "discord",
     );
-    expect(hoisted.providerManager.startDiscordProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "discord",
     );
-    expect(hoisted.providerManager.stopSignalProvider).toHaveBeenCalledTimes(1);
-    expect(hoisted.providerManager.startSignalProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith("signal");
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "signal",
     );
-    expect(hoisted.providerManager.stopIMessageProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "imessage",
     );
-    expect(hoisted.providerManager.startIMessageProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "imessage",
     );
 
     await server.close();

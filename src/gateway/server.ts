@@ -800,13 +800,14 @@ export async function startGatewayServer(
   const {
     getRuntimeSnapshot,
     startProviders,
+    startProvider,
+    stopProvider,
     startWhatsAppProvider,
     startTelegramProvider,
     startDiscordProvider,
     startSlackProvider,
     startSignalProvider,
     startIMessageProvider,
-    startMSTeamsProvider,
     stopWhatsAppProvider,
     stopTelegramProvider,
     stopDiscordProvider,
@@ -1907,9 +1908,11 @@ export async function startGatewayServer(
         | "slack"
         | "signal"
         | "imessage"
+        | "msteams"
         | "webchat",
       to,
       allowFrom: cfg.whatsapp?.allowFrom ?? [],
+      cfg,
     });
     if (!resolved.ok) {
       enqueueSystemEvent(message, { sessionKey });
@@ -2011,59 +2014,13 @@ export async function startGatewayServer(
           "skipping provider reload (CLAWDBOT_SKIP_PROVIDERS=1)",
         );
       } else {
-        const restartProvider = async (
-          name: ProviderKind,
-          stop: () => Promise<void>,
-          start: () => Promise<void>,
-        ) => {
+        const restartProvider = async (name: ProviderKind) => {
           logProviders.info(`restarting ${name} provider`);
-          await stop();
-          await start();
+          await stopProvider(name);
+          await startProvider(name);
         };
-        if (plan.restartProviders.has("whatsapp")) {
-          await restartProvider(
-            "whatsapp",
-            stopWhatsAppProvider,
-            startWhatsAppProvider,
-          );
-        }
-        if (plan.restartProviders.has("telegram")) {
-          await restartProvider(
-            "telegram",
-            stopTelegramProvider,
-            startTelegramProvider,
-          );
-        }
-        if (plan.restartProviders.has("discord")) {
-          await restartProvider(
-            "discord",
-            stopDiscordProvider,
-            startDiscordProvider,
-          );
-        }
-        if (plan.restartProviders.has("slack")) {
-          await restartProvider("slack", stopSlackProvider, startSlackProvider);
-        }
-        if (plan.restartProviders.has("signal")) {
-          await restartProvider(
-            "signal",
-            stopSignalProvider,
-            startSignalProvider,
-          );
-        }
-        if (plan.restartProviders.has("imessage")) {
-          await restartProvider(
-            "imessage",
-            stopIMessageProvider,
-            startIMessageProvider,
-          );
-        }
-        if (plan.restartProviders.has("msteams")) {
-          await restartProvider(
-            "msteams",
-            stopMSTeamsProvider,
-            startMSTeamsProvider,
-          );
+        for (const provider of plan.restartProviders) {
+          await restartProvider(provider);
         }
       }
     }

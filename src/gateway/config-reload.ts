@@ -5,20 +5,17 @@ import type {
   ConfigFileSnapshot,
   GatewayReloadMode,
 } from "../config/config.js";
+import {
+  listProviderPlugins,
+  type ProviderId,
+} from "../providers/plugins/index.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
 };
 
-export type ProviderKind =
-  | "whatsapp"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "signal"
-  | "imessage"
-  | "msteams";
+export type ProviderKind = ProviderId;
 
 export type GatewayReloadPlan = {
   changedPaths: string[];
@@ -46,20 +43,14 @@ type ReloadAction =
   | "restart-browser-control"
   | "restart-cron"
   | "restart-heartbeat"
-  | "restart-provider:whatsapp"
-  | "restart-provider:telegram"
-  | "restart-provider:discord"
-  | "restart-provider:slack"
-  | "restart-provider:signal"
-  | "restart-provider:imessage"
-  | "restart-provider:msteams";
+  | `restart-provider:${ProviderId}`;
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
   debounceMs: 300,
 };
 
-const RELOAD_RULES: ReloadRule[] = [
+const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
@@ -69,26 +60,26 @@ const RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   {
     prefix: "browser",
     kind: "hot",
     actions: ["restart-browser-control"],
   },
-  { prefix: "web", kind: "hot", actions: ["restart-provider:whatsapp"] },
-  { prefix: "telegram", kind: "hot", actions: ["restart-provider:telegram"] },
-  { prefix: "discord", kind: "hot", actions: ["restart-provider:discord"] },
-  { prefix: "slack", kind: "hot", actions: ["restart-provider:slack"] },
-  { prefix: "signal", kind: "hot", actions: ["restart-provider:signal"] },
-  { prefix: "imessage", kind: "hot", actions: ["restart-provider:imessage"] },
-  { prefix: "msteams", kind: "hot", actions: ["restart-provider:msteams"] },
+];
+
+const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
+  { prefix: "identity", kind: "none" },
+  { prefix: "wizard", kind: "none" },
+  { prefix: "logging", kind: "none" },
+  { prefix: "models", kind: "none" },
   { prefix: "agents", kind: "none" },
   { prefix: "tools", kind: "none" },
   { prefix: "bindings", kind: "none" },
   { prefix: "audio", kind: "none" },
-  { prefix: "wizard", kind: "none" },
-  { prefix: "logging", kind: "none" },
-  { prefix: "models", kind: "none" },
+  { prefix: "agent", kind: "none" },
+  { prefix: "routing", kind: "none" },
   { prefix: "messages", kind: "none" },
   { prefix: "session", kind: "none" },
   { prefix: "whatsapp", kind: "none" },
@@ -101,8 +92,31 @@ const RELOAD_RULES: ReloadRule[] = [
   { prefix: "canvasHost", kind: "restart" },
 ];
 
+let cachedReloadRules: ReloadRule[] | null = null;
+
+function listReloadRules(): ReloadRule[] {
+  if (cachedReloadRules) return cachedReloadRules;
+  const providerReloadRules: ReloadRule[] = listProviderPlugins().flatMap(
+    (plugin) =>
+      (plugin.reload?.configPrefixes ?? []).map(
+        (prefix): ReloadRule => ({
+          prefix,
+          kind: "hot",
+          actions: [`restart-provider:${plugin.id}` as ReloadAction],
+        }),
+      ),
+  );
+  const rules = [
+    ...BASE_RELOAD_RULES,
+    ...providerReloadRules,
+    ...BASE_RELOAD_RULES_TAIL,
+  ];
+  cachedReloadRules = rules;
+  return rules;
+}
+
 function matchRule(path: string): ReloadRule | null {
-  for (const rule of RELOAD_RULES) {
+  for (const rule of listReloadRules()) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) return rule;
   }
   return null;
@@ -186,6 +200,11 @@ export function buildGatewayReloadPlan(
   };
 
   const applyAction = (action: ReloadAction) => {
+    if (action.startsWith("restart-provider:")) {
+      const provider = action.slice("restart-provider:".length) as ProviderId;
+      plan.restartProviders.add(provider);
+      return;
+    }
     switch (action) {
       case "reload-hooks":
         plan.reloadHooks = true;
@@ -201,27 +220,6 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
-        break;
-      case "restart-provider:whatsapp":
-        plan.restartProviders.add("whatsapp");
-        break;
-      case "restart-provider:telegram":
-        plan.restartProviders.add("telegram");
-        break;
-      case "restart-provider:discord":
-        plan.restartProviders.add("discord");
-        break;
-      case "restart-provider:slack":
-        plan.restartProviders.add("slack");
-        break;
-      case "restart-provider:signal":
-        plan.restartProviders.add("signal");
-        break;
-      case "restart-provider:imessage":
-        plan.restartProviders.add("imessage");
-        break;
-      case "restart-provider:msteams":
-        plan.restartProviders.add("msteams");
         break;
       default:
         break;

@@ -1,118 +1,109 @@
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  listDiscordAccountIds,
-  resolveDefaultDiscordAccountId,
-  resolveDiscordAccount,
-} from "../discord/accounts.js";
-import { monitorDiscordProvider } from "../discord/index.js";
-import type {
-  DiscordApplicationSummary,
-  DiscordProbe,
-} from "../discord/probe.js";
-import { probeDiscord } from "../discord/probe.js";
-import { shouldLogVerbose } from "../globals.js";
-import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-} from "../imessage/accounts.js";
-import { monitorIMessageProvider } from "../imessage/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { createSubsystemLogger } from "../logging.js";
-import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
+import {
+  getProviderPlugin,
+  listProviderPlugins,
+  type ProviderId,
+} from "../providers/plugins/index.js";
+import type { ProviderAccountSnapshot } from "../providers/plugins/types.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "../signal/accounts.js";
-import { monitorSignalProvider } from "../signal/index.js";
-import {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-} from "../slack/accounts.js";
-import { monitorSlackProvider } from "../slack/index.js";
-import {
-  listTelegramAccountIds,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
-} from "../telegram/accounts.js";
-import { monitorTelegramProvider } from "../telegram/monitor.js";
-import { probeTelegram } from "../telegram/probe.js";
-import {
-  listEnabledWhatsAppAccounts,
-  resolveDefaultWhatsAppAccountId,
-} from "../web/accounts.js";
-import type { WebProviderStatus } from "../web/auto-reply.js";
-import { readWebSelfId } from "../web/session.js";
-import { formatError } from "./server-utils.js";
-
-export type TelegramRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  mode?: "webhook" | "polling" | null;
-};
-
-export type DiscordRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  bot?: DiscordProbe["bot"];
-  application?: DiscordApplicationSummary;
-};
-
-export type SlackRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-};
-
-export type SignalRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  baseUrl?: string | null;
-};
-
-export type IMessageRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  cliPath?: string | null;
-  dbPath?: string | null;
-};
-
-export type MSTeamsRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  port?: number | null;
-};
+import { resolveDefaultWhatsAppAccountId } from "../web/accounts.js";
 
 export type ProviderRuntimeSnapshot = {
-  whatsapp: WebProviderStatus;
-  whatsappAccounts?: Record<string, WebProviderStatus>;
-  telegram: TelegramRuntimeStatus;
-  telegramAccounts?: Record<string, TelegramRuntimeStatus>;
-  discord: DiscordRuntimeStatus;
-  discordAccounts?: Record<string, DiscordRuntimeStatus>;
-  slack: SlackRuntimeStatus;
-  slackAccounts?: Record<string, SlackRuntimeStatus>;
-  signal: SignalRuntimeStatus;
-  signalAccounts?: Record<string, SignalRuntimeStatus>;
-  imessage: IMessageRuntimeStatus;
-  imessageAccounts?: Record<string, IMessageRuntimeStatus>;
-  msteams: MSTeamsRuntimeStatus;
+  [K in ProviderId]?: ProviderAccountSnapshot;
+} & {
+  [K in `${ProviderId}Accounts`]?: Record<string, ProviderAccountSnapshot>;
 };
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+type ProviderRuntimeStore = {
+  aborts: Map<string, AbortController>;
+  tasks: Map<string, Promise<unknown>>;
+  runtimes: Map<string, ProviderAccountSnapshot>;
+};
+
+const DEFAULT_RUNTIME: Record<ProviderId, ProviderAccountSnapshot> = {
+  whatsapp: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    connected: false,
+    reconnectAttempts: 0,
+    lastConnectedAt: null,
+    lastDisconnect: null,
+    lastMessageAt: null,
+    lastEventAt: null,
+    lastError: null,
+  },
+  telegram: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+  },
+  discord: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+  },
+  slack: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+  },
+  signal: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+  },
+  imessage: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+    cliPath: null,
+    dbPath: null,
+  },
+  msteams: {
+    accountId: DEFAULT_ACCOUNT_ID,
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+    port: null,
+  },
+};
+
+function createRuntimeStore(): ProviderRuntimeStore {
+  return {
+    aborts: new Map(),
+    tasks: new Map(),
+    runtimes: new Map(),
+  };
+}
+
+function isAccountEnabled(account: unknown): boolean {
+  if (!account || typeof account !== "object") return true;
+  const enabled = (account as { enabled?: boolean }).enabled;
+  return enabled !== false;
+}
+
+function cloneDefaultRuntime(
+  providerId: ProviderId,
+  accountId: string,
+): ProviderAccountSnapshot {
+  return { ...DEFAULT_RUNTIME[providerId], accountId };
+}
 
 type ProviderManagerOptions = {
   loadConfig: () => ClawdbotConfig;
@@ -135,6 +126,8 @@ type ProviderManagerOptions = {
 export type ProviderManager = {
   getRuntimeSnapshot: () => ProviderRuntimeSnapshot;
   startProviders: () => Promise<void>;
+  startProvider: (provider: ProviderId, accountId?: string) => Promise<void>;
+  stopProvider: (provider: ProviderId, accountId?: string) => Promise<void>;
   startWhatsAppProvider: (accountId?: string) => Promise<void>;
   stopWhatsAppProvider: (accountId?: string) => Promise<void>;
   startTelegramProvider: (accountId?: string) => Promise<void>;
@@ -173,976 +166,199 @@ export function createProviderManager(
     msteamsRuntimeEnv,
   } = opts;
 
-  const whatsappAborts = new Map<string, AbortController>();
-  const telegramAborts = new Map<string, AbortController>();
-  const discordAborts = new Map<string, AbortController>();
-  const slackAborts = new Map<string, AbortController>();
-  const signalAborts = new Map<string, AbortController>();
-  const imessageAborts = new Map<string, AbortController>();
-  let msteamsAbort: AbortController | null = null;
-  const whatsappTasks = new Map<string, Promise<unknown>>();
-  let msteamsTask: Promise<unknown> | null = null;
-  const telegramTasks = new Map<string, Promise<unknown>>();
-  const discordTasks = new Map<string, Promise<unknown>>();
-  const slackTasks = new Map<string, Promise<unknown>>();
-  const signalTasks = new Map<string, Promise<unknown>>();
-  const imessageTasks = new Map<string, Promise<unknown>>();
-
-  const whatsappRuntimes = new Map<string, WebProviderStatus>();
-  const defaultWhatsAppStatus = (): WebProviderStatus => ({
-    running: false,
-    connected: false,
-    reconnectAttempts: 0,
-    lastConnectedAt: null,
-    lastDisconnect: null,
-    lastMessageAt: null,
-    lastEventAt: null,
-    lastError: null,
-  });
-  const telegramRuntimes = new Map<string, TelegramRuntimeStatus>();
-  const discordRuntimes = new Map<string, DiscordRuntimeStatus>();
-  const slackRuntimes = new Map<string, SlackRuntimeStatus>();
-  const signalRuntimes = new Map<string, SignalRuntimeStatus>();
-  const imessageRuntimes = new Map<string, IMessageRuntimeStatus>();
-
-  const defaultTelegramStatus = (): TelegramRuntimeStatus => ({
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    mode: null,
-  });
-  const defaultDiscordStatus = (): DiscordRuntimeStatus => ({
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    bot: undefined,
-    application: undefined,
-  });
-  const defaultSlackStatus = (): SlackRuntimeStatus => ({
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  });
-  const defaultSignalStatus = (): SignalRuntimeStatus => ({
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    baseUrl: null,
-  });
-  const defaultIMessageStatus = (): IMessageRuntimeStatus => ({
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    cliPath: null,
-    dbPath: null,
-  });
-  let msteamsRuntime: MSTeamsRuntimeStatus = {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    port: null,
+  const providerStores = new Map<ProviderId, ProviderRuntimeStore>();
+  const providerLogs: Record<ProviderId, SubsystemLogger> = {
+    whatsapp: logWhatsApp,
+    telegram: logTelegram,
+    discord: logDiscord,
+    slack: logSlack,
+    signal: logSignal,
+    imessage: logIMessage,
+    msteams: logMSTeams,
+  };
+  const providerRuntimeEnvs: Record<ProviderId, RuntimeEnv> = {
+    whatsapp: whatsappRuntimeEnv,
+    telegram: telegramRuntimeEnv,
+    discord: discordRuntimeEnv,
+    slack: slackRuntimeEnv,
+    signal: signalRuntimeEnv,
+    imessage: imessageRuntimeEnv,
+    msteams: msteamsRuntimeEnv,
   };
 
-  const updateWhatsAppStatus = (accountId: string, next: WebProviderStatus) => {
-    whatsappRuntimes.set(accountId, next);
+  const getStore = (providerId: ProviderId): ProviderRuntimeStore => {
+    const existing = providerStores.get(providerId);
+    if (existing) return existing;
+    const next = createRuntimeStore();
+    providerStores.set(providerId, next);
+    return next;
   };
 
-  const startWhatsAppProvider = async (accountId?: string) => {
-    const cfg = loadConfig();
-    const enabledAccounts = listEnabledWhatsAppAccounts(cfg);
-    const targets = accountId
-      ? enabledAccounts.filter((a) => a.accountId === accountId)
-      : enabledAccounts;
-    if (targets.length === 0) return;
-
-    if (cfg.web?.enabled === false) {
-      for (const account of targets) {
-        const current =
-          whatsappRuntimes.get(account.accountId) ?? defaultWhatsAppStatus();
-        whatsappRuntimes.set(account.accountId, {
-          ...current,
-          running: false,
-          connected: false,
-          lastError: "disabled",
-        });
-      }
-      logWhatsApp.info("skipping provider start (web.enabled=false)");
-      return;
-    }
-
-    await Promise.all(
-      targets.map(async (account) => {
-        if (whatsappTasks.has(account.accountId)) return;
-        const current =
-          whatsappRuntimes.get(account.accountId) ?? defaultWhatsAppStatus();
-        if (!(await webAuthExists(account.authDir))) {
-          whatsappRuntimes.set(account.accountId, {
-            ...current,
-            running: false,
-            connected: false,
-            lastError: "not linked",
-          });
-          logWhatsApp.info(
-            `[${account.accountId}] skipping provider start (no linked session)`,
-          );
-          return;
-        }
-
-        const { e164, jid } = readWebSelfId(account.authDir);
-        const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
-        logWhatsApp.info(
-          `[${account.accountId}] starting provider (${identity})`,
-        );
-        const abort = new AbortController();
-        whatsappAborts.set(account.accountId, abort);
-        whatsappRuntimes.set(account.accountId, {
-          ...current,
-          running: true,
-          connected: false,
-          lastError: null,
-        });
-
-        const task = monitorWebProvider(
-          shouldLogVerbose(),
-          undefined,
-          true,
-          undefined,
-          whatsappRuntimeEnv,
-          abort.signal,
-          {
-            statusSink: (next) => updateWhatsAppStatus(account.accountId, next),
-            accountId: account.accountId,
-          },
-        )
-          .catch((err) => {
-            const latest =
-              whatsappRuntimes.get(account.accountId) ??
-              defaultWhatsAppStatus();
-            whatsappRuntimes.set(account.accountId, {
-              ...latest,
-              lastError: formatError(err),
-            });
-            logWhatsApp.error(
-              `[${account.accountId}] provider exited: ${formatError(err)}`,
-            );
-          })
-          .finally(() => {
-            whatsappAborts.delete(account.accountId);
-            whatsappTasks.delete(account.accountId);
-            const latest =
-              whatsappRuntimes.get(account.accountId) ??
-              defaultWhatsAppStatus();
-            whatsappRuntimes.set(account.accountId, {
-              ...latest,
-              running: false,
-              connected: false,
-            });
-          });
-
-        whatsappTasks.set(account.accountId, task);
-      }),
+  const getRuntime = (
+    providerId: ProviderId,
+    accountId: string,
+  ): ProviderAccountSnapshot => {
+    const store = getStore(providerId);
+    return (
+      store.runtimes.get(accountId) ??
+      cloneDefaultRuntime(providerId, accountId)
     );
   };
 
-  const stopWhatsAppProvider = async (accountId?: string) => {
-    const ids = accountId
+  const setRuntime = (
+    providerId: ProviderId,
+    accountId: string,
+    patch: ProviderAccountSnapshot,
+  ): ProviderAccountSnapshot => {
+    const store = getStore(providerId);
+    const current = getRuntime(providerId, accountId);
+    const next = { ...current, ...patch, accountId };
+    store.runtimes.set(accountId, next);
+    return next;
+  };
+
+  const startProvider = async (providerId: ProviderId, accountId?: string) => {
+    const plugin = getProviderPlugin(providerId);
+    const startAccount = plugin?.gateway?.startAccount;
+    if (!startAccount) return;
+    const cfg = loadConfig();
+    const store = getStore(providerId);
+    const accountIds = accountId
       ? [accountId]
-      : Array.from(
-          new Set([...whatsappAborts.keys(), ...whatsappTasks.keys()]),
-        );
-    await Promise.all(
-      ids.map(async (id) => {
-        const abort = whatsappAborts.get(id);
-        const task = whatsappTasks.get(id);
-        if (!abort && !task) return;
-        abort?.abort();
-        try {
-          await task;
-        } catch {
-          // ignore
-        }
-        whatsappAborts.delete(id);
-        whatsappTasks.delete(id);
-        const latest = whatsappRuntimes.get(id) ?? defaultWhatsAppStatus();
-        whatsappRuntimes.set(id, {
-          ...latest,
-          running: false,
-          connected: false,
-        });
-      }),
-    );
-  };
-
-  const startTelegramProvider = async (accountId?: string) => {
-    const cfg = loadConfig();
-    const accountIds = accountId ? [accountId] : listTelegramAccountIds(cfg);
-    if (cfg.telegram?.enabled === false) {
-      for (const id of accountIds) {
-        const latest = telegramRuntimes.get(id) ?? defaultTelegramStatus();
-        telegramRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastError: "disabled",
-        });
-      }
-      if (shouldLogVerbose()) {
-        logTelegram.debug(
-          "telegram provider disabled (telegram.enabled=false)",
-        );
-      }
-      return;
-    }
+      : plugin.config.listAccountIds(cfg);
+    if (accountIds.length === 0) return;
 
     await Promise.all(
       accountIds.map(async (id) => {
-        const account = resolveTelegramAccount({ cfg, accountId: id });
-        if (!account.enabled) {
-          const latest =
-            telegramRuntimes.get(account.accountId) ?? defaultTelegramStatus();
-          telegramRuntimes.set(account.accountId, {
-            ...latest,
+        if (store.tasks.has(id)) return;
+        const account = plugin.config.resolveAccount(cfg, id);
+        const enabled =
+          isAccountEnabled(account) &&
+          !(providerId === "whatsapp" && cfg.web?.enabled === false);
+        if (!enabled) {
+          setRuntime(providerId, id, {
+            accountId: id,
             running: false,
             lastError: "disabled",
           });
           return;
         }
-        if (telegramTasks.has(account.accountId)) return;
-        const token = account.token.trim();
-        if (!token) {
-          const latest =
-            telegramRuntimes.get(account.accountId) ?? defaultTelegramStatus();
-          telegramRuntimes.set(account.accountId, {
-            ...latest,
+
+        let configured = true;
+        if (plugin.config.isConfigured) {
+          configured = await plugin.config.isConfigured(account, cfg);
+        }
+        if (!configured) {
+          setRuntime(providerId, id, {
+            accountId: id,
             running: false,
-            lastError: "not configured",
+            lastError:
+              providerId === "whatsapp" ? "not linked" : "not configured",
           });
-          if (shouldLogVerbose()) {
-            logTelegram.debug(
-              `[${account.accountId}] telegram provider not configured (no TELEGRAM_BOT_TOKEN)`,
-            );
-          }
           return;
         }
 
-        let telegramBotLabel = "";
-        try {
-          const probe = await probeTelegram(token, 2500, account.config.proxy);
-          const username = probe.ok ? probe.bot?.username?.trim() : null;
-          if (username) telegramBotLabel = ` (@${username})`;
-        } catch (err) {
-          if (shouldLogVerbose()) {
-            logTelegram.debug(
-              `[${account.accountId}] bot probe failed: ${String(err)}`,
-            );
-          }
-        }
-
-        logTelegram.info(
-          `[${account.accountId}] starting provider${telegramBotLabel}`,
-        );
         const abort = new AbortController();
-        telegramAborts.set(account.accountId, abort);
-        const latest =
-          telegramRuntimes.get(account.accountId) ?? defaultTelegramStatus();
-        telegramRuntimes.set(account.accountId, {
-          ...latest,
+        store.aborts.set(id, abort);
+        setRuntime(providerId, id, {
+          accountId: id,
           running: true,
           lastStartAt: Date.now(),
           lastError: null,
-          mode: account.config.webhookUrl ? "webhook" : "polling",
         });
-        const task = monitorTelegramProvider({
-          token,
-          accountId: account.accountId,
-          config: cfg,
-          runtime: telegramRuntimeEnv,
+
+        const log = providerLogs[providerId];
+        const task = startAccount({
+          cfg,
+          accountId: id,
+          account,
+          runtime: providerRuntimeEnvs[providerId],
           abortSignal: abort.signal,
-          useWebhook: Boolean(account.config.webhookUrl),
-          webhookUrl: account.config.webhookUrl,
-          webhookSecret: account.config.webhookSecret,
-          webhookPath: account.config.webhookPath,
-        })
+          log,
+          getStatus: () => getRuntime(providerId, id),
+          setStatus: (next) => setRuntime(providerId, id, next),
+        });
+        const tracked = Promise.resolve(task)
           .catch((err) => {
-            const current =
-              telegramRuntimes.get(account.accountId) ??
-              defaultTelegramStatus();
-            telegramRuntimes.set(account.accountId, {
-              ...current,
-              lastError: formatError(err),
-            });
-            logTelegram.error(
-              `[${account.accountId}] provider exited: ${formatError(err)}`,
-            );
+            const message = formatErrorMessage(err);
+            setRuntime(providerId, id, { accountId: id, lastError: message });
+            log.error?.(`[${id}] provider exited: ${message}`);
           })
           .finally(() => {
-            telegramAborts.delete(account.accountId);
-            telegramTasks.delete(account.accountId);
-            const current =
-              telegramRuntimes.get(account.accountId) ??
-              defaultTelegramStatus();
-            telegramRuntimes.set(account.accountId, {
-              ...current,
+            store.aborts.delete(id);
+            store.tasks.delete(id);
+            setRuntime(providerId, id, {
+              accountId: id,
               running: false,
               lastStopAt: Date.now(),
             });
           });
-        telegramTasks.set(account.accountId, task);
+        store.tasks.set(id, tracked);
       }),
     );
   };
 
-  const stopTelegramProvider = async (accountId?: string) => {
-    const ids = accountId
-      ? [accountId]
-      : Array.from(
-          new Set([...telegramAborts.keys(), ...telegramTasks.keys()]),
-        );
+  const stopProvider = async (providerId: ProviderId, accountId?: string) => {
+    const plugin = getProviderPlugin(providerId);
+    const cfg = loadConfig();
+    const store = getStore(providerId);
+    const knownIds = new Set<string>([
+      ...store.aborts.keys(),
+      ...store.tasks.keys(),
+      ...(plugin ? plugin.config.listAccountIds(cfg) : []),
+    ]);
+    if (accountId) {
+      knownIds.clear();
+      knownIds.add(accountId);
+    }
+
     await Promise.all(
-      ids.map(async (id) => {
-        const abort = telegramAborts.get(id);
-        const task = telegramTasks.get(id);
-        if (!abort && !task) return;
+      Array.from(knownIds.values()).map(async (id) => {
+        const abort = store.aborts.get(id);
+        const task = store.tasks.get(id);
+        if (!abort && !task && !plugin?.gateway?.stopAccount) return;
         abort?.abort();
+        if (plugin?.gateway?.stopAccount) {
+          const account = plugin.config.resolveAccount(cfg, id);
+          await plugin.gateway.stopAccount({
+            cfg,
+            accountId: id,
+            account,
+            runtime: providerRuntimeEnvs[providerId],
+            abortSignal: abort?.signal ?? new AbortController().signal,
+            log: providerLogs[providerId],
+            getStatus: () => getRuntime(providerId, id),
+            setStatus: (next) => setRuntime(providerId, id, next),
+          });
+        }
         try {
           await task;
         } catch {
           // ignore
         }
-        telegramAborts.delete(id);
-        telegramTasks.delete(id);
-        const latest = telegramRuntimes.get(id) ?? defaultTelegramStatus();
-        telegramRuntimes.set(id, {
-          ...latest,
+        store.aborts.delete(id);
+        store.tasks.delete(id);
+        setRuntime(providerId, id, {
+          accountId: id,
           running: false,
           lastStopAt: Date.now(),
         });
       }),
     );
-  };
-
-  const startDiscordProvider = async (accountId?: string) => {
-    const cfg = loadConfig();
-    const accountIds = accountId ? [accountId] : listDiscordAccountIds(cfg);
-    if (cfg.discord?.enabled === false) {
-      for (const id of accountIds) {
-        const latest = discordRuntimes.get(id) ?? defaultDiscordStatus();
-        discordRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastError: "disabled",
-        });
-      }
-      if (shouldLogVerbose()) {
-        logDiscord.debug("discord provider disabled (discord.enabled=false)");
-      }
-      return;
-    }
-
-    await Promise.all(
-      accountIds.map(async (id) => {
-        const account = resolveDiscordAccount({ cfg, accountId: id });
-        if (!account.enabled) {
-          const latest =
-            discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-          discordRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "disabled",
-          });
-          return;
-        }
-        if (discordTasks.has(account.accountId)) return;
-        const token = account.token.trim();
-        if (!token) {
-          const latest =
-            discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-          discordRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "not configured",
-          });
-          if (shouldLogVerbose()) {
-            logDiscord.debug(
-              `[${account.accountId}] discord provider not configured (no DISCORD_BOT_TOKEN)`,
-            );
-          }
-          return;
-        }
-        let discordBotLabel = "";
-        try {
-          const probe = await probeDiscord(token, 2500, {
-            includeApplication: true,
-          });
-          const username = probe.ok ? probe.bot?.username?.trim() : null;
-          if (username) discordBotLabel = ` (@${username})`;
-          const latest =
-            discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-          discordRuntimes.set(account.accountId, {
-            ...latest,
-            bot: probe.bot,
-            application: probe.application,
-          });
-          const messageContent = probe.application?.intents?.messageContent;
-          if (messageContent === "disabled") {
-            logDiscord.warn(
-              `[${account.accountId}] Discord Message Content Intent is disabled; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
-            );
-          } else if (messageContent === "limited") {
-            logDiscord.info(
-              `[${account.accountId}] Discord Message Content Intent is limited; bots under 100 servers can use it without verification.`,
-            );
-          }
-        } catch (err) {
-          if (shouldLogVerbose()) {
-            logDiscord.debug(
-              `[${account.accountId}] bot probe failed: ${String(err)}`,
-            );
-          }
-        }
-        logDiscord.info(
-          `[${account.accountId}] starting provider${discordBotLabel}`,
-        );
-        const abort = new AbortController();
-        discordAborts.set(account.accountId, abort);
-        const latest =
-          discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-        discordRuntimes.set(account.accountId, {
-          ...latest,
-          running: true,
-          lastStartAt: Date.now(),
-          lastError: null,
-        });
-        const task = monitorDiscordProvider({
-          token,
-          accountId: account.accountId,
-          config: cfg,
-          runtime: discordRuntimeEnv,
-          abortSignal: abort.signal,
-          mediaMaxMb: account.config.mediaMaxMb,
-          historyLimit: account.config.historyLimit,
-        })
-          .catch((err) => {
-            const current =
-              discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-            discordRuntimes.set(account.accountId, {
-              ...current,
-              lastError: formatError(err),
-            });
-            logDiscord.error(
-              `[${account.accountId}] provider exited: ${formatError(err)}`,
-            );
-          })
-          .finally(() => {
-            discordAborts.delete(account.accountId);
-            discordTasks.delete(account.accountId);
-            const current =
-              discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-            discordRuntimes.set(account.accountId, {
-              ...current,
-              running: false,
-              lastStopAt: Date.now(),
-            });
-          });
-        discordTasks.set(account.accountId, task);
-      }),
-    );
-  };
-
-  const stopDiscordProvider = async (accountId?: string) => {
-    const ids = accountId
-      ? [accountId]
-      : Array.from(new Set([...discordAborts.keys(), ...discordTasks.keys()]));
-    await Promise.all(
-      ids.map(async (id) => {
-        const abort = discordAborts.get(id);
-        const task = discordTasks.get(id);
-        if (!abort && !task) return;
-        abort?.abort();
-        try {
-          await task;
-        } catch {
-          // ignore
-        }
-        discordAborts.delete(id);
-        discordTasks.delete(id);
-        const latest = discordRuntimes.get(id) ?? defaultDiscordStatus();
-        discordRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      }),
-    );
-  };
-
-  const startSlackProvider = async (accountId?: string) => {
-    const cfg = loadConfig();
-    const accountIds = accountId ? [accountId] : listSlackAccountIds(cfg);
-    if (cfg.slack?.enabled === false) {
-      for (const id of accountIds) {
-        const latest = slackRuntimes.get(id) ?? defaultSlackStatus();
-        slackRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastError: "disabled",
-        });
-      }
-      if (shouldLogVerbose()) {
-        logSlack.debug("slack provider disabled (slack.enabled=false)");
-      }
-      return;
-    }
-
-    await Promise.all(
-      accountIds.map(async (id) => {
-        const account = resolveSlackAccount({ cfg, accountId: id });
-        if (!account.enabled) {
-          const latest =
-            slackRuntimes.get(account.accountId) ?? defaultSlackStatus();
-          slackRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "disabled",
-          });
-          return;
-        }
-        if (slackTasks.has(account.accountId)) return;
-        const botToken = account.botToken?.trim();
-        const appToken = account.appToken?.trim();
-        if (!botToken || !appToken) {
-          const latest =
-            slackRuntimes.get(account.accountId) ?? defaultSlackStatus();
-          slackRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "not configured",
-          });
-          if (shouldLogVerbose()) {
-            logSlack.debug(
-              `[${account.accountId}] slack provider not configured (missing SLACK_BOT_TOKEN/SLACK_APP_TOKEN)`,
-            );
-          }
-          return;
-        }
-        logSlack.info(`[${account.accountId}] starting provider`);
-        const abort = new AbortController();
-        slackAborts.set(account.accountId, abort);
-        const latest =
-          slackRuntimes.get(account.accountId) ?? defaultSlackStatus();
-        slackRuntimes.set(account.accountId, {
-          ...latest,
-          running: true,
-          lastStartAt: Date.now(),
-          lastError: null,
-        });
-        const task = monitorSlackProvider({
-          botToken,
-          appToken,
-          accountId: account.accountId,
-          config: cfg,
-          runtime: slackRuntimeEnv,
-          abortSignal: abort.signal,
-          mediaMaxMb: account.config.mediaMaxMb,
-          slashCommand: account.config.slashCommand,
-        })
-          .catch((err) => {
-            const current =
-              slackRuntimes.get(account.accountId) ?? defaultSlackStatus();
-            slackRuntimes.set(account.accountId, {
-              ...current,
-              lastError: formatError(err),
-            });
-            logSlack.error(
-              `[${account.accountId}] provider exited: ${formatError(err)}`,
-            );
-          })
-          .finally(() => {
-            slackAborts.delete(account.accountId);
-            slackTasks.delete(account.accountId);
-            const current =
-              slackRuntimes.get(account.accountId) ?? defaultSlackStatus();
-            slackRuntimes.set(account.accountId, {
-              ...current,
-              running: false,
-              lastStopAt: Date.now(),
-            });
-          });
-        slackTasks.set(account.accountId, task);
-      }),
-    );
-  };
-
-  const stopSlackProvider = async (accountId?: string) => {
-    const ids = accountId
-      ? [accountId]
-      : Array.from(new Set([...slackAborts.keys(), ...slackTasks.keys()]));
-    await Promise.all(
-      ids.map(async (id) => {
-        const abort = slackAborts.get(id);
-        const task = slackTasks.get(id);
-        if (!abort && !task) return;
-        abort?.abort();
-        try {
-          await task;
-        } catch {
-          // ignore
-        }
-        slackAborts.delete(id);
-        slackTasks.delete(id);
-        const latest = slackRuntimes.get(id) ?? defaultSlackStatus();
-        slackRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      }),
-    );
-  };
-
-  const startSignalProvider = async (accountId?: string) => {
-    const cfg = loadConfig();
-    const accountIds = accountId ? [accountId] : listSignalAccountIds(cfg);
-    if (!cfg.signal) {
-      for (const id of accountIds) {
-        const latest = signalRuntimes.get(id) ?? defaultSignalStatus();
-        signalRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastError: "not configured",
-        });
-      }
-      if (shouldLogVerbose()) {
-        logSignal.debug("signal provider not configured (no signal config)");
-      }
-      return;
-    }
-
-    await Promise.all(
-      accountIds.map(async (id) => {
-        const account = resolveSignalAccount({ cfg, accountId: id });
-        if (!account.enabled) {
-          const latest =
-            signalRuntimes.get(account.accountId) ?? defaultSignalStatus();
-          signalRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "disabled",
-            baseUrl: account.baseUrl,
-          });
-          return;
-        }
-        if (!account.configured) {
-          const latest =
-            signalRuntimes.get(account.accountId) ?? defaultSignalStatus();
-          signalRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "not configured",
-            baseUrl: account.baseUrl,
-          });
-          if (shouldLogVerbose()) {
-            logSignal.debug(
-              `[${account.accountId}] signal provider not configured (missing signal config)`,
-            );
-          }
-          return;
-        }
-        if (signalTasks.has(account.accountId)) return;
-        logSignal.info(
-          `[${account.accountId}] starting provider (${account.baseUrl})`,
-        );
-        const abort = new AbortController();
-        signalAborts.set(account.accountId, abort);
-        const latest =
-          signalRuntimes.get(account.accountId) ?? defaultSignalStatus();
-        signalRuntimes.set(account.accountId, {
-          ...latest,
-          running: true,
-          lastStartAt: Date.now(),
-          lastError: null,
-          baseUrl: account.baseUrl,
-        });
-        const task = monitorSignalProvider({
-          accountId: account.accountId,
-          config: cfg,
-          runtime: signalRuntimeEnv,
-          abortSignal: abort.signal,
-          mediaMaxMb: account.config.mediaMaxMb,
-        })
-          .catch((err) => {
-            const current =
-              signalRuntimes.get(account.accountId) ?? defaultSignalStatus();
-            signalRuntimes.set(account.accountId, {
-              ...current,
-              lastError: formatError(err),
-            });
-            logSignal.error(
-              `[${account.accountId}] provider exited: ${formatError(err)}`,
-            );
-          })
-          .finally(() => {
-            signalAborts.delete(account.accountId);
-            signalTasks.delete(account.accountId);
-            const current =
-              signalRuntimes.get(account.accountId) ?? defaultSignalStatus();
-            signalRuntimes.set(account.accountId, {
-              ...current,
-              running: false,
-              lastStopAt: Date.now(),
-            });
-          });
-        signalTasks.set(account.accountId, task);
-      }),
-    );
-  };
-
-  const stopSignalProvider = async (accountId?: string) => {
-    const ids = accountId
-      ? [accountId]
-      : Array.from(new Set([...signalAborts.keys(), ...signalTasks.keys()]));
-    await Promise.all(
-      ids.map(async (id) => {
-        const abort = signalAborts.get(id);
-        const task = signalTasks.get(id);
-        if (!abort && !task) return;
-        abort?.abort();
-        try {
-          await task;
-        } catch {
-          // ignore
-        }
-        signalAborts.delete(id);
-        signalTasks.delete(id);
-        const latest = signalRuntimes.get(id) ?? defaultSignalStatus();
-        signalRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      }),
-    );
-  };
-
-  const startIMessageProvider = async (accountId?: string) => {
-    const cfg = loadConfig();
-    const accountIds = accountId ? [accountId] : listIMessageAccountIds(cfg);
-    if (!cfg.imessage) {
-      for (const id of accountIds) {
-        const latest = imessageRuntimes.get(id) ?? defaultIMessageStatus();
-        imessageRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastError: "not configured",
-        });
-      }
-      // keep quiet by default; this is a normal state
-      if (shouldLogVerbose()) {
-        logIMessage.debug(
-          "imessage provider not configured (no imessage config)",
-        );
-      }
-      return;
-    }
-
-    await Promise.all(
-      accountIds.map(async (id) => {
-        const account = resolveIMessageAccount({ cfg, accountId: id });
-        if (!account.enabled) {
-          const latest =
-            imessageRuntimes.get(account.accountId) ?? defaultIMessageStatus();
-          imessageRuntimes.set(account.accountId, {
-            ...latest,
-            running: false,
-            lastError: "disabled",
-          });
-          if (shouldLogVerbose()) {
-            logIMessage.debug(
-              `[${account.accountId}] imessage provider disabled (imessage.enabled=false)`,
-            );
-          }
-          return;
-        }
-        if (imessageTasks.has(account.accountId)) return;
-        const cliPath = account.config.cliPath?.trim() || "imsg";
-        const dbPath = account.config.dbPath?.trim();
-        logIMessage.info(
-          `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
-        );
-        const abort = new AbortController();
-        imessageAborts.set(account.accountId, abort);
-        const latest =
-          imessageRuntimes.get(account.accountId) ?? defaultIMessageStatus();
-        imessageRuntimes.set(account.accountId, {
-          ...latest,
-          running: true,
-          lastStartAt: Date.now(),
-          lastError: null,
-          cliPath,
-          dbPath: dbPath ?? null,
-        });
-        const task = monitorIMessageProvider({
-          accountId: account.accountId,
-          config: cfg,
-          runtime: imessageRuntimeEnv,
-          abortSignal: abort.signal,
-        })
-          .catch((err) => {
-            const current =
-              imessageRuntimes.get(account.accountId) ??
-              defaultIMessageStatus();
-            imessageRuntimes.set(account.accountId, {
-              ...current,
-              lastError: formatError(err),
-            });
-            logIMessage.error(
-              `[${account.accountId}] provider exited: ${formatError(err)}`,
-            );
-          })
-          .finally(() => {
-            imessageAborts.delete(account.accountId);
-            imessageTasks.delete(account.accountId);
-            const current =
-              imessageRuntimes.get(account.accountId) ??
-              defaultIMessageStatus();
-            imessageRuntimes.set(account.accountId, {
-              ...current,
-              running: false,
-              lastStopAt: Date.now(),
-            });
-          });
-        imessageTasks.set(account.accountId, task);
-      }),
-    );
-  };
-
-  const stopIMessageProvider = async (accountId?: string) => {
-    const ids = accountId
-      ? [accountId]
-      : Array.from(
-          new Set([...imessageAborts.keys(), ...imessageTasks.keys()]),
-        );
-    await Promise.all(
-      ids.map(async (id) => {
-        const abort = imessageAborts.get(id);
-        const task = imessageTasks.get(id);
-        if (!abort && !task) return;
-        abort?.abort();
-        try {
-          await task;
-        } catch {
-          // ignore
-        }
-        imessageAborts.delete(id);
-        imessageTasks.delete(id);
-        const latest = imessageRuntimes.get(id) ?? defaultIMessageStatus();
-        imessageRuntimes.set(id, {
-          ...latest,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      }),
-    );
-  };
-
-  const startMSTeamsProvider = async () => {
-    if (msteamsTask) return;
-    const cfg = loadConfig();
-    if (!cfg.msteams) {
-      msteamsRuntime = {
-        ...msteamsRuntime,
-        running: false,
-        lastError: "not configured",
-      };
-      if (shouldLogVerbose()) {
-        logMSTeams.debug("msteams provider not configured (no msteams config)");
-      }
-      return;
-    }
-    if (cfg.msteams?.enabled === false) {
-      msteamsRuntime = {
-        ...msteamsRuntime,
-        running: false,
-        lastError: "disabled",
-      };
-      if (shouldLogVerbose()) {
-        logMSTeams.debug("msteams provider disabled (msteams.enabled=false)");
-      }
-      return;
-    }
-    const { monitorMSTeamsProvider } = await import("../msteams/index.js");
-    const port = cfg.msteams?.webhook?.port ?? 3978;
-    logMSTeams.info(`starting provider (port ${port})`);
-    msteamsAbort = new AbortController();
-    msteamsRuntime = {
-      ...msteamsRuntime,
-      running: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-      port,
-    };
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: msteamsRuntimeEnv,
-      abortSignal: msteamsAbort.signal,
-    })
-      .catch((err) => {
-        msteamsRuntime = {
-          ...msteamsRuntime,
-          lastError: formatError(err),
-        };
-        logMSTeams.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        msteamsAbort = null;
-        msteamsTask = null;
-        msteamsRuntime = {
-          ...msteamsRuntime,
-          running: false,
-          lastStopAt: Date.now(),
-        };
-      });
-    msteamsTask = task;
-  };
-
-  const stopMSTeamsProvider = async () => {
-    if (!msteamsAbort && !msteamsTask) return;
-    msteamsAbort?.abort();
-    try {
-      await msteamsTask;
-    } catch {
-      // ignore
-    }
-    msteamsAbort = null;
-    msteamsTask = null;
-    msteamsRuntime = {
-      ...msteamsRuntime,
-      running: false,
-      lastStopAt: Date.now(),
-    };
   };
 
   const startProviders = async () => {
-    await startWhatsAppProvider();
-    await startDiscordProvider();
-    await startSlackProvider();
-    await startTelegramProvider();
-    await startSignalProvider();
-    await startIMessageProvider();
-    await startMSTeamsProvider();
+    for (const plugin of listProviderPlugins()) {
+      await startProvider(plugin.id);
+    }
   };
 
   const markWhatsAppLoggedOut = (cleared: boolean, accountId?: string) => {
     const cfg = loadConfig();
     const resolvedId = accountId ?? resolveDefaultWhatsAppAccountId(cfg);
-    const current = whatsappRuntimes.get(resolvedId) ?? defaultWhatsAppStatus();
-    whatsappRuntimes.set(resolvedId, {
-      ...current,
+    const current = getRuntime("whatsapp", resolvedId);
+    setRuntime("whatsapp", resolvedId, {
+      accountId: resolvedId,
       running: false,
       connected: false,
       lastError: cleared ? "logged out" : current.lastError,
@@ -1151,158 +367,70 @@ export function createProviderManager(
 
   const getRuntimeSnapshot = (): ProviderRuntimeSnapshot => {
     const cfg = loadConfig();
-    const defaultWhatsAppId = resolveDefaultWhatsAppAccountId(cfg);
-    const whatsapp =
-      whatsappRuntimes.get(defaultWhatsAppId) ?? defaultWhatsAppStatus();
-    const whatsappAccounts = Object.fromEntries(
-      Array.from(whatsappRuntimes.entries()).map(([id, status]) => [
-        id,
-        { ...status },
-      ]),
-    );
-
-    const telegramAccounts = Object.fromEntries(
-      listTelegramAccountIds(cfg).map((id) => {
-        const account = resolveTelegramAccount({ cfg, accountId: id });
+    const snapshot: ProviderRuntimeSnapshot = {};
+    for (const plugin of listProviderPlugins()) {
+      const store = getStore(plugin.id);
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const defaultAccountId =
+        plugin.config.defaultAccountId?.(cfg) ??
+        accountIds[0] ??
+        DEFAULT_ACCOUNT_ID;
+      const accounts: Record<string, ProviderAccountSnapshot> = {};
+      for (const id of accountIds) {
+        const account = plugin.config.resolveAccount(cfg, id);
+        const enabled =
+          isAccountEnabled(account) &&
+          !(plugin.id === "whatsapp" && cfg.web?.enabled === false);
+        const described = plugin.config.describeAccount?.(account, cfg);
+        const configured = described?.configured;
         const current =
-          telegramRuntimes.get(account.accountId) ?? defaultTelegramStatus();
-        const status: TelegramRuntimeStatus = {
-          ...current,
-          mode:
-            current.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
-        };
-        if (!status.running) {
-          if (!account.enabled) {
-            status.lastError ??= "disabled";
-          } else if (!account.token) {
-            status.lastError ??= "not configured";
-          }
+          store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        const next = { ...current, accountId: id };
+        if (!next.running) {
+          if (!enabled) next.lastError ??= "disabled";
+          else if (configured === false) next.lastError ??= "not configured";
         }
-        return [account.accountId, status];
-      }),
-    );
-    const telegramDefaultId = resolveDefaultTelegramAccountId(cfg);
-    const telegram =
-      telegramAccounts[telegramDefaultId] ?? defaultTelegramStatus();
-
-    const discordAccounts = Object.fromEntries(
-      listDiscordAccountIds(cfg).map((id) => {
-        const account = resolveDiscordAccount({ cfg, accountId: id });
-        const current =
-          discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
-        const status: DiscordRuntimeStatus = { ...current };
-        if (!status.running) {
-          if (!account.enabled) {
-            status.lastError ??= "disabled";
-          } else if (!account.token) {
-            status.lastError ??= "not configured";
-          }
-        }
-        return [account.accountId, status];
-      }),
-    );
-    const discordDefaultId = resolveDefaultDiscordAccountId(cfg);
-    const discord = discordAccounts[discordDefaultId] ?? defaultDiscordStatus();
-
-    const slackAccounts = Object.fromEntries(
-      listSlackAccountIds(cfg).map((id) => {
-        const account = resolveSlackAccount({ cfg, accountId: id });
-        const current =
-          slackRuntimes.get(account.accountId) ?? defaultSlackStatus();
-        const status: SlackRuntimeStatus = { ...current };
-        if (!status.running) {
-          if (!account.enabled) {
-            status.lastError ??= "disabled";
-          } else if (!account.botToken || !account.appToken) {
-            status.lastError ??= "not configured";
-          }
-        }
-        return [account.accountId, status];
-      }),
-    );
-    const slackDefaultId = resolveDefaultSlackAccountId(cfg);
-    const slack = slackAccounts[slackDefaultId] ?? defaultSlackStatus();
-
-    const signalAccounts = Object.fromEntries(
-      listSignalAccountIds(cfg).map((id) => {
-        const account = resolveSignalAccount({ cfg, accountId: id });
-        const current =
-          signalRuntimes.get(account.accountId) ?? defaultSignalStatus();
-        const status: SignalRuntimeStatus = {
-          ...current,
-          baseUrl: current.baseUrl ?? account.baseUrl,
-        };
-        if (!status.running) {
-          if (!account.enabled) {
-            status.lastError ??= "disabled";
-          } else if (!account.configured) {
-            status.lastError ??= "not configured";
-          }
-        }
-        return [account.accountId, status];
-      }),
-    );
-    const signalDefaultId = resolveDefaultSignalAccountId(cfg);
-    const signal = signalAccounts[signalDefaultId] ?? defaultSignalStatus();
-
-    const imessageAccounts = Object.fromEntries(
-      listIMessageAccountIds(cfg).map((id) => {
-        const account = resolveIMessageAccount({ cfg, accountId: id });
-        const current =
-          imessageRuntimes.get(account.accountId) ?? defaultIMessageStatus();
-        const cliPath = account.config.cliPath?.trim() || "imsg";
-        const dbPath = account.config.dbPath?.trim() || null;
-        const status: IMessageRuntimeStatus = {
-          ...current,
-          cliPath: current.cliPath ?? cliPath,
-          dbPath: current.dbPath ?? dbPath,
-        };
-        if (!status.running && !account.enabled) {
-          status.lastError ??= "disabled";
-        }
-        if (!status.running && !cfg.imessage) {
-          status.lastError ??= "not configured";
-        }
-        return [account.accountId, status];
-      }),
-    );
-    const imessageDefaultId = resolveDefaultIMessageAccountId(cfg);
-    const imessage =
-      imessageAccounts[imessageDefaultId] ?? defaultIMessageStatus();
-    return {
-      whatsapp: { ...whatsapp },
-      whatsappAccounts,
-      telegram,
-      telegramAccounts,
-      discord,
-      discordAccounts,
-      slack,
-      slackAccounts,
-      signal,
-      signalAccounts,
-      imessage,
-      imessageAccounts,
-      msteams: { ...msteamsRuntime },
-    };
+        accounts[id] = next;
+      }
+      const defaultAccount =
+        accounts[defaultAccountId] ??
+        cloneDefaultRuntime(plugin.id, defaultAccountId);
+      (snapshot as Record<string, unknown>)[plugin.id] = defaultAccount;
+      (snapshot as Record<string, unknown>)[`${plugin.id}Accounts`] = accounts;
+    }
+    return snapshot;
   };
 
   return {
     getRuntimeSnapshot,
     startProviders,
-    startWhatsAppProvider,
-    stopWhatsAppProvider,
-    startTelegramProvider,
-    stopTelegramProvider,
-    startDiscordProvider,
-    stopDiscordProvider,
-    startSlackProvider,
-    stopSlackProvider,
-    startSignalProvider,
-    stopSignalProvider,
-    startIMessageProvider,
-    stopIMessageProvider,
-    startMSTeamsProvider,
-    stopMSTeamsProvider,
+    startProvider,
+    stopProvider,
+    startWhatsAppProvider: (accountId?: string) =>
+      startProvider("whatsapp", accountId),
+    stopWhatsAppProvider: (accountId?: string) =>
+      stopProvider("whatsapp", accountId),
+    startTelegramProvider: (accountId?: string) =>
+      startProvider("telegram", accountId),
+    stopTelegramProvider: (accountId?: string) =>
+      stopProvider("telegram", accountId),
+    startDiscordProvider: (accountId?: string) =>
+      startProvider("discord", accountId),
+    stopDiscordProvider: (accountId?: string) =>
+      stopProvider("discord", accountId),
+    startSlackProvider: (accountId?: string) =>
+      startProvider("slack", accountId),
+    stopSlackProvider: (accountId?: string) => stopProvider("slack", accountId),
+    startSignalProvider: (accountId?: string) =>
+      startProvider("signal", accountId),
+    stopSignalProvider: (accountId?: string) =>
+      stopProvider("signal", accountId),
+    startIMessageProvider: (accountId?: string) =>
+      startProvider("imessage", accountId),
+    stopIMessageProvider: (accountId?: string) =>
+      stopProvider("imessage", accountId),
+    startMSTeamsProvider: () => startProvider("msteams"),
+    stopMSTeamsProvider: () => stopProvider("msteams"),
     markWhatsAppLoggedOut,
   };
 }
