@@ -265,11 +265,18 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
   return commands;
 })();
 
-const NATIVE_COMMAND_SURFACES = new Set<string>(
-  listProviderPlugins()
-    .filter((plugin) => plugin.capabilities.nativeCommands)
-    .map((plugin) => plugin.id),
-);
+let cachedNativeCommandSurfaces: Set<string> | null = null;
+
+const getNativeCommandSurfaces = (): Set<string> => {
+  if (!cachedNativeCommandSurfaces) {
+    cachedNativeCommandSurfaces = new Set(
+      listProviderPlugins()
+        .filter((plugin) => plugin.capabilities.nativeCommands)
+        .map((plugin) => plugin.id),
+    );
+  }
+  return cachedNativeCommandSurfaces;
+};
 
 const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {
   const map = new Map<string, TextAliasSpec>();
@@ -358,9 +365,35 @@ export function buildCommandText(commandName: string, args?: string): string {
 export function normalizeCommandBody(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) return trimmed;
+
   const newline = trimmed.indexOf("\n");
-  if (newline === -1) return trimmed;
-  return trimmed.slice(0, newline).trim();
+  const singleLine =
+    newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+
+  const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
+  const normalized = colonMatch
+    ? (() => {
+        const [, command, rest] = colonMatch;
+        const normalizedRest = rest.trimStart();
+        return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+      })()
+    : singleLine;
+
+  const lowered = normalized.toLowerCase();
+  const exact = TEXT_ALIAS_MAP.get(lowered);
+  if (exact) return exact.canonical;
+
+  const tokenMatch = normalized.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
+  if (!tokenMatch) return normalized;
+  const [, token, rest] = tokenMatch;
+  const tokenKey = `/${token.toLowerCase()}`;
+  const tokenSpec = TEXT_ALIAS_MAP.get(tokenKey);
+  if (!tokenSpec) return normalized;
+  if (rest && !tokenSpec.acceptsArgs) return normalized;
+  const normalizedRest = rest?.trimStart();
+  return normalizedRest
+    ? `${tokenSpec.canonical} ${normalizedRest}`
+    : tokenSpec.canonical;
 }
 
 export function isCommandMessage(raw: string): boolean {
@@ -374,18 +407,24 @@ export function getCommandDetection(_cfg?: ClawdbotConfig): {
 } {
   if (cachedDetection) return cachedDetection;
   const exact = new Set<string>();
-  const regexParts: string[] = [];
+  const patterns: string[] = [];
   for (const cmd of CHAT_COMMANDS) {
     for (const alias of cmd.textAliases) {
       const normalized = alias.trim().toLowerCase();
       if (!normalized) continue;
       exact.add(normalized);
-      regexParts.push(escapeRegExp(normalized));
+      const escaped = escapeRegExp(normalized);
+      if (!escaped) continue;
+      if (cmd.acceptsArgs) {
+        patterns.push(`${escaped}(?:\\s+.+|\\s*:\\s*.*)?`);
+      } else {
+        patterns.push(`${escaped}(?:\\s*:\\s*)?`);
+      }
     }
   }
   cachedDetection = {
     exact,
-    regex: new RegExp(`^(?:${regexParts.join("|")})(?:$|\\s)`, "i"),
+    regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
   };
   return cachedDetection;
 }
@@ -396,9 +435,11 @@ export function maybeResolveTextAlias(raw: string, cfg?: ClawdbotConfig) {
   const detection = getCommandDetection(cfg);
   const normalized = trimmed.toLowerCase();
   if (detection.exact.has(normalized)) return normalized;
-  const match = detection.regex.exec(normalized);
-  if (!match?.[0]) return null;
-  return match[0].trim();
+  if (!detection.regex.test(normalized)) return null;
+  const tokenMatch = normalized.match(/^\/([^\s:]+)(?:\s|$)/);
+  if (!tokenMatch) return null;
+  const tokenKey = `/${tokenMatch[1]}`;
+  return TEXT_ALIAS_MAP.has(tokenKey) ? tokenKey : null;
 }
 
 export function resolveTextCommand(
@@ -423,12 +464,13 @@ export function resolveTextCommand(
 }
 
 export function isNativeCommandSurface(surface: string): boolean {
-  return NATIVE_COMMAND_SURFACES.has(surface.toLowerCase());
+  if (!surface) return false;
+  return getNativeCommandSurfaces().has(surface.toLowerCase());
 }
 
 export function shouldHandleTextCommands(params: {
   cfg: ClawdbotConfig;
-  surface: string;
+  surface?: string;
   commandSource?: "text" | "native";
 }): boolean {
   if (params.commandSource === "native") return true;
