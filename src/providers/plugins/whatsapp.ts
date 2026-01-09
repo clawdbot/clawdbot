@@ -13,6 +13,7 @@ import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
   logWebSelfId,
+  logoutWeb,
   readWebSelfId,
   webAuthExists,
 } from "../../web/session.js";
@@ -231,6 +232,14 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
           accountId: account.accountId,
         },
       );
+    },
+    logoutAccount: async ({ account, runtime }) => {
+      const cleared = await logoutWeb({
+        authDir: account.authDir,
+        isLegacyAuthDir: account.isLegacyAuthDir,
+        runtime,
+      });
+      return { cleared, loggedOut: cleared };
     },
   },
 };

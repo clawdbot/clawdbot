@@ -88,6 +88,8 @@ import {
   ProtocolSchemas,
   type ProvidersStatusParams,
   ProvidersStatusParamsSchema,
+  type ProvidersLogoutParams,
+  ProvidersLogoutParamsSchema,
   type RequestFrame,
   RequestFrameSchema,
   type ResponseFrame,
@@ -247,6 +249,9 @@ export const validateTalkModeParams =
 export const validateProvidersStatusParams = ajv.compile<ProvidersStatusParams>(
   ProvidersStatusParamsSchema,
 );
+export const validateProvidersLogoutParams = ajv.compile<ProvidersLogoutParams>(
+  ProvidersLogoutParamsSchema,
+);
 export const validateModelsListParams = ajv.compile<ModelsListParams>(
   ModelsListParamsSchema,
 );
@@ -344,6 +349,7 @@ export {
   WizardStartResultSchema,
   WizardStatusResultSchema,
   ProvidersStatusParamsSchema,
+  ProvidersLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   AgentSummarySchema,
@@ -409,6 +415,7 @@ export type {
   WizardStatusResult,
   TalkModeParams,
   ProvidersStatusParams,
+  ProvidersLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
   AgentSummary,

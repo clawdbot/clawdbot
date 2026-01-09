@@ -232,6 +232,7 @@ const BASE_METHODS = [
   "health",
   "logs.tail",
   "providers.status",
+  "providers.logout",
   "status",
   "usage.status",
   "config.get",

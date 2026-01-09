@@ -1,8 +1,6 @@
-import { loadConfig } from "../../config/config.js";
-import { defaultRuntime } from "../../runtime.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import { getProviderPlugin } from "../../providers/plugins/index.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
-import { logoutWeb } from "../../web/session.js";
 import {
   ErrorCodes,
   errorShape,
@@ -11,6 +9,7 @@ import {
   validateWebLoginWaitParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import { logoutProviderAccount } from "./providers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const webHandlers: GatewayRequestHandlers = {
@@ -94,19 +93,38 @@ export const webHandlers: GatewayRequestHandlers = {
           : undefined;
       const accountId =
         typeof rawAccountId === "string" ? rawAccountId.trim() : "";
-      const cfg = loadConfig();
-      const account = resolveWhatsAppAccount({
-        cfg,
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "config invalid; fix it before logging out",
+          ),
+        );
+        return;
+      }
+      const plugin = getProviderPlugin("whatsapp");
+      if (!plugin?.gateway?.logoutAccount) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "whatsapp does not support logout",
+          ),
+        );
+        return;
+      }
+      const payload = await logoutProviderAccount({
+        providerId: "whatsapp",
         accountId: accountId || undefined,
+        cfg: snapshot.config ?? {},
+        context,
+        plugin,
       });
-      await context.stopProvider("whatsapp", account.accountId);
-      const cleared = await logoutWeb({
-        authDir: account.authDir,
-        isLegacyAuthDir: account.isLegacyAuthDir,
-        runtime: defaultRuntime,
-      });
-      context.markProviderLoggedOut("whatsapp", cleared, account.accountId);
-      respond(true, { cleared }, undefined);
+      respond(true, { cleared: Boolean(payload.cleared) }, undefined);
     } catch (err) {
       respond(
         false,

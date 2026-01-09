@@ -1,12 +1,10 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  loadConfig,
-  readConfigFileSnapshot,
-  writeConfigFile,
-} from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getProviderActivity } from "../../infra/provider-activity.js";
 import {
+  getProviderPlugin,
   listProviderPlugins,
+  normalizeProviderId,
   type ProviderId,
 } from "../../providers/plugins/index.js";
 import { buildProviderAccountSnapshot } from "../../providers/plugins/status.js";
@@ -15,14 +13,67 @@ import type {
   ProviderPlugin,
 } from "../../providers/plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateProvidersLogoutParams,
   validateProvidersStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+
+type ProviderLogoutPayload = {
+  provider: ProviderId;
+  accountId: string;
+  cleared: boolean;
+  [key: string]: unknown;
+};
+
+export async function logoutProviderAccount(params: {
+  providerId: ProviderId;
+  accountId?: string | null;
+  cfg: ClawdbotConfig;
+  context: GatewayRequestContext;
+  plugin: ProviderPlugin;
+}): Promise<ProviderLogoutPayload> {
+  const resolvedAccountId =
+    params.accountId?.trim() ||
+    params.plugin.config.defaultAccountId?.(params.cfg) ||
+    params.plugin.config.listAccountIds(params.cfg)[0] ||
+    DEFAULT_ACCOUNT_ID;
+  const account = params.plugin.config.resolveAccount(
+    params.cfg,
+    resolvedAccountId,
+  );
+  await params.context.stopProvider(params.providerId, resolvedAccountId);
+  const result = await params.plugin.gateway?.logoutAccount?.({
+    cfg: params.cfg,
+    accountId: resolvedAccountId,
+    account,
+    runtime: defaultRuntime,
+  });
+  if (!result) {
+    throw new Error(`Provider ${params.providerId} does not support logout`);
+  }
+  const cleared = Boolean(result.cleared);
+  const loggedOut =
+    typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
+  if (loggedOut) {
+    params.context.markProviderLoggedOut(
+      params.providerId,
+      true,
+      resolvedAccountId,
+    );
+  }
+  return {
+    provider: params.providerId,
+    accountId: resolvedAccountId,
+    ...result,
+    cleared,
+  };
+}
 
 export const providersHandlers: GatewayRequestHandlers = {
   "providers.status": async ({ params, respond, context }) => {
@@ -188,40 +239,70 @@ export const providersHandlers: GatewayRequestHandlers = {
 
     respond(true, payload, undefined);
   },
-  "telegram.logout": async ({ respond, context }) => {
-    try {
-      await context.stopProvider("telegram");
-      const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.valid) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "config invalid; fix it before logging out",
-          ),
-        );
-        return;
-      }
-      const cfg = snapshot.config ?? {};
-      const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
-      const hadToken = Boolean(cfg.telegram?.botToken);
-      const nextTelegram = cfg.telegram ? { ...cfg.telegram } : undefined;
-      if (nextTelegram) {
-        delete nextTelegram.botToken;
-      }
-      const nextCfg = { ...cfg } as ClawdbotConfig;
-      if (nextTelegram && Object.keys(nextTelegram).length > 0) {
-        nextCfg.telegram = nextTelegram;
-      } else {
-        delete nextCfg.telegram;
-      }
-      await writeConfigFile(nextCfg);
+  "providers.logout": async ({ params, respond, context }) => {
+    if (!validateProvidersLogoutParams(params)) {
       respond(
-        true,
-        { cleared: hadToken, envToken: Boolean(envToken) },
+        false,
         undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid providers.logout params: ${formatValidationErrors(validateProvidersLogoutParams.errors)}`,
+        ),
       );
+      return;
+    }
+    const rawProvider = (params as { provider?: unknown }).provider;
+    const providerId =
+      typeof rawProvider === "string"
+        ? normalizeProviderId(rawProvider)
+        : null;
+    if (!providerId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid providers.logout provider",
+        ),
+      );
+      return;
+    }
+    const plugin = getProviderPlugin(providerId);
+    if (!plugin?.gateway?.logoutAccount) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `provider ${providerId} does not support logout`,
+        ),
+      );
+      return;
+    }
+    const accountIdRaw = (params as { accountId?: unknown }).accountId;
+    const accountId =
+      typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "config invalid; fix it before logging out",
+        ),
+      );
+      return;
+    }
+    try {
+      const payload = await logoutProviderAccount({
+        providerId,
+        accountId,
+        cfg: snapshot.config ?? {},
+        context,
+        plugin,
+      });
+      respond(true, payload, undefined);
     } catch (err) {
       respond(
         false,

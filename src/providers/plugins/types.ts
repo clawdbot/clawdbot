@@ -80,6 +80,13 @@ export type ProviderAccountSnapshot = {
   bot?: unknown;
 };
 
+export type ProviderLogSink = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+  error: (msg: string) => void;
+  debug?: (msg: string) => void;
+};
+
 export type ProviderConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: ClawdbotConfig) => string[];
   resolveAccount: (
@@ -198,14 +205,23 @@ export type ProviderGatewayContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
-  log?: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-    debug?: (msg: string) => void;
-  };
+  log?: ProviderLogSink;
   getStatus: () => ProviderAccountSnapshot;
   setStatus: (next: ProviderAccountSnapshot) => void;
+};
+
+export type ProviderLogoutResult = {
+  cleared: boolean;
+  loggedOut?: boolean;
+  [key: string]: unknown;
+};
+
+export type ProviderLogoutContext<ResolvedAccount = unknown> = {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  account: ResolvedAccount;
+  runtime: RuntimeEnv;
+  log?: ProviderLogSink;
 };
 
 export type ProviderGatewayAdapter<ResolvedAccount = unknown> = {
@@ -213,6 +229,9 @@ export type ProviderGatewayAdapter<ResolvedAccount = unknown> = {
     ctx: ProviderGatewayContext<ResolvedAccount>,
   ) => Promise<unknown>;
   stopAccount?: (ctx: ProviderGatewayContext<ResolvedAccount>) => Promise<void>;
+  logoutAccount?: (
+    ctx: ProviderLogoutContext<ResolvedAccount>,
+  ) => Promise<ProviderLogoutResult>;
 };
 
 export type ProviderHeartbeatAdapter = {

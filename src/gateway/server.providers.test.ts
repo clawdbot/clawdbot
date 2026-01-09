@@ -62,7 +62,7 @@ describe("gateway server providers", () => {
     await server.close();
   });
 
-  test("telegram.logout clears bot token from config", async () => {
+  test("providers.logout clears telegram bot token from config", async () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
     const { readConfigFileSnapshot, writeConfigFile } =
@@ -77,11 +77,13 @@ describe("gateway server providers", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const res = await rpcReq<{ cleared?: boolean; envToken?: boolean }>(
-      ws,
-      "telegram.logout",
-    );
+    const res = await rpcReq<{
+      cleared?: boolean;
+      envToken?: boolean;
+      provider?: string;
+    }>(ws, "providers.logout", { provider: "telegram" });
     expect(res.ok).toBe(true);
+    expect(res.payload?.provider).toBe("telegram");
     expect(res.payload?.cleared).toBe(true);
     expect(res.payload?.envToken).toBe(false);
 

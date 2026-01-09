@@ -1,4 +1,6 @@
 import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import type { ClawdbotConfig } from "../../config/config.js";
+import { writeConfigFile } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
@@ -34,7 +36,6 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     nativeCommands: true,
   },
   reload: { configPrefixes: ["telegram"] },
-  gatewayMethods: ["telegram.logout"],
   config: {
     listAccountIds: (cfg) => listTelegramAccountIds(cfg),
     resolveAccount: (cfg, accountId) =>
@@ -231,6 +232,68 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
       });
+    },
+    logoutAccount: async ({ accountId, cfg }) => {
+      const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
+      const nextCfg = { ...cfg } as ClawdbotConfig;
+      const nextTelegram = cfg.telegram ? { ...cfg.telegram } : undefined;
+      let cleared = false;
+      let changed = false;
+      if (nextTelegram) {
+        if (accountId === DEFAULT_ACCOUNT_ID && nextTelegram.botToken) {
+          delete nextTelegram.botToken;
+          cleared = true;
+          changed = true;
+        }
+        const accounts =
+          nextTelegram.accounts && typeof nextTelegram.accounts === "object"
+            ? { ...nextTelegram.accounts }
+            : undefined;
+        if (accounts && accountId in accounts) {
+          const entry = accounts[accountId];
+          if (entry && typeof entry === "object") {
+            const nextEntry = { ...entry } as Record<string, unknown>;
+            if ("botToken" in nextEntry) {
+              const token = nextEntry.botToken;
+              if (typeof token === "string" ? token.trim() : token) {
+                cleared = true;
+              }
+              delete nextEntry.botToken;
+              changed = true;
+            }
+            if (Object.keys(nextEntry).length === 0) {
+              delete accounts[accountId];
+              changed = true;
+            } else {
+              accounts[accountId] = nextEntry as typeof entry;
+            }
+          }
+        }
+        if (accounts) {
+          if (Object.keys(accounts).length === 0) {
+            delete nextTelegram.accounts;
+            changed = true;
+          } else {
+            nextTelegram.accounts = accounts;
+          }
+        }
+      }
+      if (changed) {
+        if (nextTelegram && Object.keys(nextTelegram).length > 0) {
+          nextCfg.telegram = nextTelegram;
+        } else {
+          delete nextCfg.telegram;
+        }
+      }
+      const resolved = resolveTelegramAccount({
+        cfg: changed ? nextCfg : cfg,
+        accountId,
+      });
+      const loggedOut = resolved.tokenSource === "none";
+      if (changed) {
+        await writeConfigFile(nextCfg);
+      }
+      return { cleared, envToken: Boolean(envToken), loggedOut };
     },
   },
 };
