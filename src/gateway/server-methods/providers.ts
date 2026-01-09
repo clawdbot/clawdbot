@@ -190,7 +190,7 @@ export const providersHandlers: GatewayRequestHandlers = {
   },
   "telegram.logout": async ({ respond, context }) => {
     try {
-      await context.stopTelegramProvider();
+      await context.stopProvider("telegram");
       const snapshot = await readConfigFileSnapshot();
       if (!snapshot.valid) {
         respond(

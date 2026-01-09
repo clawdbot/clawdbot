@@ -54,20 +54,8 @@ function cloneDefaultRuntime(
 
 type ProviderManagerOptions = {
   loadConfig: () => ClawdbotConfig;
-  logWhatsApp: SubsystemLogger;
-  logTelegram: SubsystemLogger;
-  logDiscord: SubsystemLogger;
-  logSlack: SubsystemLogger;
-  logSignal: SubsystemLogger;
-  logIMessage: SubsystemLogger;
-  logMSTeams: SubsystemLogger;
-  whatsappRuntimeEnv: RuntimeEnv;
-  telegramRuntimeEnv: RuntimeEnv;
-  discordRuntimeEnv: RuntimeEnv;
-  slackRuntimeEnv: RuntimeEnv;
-  signalRuntimeEnv: RuntimeEnv;
-  imessageRuntimeEnv: RuntimeEnv;
-  msteamsRuntimeEnv: RuntimeEnv;
+  providerLogs: Record<ProviderId, SubsystemLogger>;
+  providerRuntimeEnvs: Record<ProviderId, RuntimeEnv>;
 };
 
 export type ProviderManager = {
@@ -75,20 +63,6 @@ export type ProviderManager = {
   startProviders: () => Promise<void>;
   startProvider: (provider: ProviderId, accountId?: string) => Promise<void>;
   stopProvider: (provider: ProviderId, accountId?: string) => Promise<void>;
-  startWhatsAppProvider: (accountId?: string) => Promise<void>;
-  stopWhatsAppProvider: (accountId?: string) => Promise<void>;
-  startTelegramProvider: (accountId?: string) => Promise<void>;
-  stopTelegramProvider: (accountId?: string) => Promise<void>;
-  startDiscordProvider: (accountId?: string) => Promise<void>;
-  stopDiscordProvider: (accountId?: string) => Promise<void>;
-  startSlackProvider: (accountId?: string) => Promise<void>;
-  stopSlackProvider: (accountId?: string) => Promise<void>;
-  startSignalProvider: (accountId?: string) => Promise<void>;
-  stopSignalProvider: (accountId?: string) => Promise<void>;
-  startIMessageProvider: (accountId?: string) => Promise<void>;
-  stopIMessageProvider: (accountId?: string) => Promise<void>;
-  startMSTeamsProvider: () => Promise<void>;
-  stopMSTeamsProvider: () => Promise<void>;
   markProviderLoggedOut: (
     providerId: ProviderId,
     cleared: boolean,
@@ -101,41 +75,11 @@ export function createProviderManager(
 ): ProviderManager {
   const {
     loadConfig,
-    logWhatsApp,
-    logTelegram,
-    logDiscord,
-    logSlack,
-    logSignal,
-    logIMessage,
-    logMSTeams,
-    whatsappRuntimeEnv,
-    telegramRuntimeEnv,
-    discordRuntimeEnv,
-    slackRuntimeEnv,
-    signalRuntimeEnv,
-    imessageRuntimeEnv,
-    msteamsRuntimeEnv,
+    providerLogs,
+    providerRuntimeEnvs,
   } = opts;
 
   const providerStores = new Map<ProviderId, ProviderRuntimeStore>();
-  const providerLogs: Record<ProviderId, SubsystemLogger> = {
-    whatsapp: logWhatsApp,
-    telegram: logTelegram,
-    discord: logDiscord,
-    slack: logSlack,
-    signal: logSignal,
-    imessage: logIMessage,
-    msteams: logMSTeams,
-  };
-  const providerRuntimeEnvs: Record<ProviderId, RuntimeEnv> = {
-    whatsapp: whatsappRuntimeEnv,
-    telegram: telegramRuntimeEnv,
-    discord: discordRuntimeEnv,
-    slack: slackRuntimeEnv,
-    signal: signalRuntimeEnv,
-    imessage: imessageRuntimeEnv,
-    msteams: msteamsRuntimeEnv,
-  };
 
   const getStore = (providerId: ProviderId): ProviderRuntimeStore => {
     const existing = providerStores.get(providerId);
@@ -378,31 +322,6 @@ export function createProviderManager(
     startProviders,
     startProvider,
     stopProvider,
-    startWhatsAppProvider: (accountId?: string) =>
-      startProvider("whatsapp", accountId),
-    stopWhatsAppProvider: (accountId?: string) =>
-      stopProvider("whatsapp", accountId),
-    startTelegramProvider: (accountId?: string) =>
-      startProvider("telegram", accountId),
-    stopTelegramProvider: (accountId?: string) =>
-      stopProvider("telegram", accountId),
-    startDiscordProvider: (accountId?: string) =>
-      startProvider("discord", accountId),
-    stopDiscordProvider: (accountId?: string) =>
-      stopProvider("discord", accountId),
-    startSlackProvider: (accountId?: string) =>
-      startProvider("slack", accountId),
-    stopSlackProvider: (accountId?: string) => stopProvider("slack", accountId),
-    startSignalProvider: (accountId?: string) =>
-      startProvider("signal", accountId),
-    stopSignalProvider: (accountId?: string) =>
-      stopProvider("signal", accountId),
-    startIMessageProvider: (accountId?: string) =>
-      startProvider("imessage", accountId),
-    stopIMessageProvider: (accountId?: string) =>
-      stopProvider("imessage", accountId),
-    startMSTeamsProvider: () => startProvider("msteams"),
-    stopMSTeamsProvider: () => stopProvider("msteams"),
     markProviderLoggedOut,
   };
 }

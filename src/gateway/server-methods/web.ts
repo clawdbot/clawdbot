@@ -31,7 +31,7 @@ export const webHandlers: GatewayRequestHandlers = {
         typeof (params as { accountId?: unknown }).accountId === "string"
           ? (params as { accountId?: string }).accountId
           : undefined;
-      await context.stopWhatsAppProvider(accountId);
+      await context.stopProvider("whatsapp", accountId);
       const result = await startWebLoginWithQr({
         force: Boolean((params as { force?: boolean }).force),
         timeoutMs:
@@ -75,7 +75,7 @@ export const webHandlers: GatewayRequestHandlers = {
         accountId,
       });
       if (result.connected) {
-        await context.startWhatsAppProvider(accountId);
+        await context.startProvider("whatsapp", accountId);
       }
       respond(true, result, undefined);
     } catch (err) {
@@ -99,7 +99,7 @@ export const webHandlers: GatewayRequestHandlers = {
         cfg,
         accountId: accountId || undefined,
       });
-      await context.stopWhatsAppProvider(account.accountId);
+      await context.stopProvider("whatsapp", account.accountId);
       const cleared = await logoutWeb({
         authDir: account.authDir,
         isLegacyAuthDir: account.isLegacyAuthDir,

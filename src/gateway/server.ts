@@ -76,7 +76,11 @@ import {
 } from "../infra/restart-sentinel.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { normalizeProviderId } from "../providers/plugins/index.js";
+import {
+  listProviderPlugins,
+  normalizeProviderId,
+  type ProviderId,
+} from "../providers/plugins/index.js";
 import {
   listSystemPresence,
   upsertPresence,
@@ -105,7 +109,7 @@ import {
   runtimeForLogger,
 } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
 import {
@@ -190,21 +194,19 @@ const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 const logWsControl = log.child("ws");
-const logWhatsApp = logProviders.child("whatsapp");
-const logTelegram = logProviders.child("telegram");
-const logDiscord = logProviders.child("discord");
-const logSlack = logProviders.child("slack");
-const logSignal = logProviders.child("signal");
-const logIMessage = logProviders.child("imessage");
-const logMSTeams = logProviders.child("msteams");
 const canvasRuntime = runtimeForLogger(logCanvas);
-const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
-const telegramRuntimeEnv = runtimeForLogger(logTelegram);
-const discordRuntimeEnv = runtimeForLogger(logDiscord);
-const slackRuntimeEnv = runtimeForLogger(logSlack);
-const signalRuntimeEnv = runtimeForLogger(logSignal);
-const imessageRuntimeEnv = runtimeForLogger(logIMessage);
-const msteamsRuntimeEnv = runtimeForLogger(logMSTeams);
+const providerLogs = Object.fromEntries(
+  listProviderPlugins().map((plugin) => [
+    plugin.id,
+    logProviders.child(plugin.id),
+  ]),
+) as Record<ProviderId, ReturnType<typeof createSubsystemLogger>>;
+const providerRuntimeEnvs = Object.fromEntries(
+  Object.entries(providerLogs).map(([id, logger]) => [
+    id,
+    runtimeForLogger(logger),
+  ]),
+) as Record<ProviderId, RuntimeEnv>;
 
 type GatewayModelChoice = ModelCatalogEntry;
 
@@ -783,39 +785,14 @@ export async function startGatewayServer(
 
   const providerManager = createProviderManager({
     loadConfig,
-    logWhatsApp,
-    logTelegram,
-    logDiscord,
-    logSlack,
-    logSignal,
-    logIMessage,
-    logMSTeams,
-    whatsappRuntimeEnv,
-    telegramRuntimeEnv,
-    discordRuntimeEnv,
-    slackRuntimeEnv,
-    signalRuntimeEnv,
-    imessageRuntimeEnv,
-    msteamsRuntimeEnv,
+    providerLogs,
+    providerRuntimeEnvs,
   });
   const {
     getRuntimeSnapshot,
     startProviders,
     startProvider,
     stopProvider,
-    startWhatsAppProvider,
-    startTelegramProvider,
-    startDiscordProvider,
-    startSlackProvider,
-    startSignalProvider,
-    startIMessageProvider,
-    stopWhatsAppProvider,
-    stopTelegramProvider,
-    stopDiscordProvider,
-    stopSlackProvider,
-    stopSignalProvider,
-    stopIMessageProvider,
-    stopMSTeamsProvider,
     markProviderLoggedOut,
   } = providerManager;
 
@@ -1709,18 +1686,8 @@ export async function startGatewayServer(
               findRunningWizard,
               purgeWizardSession,
               getRuntimeSnapshot,
-              startWhatsAppProvider,
-              stopWhatsAppProvider,
-              startTelegramProvider,
-              stopTelegramProvider,
-              startDiscordProvider,
-              stopDiscordProvider,
-              startSlackProvider,
-              stopSlackProvider,
-              startSignalProvider,
-              stopSignalProvider,
-              startIMessageProvider,
-              stopIMessageProvider,
+              startProvider,
+              stopProvider,
               markProviderLoggedOut,
               wizardRunner,
               broadcastVoiceWakeChanged,
@@ -2113,13 +2080,9 @@ export async function startGatewayServer(
           /* ignore */
         }
       }
-      await stopWhatsAppProvider();
-      await stopTelegramProvider();
-      await stopDiscordProvider();
-      await stopSlackProvider();
-      await stopSignalProvider();
-      await stopIMessageProvider();
-      await stopMSTeamsProvider();
+      for (const plugin of listProviderPlugins()) {
+        await stopProvider(plugin.id);
+      }
       await stopGmailWatcher();
       cron.stop();
       heartbeatRunner.stop();
