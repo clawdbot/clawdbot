@@ -8,6 +8,10 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
+import {
   agentCommand,
   connectOk,
   getFreePort,
@@ -786,10 +790,10 @@ describe("gateway server agent", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "webchat",
+        name: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 
@@ -834,10 +838,10 @@ describe("gateway server agent", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "webchat",
+        name: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 
@@ -894,10 +898,10 @@ describe("gateway server agent", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "webchat",
+        name: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 

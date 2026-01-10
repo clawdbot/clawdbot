@@ -1,5 +1,9 @@
 import type { Command } from "commander";
 import { callGateway } from "../gateway/call.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 import { withProgress } from "./progress.js";
 
 export type GatewayRpcOpts = {
@@ -41,8 +45,8 @@ export async function callGatewayFromCli(
         params,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         timeoutMs: Number(opts.timeout ?? 10_000),
-        clientName: "cli",
-        mode: "cli",
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 }

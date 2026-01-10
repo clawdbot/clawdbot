@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
 import { rawDataToString } from "../infra/ws.js";
+import { GATEWAY_CLIENT_MODES } from "../utils/message-provider.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 async function getFreePort(): Promise<number> {
@@ -95,7 +96,7 @@ async function connectReq(params: { url: string; token?: string }) {
           name: "vitest",
           version: "dev",
           platform: process.platform,
-          mode: "test",
+          mode: GATEWAY_CLIENT_MODES.TEST,
         },
         caps: [],
         auth: params.token ? { token: params.token } : undefined,
@@ -135,7 +136,7 @@ async function connectClient(params: { url: string; token?: string }) {
         token: params.token,
         clientName: "vitest-wizard",
         clientVersion: "dev",
-        mode: "test",
+        mode: GATEWAY_CLIENT_MODES.TEST,
         onHelloOk: () => stop(undefined, client),
         onConnectError: (err) => stop(err),
         onClose: (code, reason) =>

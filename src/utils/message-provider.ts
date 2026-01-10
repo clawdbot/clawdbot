@@ -7,15 +7,74 @@ import {
 export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
 export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
 
+export const GATEWAY_CLIENT_NAMES = {
+  WEBCHAT_UI: "webchat-ui",
+  CONTROL_UI: "clawdbot-control-ui",
+  WEBCHAT: "webchat",
+  CLI: "cli",
+  GATEWAY_CLIENT: "gateway-client",
+  TEST: "test",
+  FINGERPRINT: "fingerprint",
+  PROBE: "clawdbot-probe",
+} as const;
+
+export type GatewayClientName =
+  (typeof GATEWAY_CLIENT_NAMES)[keyof typeof GATEWAY_CLIENT_NAMES];
+
+export const GATEWAY_CLIENT_MODES = {
+  WEBCHAT: "webchat",
+  CLI: "cli",
+  UI: "ui",
+  BACKEND: "backend",
+  PROBE: "probe",
+  TEST: "test",
+} as const;
+
+export type GatewayClientMode =
+  (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
+
+type GatewayClientInfo = { mode?: string | null; name?: string | null };
+
+const GATEWAY_CLIENT_NAME_SET = new Set<GatewayClientName>(
+  Object.values(GATEWAY_CLIENT_NAMES),
+);
+const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(
+  Object.values(GATEWAY_CLIENT_MODES),
+);
+
+export function normalizeGatewayClientName(
+  raw?: string | null,
+): GatewayClientName | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return GATEWAY_CLIENT_NAME_SET.has(normalized as GatewayClientName)
+    ? (normalized as GatewayClientName)
+    : undefined;
+}
+
+export function normalizeGatewayClientMode(
+  raw?: string | null,
+): GatewayClientMode | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return GATEWAY_CLIENT_MODE_SET.has(normalized as GatewayClientMode)
+    ? (normalized as GatewayClientMode)
+    : undefined;
+}
+
+export function isGatewayCliClient(client?: GatewayClientInfo | null): boolean {
+  return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
+}
+
 export function isInternalMessageProvider(raw?: string | null): boolean {
   return normalizeMessageProvider(raw) === INTERNAL_MESSAGE_PROVIDER;
 }
 
-export function isWebchatClient(
-  client?: { mode?: string; name?: string } | null,
-): boolean {
+export function isWebchatClient(client?: GatewayClientInfo | null): boolean {
+  const mode = normalizeGatewayClientMode(client?.mode);
+  if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) return true;
   return (
-    isInternalMessageProvider(client?.mode) || client?.name === "webchat-ui"
+    normalizeGatewayClientName(client?.name) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
   );
 }
 

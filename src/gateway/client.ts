@@ -3,6 +3,10 @@ import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
+import {
   type ConnectParams,
   type EventFrame,
   type HelloOk,
@@ -109,10 +113,10 @@ export class GatewayClient {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
       client: {
-        name: this.opts.clientName ?? "gateway-client",
+        name: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         version: this.opts.clientVersion ?? "dev",
         platform: this.opts.platform ?? process.platform,
-        mode: this.opts.mode ?? "backend",
+        mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
         instanceId: this.opts.instanceId,
       },
       caps: [],

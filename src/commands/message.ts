@@ -23,6 +23,10 @@ import { resolveMessageProviderSelection } from "../infra/outbound/provider-sele
 import { dispatchProviderMessageAction } from "../providers/plugins/message-actions.js";
 import type { ProviderMessageActionName } from "../providers/plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 
 type MessageAction =
   | "send"
@@ -318,7 +322,10 @@ export async function messageCommand(
       cfg,
       params: actionParams,
       accountId,
-      gateway: { clientName: "cli", mode: "cli" },
+      gateway: {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
       dryRun: opts.dryRun,
     });
     if (handled) {
@@ -348,7 +355,10 @@ export async function messageCommand(
           accountId,
           dryRun: opts.dryRun,
           deps: outboundDeps,
-          gateway: { clientName: "cli", mode: "cli" },
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
         }),
     );
     logSendResult(result, sendOpts, runtime);
@@ -379,7 +389,10 @@ export async function messageCommand(
         durationHours,
         provider,
         dryRun: true,
-        gateway: { clientName: "cli", mode: "cli" },
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
       });
       logPollDryRun(result, runtime);
       return;
@@ -391,7 +404,10 @@ export async function messageCommand(
       cfg,
       params: actionParams,
       accountId,
-      gateway: { clientName: "cli", mode: "cli" },
+      gateway: {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
       dryRun: opts.dryRun,
     });
     if (handled) {
@@ -420,7 +436,10 @@ export async function messageCommand(
           durationHours,
           provider,
           dryRun: opts.dryRun,
-          gateway: { clientName: "cli", mode: "cli" },
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
         }),
     );
 
@@ -470,7 +489,10 @@ export async function messageCommand(
     cfg,
     params: actionParams,
     accountId,
-    gateway: { clientName: "cli", mode: "cli" },
+    gateway: {
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    },
     dryRun: opts.dryRun,
   });
   if (handled) {

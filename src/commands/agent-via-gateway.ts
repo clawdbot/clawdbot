@@ -10,7 +10,11 @@ import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeMessageProvider } from "../utils/message-provider.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  normalizeMessageProvider,
+} from "../utils/message-provider.js";
 import { agentCommand } from "./agent.js";
 
 type AgentGatewayResult = {
@@ -153,8 +157,8 @@ export async function agentViaGatewayCommand(
         },
         expectFinal: true,
         timeoutMs: gatewayTimeoutMs,
-        clientName: "cli",
-        mode: "cli",
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 
