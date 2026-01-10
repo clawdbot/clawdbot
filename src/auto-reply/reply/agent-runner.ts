@@ -15,6 +15,7 @@ import {
   resolveSessionTranscriptPath,
   type SessionEntry,
   saveSessionStore,
+  updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -824,59 +825,48 @@ export async function runReplyAgent(params: {
       sessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
-    if (sessionStore && sessionKey) {
-      // Reload store to avoid overwriting concurrent updates (e.g. from inline directives or parallel runs)
-      let freshStore = sessionStore;
-      let entry = sessionEntry ?? sessionStore[sessionKey];
-
-      if (storePath) {
-        try {
-          freshStore = loadSessionStore(storePath);
-          entry = freshStore[sessionKey];
-        } catch (err) {
-          logVerbose(
-            `failed to reload session store for usage update: ${String(err)}`,
-          );
-        }
-      }
-
+    if (storePath && sessionKey) {
       if (hasNonzeroUsage(usage)) {
-        if (entry) {
-          const input = usage.input ?? 0;
-          const output = usage.output ?? 0;
-          const promptTokens =
-            input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-          const nextEntry = {
-            ...entry,
-            inputTokens: input,
-            outputTokens: output,
-            totalTokens:
-              promptTokens > 0 ? promptTokens : (usage.total ?? input),
-            modelProvider: providerUsed,
-            model: modelUsed,
-            contextTokens: contextTokensUsed ?? entry.contextTokens,
-            updatedAt: Date.now(),
-          };
-          if (cliSessionId) {
-            nextEntry.claudeCliSessionId = cliSessionId;
-          }
-          freshStore[sessionKey] = nextEntry;
-          if (storePath) {
-            await saveSessionStore(storePath, freshStore);
-          }
+        try {
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async (entry) => {
+              const input = usage.input ?? 0;
+              const output = usage.output ?? 0;
+              const promptTokens =
+                input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+              return {
+                inputTokens: input,
+                outputTokens: output,
+                totalTokens:
+                  promptTokens > 0 ? promptTokens : (usage.total ?? input),
+                modelProvider: providerUsed,
+                model: modelUsed,
+                contextTokens: contextTokensUsed ?? entry.contextTokens,
+                updatedAt: Date.now(),
+                claudeCliSessionId: cliSessionId ?? entry.claudeCliSessionId,
+              };
+            },
+          });
+        } catch (err) {
+          logVerbose(`failed to persist usage update: ${String(err)}`);
         }
       } else if (modelUsed || contextTokensUsed) {
-        if (entry) {
-          freshStore[sessionKey] = {
-            ...entry,
-            modelProvider: providerUsed ?? entry.modelProvider,
-            model: modelUsed ?? entry.model,
-            contextTokens: contextTokensUsed ?? entry.contextTokens,
-            claudeCliSessionId: cliSessionId ?? entry.claudeCliSessionId,
-          };
-          if (storePath) {
-            await saveSessionStore(storePath, freshStore);
-          }
+        try {
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async (entry) => ({
+              modelProvider: providerUsed ?? entry.modelProvider,
+              model: modelUsed ?? entry.model,
+              contextTokens: contextTokensUsed ?? entry.contextTokens,
+              claudeCliSessionId: cliSessionId ?? entry.claudeCliSessionId,
+              updatedAt: Date.now(),
+            }),
+          });
+        } catch (err) {
+          logVerbose(`failed to persist model/context update: ${String(err)}`);
         }
       }
     }

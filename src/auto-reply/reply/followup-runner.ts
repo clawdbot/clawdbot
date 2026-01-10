@@ -5,9 +5,8 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
-  loadSessionStore,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -236,7 +235,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      if (sessionStore && sessionKey) {
+      if (storePath && sessionKey) {
         const usage = runResult.meta.agentMeta?.usage;
         const modelUsed =
           runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
@@ -246,52 +245,49 @@ export function createFollowupRunner(params: {
           sessionEntry?.contextTokens ??
           DEFAULT_CONTEXT_TOKENS;
 
-        // Reload store to avoid overwriting concurrent updates
-        let freshStore = sessionStore;
-        let entry = sessionStore[sessionKey];
-        if (storePath) {
+        if (hasNonzeroUsage(usage)) {
           try {
-            freshStore = loadSessionStore(storePath);
-            entry = freshStore[sessionKey];
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async (entry) => {
+                const input = usage.input ?? 0;
+                const output = usage.output ?? 0;
+                const promptTokens =
+                  input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+                return {
+                  inputTokens: input,
+                  outputTokens: output,
+                  totalTokens:
+                    promptTokens > 0 ? promptTokens : (usage.total ?? input),
+                  modelProvider: fallbackProvider ?? entry.modelProvider,
+                  model: modelUsed,
+                  contextTokens: contextTokensUsed ?? entry.contextTokens,
+                  updatedAt: Date.now(),
+                };
+              },
+            });
           } catch (err) {
             logVerbose(
-              `failed to reload session store for followup usage update: ${String(err)}`,
+              `failed to persist followup usage update: ${String(err)}`,
             );
           }
-        }
-
-        if (hasNonzeroUsage(usage)) {
-          if (entry) {
-            const input = usage.input ?? 0;
-            const output = usage.output ?? 0;
-            const promptTokens =
-              input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-            freshStore[sessionKey] = {
-              ...entry,
-              inputTokens: input,
-              outputTokens: output,
-              totalTokens:
-                promptTokens > 0 ? promptTokens : (usage.total ?? input),
-              modelProvider: fallbackProvider ?? entry.modelProvider,
-              model: modelUsed,
-              contextTokens: contextTokensUsed ?? entry.contextTokens,
-              updatedAt: Date.now(),
-            };
-            if (storePath) {
-              await saveSessionStore(storePath, freshStore);
-            }
-          }
         } else if (modelUsed || contextTokensUsed) {
-          if (entry) {
-            freshStore[sessionKey] = {
-              ...entry,
-              modelProvider: fallbackProvider ?? entry.modelProvider,
-              model: modelUsed ?? entry.model,
-              contextTokens: contextTokensUsed ?? entry.contextTokens,
-            };
-            if (storePath) {
-              await saveSessionStore(storePath, freshStore);
-            }
+          try {
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async (entry) => ({
+                modelProvider: fallbackProvider ?? entry.modelProvider,
+                model: modelUsed ?? entry.model,
+                contextTokens: contextTokensUsed ?? entry.contextTokens,
+                updatedAt: Date.now(),
+              }),
+            });
+          } catch (err) {
+            logVerbose(
+              `failed to persist followup model/context update: ${String(err)}`,
+            );
           }
         }
       }

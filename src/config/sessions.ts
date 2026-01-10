@@ -133,6 +133,19 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
 };
 
+function mergeSessionEntry(
+  existing: SessionEntry,
+  patch: Partial<SessionEntry>,
+): SessionEntry {
+  const sessionId = patch.sessionId ?? existing.sessionId ?? crypto.randomUUID();
+  const updatedAt = Math.max(
+    existing.updatedAt ?? 0,
+    patch.updatedAt ?? 0,
+    Date.now(),
+  );
+  return { ...existing, ...patch, sessionId, updatedAt };
+}
+
 export type GroupKeyResolution = {
   key: string;
   legacyKey?: string;
@@ -474,6 +487,92 @@ export async function saveSessionStore(
   } finally {
     await fs.promises.rm(tmp, { force: true });
   }
+}
+
+type SessionStoreLockOptions = {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  staleMs?: number;
+};
+
+async function withSessionStoreLock<T>(
+  storePath: string,
+  fn: () => Promise<T>,
+  opts: SessionStoreLockOptions = {},
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const pollIntervalMs = opts.pollIntervalMs ?? 25;
+  const staleMs = opts.staleMs ?? 30_000;
+  const lockPath = `${storePath}.lock`;
+  const startedAt = Date.now();
+
+  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+
+  while (true) {
+    try {
+      const handle = await fs.promises.open(lockPath, "wx");
+      try {
+        await handle.writeFile(
+          JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
+          "utf-8",
+        );
+      } catch {
+        // best-effort
+      }
+      await handle.close();
+      break;
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : null;
+      if (code !== "EEXIST") throw err;
+
+      const now = Date.now();
+      if (now - startedAt > timeoutMs) {
+        throw new Error(`timeout acquiring session store lock: ${lockPath}`);
+      }
+
+      // Best-effort stale lock eviction (e.g. crashed process).
+      try {
+        const st = await fs.promises.stat(lockPath);
+        const ageMs = now - st.mtimeMs;
+        if (ageMs > staleMs) {
+          await fs.promises.unlink(lockPath);
+          continue;
+        }
+      } catch {
+        // ignore
+      }
+
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await fs.promises.unlink(lockPath).catch(() => undefined);
+  }
+}
+
+export async function updateSessionStoreEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
+}): Promise<SessionEntry | null> {
+  const { storePath, sessionKey, update } = params;
+  return await withSessionStoreLock(storePath, async () => {
+    const store = loadSessionStore(storePath);
+    const existing = store[sessionKey];
+    if (!existing) return null;
+    const patch = await update(existing);
+    if (!patch) return existing;
+    const next = mergeSessionEntry(existing, patch);
+    store[sessionKey] = next;
+    await saveSessionStore(storePath, store);
+    return next;
+  });
 }
 
 export async function updateLastRoute(params: {

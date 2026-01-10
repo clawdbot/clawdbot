@@ -2087,6 +2087,7 @@ Template placeholders are expanded in `audio.transcription.command` (and any fut
 | Variable | Description |
 |----------|-------------|
 | `{{Body}}` | Full inbound message body |
+| `{{RawBody}}` | Raw inbound message body (no history/sender wrappers; best for command parsing) |
 | `{{BodyStripped}}` | Body with group mentions stripped (best default for agents) |
 | `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per provider) |
 | `{{To}}` | Destination identifier |
