@@ -8,6 +8,9 @@ overrides:
   '@sinclair/typebox': 0.34.47
 
 patchedDependencies:
+  '@buape/carbon@0.0.0-beta-20260109194934':
+    hash: 4d2a2b9a295eb91a8f9febc76d64728f4093bbbddff344cfc88aa14423debe49
+    path: patches/@buape__carbon@0.0.0-beta-20260109194934.patch
   '@mariozechner/pi-agent-core':
     hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
     path: patches/@mariozechner__pi-agent-core.patch
@@ -24,7 +27,7 @@ importers:
     dependencies:
       '@buape/carbon':
         specifier: 0.0.0-beta-20260109194934
-        version: 0.0.0-beta-20260109194934(hono@4.11.3)
+        version: 0.0.0-beta-20260109194934(patch_hash=4d2a2b9a295eb91a8f9febc76d64728f4093bbbddff344cfc88aa14423debe49)(hono@4.11.3)
       '@clack/prompts':
         specifier: ^0.11.0
         version: 0.11.0
@@ -3374,7 +3377,7 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.0.0-beta-20260109194934(hono@4.11.3)':
+  '@buape/carbon@0.0.0-beta-20260109194934(patch_hash=4d2a2b9a295eb91a8f9febc76d64728f4093bbbddff344cfc88aa14423debe49)(hono@4.11.3)':
     dependencies:
       '@types/node': 24.10.4
       discord-api-types: 0.38.36
