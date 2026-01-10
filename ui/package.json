@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node -e \"require('vite').build({ configFile: 'vite.config.ts' }).catch(e => { console.error(e); process.exit(1); })\"",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.ts"
   },
