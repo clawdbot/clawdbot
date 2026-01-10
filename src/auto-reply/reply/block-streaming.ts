@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import { PROVIDER_IDS } from "../../providers/registry.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
@@ -16,14 +17,8 @@ const PROVIDER_COALESCE_DEFAULTS: Partial<
 };
 
 const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
+  ...PROVIDER_IDS,
   "webchat",
-  "msteams",
 ]);
 
 function normalizeChunkProvider(

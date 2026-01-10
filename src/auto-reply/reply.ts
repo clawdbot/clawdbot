@@ -128,19 +128,19 @@ function slugAllowToken(value?: string) {
   return text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
 }
 
+const SENDER_PREFIXES = [
+  ...CHAT_PROVIDER_ORDER,
+  "webchat",
+  "user",
+  "group",
+  "channel",
+];
+const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
+
 function stripSenderPrefix(value?: string) {
   if (!value) return "";
   const trimmed = value.trim();
-  const prefixes = [
-    ...CHAT_PROVIDER_ORDER,
-    "msteams",
-    "webchat",
-    "user",
-    "group",
-    "channel",
-  ];
-  const pattern = new RegExp(`^(${prefixes.join("|")}):`, "i");
-  return trimmed.replace(pattern, "");
+  return trimmed.replace(SENDER_PREFIX_RE, "");
 }
 
 function resolveElevatedAllowList(

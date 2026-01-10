@@ -8,27 +8,14 @@ import {
   isSafeFenceBreak,
   parseFenceSpans,
 } from "../markdown/fences.js";
+import type { ProviderId } from "../providers/plugins/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
-export type TextChunkProvider =
-  | "whatsapp"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "signal"
-  | "imessage"
-  | "webchat"
-  | "msteams";
+export type TextChunkProvider = ProviderId | "webchat";
 
-const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Record<TextChunkProvider, number> = {
-  whatsapp: 4000,
-  telegram: 4000,
+const DEFAULT_CHUNK_LIMIT = 4000;
+const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Partial<Record<ProviderId, number>> = {
   discord: 2000,
-  slack: 4000,
-  signal: 4000,
-  imessage: 4000,
-  webchat: 4000,
-  msteams: 4000,
 };
 
 export function resolveTextChunkLimit(
@@ -80,8 +67,10 @@ export function resolveTextChunkLimit(
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
   }
-  if (provider) return DEFAULT_CHUNK_LIMIT_BY_PROVIDER[provider];
-  return 4000;
+  if (provider && provider !== "webchat") {
+    return DEFAULT_CHUNK_LIMIT_BY_PROVIDER[provider] ?? DEFAULT_CHUNK_LIMIT;
+  }
+  return DEFAULT_CHUNK_LIMIT;
 }
 
 export function chunkText(text: string, limit: number): string[] {

@@ -6,6 +6,8 @@ import path from "node:path";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import JSON5 from "json5";
 import type { MsgContext } from "../auto-reply/templating.js";
+import type { ProviderId } from "../providers/plugins/types.js";
+import { PROVIDER_IDS } from "../providers/registry.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -63,15 +65,9 @@ export function clearSessionStoreCacheForTest(): void {
 
 export type SessionScope = "per-sender" | "global";
 
-const GROUP_SURFACES = new Set([
-  "whatsapp",
-  "telegram",
-  "discord",
-  "signal",
-  "imessage",
-  "webchat",
-  "slack",
-]);
+export type SessionProviderId = ProviderId | "webchat";
+
+const GROUP_SURFACES = new Set<string>([...PROVIDER_IDS, "webchat"]);
 
 export type SessionChatType = "direct" | "group" | "room";
 
@@ -121,15 +117,7 @@ export type SessionEntry = {
   subject?: string;
   room?: string;
   space?: string;
-  lastProvider?:
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams"
-    | "webchat";
+  lastProvider?: SessionProviderId;
   lastTo?: string;
   lastAccountId?: string;
   skillsSnapshot?: SessionSkillSnapshot;

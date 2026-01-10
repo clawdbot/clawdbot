@@ -430,10 +430,7 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-const PROVIDER_SUBSYSTEM_PREFIXES = new Set<string>([
-  ...CHAT_PROVIDER_ORDER,
-  "msteams",
-]);
+const PROVIDER_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_PROVIDER_ORDER);
 
 function pickSubsystemColor(
   color: ChalkInstance,
