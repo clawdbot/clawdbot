@@ -1,7 +1,8 @@
 import type { ProviderId } from "../providers/plugins/types.js";
+import type { InternalMessageProvider } from "../utils/message-provider.js";
 
 /** Valid provider channels for message routing. */
-export type OriginatingChannelType = ProviderId | "webchat";
+export type OriginatingChannelType = ProviderId | InternalMessageProvider;
 
 export type MsgContext = {
   Body?: string;

@@ -5,6 +5,7 @@ import {
   getProviderPlugin,
   normalizeProviderId,
 } from "../providers/plugins/index.js";
+import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 type ProviderAuthOptions = {
@@ -17,7 +18,7 @@ export async function runProviderLogin(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const providerInput = opts.provider ?? "whatsapp";
+  const providerInput = opts.provider ?? DEFAULT_CHAT_PROVIDER;
   const providerId = normalizeProviderId(providerInput);
   if (!providerId) {
     throw new Error(`Unsupported provider: ${providerInput}`);
@@ -44,7 +45,7 @@ export async function runProviderLogout(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const providerInput = opts.provider ?? "whatsapp";
+  const providerInput = opts.provider ?? DEFAULT_CHAT_PROVIDER;
   const providerId = normalizeProviderId(providerInput);
   if (!providerId) {
     throw new Error(`Unsupported provider: ${providerInput}`);

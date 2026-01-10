@@ -39,6 +39,7 @@ import {
 import { CHAT_PROVIDER_ORDER } from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import {
@@ -134,7 +135,7 @@ function slugAllowToken(value?: string) {
 
 const SENDER_PREFIXES = [
   ...CHAT_PROVIDER_ORDER,
-  "webchat",
+  INTERNAL_MESSAGE_PROVIDER,
   "user",
   "group",
   "channel",

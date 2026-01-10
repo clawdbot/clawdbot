@@ -7,6 +7,7 @@ import {
   getProviderPlugin,
   normalizeProviderId,
 } from "../../providers/plugins/index.js";
+import { isInternalMessageProvider } from "../../utils/message-provider.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 
@@ -55,7 +56,7 @@ export function buildGroupIntro(params: {
   const provider = params.sessionCtx.Provider?.trim().toLowerCase();
   const providerLabel = (() => {
     if (!provider) return "chat";
-    if (provider === "webchat") return "WebChat";
+    if (isInternalMessageProvider(provider)) return "WebChat";
     const normalized = normalizeProviderId(provider);
     if (normalized) {
       return getProviderPlugin(normalized)?.meta.label ?? normalized;
