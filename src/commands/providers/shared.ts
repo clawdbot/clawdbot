@@ -6,7 +6,6 @@ import {
   getProviderPlugin,
   type ProviderId,
 } from "../../providers/plugins/index.js";
-import { getChatProviderMeta } from "../../providers/registry.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 
@@ -42,8 +41,7 @@ export function formatAccountLabel(params: {
 
 export const providerLabel = (provider: ChatProvider) => {
   const plugin = getProviderPlugin(provider);
-  if (plugin) return plugin.meta.label;
-  return getChatProviderMeta(provider as never).label;
+  return plugin?.meta.label ?? provider;
 };
 
 export function formatProviderAccountLabel(params: {

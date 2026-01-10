@@ -59,6 +59,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { listProviderPlugins } from "../providers/plugins/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { runTui } from "../tui/tui.js";
@@ -541,10 +542,15 @@ export async function runOnboardingWizard(
   if (opts.skipProviders) {
     await prompter.note("Skipping provider setup.", "Providers");
   } else {
+    const quickstartAllowFromProviders =
+      flow === "quickstart"
+        ? listProviderPlugins()
+            .filter((plugin) => plugin.meta.quickstartAllowFrom)
+            .map((plugin) => plugin.id)
+        : [];
     nextConfig = await setupProviders(nextConfig, runtime, prompter, {
       allowSignalInstall: true,
-      forceAllowFromProviders:
-        flow === "quickstart" ? ["telegram", "whatsapp"] : [],
+      forceAllowFromProviders: quickstartAllowFromProviders,
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",

@@ -6,6 +6,8 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { requirePairingAdapter } from "../providers/plugins/pairing.js";
+import type { ProviderId } from "../providers/plugins/types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -22,14 +24,7 @@ const PAIRING_STORE_LOCK_OPTIONS = {
   stale: 30_000,
 } as const;
 
-export type PairingProvider =
-  | "telegram"
-  | "signal"
-  | "imessage"
-  | "discord"
-  | "slack"
-  | "whatsapp"
-  | "msteams";
+export type PairingProvider = ProviderId;
 
 export type PairingRequest = {
   id: string;
@@ -200,21 +195,21 @@ function normalizeId(value: string | number): string {
 }
 
 function normalizeAllowEntry(provider: PairingProvider, entry: string): string {
+  const adapter = requirePairingAdapter(provider);
   const trimmed = entry.trim();
   if (!trimmed) return "";
   if (trimmed === "*") return "";
-  if (provider === "telegram") return trimmed.replace(/^(telegram|tg):/i, "");
-  if (provider === "signal") return trimmed.replace(/^signal:/i, "");
-  if (provider === "discord") return trimmed.replace(/^(discord|user):/i, "");
-  if (provider === "slack") return trimmed.replace(/^(slack|user):/i, "");
-  if (provider === "msteams") return trimmed.replace(/^(msteams|user):/i, "");
-  return trimmed;
+  const normalized = adapter.normalizeAllowEntry
+    ? adapter.normalizeAllowEntry(trimmed)
+    : trimmed;
+  return String(normalized).trim();
 }
 
 export async function readProviderAllowFromStore(
   provider: PairingProvider,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
+  requirePairingAdapter(provider);
   const filePath = resolveAllowFromPath(provider, env);
   const { value } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
@@ -231,6 +226,7 @@ export async function addProviderAllowFromStoreEntry(params: {
   entry: string | number;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
+  requirePairingAdapter(params.provider);
   const env = params.env ?? process.env;
   const filePath = resolveAllowFromPath(params.provider, env);
   return await withFileLock(
@@ -265,6 +261,7 @@ export async function listProviderPairingRequests(
   provider: PairingProvider,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PairingRequest[]> {
+  requirePairingAdapter(provider);
   const filePath = resolvePairingPath(provider, env);
   return await withFileLock(
     filePath,
@@ -308,6 +305,7 @@ export async function upsertProviderPairingRequest(params: {
   meta?: Record<string, string | undefined | null>;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ code: string; created: boolean }> {
+  requirePairingAdapter(params.provider);
   const env = params.env ?? process.env;
   const filePath = resolvePairingPath(params.provider, env);
   return await withFileLock(
@@ -405,6 +403,7 @@ export async function approveProviderPairingCode(params: {
   code: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ id: string; entry?: PairingRequest } | null> {
+  requirePairingAdapter(params.provider);
   const env = params.env ?? process.env;
   const code = params.code.trim().toUpperCase();
   if (!code) return null;

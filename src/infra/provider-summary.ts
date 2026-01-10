@@ -72,7 +72,7 @@ const buildAccountSnapshot = (params: {
   return {
     enabled: params.enabled,
     configured: params.configured,
-    ...(described ?? {}),
+    ...described,
     accountId: params.accountId,
   };
 };

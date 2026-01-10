@@ -92,159 +92,40 @@ export async function providersRemoveCommand(
     }
   }
 
-  if (provider === "msteams") {
-    accountId = DEFAULT_ACCOUNT_ID;
+  const plugin = getProviderPlugin(provider);
+  if (!plugin) {
+    runtime.error(`Unknown provider: ${provider}`);
+    runtime.exit(1);
+    return;
   }
 
+  const resolvedAccountId = normalizeAccountId(
+    accountId || plugin.config.defaultAccountId?.(cfg),
+  );
+  const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
+
   let next = { ...cfg };
-  const accountKey = accountId || DEFAULT_ACCOUNT_ID;
-
-  const setAccountEnabled = (key: ChatProvider, enabled: boolean) => {
-    if (key === "whatsapp") {
-      next = {
-        ...next,
-        whatsapp: {
-          ...next.whatsapp,
-          accounts: {
-            ...next.whatsapp?.accounts,
-            [accountKey]: {
-              ...next.whatsapp?.accounts?.[accountKey],
-              enabled,
-            },
-          },
-        },
-      };
-      return;
-    }
-    if (key === "msteams") {
-      next = {
-        ...next,
-        msteams: {
-          ...next.msteams,
-          enabled,
-        },
-      };
-      return;
-    }
-    const base = (next as Record<string, unknown>)[key] as
-      | {
-          accounts?: Record<string, Record<string, unknown>>;
-          enabled?: boolean;
-        }
-      | undefined;
-    const baseAccounts: Record<
-      string,
-      Record<string, unknown>
-    > = base?.accounts ?? {};
-    const existingAccount = baseAccounts[accountKey] ?? {};
-    if (accountKey === DEFAULT_ACCOUNT_ID && !base?.accounts) {
-      next = {
-        ...next,
-        [key]: {
-          ...base,
-          enabled,
-        },
-      } as ClawdbotConfig;
-      return;
-    }
-    next = {
-      ...next,
-      [key]: {
-        ...base,
-        accounts: {
-          ...baseAccounts,
-          [accountKey]: {
-            ...existingAccount,
-            enabled,
-          },
-        },
-      },
-    } as ClawdbotConfig;
-  };
-
-  const deleteAccount = (key: ChatProvider) => {
-    if (key === "whatsapp") {
-      const accounts = { ...next.whatsapp?.accounts };
-      delete accounts[accountKey];
-      next = {
-        ...next,
-        whatsapp: {
-          ...next.whatsapp,
-          accounts: Object.keys(accounts).length ? accounts : undefined,
-        },
-      };
-      return;
-    }
-    if (key === "msteams") {
-      const clone = { ...next } as Record<string, unknown>;
-      delete clone.msteams;
-      next = clone as ClawdbotConfig;
-      return;
-    }
-    const base = (next as Record<string, unknown>)[key] as
-      | {
-          accounts?: Record<string, Record<string, unknown>>;
-          enabled?: boolean;
-        }
-      | undefined;
-    if (accountKey !== DEFAULT_ACCOUNT_ID) {
-      const accounts = { ...base?.accounts };
-      delete accounts[accountKey];
-      next = {
-        ...next,
-        [key]: {
-          ...base,
-          accounts: Object.keys(accounts).length ? accounts : undefined,
-        },
-      } as ClawdbotConfig;
-      return;
-    }
-    if (base?.accounts && Object.keys(base.accounts).length > 0) {
-      const accounts = { ...base.accounts };
-      delete accounts[accountKey];
-      next = {
-        ...next,
-        [key]: {
-          ...base,
-          accounts: Object.keys(accounts).length ? accounts : undefined,
-          ...(key === "telegram"
-            ? { botToken: undefined, tokenFile: undefined, name: undefined }
-            : key === "discord"
-              ? { token: undefined, name: undefined }
-              : key === "slack"
-                ? { botToken: undefined, appToken: undefined, name: undefined }
-                : key === "signal"
-                  ? {
-                      account: undefined,
-                      httpUrl: undefined,
-                      httpHost: undefined,
-                      httpPort: undefined,
-                      cliPath: undefined,
-                      name: undefined,
-                    }
-                  : key === "imessage"
-                    ? {
-                        cliPath: undefined,
-                        dbPath: undefined,
-                        service: undefined,
-                        region: undefined,
-                        name: undefined,
-                      }
-                    : {}),
-        },
-      } as ClawdbotConfig;
-      return;
-    }
-    // No accounts map: remove entire provider section.
-    const clone = { ...next } as Record<string, unknown>;
-    delete clone[key];
-    next = clone as ClawdbotConfig;
-  };
-
   if (deleteConfig) {
-    deleteAccount(provider);
+    if (!plugin.config.deleteAccount) {
+      runtime.error(`Provider ${provider} does not support delete.`);
+      runtime.exit(1);
+      return;
+    }
+    next = plugin.config.deleteAccount({
+      cfg: next,
+      accountId: resolvedAccountId,
+    });
   } else {
-    setAccountEnabled(provider, false);
+    if (!plugin.config.setAccountEnabled) {
+      runtime.error(`Provider ${provider} does not support disable.`);
+      runtime.exit(1);
+      return;
+    }
+    next = plugin.config.setAccountEnabled({
+      cfg: next,
+      accountId: resolvedAccountId,
+      enabled: false,
+    });
   }
 
   await writeConfigFile(next);
