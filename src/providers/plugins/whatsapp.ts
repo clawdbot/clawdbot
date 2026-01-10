@@ -38,6 +38,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     aliases: ["web"],
     showConfigured: false,
     quickstartAllowFrom: true,
+    forceAccountBinding: true,
   },
   pairing: {
     idLabel: "whatsappSenderId",
@@ -291,6 +292,8 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         allowFrom: account.allowFrom,
       };
     },
+    resolveAccountState: ({ configured }) =>
+      configured ? "linked" : "not linked",
     logSelfId: ({ account, runtime, includeProviderPrefix }) => {
       logWebSelfId(account.authDir, runtime, includeProviderPrefix);
     },

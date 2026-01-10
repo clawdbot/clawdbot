@@ -37,6 +37,14 @@ export type ProviderStatusIssue = {
   fix?: string;
 };
 
+export type ProviderAccountState =
+  | "linked"
+  | "not linked"
+  | "configured"
+  | "not configured"
+  | "enabled"
+  | "disabled";
+
 export type ProviderSetupAdapter = {
   resolveAccountId?: (params: {
     cfg: ClawdbotConfig;
@@ -75,6 +83,7 @@ export type ProviderMeta = {
   order?: number;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
+  forceAccountBinding?: boolean;
 };
 
 export type ProviderAccountSnapshot = {
@@ -244,6 +253,12 @@ export type ProviderStatusAdapter<ResolvedAccount> = {
     runtime: RuntimeEnv;
     includeProviderPrefix?: boolean;
   }) => void;
+  resolveAccountState?: (params: {
+    account: ResolvedAccount;
+    cfg: ClawdbotConfig;
+    configured: boolean;
+    enabled: boolean;
+  }) => ProviderAccountState;
   collectStatusIssues?: (
     accounts: ProviderAccountSnapshot[],
   ) => ProviderStatusIssue[];

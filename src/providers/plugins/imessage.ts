@@ -209,6 +209,8 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       lastInboundAt: runtime?.lastInboundAt ?? null,
       lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
+    resolveAccountState: ({ enabled }) =>
+      enabled ? "enabled" : "disabled",
   },
   gateway: {
     startAccount: async (ctx) => {
