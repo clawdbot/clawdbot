@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveUserPath } from "../utils.js";
-import { mapVoiceToPolly } from "./voice-mapping.js";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import {
@@ -18,6 +17,7 @@ import {
   TerminalStates,
   type TranscriptEntry,
 } from "./types.js";
+import { mapVoiceToPolly } from "./voice-mapping.js";
 
 /**
  * Manages voice calls: state machine, persistence, and provider coordination.
