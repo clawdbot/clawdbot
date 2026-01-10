@@ -5,15 +5,8 @@ import { parseConfigCommand } from "./config-commands.js";
 describe("parseConfigCommand", () => {
   it("parses show/unset", () => {
     expect(parseConfigCommand("/config")).toEqual({ action: "show" });
-    expect(parseConfigCommand("/config show")).toEqual({
-      action: "show",
-      path: undefined,
-    });
+    expect(parseConfigCommand("/config show")).toEqual({ action: "show", path: undefined });
     expect(parseConfigCommand("/config show foo.bar")).toEqual({
-      action: "show",
-      path: "foo.bar",
-    });
-    expect(parseConfigCommand("/config get foo.bar")).toEqual({
       action: "show",
       path: "foo.bar",
     });

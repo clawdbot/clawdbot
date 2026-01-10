@@ -660,7 +660,7 @@ export async function handleCommands(params: {
   if (configCommand) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /config from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /config from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -679,16 +679,10 @@ export async function handleCommands(params: {
       };
     }
     const snapshot = await readConfigFileSnapshot();
-    if (
-      !snapshot.valid ||
-      !snapshot.parsed ||
-      typeof snapshot.parsed !== "object"
-    ) {
+    if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
       return {
         shouldContinue: false,
-        reply: {
-          text: "⚠️ Config file is invalid; fix it before using /config.",
-        },
+        reply: { text: "⚠️ Config file is invalid; fix it before using /config." },
       };
     }
     const parsedBase = structuredClone(
@@ -819,13 +813,11 @@ export async function handleCommands(params: {
           reply: { text: "⚙️ Debug overrides: (none)" },
         };
       }
-      const effectiveConfig = cfg ?? {};
       const json = JSON.stringify(overrides, null, 2);
-      const effectiveJson = JSON.stringify(effectiveConfig, null, 2);
       return {
         shouldContinue: false,
         reply: {
-          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\`\n⚙️ Effective config (with overrides):\n\`\`\`json\n${effectiveJson}\n\`\`\``,
+          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\``,
         },
       };
     }

@@ -96,7 +96,6 @@ Examples:
 ```
 /config show
 /config show messages.responsePrefix
-/config get messages.responsePrefix
 /config set messages.responsePrefix="[clawdbot]"
 /config unset messages.responsePrefix
 ```

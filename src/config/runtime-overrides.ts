@@ -1,9 +1,9 @@
+import type { ClawdbotConfig } from "./types.js";
 import {
   parseConfigPath,
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import type { ClawdbotConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
 
@@ -58,11 +58,7 @@ export function unsetConfigOverride(pathRaw: string): {
 } {
   const parsed = parseConfigPath(pathRaw);
   if (!parsed.ok || !parsed.path) {
-    return {
-      ok: false,
-      removed: false,
-      error: parsed.error ?? "Invalid path.",
-    };
+    return { ok: false, removed: false, error: parsed.error ?? "Invalid path." };
   }
   const removed = unsetConfigValueAtPath(overrides, parsed.path);
   return { ok: true, removed };
