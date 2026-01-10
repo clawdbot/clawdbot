@@ -59,6 +59,7 @@ export function buildServiceEnvironment(params: {
   launchdLabel?: string;
 }): Record<string, string | undefined> {
   const { env, port, token, launchdLabel } = params;
+  // Include the profile so the service knows which profile it's running under
   return {
     PATH: buildMinimalServicePath({ env }),
     CLAWDBOT_PROFILE: env.CLAWDBOT_PROFILE,
