@@ -388,6 +388,7 @@ function createSandboxedEditTool(root: string) {
   return wrapSandboxPathGuard(base as unknown as AnyAgentTool, root);
 }
 
+// Provider docking: migrate provider-specific login tools here if new providers need QR/interactive login.
 function createWhatsAppLoginTool(): AnyAgentTool {
   return {
     label: "WhatsApp Login",

@@ -54,6 +54,7 @@ export function buildAgentSystemPrompt(params: {
     ls: "List directory contents",
     bash: "Run shell commands",
     process: "Manage background bash sessions",
+    // Provider docking: add provider login tools here when a provider needs interactive linking.
     whatsapp_login: "Generate and wait for WhatsApp QR login",
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",

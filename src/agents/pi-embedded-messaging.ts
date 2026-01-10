@@ -9,6 +9,7 @@ export type MessagingToolSend = {
 
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
 
+// Provider docking: any plugin with `actions` opts into messaging tool handling.
 export function isMessagingTool(toolName: string): boolean {
   if (CORE_MESSAGING_TOOLS.has(toolName)) return true;
   const providerId = normalizeProviderId(toolName);
@@ -41,4 +42,3 @@ export function normalizeTargetForProvider(
     (raw.trim().toLowerCase() || undefined);
   return normalized || undefined;
 }
-import { getProviderPlugin, normalizeProviderId } from "../providers/plugins/index.js";

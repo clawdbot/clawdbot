@@ -132,6 +132,7 @@ function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
 ): MessagingToolSend | undefined {
+  // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
   const accountIdRaw =
     typeof args.accountId === "string" ? args.accountId.trim() : undefined;
