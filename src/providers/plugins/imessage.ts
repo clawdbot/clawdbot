@@ -5,7 +5,6 @@ import {
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
-import { monitorIMessageProvider } from "../../imessage/index.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import {
@@ -259,6 +258,10 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       });
       ctx.log?.info(
         `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
+      );
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+      const { monitorIMessageProvider } = await import(
+        "../../imessage/index.js"
       );
       return monitorIMessageProvider({
         accountId: account.accountId,

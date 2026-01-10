@@ -8,7 +8,6 @@ import {
   auditDiscordChannelPermissions,
   collectDiscordAuditChannelIds,
 } from "../../discord/audit.js";
-import { monitorDiscordProvider } from "../../discord/index.js";
 import { probeDiscord } from "../../discord/probe.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
@@ -338,6 +337,8 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       ctx.log?.info(
         `[${account.accountId}] starting provider${discordBotLabel}`,
       );
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+      const { monitorDiscordProvider } = await import("../../discord/index.js");
       return monitorDiscordProvider({
         token,
         accountId: account.accountId,

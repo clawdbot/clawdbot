@@ -38,6 +38,8 @@ Each `ProviderPlugin` bundles:
 ## Key Integration Notes
 - `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
 - Avoid importing `src/providers/plugins/index.ts` from shared modules (reply flow, command auth, sandbox explain). It’s intentionally “heavy” (providers may pull web login / monitor code). Use `getProviderDock()` + `normalizeProviderId()` for cheap metadata, and only `getProviderPlugin()` at execution boundaries (ex: `src/auto-reply/reply/route-reply.ts`).
+- Avoid static imports of provider monitors inside plugin modules. Monitors typically import the reply pipeline, which can create ESM cycles (and break Vite/Vitest SSR with TDZ errors). Prefer lazy imports inside `gateway.startAccount`.
+- Debug cycle leaks quickly with: `npx -y madge --circular src/providers/plugins/index.ts`.
 - Gateway protocol schema keeps provider selection as an open-ended string (no provider enum / static list) to avoid init cycles and so new plugins don’t require protocol changes.
 - Protocol v3: no more per-provider fields in `providers.status`; consumers must read map entries by provider id.
 - `DEFAULT_CHAT_PROVIDER` lives in `src/providers/registry.ts` and is used anywhere we need a fallback delivery surface.
@@ -72,8 +74,7 @@ Each `ProviderPlugin` bundles:
 - Elevated tool allowlists (`tools.elevated.allowFrom`) are a record keyed by provider id (no schema update needed when adding providers).
 - Block streaming defaults live on the plugin (`capabilities.blockStreaming`, `streaming.blockStreamingCoalesceDefaults`) instead of hardcoded provider checks.
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
-- WhatsApp web login aliases (ex: `web`) live in `src/providers/registry.ts` so gateway API inputs stay stable.
-- Gateway message-provider normalization uses registry aliases (including `web`) so CLI/API inputs stay stable without plugin init cycles.
+- Gateway message-provider normalization uses `src/providers/registry.ts` for cheap validation/normalization without plugin init cycles.
 - Group mention gating now flows through `plugin.groups.resolveRequireMention` (Discord/Slack/Telegram/WhatsApp/iMessage) instead of branching in reply handlers.
 - Command authorization uses `config.resolveAllowFrom` + `config.formatAllowFrom`, with `commands.enforceOwnerForCommands` and `commands.skipWhenConfigEmpty` driving provider-specific behavior.
 - Security warnings (`doctor security`) use `plugin.security.resolveDmPolicy` + `plugin.security.collectWarnings`; supply `policyPath` + `allowFromPath` for accurate config hints.

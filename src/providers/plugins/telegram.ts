@@ -16,7 +16,6 @@ import {
   auditTelegramGroupMembership,
   collectTelegramUnmentionedGroupIds,
 } from "../../telegram/audit.js";
-import { monitorTelegramProvider } from "../../telegram/monitor.js";
 import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
@@ -383,6 +382,10 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
       }
       ctx.log?.info(
         `[${account.accountId}] starting provider${telegramBotLabel}`,
+      );
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+      const { monitorTelegramProvider } = await import(
+        "../../telegram/monitor.js"
       );
       return monitorTelegramProvider({
         token,

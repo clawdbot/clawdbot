@@ -15,7 +15,6 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
 } from "../../slack/accounts.js";
-import { monitorSlackProvider } from "../../slack/index.js";
 import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatProviderMeta } from "../registry.js";
@@ -489,6 +488,8 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
       const botToken = account.botToken?.trim();
       const appToken = account.appToken?.trim();
       ctx.log?.info(`[${account.accountId}] starting provider`);
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+      const { monitorSlackProvider } = await import("../../slack/index.js");
       return monitorSlackProvider({
         botToken: botToken ?? "",
         appToken: appToken ?? "",

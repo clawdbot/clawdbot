@@ -99,6 +99,9 @@ export async function routeReply(
   if (!provider) {
     return { ok: false, error: `Unknown channel: ${String(channel)}` };
   }
+  if (abortSignal?.aborted) {
+    return { ok: false, error: "Reply routing aborted" };
+  }
   const { getProviderPlugin } = await import(
     "../../providers/plugins/index.js"
   );

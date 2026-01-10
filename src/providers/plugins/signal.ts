@@ -9,7 +9,6 @@ import {
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
 } from "../../signal/accounts.js";
-import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeE164 } from "../../utils.js";
@@ -287,6 +286,8 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       ctx.log?.info(
         `[${account.accountId}] starting provider (${account.baseUrl})`,
       );
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+      const { monitorSignalProvider } = await import("../../signal/index.js");
       return monitorSignalProvider({
         accountId: account.accountId,
         config: ctx.cfg,
