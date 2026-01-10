@@ -30,7 +30,7 @@ Each `ProviderPlugin` bundles:
 
 ## Key Integration Notes
 - `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
-- Gateway protocol schema + system prompt use `PROVIDER_IDS` (static list) to avoid plugin init cycles; keep it in sync with the plugin registry.
+- Gateway protocol schema keeps provider selection as an open-ended string (no provider enum / static list) to avoid init cycles and so new plugins don’t require protocol changes.
 - `DEFAULT_CHAT_PROVIDER` lives in `src/providers/registry.ts` and is used anywhere we need a fallback delivery surface.
 - Provider reload rules are computed lazily to avoid static init cycles in tests.
 - Signal/iMessage media size limits are now resolved inside their plugins.
@@ -46,6 +46,7 @@ Each `ProviderPlugin` bundles:
 - Onboarding quickstart allowlist uses `meta.quickstartAllowFrom` to avoid hardcoded provider lists.
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 - Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
+- Agent gateway routing sets `deliveryTargetMode` and uses `resolveOutboundTarget` for implicit fallback targets when `to` is missing.
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
 - WhatsApp web login aliases are handled by the plugin (`meta.aliases: ["web"]`) so gateway API inputs can stay stable.
 - Gateway message-provider normalization uses registry aliases (including `web`) so CLI/API inputs stay stable without plugin init cycles.
