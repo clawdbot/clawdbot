@@ -4,6 +4,7 @@ import type {
   OutboundDeliveryResult,
   OutboundSendDeps,
 } from "../../infra/outbound/deliver.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import type { PollInput } from "../../polls.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ChatProviderId } from "../registry.js";
@@ -354,6 +355,20 @@ export type ProviderCommandAdapter = {
   skipWhenConfigEmpty?: boolean;
 };
 
+export type ProviderMentionAdapter = {
+  stripPatterns?: (params: {
+    ctx: MsgContext;
+    cfg: ClawdbotConfig | undefined;
+    agentId?: string;
+  }) => string[];
+  stripMentions?: (params: {
+    text: string;
+    ctx: MsgContext;
+    cfg: ClawdbotConfig | undefined;
+    agentId?: string;
+  }) => string;
+};
+
 export type ProviderStreamingAdapter = {
   blockStreamingCoalesceDefaults?: {
     minChars: number;
@@ -464,6 +479,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   setup?: ProviderSetupAdapter;
   pairing?: ProviderPairingAdapter;
   groups?: ProviderGroupAdapter;
+  mentions?: ProviderMentionAdapter;
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;
   gatewayMethods?: string[];

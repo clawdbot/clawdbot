@@ -41,6 +41,9 @@ import type { ProviderMessageActionName, ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("whatsapp");
 
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
   meta: {
@@ -163,6 +166,14 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   },
   groups: {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
+  },
+  mentions: {
+    stripPatterns: ({ ctx }) => {
+      const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
+      if (!selfE164) return [];
+      const escaped = escapeRegExp(selfE164);
+      return [escaped, `@${escaped}`];
+    },
   },
   commands: {
     enforceOwnerForCommands: true,

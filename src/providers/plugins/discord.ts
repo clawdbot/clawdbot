@@ -100,6 +100,9 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
   groups: {
     resolveRequireMention: resolveDiscordGroupRequireMention,
   },
+  mentions: {
+    stripPatterns: () => ["<@!?\\d+>"],
+  },
   threading: {
     resolveReplyToMode: ({ cfg }) => cfg.discord?.replyToMode ?? "off",
   },
