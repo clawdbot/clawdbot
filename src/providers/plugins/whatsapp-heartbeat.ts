@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
+import { normalizeChatProviderId } from "../../providers/registry.js";
 import { normalizeE164 } from "../../utils.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
@@ -23,7 +24,8 @@ function getSessionRecipients(cfg: ClawdbotConfig) {
     .filter(([key]) => !isGroupKey(key) && !isCronKey(key))
     .map(([_, entry]) => ({
       to:
-        entry?.lastProvider === "whatsapp" && entry?.lastTo
+        normalizeChatProviderId(entry?.lastProvider) === "whatsapp" &&
+        entry?.lastTo
           ? normalizeE164(entry.lastTo)
           : "",
       updatedAt: entry?.updatedAt ?? 0,
