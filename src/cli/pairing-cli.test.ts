@@ -4,8 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 const listProviderPairingRequests = vi.fn();
 const approveProviderPairingCode = vi.fn();
 const notifyPairingApproved = vi.fn();
+const pairingIdLabels: Record<string, string> = {
+  telegram: "telegramUserId",
+  discord: "discordUserId",
+};
 const requirePairingAdapter = vi.fn((provider: string) => ({
-  idLabel: provider === "telegram" ? "telegramUserId" : "discordUserId",
+  idLabel: pairingIdLabels[provider] ?? "userId",
 }));
 const listPairingProviders = vi.fn(() => ["telegram", "discord"]);
 const resolvePairingProvider = vi.fn((raw: string) => raw);
