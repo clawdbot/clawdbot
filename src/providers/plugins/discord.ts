@@ -114,9 +114,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
         approveHint:
           "Approve via: clawdbot pairing list --provider discord / clawdbot pairing approve --provider discord <code>",
         normalizeEntry: (raw) =>
-          raw
-            .replace(/^(discord|user):/i, "")
-            .replace(/^<@!?(\d+)>$/, "$1"),
+          raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };
     },
   },

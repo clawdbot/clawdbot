@@ -125,8 +125,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     collectWarnings: ({ account }) => {
       const groupPolicy = account.config.groupPolicy ?? "open";
       const groupAllowlistConfigured =
-        account.config.groups &&
-        Object.keys(account.config.groups).length > 0;
+        account.config.groups && Object.keys(account.config.groups).length > 0;
       if (groupPolicy !== "open" || groupAllowlistConfigured) return [];
       return [
         `- Telegram groups: open (groupPolicy="open") with no telegram.groups allowlist; mention-gating applies but any group can add + ping.`,

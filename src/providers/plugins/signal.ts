@@ -102,9 +102,7 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId =
         accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(
-        cfg.signal?.accounts?.[resolvedAccountId],
-      );
+      const useAccountPath = Boolean(cfg.signal?.accounts?.[resolvedAccountId]);
       const basePath = useAccountPath
         ? `signal.accounts.${resolvedAccountId}.`
         : "signal.";

@@ -9,6 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../routing/session-key.js";
+import { normalizeE164 } from "../../utils.js";
 import {
   listWhatsAppAccountIds,
   type ResolvedWhatsAppAccount,
@@ -28,7 +29,6 @@ import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
 } from "../../whatsapp/normalize.js";
-import { normalizeE164 } from "../../utils.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
