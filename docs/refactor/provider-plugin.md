@@ -10,7 +10,8 @@ read_when:
 Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and shared UX/state paths.
 
 ## Architecture Overview
-- Registry: `src/providers/plugins/index.ts` owns the plugin list + aliases.
+- Registry: `src/providers/plugins/index.ts` owns the plugin list.
+- IDs/aliases: `src/providers/registry.ts` owns stable provider ids + input aliases.
 - Shape: `src/providers/plugins/types.ts` defines the plugin contract.
 - Gateway: `src/gateway/server-providers.ts` drives start/stop + runtime snapshots via plugins.
 - Outbound: `src/infra/outbound/deliver.ts` routes through plugin outbound when present.
@@ -19,7 +20,7 @@ Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and
 
 ## Plugin Contract (high-level)
 Each `ProviderPlugin` bundles:
-- `meta`: id/labels/docs/aliases/sort order.
+- `meta`: id/labels/docs/sort order.
 - `capabilities`: chatTypes + optional features (polls, media, nativeCommands, etc.).
 - `config`: list/resolve/default/isConfigured/describeAccount + isEnabled + (un)configured reasons + `resolveAllowFrom` + `formatAllowFrom`.
 - `outbound`: deliveryMode + chunker + resolveTarget (mode-aware) + sendText/sendMedia/sendPoll + pollMaxOptions.
@@ -60,7 +61,7 @@ Each `ProviderPlugin` bundles:
 - Elevated tool allowlists can fall back to `plugin.elevated.allowFromFallback` (ex: Discord DM allowFrom).
 - Block streaming defaults live on the plugin (`capabilities.blockStreaming`, `streaming.blockStreamingCoalesceDefaults`) instead of hardcoded provider checks.
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
-- WhatsApp web login aliases are handled by the plugin (`meta.aliases: ["web"]`) so gateway API inputs can stay stable.
+- WhatsApp web login aliases (ex: `web`) live in `src/providers/registry.ts` so gateway API inputs stay stable.
 - Gateway message-provider normalization uses registry aliases (including `web`) so CLI/API inputs stay stable without plugin init cycles.
 - Group mention gating now flows through `plugin.groups.resolveRequireMention` (Discord/Slack/Telegram/WhatsApp/iMessage) instead of branching in reply handlers.
 - Command authorization uses `config.resolveAllowFrom` + `config.formatAllowFrom`, with `commands.enforceOwnerForCommands` and `commands.skipWhenConfigEmpty` driving provider-specific behavior.
@@ -82,7 +83,7 @@ Each `ProviderPlugin` bundles:
 
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
-2) Register in `src/providers/plugins/index.ts` + aliases if needed.
+2) Register in `src/providers/plugins/index.ts` and update `src/providers/registry.ts` (ids/aliases/meta) if needed.
 3) Add `reload.configPrefixes` for hot reload when config changes.
 4) Delegate to existing provider modules (send/probe/monitor) or create them.
 5) Update docs/tests for any behavior changes.

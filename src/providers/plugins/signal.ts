@@ -35,7 +35,6 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
   id: "signal",
   meta: {
     ...meta,
-    aliases: [],
   },
   onboarding: signalOnboardingAdapter,
   pairing: {

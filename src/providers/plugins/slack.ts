@@ -40,7 +40,6 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
     ...meta,
-    aliases: [],
   },
   onboarding: slackOnboardingAdapter,
   pairing: {

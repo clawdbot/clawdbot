@@ -23,17 +23,6 @@ const PROVIDERS: ProviderPlugin[] = [
   msteamsPlugin,
 ];
 
-// Provider docking: aliases live on plugins to keep CLI/API normalization consistent.
-const PROVIDER_ALIASES = (() => {
-  const map = new Map<string, ProviderId>();
-  for (const plugin of PROVIDERS) {
-    for (const alias of plugin.meta.aliases ?? []) {
-      map.set(alias.toLowerCase(), plugin.id);
-    }
-  }
-  return map;
-})();
-
 export function listProviderPlugins(): ProviderPlugin[] {
   return [...PROVIDERS].sort((a, b) => {
     const indexA = CHAT_PROVIDER_ORDER.indexOf(a.id as ChatProviderId);
@@ -50,10 +39,9 @@ export function getProviderPlugin(id: ProviderId): ProviderPlugin | undefined {
 }
 
 export function normalizeProviderId(raw?: string | null): ProviderId | null {
-  const trimmed = (raw ?? "").trim().toLowerCase();
-  if (!trimmed) return null;
-  const normalized = PROVIDER_ALIASES.get(trimmed) ?? trimmed;
-  return normalizeChatProviderId(normalized);
+  // Provider docking: keep input normalization centralized in src/providers/registry.ts
+  // so CLI/API/protocol can rely on stable aliases without plugin init side effects.
+  return normalizeChatProviderId(raw);
 }
 
 export {

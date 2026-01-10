@@ -40,7 +40,6 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
   id: "discord",
   meta: {
     ...meta,
-    aliases: [],
   },
   onboarding: discordOnboardingAdapter,
   pairing: {

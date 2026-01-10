@@ -44,7 +44,6 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
   id: "telegram",
   meta: {
     ...meta,
-    aliases: [],
     quickstartAllowFrom: true,
   },
   onboarding: telegramOnboardingAdapter,

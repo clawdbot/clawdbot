@@ -89,7 +89,6 @@ export type ProviderMeta = {
   docsPath: string;
   docsLabel?: string;
   blurb: string;
-  aliases?: string[];
   order?: number;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;

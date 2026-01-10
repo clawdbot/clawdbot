@@ -34,7 +34,6 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
   id: "imessage",
   meta: {
     ...meta,
-    aliases: ["imsg"],
     showConfigured: false,
   },
   onboarding: imessageOnboardingAdapter,

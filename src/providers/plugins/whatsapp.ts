@@ -54,7 +54,6 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
   meta: {
     ...meta,
-    aliases: ["web"],
     showConfigured: false,
     quickstartAllowFrom: true,
     forceAccountBinding: true,

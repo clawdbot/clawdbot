@@ -26,7 +26,6 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
   id: "msteams",
   meta: {
     ...meta,
-    aliases: ["teams"],
   },
   onboarding: msteamsOnboardingAdapter,
   pairing: {
