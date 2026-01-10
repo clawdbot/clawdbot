@@ -263,6 +263,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? lastTo || undefined
         : undefined);
     if (!resolvedTo && isDeliverableMessageProvider(resolvedProvider)) {
+    if (
+      !resolvedTo &&
+      isDeliverableMessageProvider(resolvedProvider) &&
+      resolvedProvider !== INTERNAL_MESSAGE_PROVIDER
+    ) {
       const cfg = cfgForAgent ?? loadConfig();
       const fallback = resolveOutboundTarget({
         provider: resolvedProvider,
