@@ -26,7 +26,8 @@ Each `ProviderPlugin` bundles:
 - `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary + logSelfId + collectStatusIssues.
 - `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`).
 - `security`: dmPolicy + allowFrom hints used by `doctor security`.
-- `heartbeat`: optional readiness checks (e.g., WhatsApp linked + running).
+- `heartbeat`: optional readiness checks + heartbeat recipient resolution when providers own targeting.
+- `auth`: optional login hook used by `clawdbot providers login`.
 - `reload`: `configPrefixes` that map to hot restarts.
 
 ## Key Integration Notes
@@ -66,10 +67,12 @@ Each `ProviderPlugin` bundles:
 - Message tool + CLI action dispatch now use `plugin.actions.listActions` + `plugin.actions.handleAction`; use `plugin.actions.supportsAction` for dispatch-only gating when you still want fallback send/poll.
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
 - Onboarding provider setup is delegated to adapter modules under `src/commands/onboarding/providers/*`, keeping `setupProviders` provider-agnostic.
+- Provider login flows (`clawdbot providers login`) route through `plugin.auth.login` when available.
 
 ## CLI Commands (inline references)
 - Add/remove providers: `clawdbot providers add <provider>` / `clawdbot providers remove <provider>`.
 - Inspect provider state: `clawdbot providers list`, `clawdbot providers status`.
+- Link/unlink providers: `clawdbot providers login --provider <provider>` / `clawdbot providers logout --provider <provider>`.
 - Pairing approvals: `clawdbot pairing list <provider>`, `clawdbot pairing approve <provider> <code>`.
 
 ## Adding a Provider (checklist)
