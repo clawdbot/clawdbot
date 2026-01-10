@@ -150,8 +150,8 @@ ws.on("open", () => {
     id: "c1",
     method: "connect",
     params: {
-      minProtocol: 2,
-      maxProtocol: 2,
+      minProtocol: 3,
+      maxProtocol: 3,
       client: {
         name: "example",
         version: "dev",

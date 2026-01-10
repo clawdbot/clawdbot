@@ -126,12 +126,14 @@ export function formatGatewayProvidersStatusLines(
     });
 
   const plugins = listProviderPlugins();
+  const accountsByProvider = payload.providerAccounts as
+    | Record<string, unknown>
+    | undefined;
   const accountPayloads: Partial<
     Record<string, Array<Record<string, unknown>>>
   > = {};
   for (const plugin of plugins) {
-    const key = `${plugin.id}Accounts`;
-    const raw = payload[key];
+    const raw = accountsByProvider?.[plugin.id];
     if (Array.isArray(raw)) {
       accountPayloads[plugin.id] = raw as Array<Record<string, unknown>>;
     }

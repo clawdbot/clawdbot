@@ -8,12 +8,13 @@ export function collectProvidersStatusIssues(
   payload: Record<string, unknown>,
 ): ProviderStatusIssue[] {
   const issues: ProviderStatusIssue[] = [];
+  const accountsByProvider = payload.providerAccounts as
+    | Record<string, unknown>
+    | undefined;
   for (const plugin of listProviderPlugins()) {
     const collect = plugin.status?.collectStatusIssues;
     if (!collect) continue;
-
-    const key = `${plugin.id}Accounts`;
-    const raw = payload[key];
+    const raw = accountsByProvider?.[plugin.id];
     if (!Array.isArray(raw)) continue;
 
     issues.push(...collect(raw as ProviderAccountSnapshot[]));

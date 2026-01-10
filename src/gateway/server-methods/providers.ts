@@ -213,7 +213,22 @@ export const providersHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
-    const payload: Record<string, unknown> = { ts: Date.now() };
+    const payload: Record<string, unknown> = {
+      ts: Date.now(),
+      providerOrder: plugins.map((plugin) => plugin.id),
+      providerLabels: Object.fromEntries(
+        plugins.map((plugin) => [plugin.id, plugin.meta.label]),
+      ),
+      providers: {} as Record<string, unknown>,
+      providerAccounts: {} as Record<string, unknown>,
+      providerDefaultAccountId: {} as Record<string, unknown>,
+    };
+    const providersMap = payload.providers as Record<string, unknown>;
+    const accountsMap = payload.providerAccounts as Record<string, unknown>;
+    const defaultAccountIdMap = payload.providerDefaultAccountId as Record<
+      string,
+      unknown
+    >;
     for (const plugin of plugins) {
       const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
         await buildProviderAccounts(plugin.id);
@@ -234,9 +249,9 @@ export const providersHandlers: GatewayRequestHandlers = {
         : {
             configured: defaultAccount?.configured ?? false,
           };
-      payload[plugin.id] = summary;
-      payload[`${plugin.id}Accounts`] = accounts;
-      payload[`${plugin.id}DefaultAccountId`] = defaultAccountId;
+      providersMap[plugin.id] = summary;
+      accountsMap[plugin.id] = accounts;
+      defaultAccountIdMap[plugin.id] = defaultAccountId;
     }
 
     respond(true, payload, undefined);
