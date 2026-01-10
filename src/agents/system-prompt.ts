@@ -1,11 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
+import { PROVIDER_IDS } from "../providers/registry.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 
-const MESSAGE_PROVIDER_OPTIONS = listProviderPlugins()
-  .map((plugin) => plugin.id)
-  .join("|");
+const MESSAGE_PROVIDER_OPTIONS = PROVIDER_IDS.join("|");
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
