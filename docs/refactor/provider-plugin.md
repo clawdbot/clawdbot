@@ -17,6 +17,7 @@ Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and
 - Outbound: `src/infra/outbound/deliver.ts` routes through plugin outbound when present.
 - Reload: `src/gateway/config-reload.ts` uses plugin `reload.configPrefixes` lazily (avoid init cycles).
 - CLI: `src/commands/providers/*` uses plugin list for add/remove/status/list.
+- Protocol: `src/gateway/protocol/schema.ts` (v3) makes provider-shaped responses container-generic (maps keyed by provider id).
 
 ## Plugin Contract (high-level)
 Each `ProviderPlugin` bundles:
@@ -36,14 +37,21 @@ Each `ProviderPlugin` bundles:
 ## Key Integration Notes
 - `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
 - Gateway protocol schema keeps provider selection as an open-ended string (no provider enum / static list) to avoid init cycles and so new plugins don’t require protocol changes.
+- Protocol v3: no more per-provider fields in `providers.status`; consumers must read map entries by provider id.
 - `DEFAULT_CHAT_PROVIDER` lives in `src/providers/registry.ts` and is used anywhere we need a fallback delivery surface.
 - Provider reload rules are computed lazily to avoid static init cycles in tests.
 - Signal/iMessage media size limits are now resolved inside their plugins.
 - `normalizeProviderId()` handles aliases (ex: `imsg`, `teams`) so CLI and API inputs stay stable.
 - `ProviderId` is `ChatProviderId` (no extra special-cased provider IDs in shared code).
 - Gateway runtime defaults (`status.defaultRuntime`) replace the old per-provider runtime map.
-- Gateway health snapshots now iterate plugins (`status.probeAccount` + `status.buildProviderSummary`) and emit `providers` + `providerOrder` instead of provider-specific fields.
-- `providers.status` summary objects now come from `status.buildProviderSummary` (no per-provider branching in the handler).
+- Gateway runtime snapshot (`getRuntimeSnapshot`) is map-based: `{ providers, providerAccounts }` (no `${id}Accounts` keys).
+- `providers.status` response keys (v3):
+  - `providerOrder: string[]`
+  - `providerLabels: Record<string, string>`
+  - `providers: Record<string, unknown>` (provider summary objects, plugin-defined)
+  - `providerAccounts: Record<string, ProviderAccountSnapshot[]>`
+  - `providerDefaultAccountId: Record<string, string>`
+- `providers.status` summary objects come from `status.buildProviderSummary` (no per-provider branching in the handler).
 - `providers.status` warnings now flow through `status.collectStatusIssues` per plugin.
 - CLI list uses `meta.showConfigured` to decide whether to show configured state.
 - CLI provider options and prompt provider lists are generated from `listProviderPlugins()` (avoid hardcoded arrays).
@@ -86,7 +94,8 @@ Each `ProviderPlugin` bundles:
 2) Register in `src/providers/plugins/index.ts` and update `src/providers/registry.ts` (ids/aliases/meta) if needed.
 3) Add `reload.configPrefixes` for hot reload when config changes.
 4) Delegate to existing provider modules (send/probe/monitor) or create them.
-5) Update docs/tests for any behavior changes.
+5) Update protocol clients (if you changed protocol): `pnpm protocol:gen` / `pnpm protocol:gen:swift`.
+6) Update docs/tests for any behavior changes.
 
 ## Cleanup Expectations
 - Keep plugin files small; move heavy logic into provider modules.
