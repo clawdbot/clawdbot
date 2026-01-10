@@ -10,6 +10,11 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
+import {
+  createActionGate,
+  readStringParam,
+} from "../../agents/tools/common.js";
+import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
@@ -32,7 +37,10 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
-import type { ProviderPlugin } from "./types.js";
+import type {
+  ProviderMessageActionName,
+  ProviderPlugin,
+} from "./types.js";
 
 const meta = getChatProviderMeta("whatsapp");
 
@@ -165,6 +173,46 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
+  },
+  actions: {
+    listActions: ({ cfg }) => {
+      if (!cfg.whatsapp) return [];
+      const gate = createActionGate(cfg.whatsapp.actions);
+      const actions = new Set<ProviderMessageActionName>();
+      if (gate("reactions")) actions.add("react");
+      if (gate("polls")) actions.add("poll");
+      return Array.from(actions);
+    },
+    supportsAction: ({ action }) => action === "react",
+    handleAction: async ({ action, params, cfg, accountId }) => {
+      if (action !== "react") {
+        throw new Error(
+          `Action ${action} is not supported for provider ${meta.id}.`,
+        );
+      }
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+      });
+      const emoji = readStringParam(params, "emoji", { allowEmpty: true });
+      const remove =
+        typeof params.remove === "boolean" ? params.remove : undefined;
+      return await handleWhatsAppAction(
+        {
+          action: "react",
+          chatJid:
+            readStringParam(params, "chatJid") ??
+            readStringParam(params, "to", { required: true }),
+          messageId,
+          emoji,
+          remove,
+          participant: readStringParam(params, "participant"),
+          accountId: accountId ?? undefined,
+          fromMe:
+            typeof params.fromMe === "boolean" ? params.fromMe : undefined,
+        },
+        cfg,
+      );
+    },
   },
   outbound: {
     deliveryMode: "gateway",

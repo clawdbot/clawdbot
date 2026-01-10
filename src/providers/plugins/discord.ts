@@ -17,6 +17,7 @@ import {
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import { discordMessageActions } from "./actions/discord.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -105,6 +106,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
   },
+  actions: discordMessageActions,
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
