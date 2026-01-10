@@ -41,6 +41,25 @@ gateway-backed session transcript, so they are the source of truth.
 
 Details: [Session management](/concepts/session).
 
+## Inbound bodies and history context
+
+Clawdbot separates the **prompt body** from the **command body**:
+- `Body`: prompt text sent to the agent. This may include provider envelopes and
+  optional history wrappers.
+- `CommandBody`: raw user text for directive/command parsing.
+- `RawBody`: legacy alias for `CommandBody` (kept for compatibility).
+
+When a provider supplies history, it uses a shared wrapper:
+- `[Chat messages since your last reply - for context]`
+- `[Current message - respond to this]`
+
+Directive stripping only applies to the **current message** section so history
+remains intact. Providers that wrap history should set `CommandBody` (or
+`RawBody`) to the original message text and keep `Body` as the combined prompt.
+History buffers are configurable via `messages.groupChat.historyLimit` (global
+default) and per-provider overrides like `slack.historyLimit` or
+`telegram.accounts.<id>.historyLimit` (set `0` to disable).
+
 ## Queueing and followups
 
 If a run is already active, inbound messages can be queued, steered into the

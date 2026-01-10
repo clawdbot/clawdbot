@@ -343,6 +343,8 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
+`messages.groupChat.historyLimit` sets the global default for group history context. Providers can override with `<provider>.historyLimit` (or `<provider>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
+
 Per-agent override (takes precedence when set, even `[]`):
 ```json5
 {
@@ -674,6 +676,7 @@ Multi-account support lives under `telegram.accounts` (see the multi-account sec
         }
       }
     },
+    historyLimit: 50,                     // include last N group messages as context (0 disables)
     replyToMode: "first",                 // off | first | all
     streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
     draftChunk: {                        // optional; only for streamMode=block
@@ -808,6 +811,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
         systemPrompt: "Short answers only."
       }
     },
+    historyLimit: 50,          // include last N channel/group messages as context (0 disables)
     allowBots: false,
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
@@ -860,7 +864,8 @@ Signal reactions can emit system events (shared reaction tooling):
 {
   signal: {
     reactionNotifications: "own", // off | own | all | allowlist
-    reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"]
+    reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+    historyLimit: 50 // include last N group messages as context (0 disables)
   }
 }
 ```
@@ -883,6 +888,7 @@ Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
     dbPath: "~/Library/Messages/chat.db",
     dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
+    historyLimit: 50,    // include last N group messages as context (0 disables)
     includeAttachments: false,
     mediaMaxMb: 16,
     service: "auto",

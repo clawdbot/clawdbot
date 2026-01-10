@@ -193,6 +193,7 @@ Behavior:
 - `whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap).
 - `whatsapp.groupAllowFrom` (group sender allowlist).
 - `whatsapp.groupPolicy` (group policy).
+- `whatsapp.historyLimit` / `whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables).
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `whatsapp.actions.reactions` (gate WhatsApp tool reactions).
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`)

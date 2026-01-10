@@ -78,6 +78,7 @@ group messages, so use admin if you need full visibility.
 ## Limits
 - Outbound text is chunked to `telegram.textChunkLimit` (default 4000).
 - Media downloads/uploads are capped by `telegram.mediaMaxMb` (default 5).
+- Group history context uses `telegram.historyLimit` (or `telegram.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Group activation modes
 

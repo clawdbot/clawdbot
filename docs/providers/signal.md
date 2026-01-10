@@ -64,6 +64,7 @@ Groups:
 - Attachments supported (base64 fetched from `signal-cli`).
 - Default media cap: `signal.mediaMaxMb` (default 8).
 - Use `signal.ignoreAttachments` to skip downloading media.
+- Group history context uses `signal.historyLimit` (or `signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Delivery targets (CLI/cron)
 - DMs: `signal:+15551234567` (or plain E.164).
@@ -88,6 +89,7 @@ Provider options:
 - `signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`.
 - `signal.groupPolicy`: `open | allowlist | disabled` (default: open).
 - `signal.groupAllowFrom`: group sender allowlist.
+- `signal.historyLimit`: max group messages to include as context (0 disables).
 - `signal.textChunkLimit`: outbound chunk size (chars).
 - `signal.mediaMaxMb`: inbound/outbound media cap (MB).
 

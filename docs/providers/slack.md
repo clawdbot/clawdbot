@@ -24,6 +24,10 @@ Use the manifest below so scopes and events stay in sync.
 
 Multi-account support: use `slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
+## History context
+- `slack.historyLimit` (or `slack.accounts.*.historyLimit`) controls how many recent channel/group messages are wrapped into the prompt.
+- Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+
 ## Manifest (optional)
 Use this Slack app manifest to create the app quickly (adjust the name/command if you want).
 
