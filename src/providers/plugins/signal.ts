@@ -19,6 +19,7 @@ import {
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
+import { normalizeSignalMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,
@@ -96,6 +97,9 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
           entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, "")),
         )
         .filter(Boolean),
+  },
+  messaging: {
+    normalizeTarget: normalizeSignalMessagingTarget,
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

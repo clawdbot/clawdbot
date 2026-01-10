@@ -1,4 +1,8 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -25,14 +29,19 @@ export function resolveAnnounceTargetFromKey(
   const id = rest.join(":").trim();
   if (!id) return null;
   if (!providerRaw) return null;
-  const provider = providerRaw.toLowerCase();
-  if (provider === "discord") {
-    return { provider, to: `channel:${id}` };
-  }
-  if (provider === "signal") {
-    return { provider, to: `group:${id}` };
-  }
-  return { provider, to: id };
+  const normalizedProvider = normalizeProviderId(providerRaw);
+  const provider = normalizedProvider ?? providerRaw.toLowerCase();
+  const kindTarget = normalizedProvider
+    ? kind === "channel"
+      ? `channel:${id}`
+      : `group:${id}`
+    : id;
+  const normalized = normalizedProvider
+    ? getProviderPlugin(normalizedProvider)?.messaging?.normalizeTarget?.(
+        kindTarget,
+      )
+    : undefined;
+  return { provider, to: normalized ?? kindTarget };
 }
 
 export function buildAgentToAgentMessageContext(params: {

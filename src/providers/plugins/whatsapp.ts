@@ -44,6 +44,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     showConfigured: false,
     quickstartAllowFrom: true,
     forceAccountBinding: true,
+    preferSessionLookupForAnnounceTarget: true,
   },
   pairing: {
     idLabel: "whatsappSenderId",

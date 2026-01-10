@@ -13,6 +13,10 @@ export function normalizeSlackMessagingTarget(raw: string): string | undefined {
     const id = trimmed.slice(8).trim();
     return id ? `channel:${id}`.toLowerCase() : undefined;
   }
+  if (trimmed.startsWith("group:")) {
+    const id = trimmed.slice(6).trim();
+    return id ? `channel:${id}`.toLowerCase() : undefined;
+  }
   if (trimmed.startsWith("slack:")) {
     const id = trimmed.slice(6).trim();
     return id ? `user:${id}`.toLowerCase() : undefined;
@@ -41,6 +45,10 @@ export function normalizeDiscordMessagingTarget(
   }
   if (trimmed.startsWith("channel:")) {
     const id = trimmed.slice(8).trim();
+    return id ? `channel:${id}`.toLowerCase() : undefined;
+  }
+  if (trimmed.startsWith("group:")) {
+    const id = trimmed.slice(6).trim();
     return id ? `channel:${id}`.toLowerCase() : undefined;
   }
   if (trimmed.startsWith("discord:")) {
@@ -74,6 +82,32 @@ export function normalizeTelegramMessagingTarget(
   if (tmeMatch?.[1]) normalized = `@${tmeMatch[1]}`;
   if (!normalized) return undefined;
   return `telegram:${normalized}`.toLowerCase();
+}
+
+export function normalizeSignalMessagingTarget(
+  raw: string,
+): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  let normalized = trimmed;
+  if (normalized.toLowerCase().startsWith("signal:")) {
+    normalized = normalized.slice("signal:".length).trim();
+  }
+  if (!normalized) return undefined;
+  const lower = normalized.toLowerCase();
+  if (lower.startsWith("group:")) {
+    const id = normalized.slice("group:".length).trim();
+    return id ? `group:${id}`.toLowerCase() : undefined;
+  }
+  if (lower.startsWith("username:")) {
+    const id = normalized.slice("username:".length).trim();
+    return id ? `username:${id}`.toLowerCase() : undefined;
+  }
+  if (lower.startsWith("u:")) {
+    const id = normalized.slice("u:".length).trim();
+    return id ? `username:${id}`.toLowerCase() : undefined;
+  }
+  return normalized.toLowerCase();
 }
 
 export function normalizeWhatsAppMessagingTarget(
