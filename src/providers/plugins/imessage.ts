@@ -8,7 +8,6 @@ import {
 import { monitorIMessageProvider } from "../../imessage/index.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
-import { chunkText } from "../../auto-reply/chunk.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
 import {

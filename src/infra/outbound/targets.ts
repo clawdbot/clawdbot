@@ -122,7 +122,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
     return { provider: "none", reason: "no-target" };
   }
 
-  const accountId = provider === lastProvider ? entry?.lastAccountId : undefined;
+  const accountId =
+    provider === lastProvider ? entry?.lastAccountId : undefined;
   const resolved = resolveOutboundTarget({
     provider,
     to,

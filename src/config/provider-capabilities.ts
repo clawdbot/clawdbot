@@ -1,5 +1,5 @@
-import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeProviderId } from "../providers/plugins/index.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
 
 function normalizeCapabilities(
