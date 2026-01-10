@@ -1,8 +1,16 @@
 import SwiftUI
 
 extension ConnectionsSettings {
+    private func providerStatus<T: Decodable>(
+        _ id: String,
+        as type: T.Type) -> T?
+    {
+        self.store.snapshot?.decodeProvider(id, as: type)
+    }
+
     var whatsAppTint: Color {
-        guard let status = self.store.snapshot?.whatsapp else { return .secondary }
+        guard let status = self.providerStatus("whatsapp", as: ProvidersStatusSnapshot.WhatsAppStatus.self)
+        else { return .secondary }
         if !status.configured { return .secondary }
         if !status.linked { return .red }
         if status.lastError != nil { return .orange }
@@ -12,7 +20,8 @@ extension ConnectionsSettings {
     }
 
     var telegramTint: Color {
-        guard let status = self.store.snapshot?.telegram else { return .secondary }
+        guard let status = self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)
+        else { return .secondary }
         if !status.configured { return .secondary }
         if status.lastError != nil { return .orange }
         if status.probe?.ok == false { return .orange }
@@ -21,7 +30,8 @@ extension ConnectionsSettings {
     }
 
     var discordTint: Color {
-        guard let status = self.store.snapshot?.discord else { return .secondary }
+        guard let status = self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)
+        else { return .secondary }
         if !status.configured { return .secondary }
         if status.lastError != nil { return .orange }
         if status.probe?.ok == false { return .orange }
@@ -30,7 +40,8 @@ extension ConnectionsSettings {
     }
 
     var signalTint: Color {
-        guard let status = self.store.snapshot?.signal else { return .secondary }
+        guard let status = self.providerStatus("signal", as: ProvidersStatusSnapshot.SignalStatus.self)
+        else { return .secondary }
         if !status.configured { return .secondary }
         if status.lastError != nil { return .orange }
         if status.probe?.ok == false { return .orange }
@@ -39,7 +50,8 @@ extension ConnectionsSettings {
     }
 
     var imessageTint: Color {
-        guard let status = self.store.snapshot?.imessage else { return .secondary }
+        guard let status = self.providerStatus("imessage", as: ProvidersStatusSnapshot.IMessageStatus.self)
+        else { return .secondary }
         if !status.configured { return .secondary }
         if status.lastError != nil { return .orange }
         if status.probe?.ok == false { return .orange }
@@ -48,7 +60,8 @@ extension ConnectionsSettings {
     }
 
     var whatsAppSummary: String {
-        guard let status = self.store.snapshot?.whatsapp else { return "Checking…" }
+        guard let status = self.providerStatus("whatsapp", as: ProvidersStatusSnapshot.WhatsAppStatus.self)
+        else { return "Checking…" }
         if !status.linked { return "Not linked" }
         if status.connected { return "Connected" }
         if status.running { return "Running" }
@@ -56,35 +69,40 @@ extension ConnectionsSettings {
     }
 
     var telegramSummary: String {
-        guard let status = self.store.snapshot?.telegram else { return "Checking…" }
+        guard let status = self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)
+        else { return "Checking…" }
         if !status.configured { return "Not configured" }
         if status.running { return "Running" }
         return "Configured"
     }
 
     var discordSummary: String {
-        guard let status = self.store.snapshot?.discord else { return "Checking…" }
+        guard let status = self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)
+        else { return "Checking…" }
         if !status.configured { return "Not configured" }
         if status.running { return "Running" }
         return "Configured"
     }
 
     var signalSummary: String {
-        guard let status = self.store.snapshot?.signal else { return "Checking…" }
+        guard let status = self.providerStatus("signal", as: ProvidersStatusSnapshot.SignalStatus.self)
+        else { return "Checking…" }
         if !status.configured { return "Not configured" }
         if status.running { return "Running" }
         return "Configured"
     }
 
     var imessageSummary: String {
-        guard let status = self.store.snapshot?.imessage else { return "Checking…" }
+        guard let status = self.providerStatus("imessage", as: ProvidersStatusSnapshot.IMessageStatus.self)
+        else { return "Checking…" }
         if !status.configured { return "Not configured" }
         if status.running { return "Running" }
         return "Configured"
     }
 
     var whatsAppDetails: String? {
-        guard let status = self.store.snapshot?.whatsapp else { return nil }
+        guard let status = self.providerStatus("whatsapp", as: ProvidersStatusSnapshot.WhatsAppStatus.self)
+        else { return nil }
         var lines: [String] = []
         if let e164 = status.`self`?.e164 ?? status.`self`?.jid {
             lines.append("Linked as \(e164)")
@@ -114,7 +132,8 @@ extension ConnectionsSettings {
     }
 
     var telegramDetails: String? {
-        guard let status = self.store.snapshot?.telegram else { return nil }
+        guard let status = self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)
+        else { return nil }
         var lines: [String] = []
         if let source = status.tokenSource {
             lines.append("Token source: \(source)")
@@ -145,7 +164,8 @@ extension ConnectionsSettings {
     }
 
     var discordDetails: String? {
-        guard let status = self.store.snapshot?.discord else { return nil }
+        guard let status = self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)
+        else { return nil }
         var lines: [String] = []
         if let source = status.tokenSource {
             lines.append("Token source: \(source)")
@@ -173,7 +193,8 @@ extension ConnectionsSettings {
     }
 
     var signalDetails: String? {
-        guard let status = self.store.snapshot?.signal else { return nil }
+        guard let status = self.providerStatus("signal", as: ProvidersStatusSnapshot.SignalStatus.self)
+        else { return nil }
         var lines: [String] = []
         lines.append("Base URL: \(status.baseUrl)")
         if let probe = status.probe {
@@ -199,7 +220,8 @@ extension ConnectionsSettings {
     }
 
     var imessageDetails: String? {
-        guard let status = self.store.snapshot?.imessage else { return nil }
+        guard let status = self.providerStatus("imessage", as: ProvidersStatusSnapshot.IMessageStatus.self)
+        else { return nil }
         var lines: [String] = []
         if let cliPath = status.cliPath, !cliPath.isEmpty {
             lines.append("CLI: \(cliPath)")
@@ -221,11 +243,11 @@ extension ConnectionsSettings {
     }
 
     var isTelegramTokenLocked: Bool {
-        self.store.snapshot?.telegram.tokenSource == "env"
+        self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)?.tokenSource == "env"
     }
 
     var isDiscordTokenLocked: Bool {
-        self.store.snapshot?.discord?.tokenSource == "env"
+        self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)?.tokenSource == "env"
     }
 
     var orderedProviders: [ConnectionProvider] {
@@ -258,19 +280,24 @@ extension ConnectionsSettings {
     func providerEnabled(_ provider: ConnectionProvider) -> Bool {
         switch provider {
         case .whatsapp:
-            guard let status = self.store.snapshot?.whatsapp else { return false }
+            guard let status = self.providerStatus("whatsapp", as: ProvidersStatusSnapshot.WhatsAppStatus.self)
+            else { return false }
             return status.configured || status.linked || status.running
         case .telegram:
-            guard let status = self.store.snapshot?.telegram else { return false }
+            guard let status = self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)
+            else { return false }
             return status.configured || status.running
         case .discord:
-            guard let status = self.store.snapshot?.discord else { return false }
+            guard let status = self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)
+            else { return false }
             return status.configured || status.running
         case .signal:
-            guard let status = self.store.snapshot?.signal else { return false }
+            guard let status = self.providerStatus("signal", as: ProvidersStatusSnapshot.SignalStatus.self)
+            else { return false }
             return status.configured || status.running
         case .imessage:
-            guard let status = self.store.snapshot?.imessage else { return false }
+            guard let status = self.providerStatus("imessage", as: ProvidersStatusSnapshot.IMessageStatus.self)
+            else { return false }
             return status.configured || status.running
         }
     }
@@ -344,35 +371,48 @@ extension ConnectionsSettings {
     func providerLastCheck(_ provider: ConnectionProvider) -> Date? {
         switch provider {
         case .whatsapp:
-            guard let status = self.store.snapshot?.whatsapp else { return nil }
+            guard let status = self.providerStatus("whatsapp", as: ProvidersStatusSnapshot.WhatsAppStatus.self)
+            else { return nil }
             return self.date(fromMs: status.lastEventAt ?? status.lastMessageAt ?? status.lastConnectedAt)
         case .telegram:
-            return self.date(fromMs: self.store.snapshot?.telegram.lastProbeAt)
+            return self
+                .date(fromMs: self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)?
+                    .lastProbeAt)
         case .discord:
-            return self.date(fromMs: self.store.snapshot?.discord?.lastProbeAt)
+            return self
+                .date(fromMs: self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)?
+                    .lastProbeAt)
         case .signal:
-            return self.date(fromMs: self.store.snapshot?.signal?.lastProbeAt)
+            return self
+                .date(fromMs: self.providerStatus("signal", as: ProvidersStatusSnapshot.SignalStatus.self)?.lastProbeAt)
         case .imessage:
-            return self.date(fromMs: self.store.snapshot?.imessage?.lastProbeAt)
+            return self
+                .date(fromMs: self.providerStatus("imessage", as: ProvidersStatusSnapshot.IMessageStatus.self)?
+                    .lastProbeAt)
         }
     }
 
     func providerHasError(_ provider: ConnectionProvider) -> Bool {
         switch provider {
         case .whatsapp:
-            guard let status = self.store.snapshot?.whatsapp else { return false }
+            guard let status = self.providerStatus("whatsapp", as: ProvidersStatusSnapshot.WhatsAppStatus.self)
+            else { return false }
             return status.lastError?.isEmpty == false || status.lastDisconnect?.loggedOut == true
         case .telegram:
-            guard let status = self.store.snapshot?.telegram else { return false }
+            guard let status = self.providerStatus("telegram", as: ProvidersStatusSnapshot.TelegramStatus.self)
+            else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case .discord:
-            guard let status = self.store.snapshot?.discord else { return false }
+            guard let status = self.providerStatus("discord", as: ProvidersStatusSnapshot.DiscordStatus.self)
+            else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case .signal:
-            guard let status = self.store.snapshot?.signal else { return false }
+            guard let status = self.providerStatus("signal", as: ProvidersStatusSnapshot.SignalStatus.self)
+            else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case .imessage:
-            guard let status = self.store.snapshot?.imessage else { return false }
+            guard let status = self.providerStatus("imessage", as: ProvidersStatusSnapshot.IMessageStatus.self)
+            else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         }
     }

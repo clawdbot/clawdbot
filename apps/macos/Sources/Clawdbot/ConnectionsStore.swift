@@ -121,12 +121,54 @@ struct ProvidersStatusSnapshot: Codable {
         let lastProbeAt: Double?
     }
 
+    struct ProviderAccountSnapshot: Codable {
+        let accountId: String
+        let name: String?
+        let enabled: Bool?
+        let configured: Bool?
+        let linked: Bool?
+        let running: Bool?
+        let connected: Bool?
+        let reconnectAttempts: Int?
+        let lastConnectedAt: Double?
+        let lastError: String?
+        let lastStartAt: Double?
+        let lastStopAt: Double?
+        let lastInboundAt: Double?
+        let lastOutboundAt: Double?
+        let lastProbeAt: Double?
+        let mode: String?
+        let dmPolicy: String?
+        let allowFrom: [String]?
+        let tokenSource: String?
+        let botTokenSource: String?
+        let appTokenSource: String?
+        let baseUrl: String?
+        let allowUnmentionedGroups: Bool?
+        let cliPath: String?
+        let dbPath: String?
+        let port: Int?
+        let probe: AnyCodable?
+        let audit: AnyCodable?
+        let application: AnyCodable?
+    }
+
     let ts: Double
-    let whatsapp: WhatsAppStatus
-    let telegram: TelegramStatus
-    let discord: DiscordStatus?
-    let signal: SignalStatus?
-    let imessage: IMessageStatus?
+    let providerOrder: [String]
+    let providerLabels: [String: String]
+    let providers: [String: AnyCodable]
+    let providerAccounts: [String: [ProviderAccountSnapshot]]
+    let providerDefaultAccountId: [String: String]
+
+    func decodeProvider<T: Decodable>(_ id: String, as type: T.Type) -> T? {
+        guard let value = self.providers[id] else { return nil }
+        do {
+            let data = try JSONEncoder().encode(value)
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            return nil
+        }
+    }
 }
 
 struct ConfigSnapshot: Codable {
