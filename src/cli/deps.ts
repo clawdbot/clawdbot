@@ -1,6 +1,6 @@
+import type { ClawdbotConfig } from "../config/config.js";
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
-import type { ClawdbotConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { sendMessageMSTeams } from "../msteams/send.js";
 import { logWebSelfId, sendMessageWhatsApp } from "../providers/web/index.js";

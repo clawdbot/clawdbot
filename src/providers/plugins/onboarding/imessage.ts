@@ -1,3 +1,4 @@
+import { detectBinary } from "../../../commands/onboard-helpers.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
 import {
@@ -10,7 +11,6 @@ import {
   normalizeAccountId,
 } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { detectBinary } from "../../../commands/onboard-helpers.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,

@@ -30,6 +30,8 @@ export type ChatProviderMeta = {
   selectionExtras?: string[];
 };
 
+const WEBSITE_URL = "https://clawd.bot";
+
 const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
   telegram: {
     id: "telegram",
@@ -93,8 +95,6 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
     blurb: "supported (Bot Framework).",
   },
 };
-
-const WEBSITE_URL = "https://clawd.bot";
 
 export const CHAT_PROVIDER_ALIASES: Record<string, ChatProviderId> = {
   imsg: "imessage",

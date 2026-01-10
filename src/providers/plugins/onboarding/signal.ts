@@ -1,3 +1,5 @@
+import { detectBinary } from "../../../commands/onboard-helpers.js";
+import { installSignalCli } from "../../../commands/signal-install.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
 import {
@@ -10,8 +12,6 @@ import {
   resolveSignalAccount,
 } from "../../../signal/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { detectBinary } from "../../../commands/onboard-helpers.js";
-import { installSignalCli } from "../../../commands/signal-install.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,
