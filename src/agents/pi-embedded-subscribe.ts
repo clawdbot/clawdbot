@@ -532,7 +532,10 @@ export function subscribeEmbeddedPiSession(params: {
             typeof argsRecord.action === "string"
               ? argsRecord.action.trim()
               : "";
-          const isMessagingSend = isMessagingToolSendAction(toolName, action);
+          const isMessagingSend = isMessagingToolSendAction(
+            toolName,
+            argsRecord,
+          );
           if (isMessagingSend) {
             const sendTarget = extractMessagingToolSend(toolName, argsRecord);
             if (sendTarget) {

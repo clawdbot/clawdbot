@@ -69,7 +69,7 @@ Each `ProviderPlugin` bundles:
 - Messaging tool dedupe now relies on `plugin.messaging.normalizeTarget` for provider-specific target normalization.
 - Message tool + CLI action dispatch now use `plugin.actions.listActions` + `plugin.actions.handleAction`; use `plugin.actions.supportsAction` for dispatch-only gating when you still want fallback send/poll.
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
-- Onboarding provider setup is delegated to adapter modules under `src/commands/onboarding/providers/*`, keeping `setupProviders` provider-agnostic.
+- Onboarding provider setup is delegated to adapter modules under `src/providers/plugins/onboarding/*`, keeping `setupProviders` provider-agnostic.
 - Onboarding registry now reads `plugin.onboarding` from each provider (no standalone onboarding map).
 - Provider login flows (`clawdbot providers login`) route through `plugin.auth.login` when available.
 

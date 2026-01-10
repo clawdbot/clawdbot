@@ -18,16 +18,18 @@ export function isMessagingTool(toolName: string): boolean {
 
 export function isMessagingToolSendAction(
   toolName: string,
-  actionRaw: string,
+  args: Record<string, unknown>,
 ): boolean {
-  const action = actionRaw.trim();
+  const action = typeof args.action === "string" ? args.action.trim() : "";
   if (toolName === "sessions_send") return true;
   if (toolName === "message") {
     return action === "send" || action === "thread-reply";
   }
   const providerId = normalizeProviderId(toolName);
-  if (!providerId || !getProviderPlugin(providerId)?.actions) return false;
-  return action === "sendMessage" || action === "threadReply";
+  if (!providerId) return false;
+  const plugin = getProviderPlugin(providerId);
+  if (!plugin?.actions?.extractToolSend) return false;
+  return Boolean(plugin.actions.extractToolSend({ args })?.to);
 }
 
 export function normalizeTargetForProvider(
