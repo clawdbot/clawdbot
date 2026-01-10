@@ -73,6 +73,16 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
       configured: account.configured,
     }),
   },
+  setup: {
+    resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+    applyAccountConfig: ({ cfg }) => ({
+      ...cfg,
+      msteams: {
+        ...cfg.msteams,
+        enabled: true,
+      },
+    }),
+  },
   outbound: {
     deliveryMode: "direct",
     chunker: chunkMarkdownText,

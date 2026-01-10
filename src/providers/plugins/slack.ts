@@ -1,4 +1,7 @@
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import {
   listSlackAccountIds,
   type ResolvedSlackAccount,
@@ -14,6 +17,10 @@ import {
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
+import {
+  applyAccountNameToProviderSection,
+  migrateBaseNameToDefaultAccount,
+} from "./setup-helpers.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("slack");
@@ -70,6 +77,71 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "slack",
+        accountId,
+        name,
+      }),
+    validateInput: ({ accountId, input }) => {
+      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+        return "Slack env tokens can only be used for the default account.";
+      }
+      if (!input.useEnv && (!input.botToken || !input.appToken)) {
+        return "Slack requires --bot-token and --app-token (or --use-env).";
+      }
+      return null;
+    },
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "slack",
+        accountId,
+        name: input.name,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              providerKey: "slack",
+            })
+          : namedConfig;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          slack: {
+            ...next.slack,
+            enabled: true,
+            ...(input.useEnv
+              ? {}
+              : {
+                  ...(input.botToken ? { botToken: input.botToken } : {}),
+                  ...(input.appToken ? { appToken: input.appToken } : {}),
+                }),
+          },
+        };
+      }
+      return {
+        ...next,
+        slack: {
+          ...next.slack,
+          enabled: true,
+          accounts: {
+            ...next.slack?.accounts,
+            [accountId]: {
+              ...next.slack?.accounts?.[accountId],
+              enabled: true,
+              ...(input.botToken ? { botToken: input.botToken } : {}),
+              ...(input.appToken ? { appToken: input.appToken } : {}),
+            },
+          },
+        },
+      };
+    },
   },
   outbound: {
     deliveryMode: "direct",

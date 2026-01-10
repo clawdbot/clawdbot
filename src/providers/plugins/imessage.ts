@@ -8,7 +8,10 @@ import {
 import { monitorIMessageProvider } from "../../imessage/index.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
 import {
   deleteAccountFromConfigSection,
@@ -16,6 +19,10 @@ import {
 } from "./config-helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
+import {
+  applyAccountNameToProviderSection,
+  migrateBaseNameToDefaultAccount,
+} from "./setup-helpers.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("imessage");
@@ -65,6 +72,62 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       enabled: account.enabled,
       configured: account.configured,
     }),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "imessage",
+        accountId,
+        name,
+      }),
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "imessage",
+        accountId,
+        name: input.name,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              providerKey: "imessage",
+            })
+          : namedConfig;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          imessage: {
+            ...next.imessage,
+            enabled: true,
+            ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+            ...(input.dbPath ? { dbPath: input.dbPath } : {}),
+            ...(input.service ? { service: input.service } : {}),
+            ...(input.region ? { region: input.region } : {}),
+          },
+        };
+      }
+      return {
+        ...next,
+        imessage: {
+          ...next.imessage,
+          enabled: true,
+          accounts: {
+            ...next.imessage?.accounts,
+            [accountId]: {
+              ...next.imessage?.accounts?.[accountId],
+              enabled: true,
+              ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+              ...(input.dbPath ? { dbPath: input.dbPath } : {}),
+              ...(input.service ? { service: input.service } : {}),
+              ...(input.region ? { region: input.region } : {}),
+            },
+          },
+        },
+      };
+    },
   },
   outbound: {
     deliveryMode: "direct",

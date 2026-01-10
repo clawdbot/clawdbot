@@ -2,7 +2,10 @@ import { chunkMarkdownText } from "../../auto-reply/chunk.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { writeConfigFile } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import {
   listTelegramAccountIds,
   type ResolvedTelegramAccount,
@@ -23,6 +26,10 @@ import {
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
+import {
+  applyAccountNameToProviderSection,
+  migrateBaseNameToDefaultAccount,
+} from "./setup-helpers.js";
 import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -81,6 +88,75 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
     }),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "telegram",
+        accountId,
+        name,
+      }),
+    validateInput: ({ accountId, input }) => {
+      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+        return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
+      }
+      if (!input.useEnv && !input.token && !input.tokenFile) {
+        return "Telegram requires --token or --token-file (or --use-env).";
+      }
+      return null;
+    },
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "telegram",
+        accountId,
+        name: input.name,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              providerKey: "telegram",
+            })
+          : namedConfig;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          telegram: {
+            ...next.telegram,
+            enabled: true,
+            ...(input.useEnv
+              ? {}
+              : input.tokenFile
+                ? { tokenFile: input.tokenFile }
+                : input.token
+                  ? { botToken: input.token }
+                  : {}),
+          },
+        };
+      }
+      return {
+        ...next,
+        telegram: {
+          ...next.telegram,
+          enabled: true,
+          accounts: {
+            ...next.telegram?.accounts,
+            [accountId]: {
+              ...next.telegram?.accounts?.[accountId],
+              enabled: true,
+              ...(input.tokenFile
+                ? { tokenFile: input.tokenFile }
+                : input.token
+                  ? { botToken: input.token }
+                  : {}),
+            },
+          },
+        },
+      };
+    },
   },
   outbound: {
     deliveryMode: "direct",

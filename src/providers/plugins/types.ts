@@ -11,12 +11,52 @@ export type ProviderId = ChatProviderId | "msteams";
 
 export type ProviderOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
+export type ProviderSetupInput = {
+  name?: string;
+  token?: string;
+  tokenFile?: string;
+  botToken?: string;
+  appToken?: string;
+  signalNumber?: string;
+  cliPath?: string;
+  dbPath?: string;
+  service?: "imessage" | "sms" | "auto";
+  region?: string;
+  authDir?: string;
+  httpUrl?: string;
+  httpHost?: string;
+  httpPort?: string;
+  useEnv?: boolean;
+};
+
 export type ProviderStatusIssue = {
   provider: ProviderId;
   accountId: string;
   kind: "intent" | "permissions" | "config" | "auth" | "runtime";
   message: string;
   fix?: string;
+};
+
+export type ProviderSetupAdapter = {
+  resolveAccountId?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string;
+  }) => string;
+  applyAccountName?: (params: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+    name?: string;
+  }) => ClawdbotConfig;
+  applyAccountConfig: (params: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+    input: ProviderSetupInput;
+  }) => ClawdbotConfig;
+  validateInput?: (params: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+    input: ProviderSetupInput;
+  }) => string | null;
 };
 
 export type ProviderHeartbeatDeps = {
@@ -293,6 +333,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   capabilities: ProviderCapabilities;
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   config: ProviderConfigAdapter<ResolvedAccount>;
+  setup?: ProviderSetupAdapter;
   pairing?: ProviderPairingAdapter;
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;

@@ -12,13 +12,20 @@ import { monitorDiscordProvider } from "../../discord/index.js";
 import { probeDiscord } from "../../discord/probe.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
+import {
+  applyAccountNameToProviderSection,
+  migrateBaseNameToDefaultAccount,
+} from "./setup-helpers.js";
 import { collectDiscordStatusIssues } from "./status-issues/discord.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -77,6 +84,65 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
     }),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "discord",
+        accountId,
+        name,
+      }),
+    validateInput: ({ accountId, input }) => {
+      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+        return "DISCORD_BOT_TOKEN can only be used for the default account.";
+      }
+      if (!input.useEnv && !input.token) {
+        return "Discord requires --token (or --use-env).";
+      }
+      return null;
+    },
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "discord",
+        accountId,
+        name: input.name,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              providerKey: "discord",
+            })
+          : namedConfig;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          discord: {
+            ...next.discord,
+            enabled: true,
+            ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
+          },
+        };
+      }
+      return {
+        ...next,
+        discord: {
+          ...next.discord,
+          enabled: true,
+          accounts: {
+            ...next.discord?.accounts,
+            [accountId]: {
+              ...next.discord?.accounts?.[accountId],
+              enabled: true,
+              ...(input.token ? { token: input.token } : {}),
+            },
+          },
+        },
+      };
+    },
   },
   elevated: {
     allowFromFallback: ({ cfg, accountId }) =>

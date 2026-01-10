@@ -1,5 +1,8 @@
 import { chunkText } from "../../auto-reply/chunk.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import {
   listSignalAccountIds,
   type ResolvedSignalAccount,
@@ -16,6 +19,10 @@ import {
 } from "./config-helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
+import {
+  applyAccountNameToProviderSection,
+  migrateBaseNameToDefaultAccount,
+} from "./setup-helpers.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("signal");
@@ -76,6 +83,76 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "signal",
+        accountId,
+        name,
+      }),
+    validateInput: ({ input }) => {
+      if (
+        !input.signalNumber &&
+        !input.httpUrl &&
+        !input.httpHost &&
+        !input.httpPort &&
+        !input.cliPath
+      ) {
+        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+      }
+      return null;
+    },
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "signal",
+        accountId,
+        name: input.name,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              providerKey: "signal",
+            })
+          : namedConfig;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          signal: {
+            ...next.signal,
+            enabled: true,
+            ...(input.signalNumber ? { account: input.signalNumber } : {}),
+            ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+            ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
+            ...(input.httpHost ? { httpHost: input.httpHost } : {}),
+            ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+          },
+        };
+      }
+      return {
+        ...next,
+        signal: {
+          ...next.signal,
+          enabled: true,
+          accounts: {
+            ...next.signal?.accounts,
+            [accountId]: {
+              ...next.signal?.accounts?.[accountId],
+              enabled: true,
+              ...(input.signalNumber ? { account: input.signalNumber } : {}),
+              ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+              ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
+              ...(input.httpHost ? { httpHost: input.httpHost } : {}),
+              ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+            },
+          },
+        },
+      };
+    },
   },
   outbound: {
     deliveryMode: "direct",

@@ -1,6 +1,9 @@
 import { chunkText } from "../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   listWhatsAppAccountIds,
@@ -19,6 +22,10 @@ import {
 } from "../../web/session.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
+import {
+  applyAccountNameToProviderSection,
+  migrateBaseNameToDefaultAccount,
+} from "./setup-helpers.js";
 import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -99,6 +106,46 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         .filter(Boolean)
         .map((entry) => (entry === "*" ? entry : normalizeE164(entry)))
         .filter(Boolean),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "whatsapp",
+        accountId,
+        name,
+        alwaysUseAccounts: true,
+      }),
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToProviderSection({
+        cfg,
+        providerKey: "whatsapp",
+        accountId,
+        name: input.name,
+        alwaysUseAccounts: true,
+      });
+      const next = migrateBaseNameToDefaultAccount({
+        cfg: namedConfig,
+        providerKey: "whatsapp",
+        alwaysUseAccounts: true,
+      });
+      const entry = {
+        ...next.whatsapp?.accounts?.[accountId],
+        ...(input.authDir ? { authDir: input.authDir } : {}),
+        enabled: true,
+      };
+      return {
+        ...next,
+        whatsapp: {
+          ...next.whatsapp,
+          accounts: {
+            ...next.whatsapp?.accounts,
+            [accountId]: entry,
+          },
+        },
+      };
+    },
   },
   outbound: {
     deliveryMode: "gateway",
