@@ -12,6 +12,7 @@ import { telegramPlugin } from "./telegram.js";
 import type { ProviderId, ProviderPlugin } from "./types.js";
 import { whatsappPlugin } from "./whatsapp.js";
 
+// Provider docking: register the plugin here (and keep registry/protocol docs in sync).
 const PROVIDERS: ProviderPlugin[] = [
   telegramPlugin,
   whatsappPlugin,
@@ -22,6 +23,7 @@ const PROVIDERS: ProviderPlugin[] = [
   msteamsPlugin,
 ];
 
+// Provider docking: aliases live on plugins to keep CLI/API normalization consistent.
 const PROVIDER_ALIASES = (() => {
   const map = new Map<string, ProviderId>();
   for (const plugin of PROVIDERS) {

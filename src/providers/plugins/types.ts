@@ -493,6 +493,7 @@ export type ProviderMessageActionAdapter = {
   ) => Promise<AgentToolResult<unknown>>;
 };
 
+// Provider docking: implement this contract in src/providers/plugins/<id>.ts.
 // biome-ignore lint/suspicious/noExplicitAny: registry aggregates heterogeneous account types.
 export type ProviderPlugin<ResolvedAccount = any> = {
   id: ProviderId;

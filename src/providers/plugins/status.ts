@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { ProviderAccountSnapshot, ProviderPlugin } from "./types.js";
 
+// Provider docking: status snapshots flow through plugin.status hooks here.
 export async function buildProviderAccountSnapshot<ResolvedAccount>(params: {
   plugin: ProviderPlugin<ResolvedAccount>;
   cfg: ClawdbotConfig;

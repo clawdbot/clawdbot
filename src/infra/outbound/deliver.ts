@@ -51,6 +51,7 @@ type ProviderHandler = {
   ) => Promise<OutboundDeliveryResult>;
 };
 
+// Provider docking: outbound delivery delegates to plugin.outbound adapters.
 function createProviderHandler(params: {
   cfg: ClawdbotConfig;
   provider: Exclude<OutboundProvider, "none">;

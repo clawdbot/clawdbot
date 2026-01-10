@@ -1,3 +1,5 @@
+// Provider docking: add new providers here (order + meta + aliases), then
+// register the plugin in src/providers/plugins/index.ts and keep protocol IDs in sync.
 export const CHAT_PROVIDER_ORDER = [
   "telegram",
   "whatsapp",

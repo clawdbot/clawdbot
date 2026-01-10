@@ -43,13 +43,13 @@ import {
   type UpdateCheckResult,
 } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
+import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import { listProviderPlugins } from "../providers/plugins/index.js";
 import type {
   ProviderAccountSnapshot,
   ProviderId,
   ProviderPlugin,
 } from "../providers/plugins/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -114,10 +114,11 @@ async function resolveLinkProviderContext(
 ): Promise<LinkProviderContext | null> {
   for (const plugin of listProviderPlugins()) {
     const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId =
-      plugin.config.defaultAccountId?.(cfg) ??
-      accountIds[0] ??
-      DEFAULT_ACCOUNT_ID;
+    const defaultAccountId = resolveProviderDefaultAccountId({
+      plugin,
+      cfg,
+      accountIds,
+    });
     const account = plugin.config.resolveAccount(cfg, defaultAccountId);
     const enabled = plugin.config.isEnabled
       ? plugin.config.isEnabled(account, cfg)

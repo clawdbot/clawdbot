@@ -1,11 +1,11 @@
 import { loadConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
 import { loginWeb } from "../provider-web.js";
+import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
   normalizeProviderId,
 } from "../providers/plugins/index.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 type ProviderAuthOptions = {
@@ -54,10 +54,7 @@ export async function runProviderLogout(
   // Auth-only flow: resolve account + clear session state only.
   const cfg = loadConfig();
   const accountId =
-    opts.account?.trim() ||
-    plugin.config.defaultAccountId?.(cfg) ||
-    plugin.config.listAccountIds(cfg)[0] ||
-    DEFAULT_ACCOUNT_ID;
+    opts.account?.trim() || resolveProviderDefaultAccountId({ plugin, cfg });
   const account = plugin.config.resolveAccount(cfg, accountId);
   await plugin.gateway.logoutAccount({
     cfg,

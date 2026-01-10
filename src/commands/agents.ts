@@ -14,6 +14,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
   listProviderPlugins,
@@ -509,11 +510,7 @@ function resolveDefaultAccountId(
 ): string {
   const plugin = getProviderPlugin(provider);
   if (!plugin) return DEFAULT_ACCOUNT_ID;
-  return (
-    plugin.config.defaultAccountId?.(cfg) ??
-    plugin.config.listAccountIds(cfg)[0] ??
-    DEFAULT_ACCOUNT_ID
-  );
+  return resolveProviderDefaultAccountId({ plugin, cfg });
 }
 
 function shouldShowProviderEntry(

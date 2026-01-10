@@ -4,12 +4,12 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
   listProviderPlugins,
 } from "../providers/plugins/index.js";
 import type { ProviderAccountSnapshot } from "../providers/plugins/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 
@@ -175,10 +175,11 @@ export async function getHealthSnapshot(params?: {
   for (const plugin of listProviderPlugins()) {
     providerLabels[plugin.id] = plugin.meta.label ?? plugin.id;
     const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId =
-      plugin.config.defaultAccountId?.(cfg) ??
-      accountIds[0] ??
-      DEFAULT_ACCOUNT_ID;
+    const defaultAccountId = resolveProviderDefaultAccountId({
+      plugin,
+      cfg,
+      accountIds,
+    });
     const account = plugin.config.resolveAccount(cfg, defaultAccountId);
     const enabled = plugin.config.isEnabled
       ? plugin.config.isEnabled(account, cfg)
@@ -291,10 +292,11 @@ export async function healthCommand(
       if (!providerSummary || providerSummary.linked !== true) continue;
       if (!plugin.status?.logSelfId) continue;
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId =
-        plugin.config.defaultAccountId?.(cfg) ??
-        accountIds[0] ??
-        DEFAULT_ACCOUNT_ID;
+      const defaultAccountId = resolveProviderDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
       const account = plugin.config.resolveAccount(cfg, defaultAccountId);
       plugin.status.logSelfId({
         account,

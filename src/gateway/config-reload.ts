@@ -95,6 +95,7 @@ let cachedReloadRules: ReloadRule[] | null = null;
 
 function listReloadRules(): ReloadRule[] {
   if (cachedReloadRules) return cachedReloadRules;
+  // Provider docking: plugins contribute hot reload/no-op prefixes here.
   const providerReloadRules: ReloadRule[] = listProviderPlugins().flatMap(
     (plugin) => [
       ...(plugin.reload?.configPrefixes ?? []).map(

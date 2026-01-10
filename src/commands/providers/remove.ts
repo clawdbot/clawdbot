@@ -1,4 +1,5 @@
 import { type ClawdbotConfig, writeConfigFile } from "../../config/config.js";
+import { resolveProviderDefaultAccountId } from "../../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
   listProviderPlugins,
@@ -99,9 +100,9 @@ export async function providersRemoveCommand(
     return;
   }
 
-  const resolvedAccountId = normalizeAccountId(
-    accountId || plugin.config.defaultAccountId?.(cfg),
-  );
+  const resolvedAccountId =
+    normalizeAccountId(accountId) ??
+    resolveProviderDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
 
   let next = { ...cfg };

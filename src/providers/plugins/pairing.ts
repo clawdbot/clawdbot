@@ -9,6 +9,7 @@ import {
 import type { ProviderPairingAdapter } from "./types.js";
 
 export function listPairingProviders(): ProviderId[] {
+  // Provider docking: pairing support is declared via plugin.pairing.
   return listProviderPlugins()
     .filter((plugin) => plugin.pairing)
     .map((plugin) => plugin.id);

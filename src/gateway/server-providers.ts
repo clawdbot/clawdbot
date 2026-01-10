@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { createSubsystemLogger } from "../logging.js";
+import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
   listProviderPlugins,
@@ -70,6 +71,7 @@ export type ProviderManager = {
   ) => void;
 };
 
+// Provider docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createProviderManager(
   opts: ProviderManagerOptions,
 ): ProviderManager {
@@ -256,9 +258,10 @@ export function createProviderManager(
     const cfg = loadConfig();
     const resolvedId =
       accountId ??
-      plugin.config.defaultAccountId?.(cfg) ??
-      plugin.config.listAccountIds(cfg)[0] ??
-      DEFAULT_ACCOUNT_ID;
+      resolveProviderDefaultAccountId({
+        plugin,
+        cfg,
+      });
     const current = getRuntime(providerId, resolvedId);
     const next: ProviderAccountSnapshot = {
       accountId: resolvedId,
@@ -277,10 +280,11 @@ export function createProviderManager(
     for (const plugin of listProviderPlugins()) {
       const store = getStore(plugin.id);
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId =
-        plugin.config.defaultAccountId?.(cfg) ??
-        accountIds[0] ??
-        DEFAULT_ACCOUNT_ID;
+      const defaultAccountId = resolveProviderDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
       const accounts: Record<string, ProviderAccountSnapshot> = {};
       for (const id of accountIds) {
         const account = plugin.config.resolveAccount(cfg, id);

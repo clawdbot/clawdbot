@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getProviderActivity } from "../../infra/provider-activity.js";
+import { resolveProviderDefaultAccountId } from "../../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
   listProviderPlugins,
@@ -138,10 +139,11 @@ export const providersHandlers: GatewayRequestHandlers = {
         };
       }
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId =
-        plugin.config.defaultAccountId?.(cfg) ??
-        accountIds[0] ??
-        DEFAULT_ACCOUNT_ID;
+      const defaultAccountId = resolveProviderDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
       const accounts: ProviderAccountSnapshot[] = [];
       const resolvedAccounts: Record<string, unknown> = {};
       for (const accountId of accountIds) {
