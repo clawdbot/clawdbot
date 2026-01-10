@@ -14,7 +14,9 @@ export function isInternalMessageProvider(raw?: string | null): boolean {
 export function isWebchatClient(
   client?: { mode?: string; name?: string } | null,
 ): boolean {
-  return isInternalMessageProvider(client?.mode) || client?.name === "webchat-ui";
+  return (
+    isInternalMessageProvider(client?.mode) || client?.name === "webchat-ui"
+  );
 }
 
 export function normalizeMessageProvider(
