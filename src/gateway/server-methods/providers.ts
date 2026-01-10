@@ -95,8 +95,6 @@ export const providersHandlers: GatewayRequestHandlers = {
       typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
     const cfg = loadConfig();
     const runtime = context.getRuntimeSnapshot();
-
-    const runtimeAny = runtime as Record<string, unknown>;
     const plugins = listProviderPlugins();
     const pluginMap = new Map<ProviderId, ProviderPlugin>(
       plugins.map((plugin) => [plugin.id, plugin]),
@@ -107,13 +105,8 @@ export const providersHandlers: GatewayRequestHandlers = {
       accountId: string,
       defaultAccountId: string,
     ): ProviderAccountSnapshot | undefined => {
-      const accountsKey = `${providerId}Accounts`;
-      const accounts = runtimeAny[accountsKey] as
-        | Record<string, ProviderAccountSnapshot>
-        | undefined;
-      const defaultRuntime = runtimeAny[providerId] as
-        | ProviderAccountSnapshot
-        | undefined;
+      const accounts = runtime.providerAccounts[providerId];
+      const defaultRuntime = runtime.providers[providerId];
       const raw =
         accounts?.[accountId] ??
         (accountId === defaultAccountId ? defaultRuntime : undefined);

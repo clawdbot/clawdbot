@@ -12,9 +12,10 @@ import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 export type ProviderRuntimeSnapshot = {
-  [K in ProviderId]?: ProviderAccountSnapshot;
-} & {
-  [K in `${ProviderId}Accounts`]?: Record<string, ProviderAccountSnapshot>;
+  providers: Partial<Record<ProviderId, ProviderAccountSnapshot>>;
+  providerAccounts: Partial<
+    Record<ProviderId, Record<string, ProviderAccountSnapshot>>
+  >;
 };
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -276,7 +277,8 @@ export function createProviderManager(
 
   const getRuntimeSnapshot = (): ProviderRuntimeSnapshot => {
     const cfg = loadConfig();
-    const snapshot: ProviderRuntimeSnapshot = {};
+    const providers: ProviderRuntimeSnapshot["providers"] = {};
+    const providerAccounts: ProviderRuntimeSnapshot["providerAccounts"] = {};
     for (const plugin of listProviderPlugins()) {
       const store = getStore(plugin.id);
       const accountIds = plugin.config.listAccountIds(cfg);
@@ -311,10 +313,10 @@ export function createProviderManager(
       const defaultAccount =
         accounts[defaultAccountId] ??
         cloneDefaultRuntime(plugin.id, defaultAccountId);
-      (snapshot as Record<string, unknown>)[plugin.id] = defaultAccount;
-      (snapshot as Record<string, unknown>)[`${plugin.id}Accounts`] = accounts;
+      providers[plugin.id] = defaultAccount;
+      providerAccounts[plugin.id] = accounts;
     }
-    return snapshot;
+    return { providers, providerAccounts };
   };
 
   return {
