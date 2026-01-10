@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../providers/plugins/index.js";
+import { normalizeProviderId } from "../providers/registry.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
 
