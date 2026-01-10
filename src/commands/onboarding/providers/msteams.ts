@@ -15,7 +15,9 @@ const provider = "msteams" as const;
 function setMSTeamsDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.msteams?.allowFrom)
+      ? addWildcardAllowFrom(cfg.msteams?.allowFrom)?.map((entry) =>
+          String(entry),
+        )
       : undefined;
   return {
     ...cfg,
