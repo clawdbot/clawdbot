@@ -8,7 +8,15 @@ import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
-import { updateCommand } from "./update-cli.js";
+
+export function rewriteUpdateFlagArgv(argv: string[]): string[] {
+  const index = argv.indexOf("--update");
+  if (index === -1) return argv;
+
+  const next = [...argv];
+  next.splice(index, 1, "update");
+  return next;
+}
 
 export async function runCli(argv: string[] = process.argv) {
   loadDotEnv({ quiet: true });
@@ -20,12 +28,6 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
-
-  // Handle --update flag before full program parsing
-  if (argv.includes("--update")) {
-    await updateCommand({});
-    return;
-  }
 
   const { buildProgram } = await import("./program.js");
   const program = buildProgram();
@@ -42,7 +44,7 @@ export async function runCli(argv: string[] = process.argv) {
     process.exit(1);
   });
 
-  await program.parseAsync(argv);
+  await program.parseAsync(rewriteUpdateFlagArgv(argv));
 }
 
 export function isCliMainModule(): boolean {

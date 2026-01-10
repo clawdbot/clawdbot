@@ -1,3 +1,4 @@
+import { resolveClawdbotPackageRoot } from "../../infra/clawdbot-root.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
   type RestartSentinelPayload,
@@ -48,9 +49,15 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
+      const root =
+        (await resolveClawdbotPackageRoot({
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        })) ?? process.cwd();
       result = await runGatewayUpdate({
         timeoutMs,
-        cwd: process.cwd(),
+        cwd: root,
         argv1: process.argv[1],
       });
     } catch (err) {

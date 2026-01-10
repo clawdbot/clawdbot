@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 
+import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import {
   runGatewayUpdate,
   type UpdateRunResult,
@@ -103,8 +104,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log("");
   }
 
+  const root =
+    (await resolveClawdbotPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    })) ?? process.cwd();
+
   const result = await runGatewayUpdate({
-    cwd: process.cwd(),
+    cwd: root,
     argv1: process.argv[1],
     timeoutMs,
   });
@@ -121,6 +129,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.log(
         theme.warn(
           "Skipped: working directory has uncommitted changes. Commit or stash them first.",
+        ),
+      );
+    }
+    if (result.reason === "not-git-install") {
+      defaultRuntime.log(
+        theme.warn(
+          "Skipped: this Clawdbot install isn't a git checkout. Update via your package manager, then run `clawdbot doctor` and `clawdbot daemon restart`.",
+        ),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          "Examples: `npm i -g clawdbot@latest` or `pnpm add -g clawdbot@latest`",
         ),
       );
     }
@@ -141,9 +161,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       }
     } catch (err) {
       if (!opts.json) {
-        defaultRuntime.log(
-          theme.warn(`Daemon restart failed: ${String(err)}`),
-        );
+        defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
         defaultRuntime.log(
           theme.muted(
             "You may need to restart the daemon manually: clawdbot daemon restart",
@@ -179,14 +197,14 @@ export function registerUpdateCli(program: Command) {
       "after",
       `
 Examples:
-  clawdbot update                   # Update from git or package manager
+  clawdbot update                   # Update a source checkout (git)
   clawdbot update --restart         # Update and restart the daemon
   clawdbot update --json            # Output result as JSON
   clawdbot --update                 # Shorthand for clawdbot update
 
 Notes:
   - For git installs: fetches, rebases, installs deps, builds, and runs doctor
-  - For npm installs: runs package manager update command
+  - For npm installs: use npm/pnpm to reinstall (see docs/install/updating.md)
   - Skips update if the working directory has uncommitted changes
 `,
     )

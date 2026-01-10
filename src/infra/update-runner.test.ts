@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runGatewayUpdate } from "./update-runner.js";
 
@@ -86,7 +86,7 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call.includes("rebase --abort"))).toBe(true);
   });
 
-  it("runs package manager update when no git root", async () => {
+  it("skips update when no git root", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
       JSON.stringify({ name: "clawdbot", packageManager: "pnpm@8.0.0" }),
@@ -95,7 +95,6 @@ describe("runGatewayUpdate", () => {
     await fs.writeFile(path.join(tempDir, "pnpm-lock.yaml"), "", "utf-8");
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { code: 1 },
-      "pnpm update": { stdout: "ok" },
     });
 
     const result = await runGatewayUpdate({
@@ -104,8 +103,32 @@ describe("runGatewayUpdate", () => {
       timeoutMs: 5000,
     });
 
-    expect(result.status).toBe("ok");
-    expect(result.mode).toBe("pnpm");
-    expect(calls.some((call) => call.includes("pnpm update"))).toBe(true);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("not-git-install");
+    expect(calls.some((call) => call.startsWith("pnpm "))).toBe(false);
+    expect(calls.some((call) => call.startsWith("npm "))).toBe(false);
+    expect(calls.some((call) => call.startsWith("bun "))).toBe(false);
+  });
+
+  it("rejects git roots that are not a clawdbot checkout", async () => {
+    await fs.mkdir(path.join(tempDir, ".git"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);
+    const { runner, calls } = createRunner({
+      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
+    });
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runner(argv),
+      timeoutMs: 5000,
+    });
+
+    cwdSpy.mockRestore();
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("not-clawdbot-root");
+    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(
+      false,
+    );
   });
 });

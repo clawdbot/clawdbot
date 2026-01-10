@@ -49,12 +49,27 @@ function normalizeDir(value?: string | null) {
   return path.resolve(trimmed);
 }
 
+function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
+  const normalized = path.resolve(argv1);
+  const parts = normalized.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex <= 0) return null;
+  if (parts[binIndex - 1] !== "node_modules") return null;
+  const binName = path.basename(normalized);
+  const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
+  return path.join(nodeModulesDir, binName);
+}
+
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
   const cwd = normalizeDir(opts.cwd);
   if (cwd) dirs.push(cwd);
   const argv1 = normalizeDir(opts.argv1);
-  if (argv1) dirs.push(path.dirname(argv1));
+  if (argv1) {
+    dirs.push(path.dirname(argv1));
+    const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
+    if (packageRoot) dirs.push(packageRoot);
+  }
   const proc = normalizeDir(process.cwd());
   if (proc) dirs.push(proc);
   return Array.from(new Set(dirs));
@@ -165,12 +180,6 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
   return ["npm", "install"];
 }
 
-function managerUpdateArgs(manager: "pnpm" | "bun" | "npm") {
-  if (manager === "pnpm") return ["pnpm", "update"];
-  if (manager === "bun") return ["bun", "update"];
-  return ["npm", "update"];
-}
-
 export async function runGatewayUpdate(
   opts: UpdateRunnerOptions = {},
 ): Promise<UpdateRunResult> {
@@ -185,8 +194,25 @@ export async function runGatewayUpdate(
   const steps: UpdateStepResult[] = [];
   const candidates = buildStartDirs(opts);
 
-  const gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
-  if (gitRoot) {
+  const pkgRoot = await findPackageRoot(candidates);
+
+  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
+  if (gitRoot && pkgRoot && path.resolve(gitRoot) !== path.resolve(pkgRoot)) {
+    gitRoot = null;
+  }
+
+  if (gitRoot && !pkgRoot) {
+    return {
+      status: "error",
+      mode: "unknown",
+      root: gitRoot,
+      reason: "not-clawdbot-root",
+      steps: [],
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  if (gitRoot && pkgRoot && path.resolve(gitRoot) === path.resolve(pkgRoot)) {
     const beforeSha = (
       await runStep(
         runCommand,
@@ -349,7 +375,6 @@ export async function runGatewayUpdate(
     };
   }
 
-  const pkgRoot = await findPackageRoot(candidates);
   if (!pkgRoot) {
     return {
       status: "error",
@@ -359,23 +384,15 @@ export async function runGatewayUpdate(
       durationMs: Date.now() - startedAt,
     };
   }
-  const manager = await detectPackageManager(pkgRoot);
-  steps.push(
-    await runStep(
-      runCommand,
-      "deps update",
-      managerUpdateArgs(manager),
-      pkgRoot,
-      timeoutMs,
-    ),
-  );
-  const failed = steps.find((step) => step.exitCode !== 0);
+
+  const beforeVersion = await readPackageVersion(pkgRoot);
   return {
-    status: failed ? "error" : "ok",
-    mode: manager,
+    status: "skipped",
+    mode: "unknown",
     root: pkgRoot,
-    reason: failed ? failed.name : undefined,
-    steps,
+    reason: "not-git-install",
+    before: { version: beforeVersion },
+    steps: [],
     durationMs: Date.now() - startedAt,
   };
 }
