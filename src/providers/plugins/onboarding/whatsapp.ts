@@ -372,7 +372,7 @@ export const whatsappOnboardingAdapter: ProviderOnboardingAdapter = {
     });
     if (wantsLink) {
       try {
-        await loginWeb(false, "web", undefined, runtime, accountId);
+        await loginWeb(false, undefined, runtime, accountId);
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
         await prompter.note(

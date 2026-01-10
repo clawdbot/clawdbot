@@ -32,7 +32,6 @@ import {
   normalizeWhatsAppTarget,
 } from "../../whatsapp/normalize.js";
 import { getChatProviderMeta } from "../registry.js";
-import { monitorWebProvider } from "../web/index.js";
 import { createWhatsAppLoginTool } from "./agent-tools/whatsapp-login.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
@@ -335,18 +334,10 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       }),
   },
   auth: {
-    login: async ({ cfg, accountId, runtime, verbose, providerInput }) => {
+    login: async ({ cfg, accountId, runtime, verbose }) => {
       const resolvedAccountId =
         accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
-      const raw = providerInput?.trim().toLowerCase();
-      const provider = raw === "web" ? "web" : "whatsapp";
-      await loginWeb(
-        Boolean(verbose),
-        provider,
-        undefined,
-        runtime,
-        resolvedAccountId,
-      );
+      await loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
     },
   },
   heartbeat: {
@@ -443,6 +434,8 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       const { e164, jid } = readWebSelfId(account.authDir);
       const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
       ctx.log?.info(`[${account.accountId}] starting provider (${identity})`);
+      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+      const { monitorWebProvider } = await import("../web/index.js");
       return monitorWebProvider(
         shouldLogVerbose(),
         undefined,

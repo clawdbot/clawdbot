@@ -7,7 +7,7 @@ describe("message-provider", () => {
     expect(resolveGatewayMessageProvider("discord")).toBe("discord");
     expect(resolveGatewayMessageProvider(" imsg ")).toBe("imessage");
     expect(resolveGatewayMessageProvider("teams")).toBe("msteams");
-    expect(resolveGatewayMessageProvider("web")).toBe("whatsapp");
+    expect(resolveGatewayMessageProvider("web")).toBeUndefined();
     expect(resolveGatewayMessageProvider("nope")).toBeUndefined();
   });
 });

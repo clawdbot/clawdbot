@@ -99,7 +99,6 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
 export const CHAT_PROVIDER_ALIASES: Record<string, ChatProviderId> = {
   imsg: "imessage",
   teams: "msteams",
-  web: "whatsapp",
 };
 
 const normalizeProviderKey = (raw?: string | null): string | undefined => {
