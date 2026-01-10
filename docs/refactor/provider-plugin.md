@@ -43,6 +43,7 @@ Each `ProviderPlugin` bundles:
 - Provider selection (`resolveMessageProviderSelection`) now inspects `config.isEnabled` + `config.isConfigured` per plugin instead of hardcoded provider checks.
 - Pairing flows (CLI + store) now use `plugin.pairing` (`idLabel`, `normalizeAllowEntry`, `notifyApproval`) via `src/providers/plugins/pairing.ts`.
 - CLI provider remove/disable delegates to `config.setAccountEnabled` + `config.deleteAccount` per plugin.
+- CLI provider add now delegates to `plugin.setup` for account validation, naming, and config writes (no hardcoded provider checks).
 - Onboarding quickstart allowlist uses `meta.quickstartAllowFrom` to avoid hardcoded provider lists.
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 - Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
