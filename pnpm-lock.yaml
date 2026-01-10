@@ -12,7 +12,7 @@ patchedDependencies:
     hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
     path: patches/@mariozechner__pi-agent-core.patch
   '@mariozechner/pi-ai@0.42.2':
-    hash: d96b73dca0a7eac3a298a277864b5c8555ec7a5376901159b9629316430e4bd8
+    hash: 53800c5f6cd7b43591675f7d836e599255e4a39cdd38d166b8e35947c835db93
     path: patches/@mariozechner__pi-ai@0.42.2.patch
   '@mariozechner/pi-coding-agent':
     hash: 58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e
@@ -48,7 +48,7 @@ importers:
         version: 0.42.2(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
         specifier: ^0.42.2
-        version: 0.42.2(patch_hash=d96b73dca0a7eac3a298a277864b5c8555ec7a5376901159b9629316430e4bd8)(ws@8.19.0)(zod@4.3.5)
+        version: 0.42.2(patch_hash=53800c5f6cd7b43591675f7d836e599255e4a39cdd38d166b8e35947c835db93)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
         specifier: ^0.42.2
         version: 0.42.2(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)
@@ -3789,7 +3789,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.42.2(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.42.2(patch_hash=d96b73dca0a7eac3a298a277864b5c8555ec7a5376901159b9629316430e4bd8)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.42.2(patch_hash=53800c5f6cd7b43591675f7d836e599255e4a39cdd38d166b8e35947c835db93)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.42.2
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -3799,7 +3799,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.42.2(patch_hash=d96b73dca0a7eac3a298a277864b5c8555ec7a5376901159b9629316430e4bd8)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.42.2(patch_hash=53800c5f6cd7b43591675f7d836e599255e4a39cdd38d166b8e35947c835db93)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@google/genai': 1.34.0
@@ -3823,7 +3823,7 @@ snapshots:
     dependencies:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/pi-agent-core': 0.42.2(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.42.2(patch_hash=d96b73dca0a7eac3a298a277864b5c8555ec7a5376901159b9629316430e4bd8)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.42.2(patch_hash=53800c5f6cd7b43591675f7d836e599255e4a39cdd38d166b8e35947c835db93)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.42.2
       chalk: 5.6.2
       cli-highlight: 2.1.11

@@ -1,5 +1,5 @@
 diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
-index 93aa26c..beb585e 100644
+index 93aa26c395e9bd0df64376408a13d15ee9e7cce7..beb585e2f2c13eec3bca98acade761101e4572ff 100644
 --- a/dist/providers/google-gemini-cli.js
 +++ b/dist/providers/google-gemini-cli.js
 @@ -248,6 +248,11 @@ export const streamGoogleGeminiCli = (model, context, options) => {
@@ -15,10 +15,42 @@ index 93aa26c..beb585e 100644
                      if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
                          // Use server-provided delay or exponential backoff
 diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
-index 188a829..4555c9f 100644
+index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c55455332 100644
 --- a/dist/providers/openai-codex-responses.js
 +++ b/dist/providers/openai-codex-responses.js
-@@ -515,7 +521,7 @@ function convertTools(tools) {
+@@ -433,9 +433,15 @@ function convertMessages(model, context) {
+         }
+         else if (msg.role === "assistant") {
+             const output = [];
++            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`.
++            // Tool-call-only turns (thinking + function_call) are valid assistant turns, but
++            // their stored reasoning items must not be replayed as standalone `reasoning` input.
++            const hasTextBlock = msg.content.some((b) => b.type === "text");
+             for (const block of msg.content) {
+                 if (block.type === "thinking" && msg.stopReason !== "error") {
+                     if (block.thinkingSignature) {
++                        if (!hasTextBlock)
++                            continue;
+                         const reasoningItem = JSON.parse(block.thinkingSignature);
+                         output.push(reasoningItem);
+                     }
+@@ -470,6 +476,15 @@ function convertMessages(model, context) {
+             }
+             if (output.length === 0)
+                 continue;
++            // OpenAI rejects standalone reasoning items when replaying a tool-only turn.
++            // Only submit reasoning items when we also submit an assistant message item.
++            const hasMessage = output.some((item) => item?.type === "message");
++            if (!hasMessage) {
++                for (let i = output.length - 1; i >= 0; i -= 1) {
++                    if (output[i]?.type === "reasoning")
++                        output.splice(i, 1);
++                }
++            }
+             messages.push(...output);
+         }
+         else if (msg.role === "toolResult") {
+@@ -515,7 +530,7 @@ function convertTools(tools) {
          name: tool.name,
          description: tool.description,
          parameters: tool.parameters,
@@ -27,86 +59,23 @@ index 188a829..4555c9f 100644
      }));
  }
  function mapStopReason(status) {
-diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
-index 5d0813a..e0ef676 100644
---- a/dist/providers/openai-completions.js
-+++ b/dist/providers/openai-completions.js
-@@ -71,6 +71,18 @@ export const streamOpenAICompletions = (model, context, options) => {
-             stream.push({ type: "start", partial: output });
-             let currentBlock = null;
-             const blocks = output.content;
-+            const pendingToolCalls = new Map();
-+            const isCompleteJsonObject = (text) => {
-+                if (!text || text.trim() === "")
-+                    return false;
-+                try {
-+                    JSON.parse(text);
-+                    return true;
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index f07085c64390b211340d6a826b28ea9c2e77302f..523ed38a5a6151d6ff08dd89120315e7aaaf19b6 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -436,6 +436,15 @@ function convertMessages(model, context) {
+             }
+             if (output.length === 0)
+                 continue;
++            // OpenAI rejects standalone reasoning items when replaying a tool-only turn.
++            // Only submit reasoning items when we also submit an assistant message item.
++            const hasMessage = output.some((item) => item?.type === "message");
++            if (!hasMessage) {
++                for (let i = output.length - 1; i >= 0; i -= 1) {
++                    if (output[i]?.type === "reasoning")
++                        output.splice(i, 1);
 +                }
-+                catch {
-+                    return false;
-+                }
-+            };
-             const blockIndex = () => blocks.length - 1;
-             const finishCurrentBlock = (block) => {
-                 if (block) {
-@@ -193,31 +205,41 @@ export const streamOpenAICompletions = (model, context, options) => {
-                     }
-                     if (choice?.delta?.tool_calls) {
-                         for (const toolCall of choice.delta.tool_calls) {
-+                            const index = typeof toolCall.index === "number" ? toolCall.index : 0;
-+                            const pending = pendingToolCalls.get(index) || {
-+                                type: "toolCall",
-+                                id: "",
-+                                name: "",
-+                                arguments: {},
-+                                partialArgs: "",
-+                            };
-+                            if (toolCall.id)
-+                                pending.id = toolCall.id;
-+                            if (toolCall.function?.name)
-+                                pending.name = toolCall.function.name;
-+                            let delta = "";
-+                            if (toolCall.function && "arguments" in toolCall.function) {
-+                                delta = toolCall.function.arguments || "";
-+                                pending.partialArgs += delta;
-+                                pending.arguments = parseStreamingJson(pending.partialArgs);
-+                            }
-+                            pendingToolCalls.set(index, pending);
-+                            // Delay emitting tool calls until the arguments JSON is complete.
-+                            // Some providers (e.g. LM Studio) stream an initial empty chunk.
-+                            if (!isCompleteJsonObject(pending.partialArgs)) {
-+                                continue;
-+                            }
-                             if (!currentBlock ||
-                                 currentBlock.type !== "toolCall" ||
--                                (toolCall.id && currentBlock.id !== toolCall.id)) {
-+                                (pending.id && currentBlock.id !== pending.id)) {
-                                 finishCurrentBlock(currentBlock);
--                                currentBlock = {
--                                    type: "toolCall",
--                                    id: toolCall.id || "",
--                                    name: toolCall.function?.name || "",
--                                    arguments: {},
--                                    partialArgs: "",
--                                };
-+                                currentBlock = pending;
-                                 output.content.push(currentBlock);
-                                 stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-                             }
-                             if (currentBlock.type === "toolCall") {
--                                if (toolCall.id)
--                                    currentBlock.id = toolCall.id;
--                                if (toolCall.function?.name)
--                                    currentBlock.name = toolCall.function.name;
--                                let delta = "";
--                                if (toolCall.function?.arguments) {
--                                    delta = toolCall.function.arguments;
--                                    currentBlock.partialArgs += toolCall.function.arguments;
--                                    currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
--                                }
-+                                currentBlock.partialArgs = pending.partialArgs;
-+                                currentBlock.arguments = pending.arguments;
-                                 stream.push({
-                                     type: "toolcall_delta",
-                                     contentIndex: blockIndex(),
++            }
+             messages.push(...output);
+         }
+         else if (msg.role === "toolResult") {

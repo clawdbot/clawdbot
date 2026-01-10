@@ -129,6 +129,8 @@ Live tests are split into two layers so we can isolate failures:
 - Optional tool-calling stress:
   - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “bash writes file → read reads it back → echo nonce” check.
   - This is specifically meant to catch tool-calling compatibility issues across providers (formatting, history replay, tool_result pairing, etc.).
+- Optional image send smoke:
+  - `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` sends a real image attachment through the gateway agent pipeline (multimodal message) and asserts the model can read back a per-run code from the image.
 
 ### Recommended live recipes
 
@@ -142,6 +144,37 @@ Narrow, explicit allowlists are fastest and least flaky:
 
 - Tool calling across several providers (bash + read probe):
   - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-flash-latest,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+
+## Live: model matrix (what we cover)
+
+There is no fixed “CI model list” (live is opt-in), but these are the **recommended** models to cover regularly on a dev machine with keys.
+
+### Baseline: tool calling (Read + optional Bash)
+
+Pick at least one per provider family:
+- OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
+- Anthropic: `anthropic/claude-opus-4-5` (or `anthropic/claude-sonnet-4-5`)
+- Google: `google/gemini-flash-latest` (or `google/gemini-2.5-pro`)
+- Z.AI (GLM): `zai/glm-4.7`
+- MiniMax: `minimax/minimax-m2.1`
+
+Optional additional coverage (nice to have):
+- xAI: `xai/grok-4` (or latest available)
+- Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
+- Cerebras: `cerebras/`… (if you have access)
+- LM Studio: `lmstudio/`… (local; tool calling depends on API mode)
+
+### Vision: image send (attachment → multimodal message)
+
+Run with `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` and include at least one image-capable model in `CLAWDBOT_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, etc.).
+
+### Aggregators / alternate gateways
+
+If you have keys enabled, we also support testing via:
+- OpenRouter: `openrouter/...` (hundreds of models; use `clawdbot models scan` to find tool+image capable candidates)
+- OpenCode Zen: `opencode-zen/...` (requires `OPENCODE_ZEN_API_KEY`)
+
+Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
 
 ## Credentials (never commit)
 

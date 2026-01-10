@@ -225,6 +225,7 @@ export const AgentParamsSchema = Type.Object(
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
+    attachments: Type.Optional(Type.Array(Type.Unknown())),
     provider: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),

@@ -21,6 +21,9 @@ import {
 
 installGatewayTestHooks();
 
+const BASE_IMAGE_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
+
 function expectProviders(call: Record<string, unknown>, provider: string) {
   expect(call.provider).toBe(provider);
   expect(call.messageProvider).toBe(provider);
@@ -106,6 +109,58 @@ describe("gateway server agent", () => {
     expectProviders(call, "webchat");
     expect(call.deliver).toBe(false);
     expect(call.to).toBeUndefined();
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent forwards image attachments as images[]", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-images",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "what is in the image?",
+      sessionKey: "main",
+      attachments: [
+        {
+          mimeType: "image/png",
+          fileName: "tiny.png",
+          content: BASE_IMAGE_PNG,
+        },
+      ],
+      idempotencyKey: "idem-agent-attachments",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.sessionKey).toBe("main");
+    expectProviders(call, "webchat");
+    expect(call.message).toBe("what is in the image?");
+
+    const images = call.images as Array<Record<string, unknown>>;
+    expect(Array.isArray(images)).toBe(true);
+    expect(images.length).toBe(1);
+    expect(images[0]?.type).toBe("image");
+    expect(images[0]?.mimeType).toBe("image/png");
+    expect(images[0]?.data).toBe(BASE_IMAGE_PNG);
 
     ws.close();
     await server.close();

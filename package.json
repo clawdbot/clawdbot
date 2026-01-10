@@ -193,11 +193,7 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
-      "@mariozechner/pi-ai@0.42.2": "patches/@mariozechner__pi-ai@0.42.2.patch",
-      "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
-      "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch",
-      "qrcode-terminal": "patches/qrcode-terminal.patch"
+      "@mariozechner/pi-ai@0.42.2": "patches/@mariozechner__pi-ai@0.42.2.patch"
     }
   },
   "vitest": {
