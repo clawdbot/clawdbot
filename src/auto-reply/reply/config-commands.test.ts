@@ -10,6 +10,10 @@ describe("parseConfigCommand", () => {
       action: "show",
       path: "foo.bar",
     });
+    expect(parseConfigCommand("/config get foo.bar")).toEqual({
+      action: "show",
+      path: "foo.bar",
+    });
     expect(parseConfigCommand("/config unset foo.bar")).toEqual({
       action: "unset",
       path: "foo.bar",
