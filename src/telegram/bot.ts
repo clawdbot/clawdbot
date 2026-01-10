@@ -21,15 +21,15 @@ import {
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { resolveTelegramDraftStreamingChunking } from "../auto-reply/reply/block-streaming.js";
 import {
+  appendHistoryEntry,
+  buildHistoryContextFromEntries,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
+import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
-  type HistoryEntry,
-} from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";

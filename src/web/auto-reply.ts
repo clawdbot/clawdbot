@@ -18,13 +18,13 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import {
-  buildMentionRegexes,
-  normalizeMentionText,
-} from "../auto-reply/reply/mentions.js";
-import {
   buildHistoryContext,
   DEFAULT_GROUP_HISTORY_LIMIT,
 } from "../auto-reply/reply/history.js";
+import {
+  buildMentionRegexes,
+  normalizeMentionText,
+} from "../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";

@@ -1,9 +1,9 @@
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
   appendHistoryEntry,
   buildHistoryContextFromEntries,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import type { ClawdbotConfig } from "../config/types.js";

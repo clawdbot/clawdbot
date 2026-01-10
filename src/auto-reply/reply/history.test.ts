@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 import {
-  HISTORY_CONTEXT_MARKER,
   appendHistoryEntry,
   buildHistoryContext,
   buildHistoryContextFromEntries,
+  HISTORY_CONTEXT_MARKER,
 } from "./history.js";
+import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
 describe("history helpers", () => {
   it("returns current message when history is empty", () => {

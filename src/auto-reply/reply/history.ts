@@ -51,9 +51,8 @@ export function buildHistoryContextFromEntries(params: {
   excludeLast?: boolean;
 }): string {
   const lineBreak = params.lineBreak ?? "\n";
-  const entries = params.excludeLast === false
-    ? params.entries
-    : params.entries.slice(0, -1);
+  const entries =
+    params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
   if (entries.length === 0) return params.currentMessage;
   const historyText = entries.map(params.formatEntry).join(lineBreak);
   return buildHistoryContext({
