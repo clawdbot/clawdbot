@@ -262,7 +262,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       (isDeliverableMessageProvider(resolvedProvider)
         ? lastTo || undefined
         : undefined);
-    if (!resolvedTo && isDeliverableMessageProvider(resolvedProvider)) {
     if (
       !resolvedTo &&
       isDeliverableMessageProvider(resolvedProvider) &&
