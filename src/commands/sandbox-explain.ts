@@ -11,7 +11,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
-import { normalizeProviderId } from "../providers/plugins/index.js";
+import { normalizeProviderId } from "../providers/registry.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,

@@ -1,10 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
-import { PROVIDER_IDS } from "../../providers/registry.js";
+import { getProviderDock } from "../../providers/dock.js";
+import { normalizeProviderId, PROVIDER_IDS } from "../../providers/registry.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
@@ -69,7 +66,7 @@ export function resolveBlockStreamingChunking(
   const providerKey = normalizeChunkProvider(provider);
   const providerId = providerKey ? normalizeProviderId(providerKey) : null;
   const providerChunkLimit = providerId
-    ? getProviderPlugin(providerId)?.outbound?.textChunkLimit
+    ? getProviderDock(providerId)?.outbound?.textChunkLimit
     : undefined;
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
     fallbackLimit: providerChunkLimit,
@@ -107,13 +104,13 @@ export function resolveBlockStreamingCoalescing(
   const providerKey = normalizeChunkProvider(provider);
   const providerId = providerKey ? normalizeProviderId(providerKey) : null;
   const providerChunkLimit = providerId
-    ? getProviderPlugin(providerId)?.outbound?.textChunkLimit
+    ? getProviderDock(providerId)?.outbound?.textChunkLimit
     : undefined;
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
     fallbackLimit: providerChunkLimit,
   });
   const providerDefaults = providerId
-    ? getProviderPlugin(providerId)?.streaming?.blockStreamingCoalesceDefaults
+    ? getProviderDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;
   const providerCfg = resolveProviderBlockStreamingCoalesce({
     cfg,

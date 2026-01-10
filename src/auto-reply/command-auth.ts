@@ -1,10 +1,8 @@
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  getProviderPlugin,
-  listProviderPlugins,
-  normalizeProviderId,
-  type ProviderId,
-} from "../providers/plugins/index.js";
+import type { ProviderDock } from "../providers/dock.js";
+import { getProviderDock, listProviderDocks } from "../providers/dock.js";
+import type { ProviderId } from "../providers/plugins/types.js";
+import { normalizeProviderId } from "../providers/registry.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -32,15 +30,15 @@ function resolveProviderFromContext(
     const normalized = normalizeProviderId(candidate);
     if (normalized) return normalized;
   }
-  const configured = listProviderPlugins()
-    .map((plugin) => {
-      if (!plugin.config.resolveAllowFrom) return null;
-      const allowFrom = plugin.config.resolveAllowFrom({
+  const configured = listProviderDocks()
+    .map((dock) => {
+      if (!dock.config?.resolveAllowFrom) return null;
+      const allowFrom = dock.config.resolveAllowFrom({
         cfg,
         accountId: ctx.AccountId,
       });
       if (!Array.isArray(allowFrom) || allowFrom.length === 0) return null;
-      return plugin.id;
+      return dock.id;
     })
     .filter((value): value is ProviderId => Boolean(value));
   if (configured.length === 1) return configured[0];
@@ -48,15 +46,15 @@ function resolveProviderFromContext(
 }
 
 function formatAllowFromList(params: {
-  plugin?: ReturnType<typeof getProviderPlugin>;
+  dock?: ProviderDock;
   cfg: ClawdbotConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
 }): string[] {
-  const { plugin, cfg, accountId, allowFrom } = params;
+  const { dock, cfg, accountId, allowFrom } = params;
   if (!allowFrom || allowFrom.length === 0) return [];
-  if (plugin?.config.formatAllowFrom) {
-    return plugin.config.formatAllowFrom({ cfg, accountId, allowFrom });
+  if (dock?.config?.formatAllowFrom) {
+    return dock.config.formatAllowFrom({ cfg, accountId, allowFrom });
   }
   return allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
 }
@@ -68,14 +66,14 @@ export function resolveCommandAuthorization(params: {
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;
   const providerId = resolveProviderFromContext(ctx, cfg);
-  const plugin = providerId ? getProviderPlugin(providerId) : undefined;
+  const dock = providerId ? getProviderDock(providerId) : undefined;
   const from = (ctx.From ?? "").trim();
   const to = (ctx.To ?? "").trim();
-  const allowFromRaw = plugin?.config.resolveAllowFrom
-    ? plugin.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
+  const allowFromRaw = dock?.config?.resolveAllowFrom
+    ? dock.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
     : [];
   const allowFromList = formatAllowFromList({
-    plugin,
+    dock,
     cfg,
     accountId: ctx.AccountId,
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
@@ -89,7 +87,7 @@ export function resolveCommandAuthorization(params: {
     : allowFromList.filter((entry) => entry !== "*");
   if (!allowAll && ownerCandidates.length === 0 && to) {
     const normalizedTo = formatAllowFromList({
-      plugin,
+      dock,
       cfg,
       accountId: ctx.AccountId,
       allowFrom: [to],
@@ -101,14 +99,14 @@ export function resolveCommandAuthorization(params: {
   const senderRaw = ctx.SenderId ?? ctx.SenderE164 ?? from;
   const senderId = senderRaw
     ? formatAllowFromList({
-        plugin,
+        dock,
         cfg,
         accountId: ctx.AccountId,
         allowFrom: [senderRaw],
       })[0]
     : undefined;
 
-  const enforceOwner = Boolean(plugin?.commands?.enforceOwnerForCommands);
+  const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const isOwner =
     !enforceOwner ||
     allowAll ||

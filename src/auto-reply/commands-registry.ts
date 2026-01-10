@@ -1,5 +1,5 @@
 import type { ClawdbotConfig } from "../config/types.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
+import { listProviderDocks } from "../providers/dock.js";
 
 export type CommandScope = "text" | "native" | "both";
 
@@ -269,9 +269,9 @@ let cachedNativeCommandSurfaces: Set<string> | null = null;
 const getNativeCommandSurfaces = (): Set<string> => {
   if (!cachedNativeCommandSurfaces) {
     cachedNativeCommandSurfaces = new Set(
-      listProviderPlugins()
-        .filter((plugin) => plugin.capabilities.nativeCommands)
-        .map((plugin) => plugin.id),
+      listProviderDocks()
+        .filter((dock) => dock.capabilities.nativeCommands)
+        .map((dock) => dock.id),
     );
   }
   return cachedNativeCommandSurfaces;

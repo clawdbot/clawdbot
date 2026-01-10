@@ -27,11 +27,9 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { isAudioFileName } from "../../media/mime.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+import { getProviderDock } from "../../providers/dock.js";
 import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
+import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   estimateUsageCost,
@@ -87,10 +85,10 @@ function buildThreadingToolContext(params: {
   if (!config) return {};
   const provider = normalizeProviderId(sessionCtx.Provider);
   if (!provider) return {};
-  const plugin = getProviderPlugin(provider);
-  if (!plugin?.threading?.buildToolContext) return {};
+  const dock = getProviderDock(provider);
+  if (!dock?.threading?.buildToolContext) return {};
   return (
-    plugin.threading.buildToolContext({
+    dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {

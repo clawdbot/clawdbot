@@ -3,10 +3,11 @@ import type {
   GroupKeyResolution,
   SessionEntry,
 } from "../../config/sessions.js";
+import { getProviderDock } from "../../providers/dock.js";
 import {
-  getProviderPlugin,
+  getChatProviderMeta,
   normalizeProviderId,
-} from "../../providers/plugins/index.js";
+} from "../../providers/registry.js";
 import { isInternalMessageProvider } from "../../utils/message-provider.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
@@ -23,7 +24,7 @@ export function resolveGroupRequireMention(params: {
   const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
   const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
-  const requireMention = getProviderPlugin(
+  const requireMention = getProviderDock(
     provider,
   )?.groups?.resolveRequireMention?.({
     cfg,
@@ -57,11 +58,10 @@ export function buildGroupIntro(params: {
   const rawProvider = params.sessionCtx.Provider?.trim();
   const providerKey = rawProvider?.toLowerCase() ?? "";
   const providerId = normalizeProviderId(rawProvider);
-  const plugin = providerId ? getProviderPlugin(providerId) : undefined;
   const providerLabel = (() => {
     if (!providerKey) return "chat";
     if (isInternalMessageProvider(providerKey)) return "WebChat";
-    if (plugin) return plugin.meta.label ?? plugin.id;
+    if (providerId) return getChatProviderMeta(providerId).label;
     return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
   })();
   const subjectLine = subject
@@ -75,13 +75,15 @@ export function buildGroupIntro(params: {
   const groupId = params.sessionCtx.From?.replace(/^group:/, "");
   const groupRoom = params.sessionCtx.GroupRoom?.trim() ?? subject;
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
-  const providerIdsLine = plugin?.groups?.resolveGroupIntroHint?.({
-    cfg: params.cfg,
-    groupId,
-    groupRoom,
-    groupSpace,
-    accountId: params.sessionCtx.AccountId,
-  });
+  const providerIdsLine = providerId
+    ? getProviderDock(providerId)?.groups?.resolveGroupIntroHint?.({
+        cfg: params.cfg,
+        groupId,
+        groupRoom,
+        groupSpace,
+        accountId: params.sessionCtx.AccountId,
+      })
+    : undefined;
   const silenceLine =
     activation === "always"
       ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so Clawdbot stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`

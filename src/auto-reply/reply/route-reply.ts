@@ -10,10 +10,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+import { normalizeProviderId } from "../../providers/registry.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -102,6 +99,9 @@ export async function routeReply(
   if (!provider) {
     return { ok: false, error: `Unknown channel: ${String(channel)}` };
   }
+  const { getProviderPlugin } = await import(
+    "../../providers/plugins/index.js"
+  );
   const plugin = getProviderPlugin(provider);
   const outbound = plugin?.outbound;
   const sendText = outbound?.sendText;
@@ -186,8 +186,5 @@ export function isRoutableChannel(
   typeof INTERNAL_MESSAGE_PROVIDER
 > {
   if (!channel || channel === INTERNAL_MESSAGE_PROVIDER) return false;
-  const provider = normalizeProviderId(channel);
-  if (!provider) return false;
-  const plugin = getProviderPlugin(provider);
-  return Boolean(plugin?.outbound?.sendText && plugin?.outbound?.sendMedia);
+  return normalizeProviderId(channel) !== null;
 }

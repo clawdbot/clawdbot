@@ -1,9 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+import { getProviderDock } from "../../providers/dock.js";
+import { normalizeProviderId } from "../../providers/registry.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -14,12 +12,10 @@ export function resolveReplyToMode(
 ): ReplyToMode {
   const provider = normalizeProviderId(channel);
   if (!provider) return "all";
-  const resolved = getProviderPlugin(provider)?.threading?.resolveReplyToMode?.(
-    {
-      cfg,
-      accountId,
-    },
-  );
+  const resolved = getProviderDock(provider)?.threading?.resolveReplyToMode?.({
+    cfg,
+    accountId,
+  });
   return resolved ?? "all";
 }
 
@@ -49,7 +45,7 @@ export function createReplyToModeFilterForChannel(
 ) {
   const provider = normalizeProviderId(channel);
   const allowTagsWhenOff = provider
-    ? Boolean(getProviderPlugin(provider)?.threading?.allowTagsWhenOff)
+    ? Boolean(getProviderDock(provider)?.threading?.allowTagsWhenOff)
     : false;
   return createReplyToModeFilter(mode, {
     allowTagsWhenOff,

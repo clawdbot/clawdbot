@@ -130,6 +130,14 @@ export function normalizeChatProviderId(
     : null;
 }
 
+// Provider docking: prefer this helper in shared code. Importing from
+// `src/providers/plugins/*` can eagerly load provider implementations.
+export function normalizeProviderId(
+  raw?: string | null,
+): ChatProviderId | null {
+  return normalizeChatProviderId(raw);
+}
+
 export function formatProviderPrimerLine(meta: ChatProviderMeta): string {
   return `${meta.label}: ${meta.blurb}`;
 }

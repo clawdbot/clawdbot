@@ -32,11 +32,11 @@ import {
 import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
+import { getProviderDock } from "../providers/dock.js";
 import {
-  getProviderPlugin,
+  CHAT_PROVIDER_ORDER,
   normalizeProviderId,
-} from "../providers/plugins/index.js";
-import { CHAT_PROVIDER_ORDER } from "../providers/registry.js";
+} from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
@@ -243,13 +243,13 @@ function resolveElevatedPermissions(params: {
   }
 
   const normalizedProvider = normalizeProviderId(params.provider);
-  const pluginFallbackAllowFrom = normalizedProvider
-    ? getProviderPlugin(normalizedProvider)?.elevated?.allowFromFallback?.({
+  const dockFallbackAllowFrom = normalizedProvider
+    ? getProviderDock(normalizedProvider)?.elevated?.allowFromFallback?.({
         cfg: params.cfg,
         accountId: params.ctx.AccountId,
       })
     : undefined;
-  const fallbackAllowFrom = pluginFallbackAllowFrom;
+  const fallbackAllowFrom = dockFallbackAllowFrom;
   const globalAllowed = isApprovedElevatedSender({
     provider: params.provider,
     ctx: params.ctx,
@@ -601,12 +601,8 @@ export async function getReplyFromConfig(
     agentCfg?.blockStreamingBreak === "message_end"
       ? "message_end"
       : "text_end";
-  const providerId = normalizeProviderId(providerKey);
-  const providerPlugin = providerId ? getProviderPlugin(providerId) : undefined;
   const blockStreamingEnabled =
-    resolvedBlockStreaming === "on" &&
-    opts?.disableBlockStreaming !== true &&
-    providerPlugin?.capabilities.blockStreaming === true;
+    resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(
         cfg,
@@ -785,7 +781,7 @@ export async function getReplyFromConfig(
   const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.providerId
     ? Boolean(
-        getProviderPlugin(command.providerId)?.commands?.skipWhenConfigEmpty,
+        getProviderDock(command.providerId)?.commands?.skipWhenConfigEmpty,
       )
     : false;
   if (

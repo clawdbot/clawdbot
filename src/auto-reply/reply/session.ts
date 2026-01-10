@@ -23,10 +23,8 @@ import {
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+import { getProviderDock } from "../../providers/dock.js";
+import { normalizeProviderId } from "../../providers/registry.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -243,7 +241,7 @@ export async function initSessionState(params: {
     const normalizedProvider = normalizeProviderId(provider);
     const isRoomProvider = Boolean(
       normalizedProvider &&
-        getProviderPlugin(normalizedProvider)?.capabilities.chatTypes.includes(
+        getProviderDock(normalizedProvider)?.capabilities.chatTypes.includes(
           "channel",
         ),
     );

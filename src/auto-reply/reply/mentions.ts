@@ -1,9 +1,7 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+import { getProviderDock } from "../../providers/dock.js";
+import { normalizeProviderId } from "../../providers/registry.js";
 import type { MsgContext } from "../templating.js";
 
 function escapeRegExp(text: string): string {
@@ -118,7 +116,7 @@ export function stripMentions(
   let result = text;
   const providerId = ctx.Provider ? normalizeProviderId(ctx.Provider) : null;
   const providerMentions = providerId
-    ? getProviderPlugin(providerId)?.mentions
+    ? getProviderDock(providerId)?.mentions
     : undefined;
   const patterns = normalizeMentionPatterns([
     ...resolveMentionPatterns(cfg, agentId),
