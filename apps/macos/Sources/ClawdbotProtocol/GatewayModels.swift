@@ -1119,6 +1119,23 @@ public struct ProvidersStatusParams: Codable, Sendable {
     }
 }
 
+public struct ProvidersLogoutParams: Codable, Sendable {
+    public let provider: String
+    public let accountid: String?
+
+    public init(
+        provider: String,
+        accountid: String?
+    ) {
+        self.provider = provider
+        self.accountid = accountid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case accountid = "accountId"
+    }
+}
+
 public struct WebLoginStartParams: Codable, Sendable {
     public let force: Bool?
     public let timeoutms: Int?
