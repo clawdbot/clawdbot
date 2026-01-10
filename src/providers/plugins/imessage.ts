@@ -80,6 +80,26 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
   },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.imessage?.accounts?.[resolvedAccountId],
+      );
+      const basePath = useAccountPath
+        ? `imessage.accounts.${resolvedAccountId}.`
+        : "imessage.";
+      return {
+        policy: account.config.dmPolicy ?? "pairing",
+        allowFrom: account.config.allowFrom ?? [],
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
+        approveHint:
+          "Approve via: clawdbot pairing list --provider imessage / clawdbot pairing approve --provider imessage <code>",
+      };
+    },
+  },
   groups: {
     resolveRequireMention: resolveIMessageGroupRequireMention,
   },

@@ -28,6 +28,7 @@ import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
 } from "../../whatsapp/normalize.js";
+import { normalizeE164 } from "../../utils.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
@@ -123,6 +124,27 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
           entry === "*" ? entry : normalizeWhatsAppTarget(entry),
         )
         .filter((entry): entry is string => Boolean(entry)),
+  },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.whatsapp?.accounts?.[resolvedAccountId],
+      );
+      const basePath = useAccountPath
+        ? `whatsapp.accounts.${resolvedAccountId}.`
+        : "whatsapp.";
+      return {
+        policy: account.dmPolicy ?? "pairing",
+        allowFrom: account.allowFrom ?? [],
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
+        approveHint:
+          "Approve via: clawdbot pairing list --provider whatsapp / clawdbot pairing approve --provider whatsapp <code>",
+        normalizeEntry: (raw) => normalizeE164(raw),
+      };
+    },
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

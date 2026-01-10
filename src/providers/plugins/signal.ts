@@ -98,6 +98,28 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
         )
         .filter(Boolean),
   },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.signal?.accounts?.[resolvedAccountId],
+      );
+      const basePath = useAccountPath
+        ? `signal.accounts.${resolvedAccountId}.`
+        : "signal.";
+      return {
+        policy: account.config.dmPolicy ?? "pairing",
+        allowFrom: account.config.allowFrom ?? [],
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
+        approveHint:
+          "Approve via: clawdbot pairing list --provider signal / clawdbot pairing approve --provider signal <code>",
+        normalizeEntry: (raw) =>
+          normalizeE164(raw.replace(/^signal:/i, "").trim()),
+      };
+    },
+  },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
   },

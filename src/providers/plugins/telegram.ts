@@ -102,6 +102,37 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
         .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
         .map((entry) => entry.toLowerCase()),
   },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.telegram?.accounts?.[resolvedAccountId],
+      );
+      const basePath = useAccountPath
+        ? `telegram.accounts.${resolvedAccountId}.`
+        : "telegram.";
+      return {
+        policy: account.config.dmPolicy ?? "pairing",
+        allowFrom: account.config.allowFrom ?? [],
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
+        approveHint:
+          "Approve via: clawdbot pairing list --provider telegram / clawdbot pairing approve --provider telegram <code>",
+        normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
+      };
+    },
+    collectWarnings: ({ account }) => {
+      const groupPolicy = account.config.groupPolicy ?? "open";
+      const groupAllowlistConfigured =
+        account.config.groups &&
+        Object.keys(account.config.groups).length > 0;
+      if (groupPolicy !== "open" || groupAllowlistConfigured) return [];
+      return [
+        `- Telegram groups: open (groupPolicy="open") with no telegram.groups allowlist; mention-gating applies but any group can add + ping.`,
+      ];
+    },
+  },
   groups: {
     resolveRequireMention: resolveTelegramGroupRequireMention,
   },

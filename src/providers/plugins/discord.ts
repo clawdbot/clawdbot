@@ -97,6 +97,29 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
   },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.discord?.accounts?.[resolvedAccountId],
+      );
+      const allowFromPath = useAccountPath
+        ? `discord.accounts.${resolvedAccountId}.dm.`
+        : "discord.dm.";
+      return {
+        policy: account.config.dm?.policy ?? "pairing",
+        allowFrom: account.config.dm?.allowFrom ?? [],
+        allowFromPath,
+        approveHint:
+          "Approve via: clawdbot pairing list --provider discord / clawdbot pairing approve --provider discord <code>",
+        normalizeEntry: (raw) =>
+          raw
+            .replace(/^(discord|user):/i, "")
+            .replace(/^<@!?(\d+)>$/, "$1"),
+      };
+    },
+  },
   groups: {
     resolveRequireMention: resolveDiscordGroupRequireMention,
   },
