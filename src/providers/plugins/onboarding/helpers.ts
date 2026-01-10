@@ -1,7 +1,7 @@
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-} from "../../routing/session-key.js";
+} from "../../../routing/session-key.js";
 import type {
   PromptAccountId,
   PromptAccountIdParams,

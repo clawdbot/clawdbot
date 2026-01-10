@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
+import { startWebLoginWithQr, waitForWebLogin } from "../../../web/login-qr.js";
 import type { ProviderAgentTool } from "../types.js";
 
 export function createWhatsAppLoginTool(): ProviderAgentTool {

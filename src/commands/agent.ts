@@ -73,9 +73,9 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import {
-  resolveMessageProvider,
-  resolveGatewayMessageProvider,
   isInternalMessageProvider,
+  resolveGatewayMessageProvider,
+  resolveMessageProvider,
 } from "../utils/message-provider.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -665,7 +665,7 @@ export async function agentCommand(
         bestEffort: bestEffortDeliver,
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
-        deps: createOutboundSendDeps(deps),
+        deps: createOutboundSendDeps(deps, cfg),
       });
     }
   }

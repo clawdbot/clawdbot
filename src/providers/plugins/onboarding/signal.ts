@@ -10,13 +10,13 @@ import {
   resolveSignalAccount,
 } from "../../../signal/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { detectBinary } from "../../onboard-helpers.js";
-import { installSignalCli } from "../../signal-install.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { detectBinary } from "../../../commands/onboard-helpers.js";
+import { installSignalCli } from "../../../commands/signal-install.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,
 } from "../onboarding-types.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const provider = "signal" as const;
 

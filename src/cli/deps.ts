@@ -1,11 +1,12 @@
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { sendMessageMSTeams } from "../msteams/send.js";
 import { logWebSelfId, sendMessageWhatsApp } from "../providers/web/index.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageTelegram } from "../telegram/send.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 
 export type CliDeps = {
   sendMessageWhatsApp: typeof sendMessageWhatsApp;
@@ -30,7 +31,10 @@ export function createDefaultDeps(): CliDeps {
 }
 
 // Provider docking: extend this mapping when adding new outbound send deps.
-export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
+export function createOutboundSendDeps(
+  deps: CliDeps,
+  cfg: ClawdbotConfig,
+): OutboundSendDeps {
   return {
     sendWhatsApp: deps.sendMessageWhatsApp,
     sendTelegram: deps.sendMessageTelegram,
@@ -38,7 +42,16 @@ export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
     sendSlack: deps.sendMessageSlack,
     sendSignal: deps.sendMessageSignal,
     sendIMessage: deps.sendMessageIMessage,
-    sendMSTeams: deps.sendMessageMSTeams,
+    // Provider docking: MS Teams send requires full cfg (credentials), wrap to match OutboundSendDeps.
+    sendMSTeams: deps.sendMessageMSTeams
+      ? async (to, text, opts) =>
+          await deps.sendMessageMSTeams({
+            cfg,
+            to,
+            text,
+            mediaUrl: opts?.mediaUrl,
+          })
+      : undefined,
   };
 }
 

@@ -10,12 +10,12 @@ import {
   normalizeAccountId,
 } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { detectBinary } from "../../onboard-helpers.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { detectBinary } from "../../../commands/onboard-helpers.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,
 } from "../onboarding-types.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const provider = "imessage" as const;
 

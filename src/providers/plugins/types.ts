@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type {
@@ -14,7 +15,7 @@ export type ProviderId = ChatProviderId | "msteams";
 
 export type ProviderOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
-export type ProviderAgentTool = AgentTool<any, unknown>;
+export type ProviderAgentTool = AgentTool<TSchema, unknown>;
 
 export type ProviderAgentToolFactory = (params: {
   cfg?: ClawdbotConfig;

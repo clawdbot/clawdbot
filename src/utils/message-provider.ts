@@ -66,7 +66,9 @@ export function isGatewayCliClient(client?: GatewayClientInfo | null): boolean {
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
-export function isInternalMessageProvider(raw?: string | null): boolean {
+export function isInternalMessageProvider(
+  raw?: string | null,
+): raw is InternalMessageProvider {
   return normalizeMessageProvider(raw) === INTERNAL_MESSAGE_PROVIDER;
 }
 
