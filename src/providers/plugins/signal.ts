@@ -212,7 +212,8 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       const send = deps?.sendSignal ?? sendMessageSignal;
       const maxBytes = resolveProviderMediaMaxBytes({
         cfg,
-        provider: "signal",
+        resolveProviderLimitMb: ({ cfg, accountId }) =>
+          cfg.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.signal?.mediaMaxMb,
         accountId,
       });
       const result = await send(to, text, {
@@ -225,7 +226,8 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       const send = deps?.sendSignal ?? sendMessageSignal;
       const maxBytes = resolveProviderMediaMaxBytes({
         cfg,
-        provider: "signal",
+        resolveProviderLimitMb: ({ cfg, accountId }) =>
+          cfg.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.signal?.mediaMaxMb,
         accountId,
       });
       const result = await send(to, text, {

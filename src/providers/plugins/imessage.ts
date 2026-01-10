@@ -180,7 +180,9 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       const send = deps?.sendIMessage ?? sendMessageIMessage;
       const maxBytes = resolveProviderMediaMaxBytes({
         cfg,
-        provider: "imessage",
+        resolveProviderLimitMb: ({ cfg, accountId }) =>
+          cfg.imessage?.accounts?.[accountId]?.mediaMaxMb ??
+          cfg.imessage?.mediaMaxMb,
         accountId,
       });
       const result = await send(to, text, {
@@ -193,7 +195,9 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       const send = deps?.sendIMessage ?? sendMessageIMessage;
       const maxBytes = resolveProviderMediaMaxBytes({
         cfg,
-        provider: "imessage",
+        resolveProviderLimitMb: ({ cfg, accountId }) =>
+          cfg.imessage?.accounts?.[accountId]?.mediaMaxMb ??
+          cfg.imessage?.mediaMaxMb,
         accountId,
       });
       const result = await send(to, text, {

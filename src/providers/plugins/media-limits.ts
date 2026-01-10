@@ -5,16 +5,16 @@ const MB = 1024 * 1024;
 
 export function resolveProviderMediaMaxBytes(params: {
   cfg: ClawdbotConfig;
-  provider: "signal" | "imessage";
+  // Provider-specific config lives under different keys; keep this helper generic
+  // so shared plugin helpers don't need provider-id branching.
+  resolveProviderLimitMb: (params: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+  }) => number | undefined;
   accountId?: string | null;
 }): number | undefined {
   const accountId = normalizeAccountId(params.accountId);
-  const providerLimit =
-    params.provider === "signal"
-      ? (params.cfg.signal?.accounts?.[accountId]?.mediaMaxMb ??
-        params.cfg.signal?.mediaMaxMb)
-      : (params.cfg.imessage?.accounts?.[accountId]?.mediaMaxMb ??
-        params.cfg.imessage?.mediaMaxMb);
+  const providerLimit = params.resolveProviderLimitMb({ cfg: params.cfg, accountId });
   if (providerLimit) return providerLimit * MB;
   if (params.cfg.agents?.defaults?.mediaMaxMb) {
     return params.cfg.agents.defaults.mediaMaxMb * MB;
