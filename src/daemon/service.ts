@@ -44,11 +44,15 @@ export type GatewayService = {
     env: Record<string, string | undefined>;
     stdout: NodeJS.WritableStream;
   }) => Promise<void>;
-  stop: (args: { stdout: NodeJS.WritableStream }) => Promise<void>;
-  restart: (args: { stdout: NodeJS.WritableStream }) => Promise<void>;
-  isLoaded: (args: {
-    env: Record<string, string | undefined>;
-  }) => Promise<boolean>;
+  stop: (args: {
+    profile?: string;
+    stdout: NodeJS.WritableStream;
+  }) => Promise<void>;
+  restart: (args: {
+    profile?: string;
+    stdout: NodeJS.WritableStream;
+  }) => Promise<void>;
+  isLoaded: (args: { profile?: string }) => Promise<boolean>;
   readCommand: (env: Record<string, string | undefined>) => Promise<{
     programArguments: string[];
     workingDirectory?: string;
@@ -73,12 +77,15 @@ export function resolveGatewayService(): GatewayService {
         await uninstallLaunchAgent(args);
       },
       stop: async (args) => {
-        await stopLaunchAgent(args);
+        await stopLaunchAgent({ stdout: args.stdout, profile: args.profile });
       },
       restart: async (args) => {
-        await restartLaunchAgent(args);
+        await restartLaunchAgent({
+          stdout: args.stdout,
+          profile: args.profile,
+        });
       },
-      isLoaded: async () => isLaunchAgentLoaded(),
+      isLoaded: async (args) => isLaunchAgentLoaded(args.profile),
       readCommand: readLaunchAgentProgramArguments,
       readRuntime: readLaunchAgentRuntime,
     };
@@ -96,14 +103,20 @@ export function resolveGatewayService(): GatewayService {
         await uninstallSystemdService(args);
       },
       stop: async (args) => {
-        await stopSystemdService(args);
+        await stopSystemdService({
+          stdout: args.stdout,
+          profile: args.profile,
+        });
       },
       restart: async (args) => {
-        await restartSystemdService(args);
+        await restartSystemdService({
+          stdout: args.stdout,
+          profile: args.profile,
+        });
       },
-      isLoaded: async () => isSystemdServiceEnabled(),
+      isLoaded: async (args) => isSystemdServiceEnabled(args.profile),
       readCommand: readSystemdServiceExecStart,
-      readRuntime: async () => await readSystemdServiceRuntime(),
+      readRuntime: async (env) => await readSystemdServiceRuntime(env),
     };
   }
 
@@ -119,14 +132,17 @@ export function resolveGatewayService(): GatewayService {
         await uninstallScheduledTask(args);
       },
       stop: async (args) => {
-        await stopScheduledTask(args);
+        await stopScheduledTask({ stdout: args.stdout, profile: args.profile });
       },
       restart: async (args) => {
-        await restartScheduledTask(args);
+        await restartScheduledTask({
+          stdout: args.stdout,
+          profile: args.profile,
+        });
       },
-      isLoaded: async () => isScheduledTaskInstalled(),
+      isLoaded: async (args) => isScheduledTaskInstalled(args.profile),
       readCommand: readScheduledTaskCommand,
-      readRuntime: async () => await readScheduledTaskRuntime(),
+      readRuntime: async (env) => await readScheduledTaskRuntime(env),
     };
   }
 

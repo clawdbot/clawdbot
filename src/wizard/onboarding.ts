@@ -625,7 +625,9 @@ export async function runOnboardingWizard(
       );
     }
     const service = resolveGatewayService();
-    const loaded = await service.isLoaded({ env: process.env });
+    const loaded = await service.isLoaded({
+      profile: process.env.CLAWDBOT_PROFILE,
+    });
     if (loaded) {
       const action = (await prompter.select({
         message: "Gateway service already installed",
@@ -636,7 +638,10 @@ export async function runOnboardingWizard(
         ],
       })) as "restart" | "reinstall" | "skip";
       if (action === "restart") {
-        await service.restart({ stdout: process.stdout });
+        await service.restart({
+          profile: process.env.CLAWDBOT_PROFILE,
+          stdout: process.stdout,
+        });
       } else if (action === "reinstall") {
         await service.uninstall({ env: process.env, stdout: process.stdout });
       }
@@ -644,7 +649,9 @@ export async function runOnboardingWizard(
 
     if (
       !loaded ||
-      (loaded && (await service.isLoaded({ env: process.env })) === false)
+      (loaded &&
+        (await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE })) ===
+          false)
     ) {
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&

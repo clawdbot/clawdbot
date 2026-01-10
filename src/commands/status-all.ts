@@ -107,7 +107,9 @@ export async function statusAllCommand(
     try {
       const service = resolveGatewayService();
       const [loaded, runtimeInfo] = await Promise.all([
-        service.isLoaded({ env: process.env }).catch(() => false),
+        service
+          .isLoaded({ profile: process.env.CLAWDBOT_PROFILE })
+          .catch(() => false),
         service.readRuntime(process.env).catch(() => undefined),
       ]);
       return {
