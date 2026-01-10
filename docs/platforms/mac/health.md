@@ -5,14 +5,14 @@ read_when:
 ---
 # Health Checks on macOS
 
-How to see whether the WhatsApp Web/Baileys bridge is healthy from the menu bar app.
+How to see whether the linked provider is healthy from the menu bar app.
 
 ## Menu bar
 - Status dot now reflects Baileys health:
   - Green: linked + socket opened recently.
   - Orange: connecting/retrying.
   - Red: logged out or probe failed.
-- Secondary line reads "Web: linked · auth 12m · socket ok" or shows the failure reason.
+- Secondary line reads "linked · auth 12m" or shows the failure reason.
 - "Run Health Check" menu item triggers an on-demand probe.
 
 ## Settings
@@ -21,7 +21,7 @@ How to see whether the WhatsApp Web/Baileys bridge is healthy from the menu bar 
 - **Connections tab** surfaces provider status + controls for WhatsApp/Telegram (login QR, logout, probe, last disconnect/error).
 
 ## How the probe works
-- App runs `clawdbot health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds, attempts a short Baileys connect, and reports status without sending messages.
+- App runs `clawdbot health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds and reports status without sending messages.
 - Cache the last good snapshot and the last error separately to avoid flicker; show the timestamp of each.
 
 ## When in doubt

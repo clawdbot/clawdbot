@@ -36,6 +36,7 @@ Each `ProviderPlugin` bundles:
 - Signal/iMessage media size limits are now resolved inside their plugins.
 - `normalizeProviderId()` handles aliases (ex: `imsg`, `teams`) so CLI and API inputs stay stable.
 - Gateway runtime defaults (`status.defaultRuntime`) replace the old per-provider runtime map.
+- Gateway health snapshots now iterate plugins (`status.probeAccount` + `status.buildProviderSummary`) and emit `providers` + `providerOrder` instead of provider-specific fields.
 - `providers.status` summary objects now come from `status.buildProviderSummary` (no per-provider branching in the handler).
 - `providers.status` warnings now flow through `status.collectStatusIssues` per plugin.
 - CLI list uses `meta.showConfigured` to decide whether to show configured state.
