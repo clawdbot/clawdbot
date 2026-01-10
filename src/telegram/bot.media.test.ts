@@ -42,6 +42,19 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
+vi.mock("../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/store.js")>();
+  return {
+    ...actual,
+    saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string) => ({
+      id: "media",
+      path: "/tmp/telegram-media",
+      size: buffer.byteLength,
+      contentType: contentType ?? "application/octet-stream",
+    })),
+  };
+});
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
