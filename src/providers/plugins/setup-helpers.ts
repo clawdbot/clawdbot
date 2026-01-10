@@ -63,8 +63,10 @@ export function applyAccountNameToProviderSection(params: {
       },
     } as ClawdbotConfig;
   }
-  const baseAccounts: Record<string, Record<string, unknown>> =
-    base?.accounts ?? {};
+  const baseAccounts: Record<
+    string,
+    Record<string, unknown>
+  > = base?.accounts ?? {};
   const existingAccount = baseAccounts[accountId] ?? {};
   const baseWithoutName =
     accountId === DEFAULT_ACCOUNT_ID

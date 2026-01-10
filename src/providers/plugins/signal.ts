@@ -12,6 +12,7 @@ import {
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
+import { normalizeE164 } from "../../utils.js";
 import { getChatProviderMeta } from "../registry.js";
 import {
   deleteAccountFromConfigSection,
@@ -83,6 +84,18 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
+      ),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) =>
+          entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, "")),
+        )
+        .filter(Boolean),
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

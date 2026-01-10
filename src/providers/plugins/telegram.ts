@@ -25,6 +25,8 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
+import { normalizeTelegramMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,
@@ -88,6 +90,25 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      (resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
+      ),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
+        .map((entry) => entry.toLowerCase()),
+  },
+  groups: {
+    resolveRequireMention: resolveTelegramGroupRequireMention,
+  },
+  threading: {
+    resolveReplyToMode: ({ cfg }) => cfg.telegram?.replyToMode ?? "first",
+  },
+  messaging: {
+    normalizeTarget: normalizeTelegramMessagingTarget,
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

@@ -16,6 +16,8 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { resolveSlackGroupRequireMention } from "./group-mentions.js";
+import { normalizeSlackMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,
@@ -77,6 +79,26 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map(
+        (entry) => String(entry),
+      ),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.toLowerCase()),
+  },
+  groups: {
+    resolveRequireMention: resolveSlackGroupRequireMention,
+  },
+  threading: {
+    resolveReplyToMode: ({ cfg, accountId }) =>
+      resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
+    allowTagsWhenOff: true,
+  },
+  messaging: {
+    normalizeTarget: normalizeSlackMessagingTarget,
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

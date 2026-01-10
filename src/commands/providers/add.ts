@@ -80,10 +80,9 @@ export async function providersAddCommand(
       for (const provider of selection) {
         const accountId = accountIds[provider] ?? DEFAULT_ACCOUNT_ID;
         const plugin = getProviderPlugin(provider as ProviderId);
-        const account = plugin?.config.resolveAccount(
-          nextConfig,
-          accountId,
-        ) as { name?: string } | undefined;
+        const account = plugin?.config.resolveAccount(nextConfig, accountId) as
+          | { name?: string }
+          | undefined;
         const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
         const existingName = snapshot?.name ?? account?.name;
         const name = await prompter.text({

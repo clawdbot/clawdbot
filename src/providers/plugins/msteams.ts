@@ -72,6 +72,12 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
       enabled: account.enabled,
       configured: account.configured,
     }),
+    resolveAllowFrom: ({ cfg }) => cfg.msteams?.allowFrom ?? [],
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.toLowerCase()),
   },
   setup: {
     resolveAccountId: () => DEFAULT_ACCOUNT_ID,
