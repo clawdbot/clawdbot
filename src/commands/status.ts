@@ -43,14 +43,19 @@ import {
   type UpdateCheckResult,
 } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
+import { listProviderPlugins } from "../providers/plugins/index.js";
+import type {
+  ProviderAccountSnapshot,
+  ProviderId,
+  ProviderPlugin,
+} from "../providers/plugins/types.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getProviderPlugin } from "../providers/plugins/index.js";
-import type { ProviderAccountSnapshot } from "../providers/plugins/types.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
-import type { HealthSummary } from "./health.js";
+import { formatHealthProviderLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { buildProvidersTable } from "./status-all/providers.js";
@@ -79,7 +84,12 @@ export type SessionStatus = {
 };
 
 export type StatusSummary = {
-  web: { linked: boolean; authAgeMs: number | null };
+  linkProvider?: {
+    id: ProviderId;
+    label: string;
+    linked: boolean;
+    authAgeMs: number | null;
+  };
   heartbeatSeconds: number;
   providerSummary: string[];
   queuedSystemEvents: string[];
@@ -91,61 +101,63 @@ export type StatusSummary = {
   };
 };
 
-type WebStatusContext = {
+type LinkProviderContext = {
   linked: boolean;
   authAgeMs: number | null;
   account?: unknown;
   accountId?: string;
-  plugin?: ReturnType<typeof getProviderPlugin>;
+  plugin: ProviderPlugin;
 };
 
-async function resolveWebStatusContext(
+async function resolveLinkProviderContext(
   cfg: ClawdbotConfig,
-): Promise<WebStatusContext> {
-  const plugin = getProviderPlugin("whatsapp");
-  if (!plugin) {
-    return { linked: false, authAgeMs: null };
+): Promise<LinkProviderContext | null> {
+  for (const plugin of listProviderPlugins()) {
+    const accountIds = plugin.config.listAccountIds(cfg);
+    const defaultAccountId =
+      plugin.config.defaultAccountId?.(cfg) ??
+      accountIds[0] ??
+      DEFAULT_ACCOUNT_ID;
+    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
+    const enabled = plugin.config.isEnabled
+      ? plugin.config.isEnabled(account, cfg)
+      : true;
+    const configured = plugin.config.isConfigured
+      ? await plugin.config.isConfigured(account, cfg)
+      : true;
+    const snapshot = plugin.config.describeAccount
+      ? plugin.config.describeAccount(account, cfg)
+      : ({
+          accountId: defaultAccountId,
+          enabled,
+          configured,
+        } as ProviderAccountSnapshot);
+    const summary = plugin.status?.buildProviderSummary
+      ? await plugin.status.buildProviderSummary({
+          account,
+          cfg,
+          defaultAccountId,
+          snapshot,
+        })
+      : undefined;
+    const summaryRecord = summary as Record<string, unknown> | undefined;
+    const linked =
+      summaryRecord && typeof summaryRecord.linked === "boolean"
+        ? summaryRecord.linked
+        : null;
+    if (linked === null) continue;
+    const authAgeMs =
+      summaryRecord && typeof summaryRecord.authAgeMs === "number"
+        ? summaryRecord.authAgeMs
+        : null;
+    return { linked, authAgeMs, account, accountId: defaultAccountId, plugin };
   }
-  const accountIds = plugin.config.listAccountIds(cfg);
-  const defaultAccountId =
-    plugin.config.defaultAccountId?.(cfg) ?? accountIds[0] ?? "default";
-  const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-  const enabled = plugin.config.isEnabled
-    ? plugin.config.isEnabled(account, cfg)
-    : true;
-  const configured = plugin.config.isConfigured
-    ? await plugin.config.isConfigured(account, cfg)
-    : true;
-  const snapshot = plugin.config.describeAccount
-    ? plugin.config.describeAccount(account, cfg)
-    : ({
-        accountId: defaultAccountId,
-        enabled,
-        configured,
-      } as ProviderAccountSnapshot);
-  const summary = plugin.status?.buildProviderSummary
-    ? await plugin.status.buildProviderSummary({
-        account,
-        cfg,
-        defaultAccountId,
-        snapshot,
-      })
-    : undefined;
-  const summaryRecord = summary as Record<string, unknown> | undefined;
-  const linked =
-    summaryRecord && typeof summaryRecord.linked === "boolean"
-      ? summaryRecord.linked
-      : configured && enabled;
-  const authAgeMs =
-    summaryRecord && typeof summaryRecord.authAgeMs === "number"
-      ? summaryRecord.authAgeMs
-      : null;
-  return { linked, authAgeMs, account, accountId: defaultAccountId, plugin };
+  return null;
 }
 
 export async function getStatusSummary(): Promise<StatusSummary> {
   const cfg = loadConfig();
-  const webContext = await resolveWebStatusContext(cfg);
+  const linkContext = await resolveLinkProviderContext(cfg);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
   const providerSummary = await buildProviderSummary(cfg, {
     colorize: true,
@@ -215,7 +227,14 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const recent = sessions.slice(0, 5);
 
   return {
-    web: { linked: webContext.linked, authAgeMs: webContext.authAgeMs },
+    linkProvider: linkContext
+      ? {
+          id: linkContext.plugin.id,
+          label: linkContext.plugin.meta.label ?? "Provider",
+          linked: linkContext.linked,
+          authAgeMs: linkContext.authAgeMs,
+        }
+      : undefined,
     heartbeatSeconds,
     providerSummary,
     queuedSystemEvents,
@@ -795,18 +814,18 @@ export async function statusCommand(
   const dashboard = (() => {
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) return "disabled";
-    const links = resolveControlUiLinks({
-      port: resolveGatewayPort(cfg),
-      bind: cfg.gateway?.bind,
-      basePath: cfg.gateway?.controlUi?.basePath,
-    });
-    return links.httpUrl;
-  })();
+	    const links = resolveControlUiLinks({
+	      port: resolveGatewayPort(cfg),
+	      bind: cfg.gateway?.bind,
+	      basePath: cfg.gateway?.controlUi?.basePath,
+	    });
+	    return links.httpUrl;
+	  })();
 
-  const gatewayValue = (() => {
-    const target = remoteUrlMissing
-      ? `fallback ${gatewayConnection.url}`
-      : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
+	  const gatewayValue = (() => {
+	    const target = remoteUrlMissing
+	      ? `fallback ${gatewayConnection.url}`
+	      : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
     const reach = remoteUrlMissing
       ? warn("misconfigured (remote.url missing)")
       : gatewayReachable
@@ -1031,32 +1050,24 @@ export async function statusCommand(
       Status: ok("reachable"),
       Detail: `${health.durationMs}ms`,
     });
-    rows.push({
-      Provider: "Telegram",
-      Status: health.telegram.configured
-        ? health.telegram.probe?.ok
-          ? ok("OK")
-          : warn("WARN")
-        : muted("OFF"),
-      Detail: health.telegram.configured
-        ? health.telegram.probe?.ok
-          ? `@${health.telegram.probe.bot?.username ?? "unknown"} · ${health.telegram.probe.elapsedMs}ms`
-          : (health.telegram.probe?.error ?? "probe failed")
-        : "not configured",
-    });
-    rows.push({
-      Provider: "Discord",
-      Status: health.discord.configured
-        ? health.discord.probe?.ok
-          ? ok("OK")
-          : warn("WARN")
-        : muted("OFF"),
-      Detail: health.discord.configured
-        ? health.discord.probe?.ok
-          ? `@${health.discord.probe.bot?.username ?? "unknown"} · ${health.discord.probe.elapsedMs}ms`
-          : (health.discord.probe?.error ?? "probe failed")
-        : "not configured",
-    });
+
+    for (const line of formatHealthProviderLines(health)) {
+      const colon = line.indexOf(":");
+      if (colon === -1) continue;
+      const provider = line.slice(0, colon).trim();
+      const detail = line.slice(colon + 1).trim();
+      const normalized = detail.toLowerCase();
+      const status = (() => {
+        if (normalized.startsWith("ok")) return ok("OK");
+        if (normalized.startsWith("failed")) return warn("WARN");
+        if (normalized.startsWith("not configured")) return muted("OFF");
+        if (normalized.startsWith("configured")) return ok("OK");
+        if (normalized.startsWith("linked")) return ok("LINKED");
+        if (normalized.startsWith("not linked")) return warn("UNLINKED");
+        return warn("WARN");
+      })();
+      rows.push({ Provider: provider, Status: status, Detail: detail });
+    }
 
     runtime.log(
       renderTable({

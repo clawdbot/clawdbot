@@ -1159,7 +1159,7 @@ ${theme.muted("Docs:")} ${formatDocsLink(
 
   program
     .command("status")
-    .description("Show local status (gateway, agents, sessions, auth)")
+    .description("Show provider health and recent session recipients")
     .option("--json", "Output JSON instead of text", false)
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show provider usage/quota snapshots", false)

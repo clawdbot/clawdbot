@@ -384,10 +384,10 @@ function buildSnapshot(): Snapshot {
   };
 }
 
-async function refreshHealthSnapshot(_opts?: { probe?: boolean }) {
+async function refreshHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot(undefined);
+      const snap = await getHealthSnapshot({ probe: opts?.probe });
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {

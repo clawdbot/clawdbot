@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { Command } from "commander";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { formatHealthProviderLines, type HealthSummary } from "../commands/health.js";
 import { gatewayStatusCommand } from "../commands/gateway-status.js";
 import { handleReset } from "../commands/onboard-helpers.js";
 import {
@@ -947,28 +948,10 @@ export function registerGatewayCli(program: Command) {
               durationMs != null ? ` (${durationMs}ms)` : ""
             }`,
           );
-          if (obj.web && typeof obj.web === "object") {
-            const web = obj.web as Record<string, unknown>;
-            const linked = web.linked === true;
-            defaultRuntime.log(
-              `Web: ${linked ? "linked" : "not linked"}${
-                typeof web.authAgeMs === "number" && linked
-                  ? ` (${Math.round(web.authAgeMs / 60_000)}m)`
-                  : ""
-              }`,
-            );
-          }
-          if (obj.telegram && typeof obj.telegram === "object") {
-            const tg = obj.telegram as Record<string, unknown>;
-            defaultRuntime.log(
-              `Telegram: ${tg.configured === true ? "configured" : "not configured"}`,
-            );
-          }
-          if (obj.discord && typeof obj.discord === "object") {
-            const dc = obj.discord as Record<string, unknown>;
-            defaultRuntime.log(
-              `Discord: ${dc.configured === true ? "configured" : "not configured"}`,
-            );
+          if (obj.providers && typeof obj.providers === "object") {
+            for (const line of formatHealthProviderLines(obj as HealthSummary)) {
+              defaultRuntime.log(line);
+            }
           }
         } catch (err) {
           defaultRuntime.error(String(err));

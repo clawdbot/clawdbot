@@ -32,22 +32,29 @@ describe("healthCommand (coverage)", () => {
       ok: true,
       ts: Date.now(),
       durationMs: 5,
-      web: {
-        linked: true,
-        authAgeMs: 5 * 60_000,
-        connect: { ok: true, status: 200, elapsedMs: 10 },
-      },
-      telegram: {
-        configured: true,
-        probe: {
-          ok: true,
-          elapsedMs: 7,
-          bot: { username: "bot" },
-          webhook: { url: "https://example.com/h" },
+      providers: {
+        whatsapp: {
+          linked: true,
+          authAgeMs: 5 * 60_000,
+        },
+        telegram: {
+          configured: true,
+          probe: {
+            ok: true,
+            elapsedMs: 7,
+            bot: { username: "bot" },
+            webhook: { url: "https://example.com/h" },
+          },
+        },
+        discord: {
+          configured: false,
         },
       },
-      discord: {
-        configured: false,
+      providerOrder: ["whatsapp", "telegram", "discord"],
+      providerLabels: {
+        whatsapp: "WhatsApp",
+        telegram: "Telegram",
+        discord: "Discord",
       },
       heartbeatSeconds: 60,
       sessions: {
@@ -64,7 +71,7 @@ describe("healthCommand (coverage)", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(
-      /Web: linked/i,
+      /WhatsApp: linked/i,
     );
     expect(logWebSelfIdMock).toHaveBeenCalled();
   });
