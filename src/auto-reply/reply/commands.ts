@@ -679,10 +679,16 @@ export async function handleCommands(params: {
       };
     }
     const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
+    if (
+      !snapshot.valid ||
+      !snapshot.parsed ||
+      typeof snapshot.parsed !== "object"
+    ) {
       return {
         shouldContinue: false,
-        reply: { text: "⚠️ Config file is invalid; fix it before using /config." },
+        reply: {
+          text: "⚠️ Config file is invalid; fix it before using /config.",
+        },
       };
     }
     const parsedBase = structuredClone(

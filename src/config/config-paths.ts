@@ -9,11 +9,17 @@ export function parseConfigPath(raw: string): {
 } {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { ok: false, error: "Invalid path. Use dot notation (e.g. foo.bar)." };
+    return {
+      ok: false,
+      error: "Invalid path. Use dot notation (e.g. foo.bar).",
+    };
   }
   const parts = trimmed.split(".").map((part) => part.trim());
   if (parts.some((part) => !part)) {
-    return { ok: false, error: "Invalid path. Use dot notation (e.g. foo.bar)." };
+    return {
+      ok: false,
+      error: "Invalid path. Use dot notation (e.g. foo.bar).",
+    };
   }
   if (parts.some((part) => BLOCKED_KEYS.has(part))) {
     return { ok: false, error: "Invalid path segment." };
@@ -66,10 +72,7 @@ export function unsetConfigValueAtPath(
   return true;
 }
 
-export function getConfigValueAtPath(
-  root: PathNode,
-  path: string[],
-): unknown {
+export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
     if (!isPlainObject(cursor)) return undefined;

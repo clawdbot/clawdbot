@@ -1,6 +1,7 @@
-export function parseConfigValue(
-  raw: string,
-): { value?: unknown; error?: string } {
+export function parseConfigValue(raw: string): {
+  value?: unknown;
+  error?: string;
+} {
   const trimmed = raw.trim();
   if (!trimmed) return { error: "Missing value." };
 
@@ -22,7 +23,7 @@ export function parseConfigValue(
   }
 
   if (
-    (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
     (trimmed.startsWith("'") && trimmed.endsWith("'"))
   ) {
     try {
