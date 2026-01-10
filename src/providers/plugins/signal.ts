@@ -18,6 +18,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import { normalizeSignalMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
@@ -111,8 +112,7 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
         allowFrom: account.config.allowFrom ?? [],
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
-        approveHint:
-          "Approve via: clawdbot pairing list --provider signal / clawdbot pairing approve --provider signal <code>",
+        approveHint: formatPairingApproveHint("signal"),
         normalizeEntry: (raw) =>
           normalizeE164(raw.replace(/^signal:/i, "").trim()),
       };

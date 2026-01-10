@@ -22,6 +22,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveDiscordGroupRequireMention } from "./group-mentions.js";
 import { normalizeDiscordMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
@@ -111,8 +112,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
         policy: account.config.dm?.policy ?? "pairing",
         allowFrom: account.config.dm?.allowFrom ?? [],
         allowFromPath,
-        approveHint:
-          "Approve via: clawdbot pairing list --provider discord / clawdbot pairing approve --provider discord <code>",
+        approveHint: formatPairingApproveHint("discord"),
         normalizeEntry: (raw) =>
           raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };

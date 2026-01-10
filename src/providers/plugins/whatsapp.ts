@@ -31,6 +31,7 @@ import {
 } from "../../whatsapp/normalize.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 import {
@@ -140,8 +141,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         allowFrom: account.allowFrom ?? [],
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
-        approveHint:
-          "Approve via: clawdbot pairing list --provider whatsapp / clawdbot pairing approve --provider whatsapp <code>",
+        approveHint: formatPairingApproveHint("whatsapp"),
         normalizeEntry: (raw) => normalizeE164(raw),
       };
     },

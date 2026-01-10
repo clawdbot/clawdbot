@@ -23,6 +23,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveSlackGroupRequireMention } from "./group-mentions.js";
 import { normalizeSlackMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
@@ -108,8 +109,7 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
         policy: account.dm?.policy ?? "pairing",
         allowFrom: account.dm?.allowFrom ?? [],
         allowFromPath,
-        approveHint:
-          "Approve via: clawdbot pairing list --provider slack / clawdbot pairing approve --provider slack <code>",
+        approveHint: formatPairingApproveHint("slack"),
         normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
       };
     },

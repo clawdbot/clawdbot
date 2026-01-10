@@ -26,6 +26,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
 import { normalizeTelegramMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
@@ -117,8 +118,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
         allowFrom: account.config.allowFrom ?? [],
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
-        approveHint:
-          "Approve via: clawdbot pairing list --provider telegram / clawdbot pairing approve --provider telegram <code>",
+        approveHint: formatPairingApproveHint("telegram"),
         normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
       };
     },

@@ -16,3 +16,7 @@ export function resolveProviderDefaultAccountId<ResolvedAccount>(params: {
     DEFAULT_ACCOUNT_ID
   );
 }
+
+export function formatPairingApproveHint(providerId: string): string {
+  return `Approve via: clawdbot pairing list ${providerId} / clawdbot pairing approve ${providerId} <code>`;
+}

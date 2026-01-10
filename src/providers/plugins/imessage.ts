@@ -17,6 +17,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveIMessageGroupRequireMention } from "./group-mentions.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
@@ -95,8 +96,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
         allowFrom: account.config.allowFrom ?? [],
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
-        approveHint:
-          "Approve via: clawdbot pairing list --provider imessage / clawdbot pairing approve --provider imessage <code>",
+        approveHint: formatPairingApproveHint("imessage"),
       };
     },
   },
