@@ -15,9 +15,6 @@ import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 export type TextChunkProvider = ProviderId | typeof INTERNAL_MESSAGE_PROVIDER;
 
 const DEFAULT_CHUNK_LIMIT = 4000;
-const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Partial<Record<ProviderId, number>> = {
-  discord: 2000,
-};
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
@@ -51,7 +48,12 @@ export function resolveTextChunkLimit(
   cfg: ClawdbotConfig | undefined,
   provider?: TextChunkProvider,
   accountId?: string | null,
+  opts?: { fallbackLimit?: number },
 ): number {
+  const fallback =
+    typeof opts?.fallbackLimit === "number" && opts.fallbackLimit > 0
+      ? opts.fallbackLimit
+      : DEFAULT_CHUNK_LIMIT;
   const providerOverride = (() => {
     if (!provider || provider === INTERNAL_MESSAGE_PROVIDER) return undefined;
     const providerConfig = (cfg as Record<string, unknown> | undefined)?.[
@@ -62,10 +64,7 @@ export function resolveTextChunkLimit(
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
   }
-  if (provider && provider !== INTERNAL_MESSAGE_PROVIDER) {
-    return DEFAULT_CHUNK_LIMIT_BY_PROVIDER[provider] ?? DEFAULT_CHUNK_LIMIT;
-  }
-  return DEFAULT_CHUNK_LIMIT;
+  return fallback;
 }
 
 export function chunkText(text: string, limit: number): string[] {

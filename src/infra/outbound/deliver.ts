@@ -43,6 +43,7 @@ type Chunker = (text: string, limit: number) => string[];
 
 type ProviderHandler = {
   chunker: Chunker | null;
+  textChunkLimit?: number;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
   sendMedia: (
     caption: string,
@@ -93,6 +94,7 @@ function createPluginHandler(params: {
   const chunker = outbound.chunker ?? null;
   return {
     chunker,
+    textChunkLimit: outbound.textChunkLimit,
     sendText: async (text) =>
       sendText({
         cfg: params.cfg,
@@ -140,7 +142,9 @@ export async function deliverOutboundPayloads(params: {
     gifPlayback: params.gifPlayback,
   });
   const textLimit = handler.chunker
-    ? resolveTextChunkLimit(cfg, provider, accountId)
+    ? resolveTextChunkLimit(cfg, provider, accountId, {
+        fallbackLimit: handler.textChunkLimit,
+      })
     : undefined;
 
   const sendTextChunks = async (text: string) => {
