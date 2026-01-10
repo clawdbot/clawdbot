@@ -110,7 +110,7 @@ import {
   type ProviderId,
 } from "../providers/plugins/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { isWebchatClient } from "../utils/message-provider.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
 import {
@@ -1276,8 +1276,7 @@ export async function startGatewayServer(
     });
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
-      params?.client?.mode === INTERNAL_MESSAGE_PROVIDER ||
-      params?.client?.name === "webchat-ui";
+      isWebchatClient(params?.client);
     let handshakeState: "pending" | "connected" | "failed" = "pending";
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
@@ -1859,17 +1858,11 @@ export async function startGatewayServer(
     }
 
     const { cfg, entry } = loadSessionEntry(sessionKey);
-    const lastProvider =
-      entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
-        ? entry.lastProvider
-        : undefined;
+    const lastProvider = entry?.lastProvider;
     const lastTo = entry?.lastTo?.trim();
     const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
     const providerRaw = lastProvider ?? parsedTarget?.provider;
-    const provider =
-      providerRaw && providerRaw !== INTERNAL_MESSAGE_PROVIDER
-        ? normalizeProviderId(providerRaw)
-        : undefined;
+    const provider = providerRaw ? normalizeProviderId(providerRaw) : null;
     const to = lastTo || parsedTarget?.to;
     if (!provider || !to) {
       enqueueSystemEvent(message, { sessionKey });

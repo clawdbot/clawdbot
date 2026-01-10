@@ -7,6 +7,16 @@ import {
 export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
 export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
 
+export function isInternalMessageProvider(raw?: string | null): boolean {
+  return normalizeMessageProvider(raw) === INTERNAL_MESSAGE_PROVIDER;
+}
+
+export function isWebchatClient(
+  client?: { mode?: string; name?: string } | null,
+): boolean {
+  return isInternalMessageProvider(client?.mode) || client?.name === "webchat-ui";
+}
+
 export function normalizeMessageProvider(
   raw?: string | null,
 ): string | undefined {
