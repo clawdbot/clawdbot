@@ -1902,7 +1902,7 @@ Convenience flags (CLI):
 - `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
-See [`docs/gateway.md`](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
+See [Gateway runbook](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
 
 Example:
 ```bash

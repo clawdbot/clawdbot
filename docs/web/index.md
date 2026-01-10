@@ -11,13 +11,13 @@ The Gateway serves a small **browser Control UI** (Vite + Lit) from the same por
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdbot`)
 
-Capabilities live in [`docs/control-ui.md`](https://docs.clawd.bot/web/control-ui).
+Capabilities live in [Control UI](/web/control-ui).
 This page focuses on bind modes, security, and web-facing surfaces.
 
 ## Webhooks
 
 When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
-See [`docs/configuration.md`](https://docs.clawd.bot/gateway/configuration) → `hooks` for auth + payloads.
+See [Gateway configuration](/gateway/configuration) → `hooks` for auth + payloads.
 
 ## Config (default-on)
 

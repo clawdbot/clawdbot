@@ -34,12 +34,13 @@ index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c
                          const reasoningItem = JSON.parse(block.thinkingSignature);
                          output.push(reasoningItem);
                      }
-@@ -470,6 +476,15 @@ function convertMessages(model, context) {
+@@ -470,6 +476,16 @@ function convertMessages(model, context) {
              }
              if (output.length === 0)
                  continue;
 +            // OpenAI rejects standalone reasoning items when replaying a tool-only turn.
 +            // Only submit reasoning items when we also submit an assistant message item.
++            // Repro: pnpm test src/agents/openai-responses.reasoning-replay.test.ts
 +            const hasMessage = output.some((item) => item?.type === "message");
 +            if (!hasMessage) {
 +                for (let i = output.length - 1; i >= 0; i -= 1) {
@@ -50,7 +51,7 @@ index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c
              messages.push(...output);
          }
          else if (msg.role === "toolResult") {
-@@ -515,7 +530,7 @@ function convertTools(tools) {
+@@ -515,7 +531,7 @@ function convertTools(tools) {
          name: tool.name,
          description: tool.description,
          parameters: tool.parameters,
@@ -63,12 +64,13 @@ diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-response
 index f07085c64390b211340d6a826b28ea9c2e77302f..523ed38a5a6151d6ff08dd89120315e7aaaf19b6 100644
 --- a/dist/providers/openai-responses.js
 +++ b/dist/providers/openai-responses.js
-@@ -436,6 +436,15 @@ function convertMessages(model, context) {
+@@ -436,6 +436,16 @@ function convertMessages(model, context) {
              }
              if (output.length === 0)
                  continue;
 +            // OpenAI rejects standalone reasoning items when replaying a tool-only turn.
 +            // Only submit reasoning items when we also submit an assistant message item.
++            // Repro: pnpm test src/agents/openai-responses.reasoning-replay.test.ts
 +            const hasMessage = output.some((item) => item?.type === "message");
 +            if (!hasMessage) {
 +                for (let i = output.length - 1; i >= 0; i -= 1) {

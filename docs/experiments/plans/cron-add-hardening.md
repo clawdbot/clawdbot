@@ -41,7 +41,7 @@ Recent gateway logs show repeated `cron.add` failures with invalid parameters (m
 - **Defaults:** safe defaults are applied for `wakeMode` and `sessionTarget` when missing.
 - **Providers:** Discord/Slack/Signal/iMessage are now consistently surfaced across CLI/UI.
 
-See [`docs/cron-jobs.md`](/automation/cron-jobs) for the normalized shape and examples.
+See [Cron jobs](/automation/cron-jobs) for the normalized shape and examples.
 
 ## Verification
 

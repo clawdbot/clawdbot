@@ -19,8 +19,8 @@ read_when:
 <p align="center">
   <a href="https://github.com/clawdbot/clawdbot">GitHub</a> ·
   <a href="https://github.com/clawdbot/clawdbot/releases">Releases</a> ·
-  <a href="https://docs.clawd.bot">Docs</a> ·
-  <a href="https://docs.clawd.bot/start/clawd">Clawdbot assistant setup</a>
+  <a href="/">Docs</a> ·
+  <a href="/start/clawd">Clawdbot assistant setup</a>
 </p>
 
 Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
@@ -28,8 +28,8 @@ Clawdbot also powers [Clawd](https://clawd.me), the space‑lobster assistant.
 
 ## Start here
 
-- **New install from zero:** https://docs.clawd.bot/start/getting-started
-- **Guided setup (recommended):** https://docs.clawd.bot/start/wizard (`clawdbot onboard`)
+- **New install from zero:** [Getting Started](/start/getting-started)
+- **Guided setup (recommended):** [Wizard](/start/wizard) (`clawdbot onboard`)
 - **Open the dashboard (local Gateway):** http://127.0.0.1:18789/ (or http://localhost:18789/)
 
 If the Gateway is running on the same computer, that link opens the browser Control UI
@@ -39,7 +39,7 @@ immediately. If it fails, start the Gateway first: `clawdbot gateway`.
 
 The dashboard is the browser Control UI for chat, config, nodes, sessions, and more.
 Local default: http://127.0.0.1:18789/
-Remote access: https://docs.clawd.bot/web and https://docs.clawd.bot/gateway/tailscale
+Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 
 ## How it works
 
@@ -70,8 +70,8 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - **Loopback-first**: Gateway WS defaults to `ws://127.0.0.1:18789`.
   - For Tailnet access, run `clawdbot gateway --bind tailnet --token ...` (token is required for non-loopback binds).
 - **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
-- **Canvas host**: HTTP file server on `canvasHost.port` (default `18793`), serving `/__clawdbot__/canvas/` for node WebViews; see [`docs/configuration.md`](https://docs.clawd.bot/gateway/configuration) (`canvasHost`).
-- **Remote use**: SSH tunnel or tailnet/VPN; see [`docs/remote.md`](https://docs.clawd.bot/gateway/remote) and [`docs/discovery.md`](https://docs.clawd.bot/gateway/discovery).
+- **Canvas host**: HTTP file server on `canvasHost.port` (default `18793`), serving `/__clawdbot__/canvas/` for node WebViews; see [Gateway configuration](/gateway/configuration) (`canvasHost`).
+- **Remote use**: SSH tunnel or tailnet/VPN; see [Remote access](/gateway/remote) and [Discovery](/gateway/discovery).
 
 ## Features (high level)
 
@@ -161,48 +161,48 @@ Example:
 ## Docs
 
 - Start here:
-  - [Docs hubs (all pages linked)](https://docs.clawd.bot/start/hubs)
-  - [FAQ](https://docs.clawd.bot/start/faq) ← *common questions answered*
-  - [Configuration](https://docs.clawd.bot/gateway/configuration)
-  - [Configuration examples](https://docs.clawd.bot/gateway/configuration-examples)
-  - [Slash commands](https://docs.clawd.bot/tools/slash-commands)
-  - [Multi-agent routing](https://docs.clawd.bot/concepts/multi-agent)
-  - [Updating / rollback](https://docs.clawd.bot/install/updating)
-  - [Pairing (DM + nodes)](https://docs.clawd.bot/start/pairing)
-  - [Nix mode](https://docs.clawd.bot/install/nix)
-  - [Clawdbot assistant setup (Clawd)](https://docs.clawd.bot/start/clawd)
-  - [Skills](https://docs.clawd.bot/tools/skills)
-  - [Skills config](https://docs.clawd.bot/tools/skills-config)
-  - [Workspace templates](https://docs.clawd.bot/reference/templates/AGENTS)
-  - [RPC adapters](https://docs.clawd.bot/reference/rpc)
-  - [Gateway runbook](https://docs.clawd.bot/gateway)
-  - [Nodes (iOS/Android)](https://docs.clawd.bot/nodes)
-  - [Web surfaces (Control UI)](https://docs.clawd.bot/web)
-  - [Discovery + transports](https://docs.clawd.bot/gateway/discovery)
-  - [Remote access](https://docs.clawd.bot/gateway/remote)
+  - [Docs hubs (all pages linked)](/start/hubs)
+  - [FAQ](/start/faq) ← *common questions answered*
+  - [Configuration](/gateway/configuration)
+  - [Configuration examples](/gateway/configuration-examples)
+  - [Slash commands](/tools/slash-commands)
+  - [Multi-agent routing](/concepts/multi-agent)
+  - [Updating / rollback](/install/updating)
+  - [Pairing (DM + nodes)](/start/pairing)
+  - [Nix mode](/install/nix)
+  - [Clawdbot assistant setup (Clawd)](/start/clawd)
+  - [Skills](/tools/skills)
+  - [Skills config](/tools/skills-config)
+  - [Workspace templates](/reference/templates/AGENTS)
+  - [RPC adapters](/reference/rpc)
+  - [Gateway runbook](/gateway)
+  - [Nodes (iOS/Android)](/nodes)
+  - [Web surfaces (Control UI)](/web)
+  - [Discovery + transports](/gateway/discovery)
+  - [Remote access](/gateway/remote)
 - Providers and UX:
-  - [WebChat](https://docs.clawd.bot/web/webchat)
-  - [Control UI (browser)](https://docs.clawd.bot/web/control-ui)
-  - [Telegram](https://docs.clawd.bot/providers/telegram)
-  - [Discord](https://docs.clawd.bot/providers/discord)
-  - [iMessage](https://docs.clawd.bot/providers/imessage)
-  - [Groups](https://docs.clawd.bot/concepts/groups)
-  - [WhatsApp group messages](https://docs.clawd.bot/concepts/group-messages)
-  - [Media: images](https://docs.clawd.bot/nodes/images)
-  - [Media: audio](https://docs.clawd.bot/nodes/audio)
+  - [WebChat](/web/webchat)
+  - [Control UI (browser)](/web/control-ui)
+  - [Telegram](/providers/telegram)
+  - [Discord](/providers/discord)
+  - [iMessage](/providers/imessage)
+  - [Groups](/concepts/groups)
+  - [WhatsApp group messages](/concepts/group-messages)
+  - [Media: images](/nodes/images)
+  - [Media: audio](/nodes/audio)
 - Companion apps:
-  - [macOS app](https://docs.clawd.bot/platforms/macos)
-  - [iOS app](https://docs.clawd.bot/platforms/ios)
-  - [Android app](https://docs.clawd.bot/platforms/android)
-  - [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
-  - [Linux app](https://docs.clawd.bot/platforms/linux)
+  - [macOS app](/platforms/macos)
+  - [iOS app](/platforms/ios)
+  - [Android app](/platforms/android)
+  - [Windows (WSL2)](/platforms/windows)
+  - [Linux app](/platforms/linux)
 - Ops and safety:
-  - [Sessions](https://docs.clawd.bot/concepts/session)
-  - [Cron jobs](https://docs.clawd.bot/automation/cron-jobs)
-  - [Webhooks](https://docs.clawd.bot/automation/webhook)
-  - [Gmail hooks (Pub/Sub)](https://docs.clawd.bot/automation/gmail-pubsub)
-  - [Security](https://docs.clawd.bot/gateway/security)
-  - [Troubleshooting](https://docs.clawd.bot/gateway/troubleshooting)
+  - [Sessions](/concepts/session)
+  - [Cron jobs](/automation/cron-jobs)
+  - [Webhooks](/automation/webhook)
+  - [Gmail hooks (Pub/Sub)](/automation/gmail-pubsub)
+  - [Security](/gateway/security)
+  - [Troubleshooting](/gateway/troubleshooting)
 
 ## The name
 

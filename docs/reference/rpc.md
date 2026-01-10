@@ -14,7 +14,7 @@ Clawdbot integrates external CLIs via JSON-RPC. Two patterns are used today.
 - Health probe: `/api/v1/check`.
 - Clawdbot owns lifecycle when `signal.autoStart=true`.
 
-See [`docs/signal.md`](/providers/signal) for setup and endpoints.
+See [Signal](/providers/signal) for setup and endpoints.
 
 ## Pattern B: stdio child process (imsg)
 - Clawdbot spawns `imsg rpc` as a child process.
@@ -27,7 +27,7 @@ Core methods used:
 - `send`
 - `chats.list` (probe/diagnostics)
 
-See [`docs/imessage.md`](/providers/imessage) for setup and addressing (`chat_id` preferred).
+See [iMessage](/providers/imessage) for setup and addressing (`chat_id` preferred).
 
 ## Adapter guidelines
 - Gateway owns the process (start/stop tied to provider lifecycle).

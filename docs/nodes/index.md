@@ -14,7 +14,7 @@ macOS can also run in **node mode**: the menubar app connects to the Gateway’s
 
 ## Pairing + status
 
-Pairing is gateway-owned and approval-based. See [`docs/gateway/pairing.md`](/gateway/pairing) for the full flow.
+Pairing is gateway-owned and approval-based. See [Gateway pairing](/gateway/pairing) for the full flow.
 
 Quick CLI:
 

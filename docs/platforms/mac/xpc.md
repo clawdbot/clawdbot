@@ -21,7 +21,7 @@ read_when:
 - UI automation uses a separate UNIX socket named `bridge.sock` and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app → Claude.app → Clawdbot.app → local execution.
 - Security: bridge hosts require TeamID `Y5PE65HELJ`; DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
-- See: [`docs/mac/peekaboo.md`](/platforms/mac/peekaboo) for PeekabooBridge usage.
+- See: [PeekabooBridge usage](/platforms/mac/peekaboo) for details.
 
 ### Mach/XPC
 - Not required for automation; `node.invoke` + PeekabooBridge cover current needs.

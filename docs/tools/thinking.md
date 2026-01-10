@@ -46,7 +46,7 @@ read_when:
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 
 ## Related
-- Elevated mode docs live in [`docs/elevated.md`](/tools/elevated).
+- Elevated mode docs live in [Elevated mode](/tools/elevated).
 
 ## Heartbeats
 - Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).

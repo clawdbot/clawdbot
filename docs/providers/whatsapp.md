@@ -213,7 +213,7 @@ Behavior:
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
-- Troubleshooting guide: [`docs/troubleshooting.md`](/gateway/troubleshooting).
+- Troubleshooting guide: [Gateway troubleshooting](/gateway/troubleshooting).
 
 ## Troubleshooting (quick)
 

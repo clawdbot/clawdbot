@@ -215,4 +215,4 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - Group replies always go back to the same `chat_id`.
 
 ## WhatsApp specifics
-See [`docs/group-messages.md`](/concepts/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
+See [Group messages](/concepts/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
