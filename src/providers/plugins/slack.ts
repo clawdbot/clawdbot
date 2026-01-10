@@ -96,6 +96,21 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
     resolveReplyToMode: ({ cfg, accountId }) =>
       resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
     allowTagsWhenOff: true,
+    buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
+      const configuredReplyToMode =
+        resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off";
+      const effectiveReplyToMode = context.ThreadLabel
+        ? "all"
+        : configuredReplyToMode;
+      return {
+        currentChannelId: context.To?.startsWith("channel:")
+          ? context.To.slice("channel:".length)
+          : undefined,
+        currentThreadTs: context.ReplyToId,
+        replyToMode: effectiveReplyToMode,
+        hasRepliedRef,
+      };
+    },
   },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,

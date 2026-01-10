@@ -84,6 +84,7 @@ export type ProviderMeta = {
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
+  preferSessionLookupForAnnounceTarget?: boolean;
 };
 
 export type ProviderAccountSnapshot = {
@@ -364,6 +365,26 @@ export type ProviderThreadingAdapter = {
     accountId?: string | null;
   }) => "off" | "first" | "all";
   allowTagsWhenOff?: boolean;
+  buildToolContext?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    context: ProviderThreadingContext;
+    hasRepliedRef?: { value: boolean };
+  }) => ProviderThreadingToolContext | undefined;
+};
+
+export type ProviderThreadingContext = {
+  Provider?: string;
+  To?: string;
+  ReplyToId?: string;
+  ThreadLabel?: string;
+};
+
+export type ProviderThreadingToolContext = {
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  replyToMode?: "off" | "first" | "all";
+  hasRepliedRef?: { value: boolean };
 };
 
 export type ProviderMessagingAdapter = {
