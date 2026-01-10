@@ -6,12 +6,10 @@ import {
   createWriteTool,
   readTool,
 } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import type { ClawdbotConfig } from "../config/config.js";
 import { detectMime } from "../media/mime.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageProvider } from "../utils/message-provider.js";
-import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import {
   resolveAgentConfig,
   resolveAgentIdFromSessionKey,
@@ -24,6 +22,7 @@ import {
 } from "./bash-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
 import type { ModelAuthMode } from "./model-auth.js";
+import { listProviderAgentTools } from "./provider-tools.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
@@ -400,76 +399,6 @@ function createSandboxedEditTool(root: string) {
   return wrapSandboxPathGuard(base as unknown as AnyAgentTool, root);
 }
 
-// Provider docking: migrate provider-specific login tools here if new providers need QR/interactive login.
-function createWhatsAppLoginTool(): AnyAgentTool {
-  return {
-    label: "WhatsApp Login",
-    name: "whatsapp_login",
-    description:
-      "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
-    // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)])
-    // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
-    parameters: Type.Object({
-      action: Type.Unsafe<"start" | "wait">({
-        type: "string",
-        enum: ["start", "wait"],
-      }),
-      timeoutMs: Type.Optional(Type.Number()),
-      force: Type.Optional(Type.Boolean()),
-    }),
-    execute: async (_toolCallId, args) => {
-      const action = (args as { action?: string })?.action ?? "start";
-      if (action === "wait") {
-        const result = await waitForWebLogin({
-          timeoutMs:
-            typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-              ? (args as { timeoutMs?: number }).timeoutMs
-              : undefined,
-        });
-        return {
-          content: [{ type: "text", text: result.message }],
-          details: { connected: result.connected },
-        };
-      }
-
-      const result = await startWebLoginWithQr({
-        timeoutMs:
-          typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (args as { timeoutMs?: number }).timeoutMs
-            : undefined,
-        force:
-          typeof (args as { force?: unknown }).force === "boolean"
-            ? (args as { force?: boolean }).force
-            : false,
-      });
-
-      if (!result.qrDataUrl) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: result.message,
-            },
-          ],
-          details: { qr: false },
-        };
-      }
-
-      const text = [
-        result.message,
-        "",
-        "Open WhatsApp → Linked Devices and scan:",
-        "",
-        `![whatsapp-qr](${result.qrDataUrl})`,
-      ].join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: { qr: true },
-      };
-    },
-  };
-}
-
 function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   return {
     ...base,
@@ -636,7 +565,8 @@ export function createClawdbotCodingTools(options?: {
       : []),
     bashTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
-    createWhatsAppLoginTool(),
+    // Provider docking: include provider-defined agent tools (login, etc.).
+    ...listProviderAgentTools({ cfg: options?.config }),
     ...createClawdbotTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
