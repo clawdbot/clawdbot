@@ -60,6 +60,7 @@ Each `ProviderPlugin` bundles:
 - Reply threading uses `plugin.threading.resolveReplyToMode` and `plugin.threading.allowTagsWhenOff` rather than provider switches in reply helpers.
 - Tool auto-threading context flows through `plugin.threading.buildToolContext` (e.g., Slack threadTs injection).
 - Messaging tool dedupe now relies on `plugin.messaging.normalizeTarget` for provider-specific target normalization.
+- Message tool + CLI action dispatch now use `plugin.actions.listActions` + `plugin.actions.handleAction`; use `plugin.actions.supportsAction` for dispatch-only gating when you still want fallback send/poll.
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
 
 ## Adding a Provider (checklist)
