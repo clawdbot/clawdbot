@@ -45,6 +45,9 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
     media: true,
     nativeCommands: true,
   },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
   reload: { configPrefixes: ["discord"] },
   config: {
     listAccountIds: (cfg) => listDiscordAccountIds(cfg),
@@ -74,6 +77,10 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
     }),
+  },
+  elevated: {
+    allowFromFallback: ({ cfg, accountId }) =>
+      resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom,
   },
   outbound: {
     deliveryMode: "direct",

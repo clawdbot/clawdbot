@@ -269,6 +269,21 @@ export type ProviderCapabilities = {
   threads?: boolean;
   media?: boolean;
   nativeCommands?: boolean;
+  blockStreaming?: boolean;
+};
+
+export type ProviderElevatedAdapter = {
+  allowFromFallback?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+  }) => Array<string | number> | undefined;
+};
+
+export type ProviderStreamingAdapter = {
+  blockStreamingCoalesceDefaults?: {
+    minChars: number;
+    idleMs: number;
+  };
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: registry aggregates heterogeneous account types.
@@ -283,5 +298,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   status?: ProviderStatusAdapter<ResolvedAccount>;
   gatewayMethods?: string[];
   gateway?: ProviderGatewayAdapter<ResolvedAccount>;
+  elevated?: ProviderElevatedAdapter;
+  streaming?: ProviderStreamingAdapter;
   heartbeat?: ProviderHeartbeatAdapter;
 };

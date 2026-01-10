@@ -38,6 +38,9 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
     media: true,
     nativeCommands: true,
   },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
   reload: { configPrefixes: ["slack"] },
   config: {
     listAccountIds: (cfg) => listSlackAccountIds(cfg),

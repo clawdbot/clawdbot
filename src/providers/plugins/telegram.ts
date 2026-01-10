@@ -50,6 +50,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     threads: true,
     media: true,
     nativeCommands: true,
+    blockStreaming: true,
   },
   reload: { configPrefixes: ["telegram"] },
   config: {

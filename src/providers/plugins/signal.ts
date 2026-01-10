@@ -37,6 +37,9 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
     chatTypes: ["direct", "group"],
     media: true,
   },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
   reload: { configPrefixes: ["signal"] },
   config: {
     listAccountIds: (cfg) => listSignalAccountIds(cfg),
