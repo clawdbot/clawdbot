@@ -9,7 +9,7 @@ import {
 describe("formatOutboundDeliverySummary", () => {
   it("falls back when result is missing", () => {
     expect(formatOutboundDeliverySummary("telegram")).toBe(
-      "✅ Sent via telegram. Message ID: unknown",
+      "✅ Sent via Telegram. Message ID: unknown",
     );
     expect(formatOutboundDeliverySummary("imessage")).toBe(
       "✅ Sent via iMessage. Message ID: unknown",
@@ -23,7 +23,7 @@ describe("formatOutboundDeliverySummary", () => {
         messageId: "m1",
         chatId: "c1",
       }),
-    ).toBe("✅ Sent via telegram. Message ID: m1 (chat c1)");
+    ).toBe("✅ Sent via Telegram. Message ID: m1 (chat c1)");
 
     expect(
       formatOutboundDeliverySummary("discord", {
@@ -31,7 +31,7 @@ describe("formatOutboundDeliverySummary", () => {
         messageId: "d1",
         channelId: "chan",
       }),
-    ).toBe("✅ Sent via discord. Message ID: d1 (channel chan)");
+    ).toBe("✅ Sent via Discord. Message ID: d1 (channel chan)");
   });
 });
 
