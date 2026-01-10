@@ -18,51 +18,45 @@ const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Partial<Record<ProviderId, number>> = {
   discord: 2000,
 };
 
+type ProviderChunkConfig = {
+  textChunkLimit?: number;
+  accounts?: Record<string, { textChunkLimit?: number }>;
+};
+
+function resolveChunkLimitForProvider(
+  cfgSection: ProviderChunkConfig | undefined,
+  accountId?: string | null,
+): number | undefined {
+  if (!cfgSection) return undefined;
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const accounts = cfgSection.accounts;
+  if (accounts && typeof accounts === "object") {
+    const direct = accounts[normalizedAccountId];
+    if (typeof direct?.textChunkLimit === "number") {
+      return direct.textChunkLimit;
+    }
+    const matchKey = Object.keys(accounts).find(
+      (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
+    );
+    const match = matchKey ? accounts[matchKey] : undefined;
+    if (typeof match?.textChunkLimit === "number") {
+      return match.textChunkLimit;
+    }
+  }
+  return cfgSection.textChunkLimit;
+}
+
 export function resolveTextChunkLimit(
   cfg: ClawdbotConfig | undefined,
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): number {
   const providerOverride = (() => {
-    if (!provider) return undefined;
-    const normalizedAccountId = normalizeAccountId(accountId);
-    if (provider === "whatsapp") {
-      return cfg?.whatsapp?.textChunkLimit;
-    }
-    if (provider === "telegram") {
-      return (
-        cfg?.telegram?.accounts?.[normalizedAccountId]?.textChunkLimit ??
-        cfg?.telegram?.textChunkLimit
-      );
-    }
-    if (provider === "discord") {
-      return (
-        cfg?.discord?.accounts?.[normalizedAccountId]?.textChunkLimit ??
-        cfg?.discord?.textChunkLimit
-      );
-    }
-    if (provider === "slack") {
-      return (
-        cfg?.slack?.accounts?.[normalizedAccountId]?.textChunkLimit ??
-        cfg?.slack?.textChunkLimit
-      );
-    }
-    if (provider === "signal") {
-      return (
-        cfg?.signal?.accounts?.[normalizedAccountId]?.textChunkLimit ??
-        cfg?.signal?.textChunkLimit
-      );
-    }
-    if (provider === "imessage") {
-      return (
-        cfg?.imessage?.accounts?.[normalizedAccountId]?.textChunkLimit ??
-        cfg?.imessage?.textChunkLimit
-      );
-    }
-    if (provider === "msteams") {
-      return cfg?.msteams?.textChunkLimit;
-    }
-    return undefined;
+    if (!provider || provider === "webchat") return undefined;
+    const providerConfig = (cfg as Record<string, unknown> | undefined)?.[
+      provider
+    ] as ProviderChunkConfig | undefined;
+    return resolveChunkLimitForProvider(providerConfig, accountId);
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
