@@ -386,7 +386,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
-  const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId);
+  const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
+    fallbackLimit: 2000,
+  });
   const historyLimit = Math.max(
     0,
     opts.historyLimit ??
@@ -1701,7 +1703,9 @@ function createDiscordNativeCommand(params: {
           await deliverDiscordInteractionReply({
             interaction,
             payload,
-            textLimit: resolveTextChunkLimit(cfg, "discord", accountId),
+            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+              fallbackLimit: 2000,
+            }),
             maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             preferFollowUp: didReply,
           });
