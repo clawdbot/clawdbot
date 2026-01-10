@@ -355,6 +355,30 @@ export type ProviderCommandAdapter = {
   skipWhenConfigEmpty?: boolean;
 };
 
+export type ProviderSecurityDmPolicy = {
+  policy: string;
+  allowFrom?: Array<string | number> | null;
+  policyPath?: string;
+  allowFromPath: string;
+  approveHint: string;
+  normalizeEntry?: (raw: string) => string;
+};
+
+export type ProviderSecurityContext<ResolvedAccount = unknown> = {
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  account: ResolvedAccount;
+};
+
+export type ProviderSecurityAdapter<ResolvedAccount = unknown> = {
+  resolveDmPolicy?: (
+    ctx: ProviderSecurityContext<ResolvedAccount>,
+  ) => ProviderSecurityDmPolicy | null;
+  collectWarnings?: (
+    ctx: ProviderSecurityContext<ResolvedAccount>,
+  ) => Promise<string[]> | string[];
+};
+
 export type ProviderMentionAdapter = {
   stripPatterns?: (params: {
     ctx: MsgContext;
@@ -478,6 +502,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   config: ProviderConfigAdapter<ResolvedAccount>;
   setup?: ProviderSetupAdapter;
   pairing?: ProviderPairingAdapter;
+  security?: ProviderSecurityAdapter<ResolvedAccount>;
   groups?: ProviderGroupAdapter;
   mentions?: ProviderMentionAdapter;
   outbound?: ProviderOutboundAdapter;

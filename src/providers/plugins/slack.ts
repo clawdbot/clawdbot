@@ -96,6 +96,24 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
   },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.slack?.accounts?.[resolvedAccountId]);
+      const allowFromPath = useAccountPath
+        ? `slack.accounts.${resolvedAccountId}.dm.`
+        : "slack.dm.";
+      return {
+        policy: account.dm?.policy ?? "pairing",
+        allowFrom: account.dm?.allowFrom ?? [],
+        allowFromPath,
+        approveHint:
+          "Approve via: clawdbot pairing list --provider slack / clawdbot pairing approve --provider slack <code>",
+        normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
+      };
+    },
+  },
   groups: {
     resolveRequireMention: resolveSlackGroupRequireMention,
   },
