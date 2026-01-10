@@ -191,10 +191,6 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       };
     },
   },
-  elevated: {
-    allowFromFallback: ({ cfg, accountId }) =>
-      resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom,
-  },
   outbound: {
     deliveryMode: "direct",
     chunker: null,

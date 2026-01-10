@@ -101,16 +101,10 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
-export type AgentElevatedAllowFromConfig = {
-  whatsapp?: string[];
-  telegram?: Array<string | number>;
-  discord?: Array<string | number>;
-  slack?: Array<string | number>;
-  signal?: Array<string | number>;
-  imessage?: Array<string | number>;
-  msteams?: Array<string | number>;
-  webchat?: Array<string | number>;
-};
+// Provider docking: allowlists keyed by provider id (and internal "webchat").
+export type AgentElevatedAllowFromConfig = Partial<
+  Record<string, Array<string | number>>
+>;
 
 export type IdentityConfig = {
   name?: string;
