@@ -143,6 +143,18 @@ final class HealthStore {
         return summary.probe?.ok ?? true
     }
 
+    private static func describeProbeFailure(_ probe: HealthSnapshot.ProviderSummary.Probe) -> String {
+        let elapsed = probe.elapsedMs.map { "\(Int($0))ms" }
+        if let error = probe.error, error.lowercased().contains("timeout") || probe.status == nil {
+            if let elapsed { return "Health check timed out (\(elapsed))" }
+            return "Health check timed out"
+        }
+        let code = probe.status.map { "status \($0)" } ?? "status unknown"
+        let reason = probe.error?.isEmpty == false ? probe.error! : "health probe failed"
+        if let elapsed { return "\(reason) (\(code), \(elapsed))" }
+        return "\(reason) (\(code))"
+    }
+
     private func resolveLinkProvider(_ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ProviderSummary)? {
         let order = snap.providerOrder ?? Array(snap.providers.keys)
         for id in order {
@@ -176,6 +188,9 @@ final class HealthStore {
             let fallback = self.resolveFallbackProvider(snap, excluding: link.id)
             return fallback != nil ? .degraded("Not linked") : .linkingNeeded
         }
+        if let probe = link.summary.probe, probe.ok == false {
+            return .degraded(Self.describeProbeFailure(probe))
+        }
         return .ok
     }
 
@@ -193,6 +208,11 @@ final class HealthStore {
             return "Not linked — run clawdbot login"
         }
         let auth = link.summary.authAgeMs.map { msToAge($0) } ?? "unknown"
+        if let probe = link.summary.probe, probe.ok == false {
+            let status = probe.status.map(String.init) ?? "?"
+            let suffix = probe.status == nil ? "probe degraded" : "probe degraded · status \(status)"
+            return "linked · auth \(auth) · \(suffix)"
+        }
         return "linked · auth \(auth)"
     }
 
@@ -216,6 +236,9 @@ final class HealthStore {
     func describeFailure(from snap: HealthSnapshot, fallback: String?) -> String {
         if let link = self.resolveLinkProvider(snap), link.summary.linked != true {
             return "Not linked — run clawdbot login"
+        }
+        if let link = self.resolveLinkProvider(snap), let probe = link.summary.probe, probe.ok == false {
+            return Self.describeProbeFailure(probe)
         }
         if let fallback, !fallback.isEmpty {
             return fallback
