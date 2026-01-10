@@ -779,7 +779,9 @@ export const CronPayloadSchema = Type.Union([
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
       deliver: Type.Optional(Type.Boolean()),
-      provider: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+      provider: Type.Optional(
+        Type.Union([Type.Literal("last"), NonEmptyString]),
+      ),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
     },

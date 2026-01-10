@@ -566,7 +566,9 @@ export function buildEmbeddedSandboxInfo(
   bashElevated?: BashElevatedDefaults,
 ): EmbeddedSandboxInfo | undefined {
   if (!sandbox?.enabled) return undefined;
-  const elevatedAllowed = Boolean(bashElevated?.enabled && bashElevated.allowed);
+  const elevatedAllowed = Boolean(
+    bashElevated?.enabled && bashElevated.allowed,
+  );
   return {
     enabled: true,
     workspaceDir: sandbox.workspaceDir,
