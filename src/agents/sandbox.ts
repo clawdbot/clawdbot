@@ -19,6 +19,7 @@ import {
   loadConfig,
   STATE_DIR_CLAWDBOT,
 } from "../config/config.js";
+import { listProviderPlugins } from "../providers/plugins/index.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -182,8 +183,8 @@ const DEFAULT_TOOL_DENY = [
   "canvas",
   "nodes",
   "cron",
-  "discord",
   "gateway",
+  ...listProviderPlugins().map((plugin) => plugin.id),
 ];
 export const DEFAULT_SANDBOX_BROWSER_IMAGE =
   "clawdbot-sandbox-browser:bookworm-slim";
