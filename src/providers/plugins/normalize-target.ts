@@ -81,5 +81,5 @@ export function normalizeWhatsAppMessagingTarget(
 ): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
-  return normalizeWhatsAppTarget(trimmed) ?? trimmed;
+  return normalizeWhatsAppTarget(trimmed) ?? undefined;
 }

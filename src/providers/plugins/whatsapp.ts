@@ -4,7 +4,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../routing/session-key.js";
-import { normalizeE164 } from "../../utils.js";
 import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
@@ -112,9 +111,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) =>
-          entry === "*"
-            ? entry
-            : normalizeWhatsAppTarget(entry) ?? normalizeE164(entry),
+          entry === "*" ? entry : normalizeWhatsAppTarget(entry),
         )
         .filter(Boolean),
   },
@@ -180,12 +177,25 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       const hasWildcard = allowListRaw.includes("*");
       const allowList = allowListRaw
         .filter((entry) => entry !== "*")
-        .map((entry) => normalizeWhatsAppTarget(entry) ?? normalizeE164(entry))
-        .filter((entry) => entry.length > 1);
+        .map((entry) => normalizeWhatsAppTarget(entry))
+        .filter((entry): entry is string => Boolean(entry));
 
       if (trimmed) {
-        const normalizedTo =
-          normalizeWhatsAppTarget(trimmed) ?? normalizeE164(trimmed);
+        const normalizedTo = normalizeWhatsAppTarget(trimmed);
+        if (!normalizedTo) {
+          if (
+            (mode === "implicit" || mode === "heartbeat") &&
+            allowList.length > 0
+          ) {
+            return { ok: true, to: allowList[0] };
+          }
+          return {
+            ok: false,
+            error: new Error(
+              "Delivering to WhatsApp requires --to <E.164|group JID> or whatsapp.allowFrom[0]",
+            ),
+          };
+        }
         if (isWhatsAppGroupJid(normalizedTo)) {
           return { ok: true, to: normalizedTo };
         }
@@ -207,7 +217,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       return {
         ok: false,
         error: new Error(
-          "Delivering to WhatsApp requires --to <E.164> or whatsapp.allowFrom[0]",
+          "Delivering to WhatsApp requires --to <E.164|group JID> or whatsapp.allowFrom[0]",
         ),
       };
     },
