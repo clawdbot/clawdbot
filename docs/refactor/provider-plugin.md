@@ -52,6 +52,7 @@ Each `ProviderPlugin` bundles:
 - Onboarding quickstart allowlist uses `meta.quickstartAllowFrom` to avoid hardcoded provider lists.
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 - Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
+- Outbound delivery results accept `meta` for provider-specific fields to avoid core type churn in new plugins.
 - Agent gateway routing sets `deliveryTargetMode` and uses `resolveOutboundTarget` for implicit fallback targets when `to` is missing.
 - Elevated tool allowlists can fall back to `plugin.elevated.allowFromFallback` (ex: Discord DM allowFrom).
 - Block streaming defaults live on the plugin (`capabilities.blockStreaming`, `streaming.blockStreamingCoalesceDefaults`) instead of hardcoded provider checks.

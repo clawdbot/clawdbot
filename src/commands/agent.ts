@@ -33,7 +33,11 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
-import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
+import {
+  type CliDeps,
+  createDefaultDeps,
+  createOutboundSendDeps,
+} from "../cli/deps.js";
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
@@ -69,8 +73,9 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import {
-  normalizeMessageProvider,
   resolveMessageProvider,
+  resolveGatewayMessageProvider,
+  isInternalMessageProvider,
 } from "../utils/message-provider.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -571,16 +576,14 @@ export async function agentCommand(
   const payloads = result.payloads ?? [];
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryProviderRaw =
-    normalizeMessageProvider(opts.provider) ?? DEFAULT_CHAT_PROVIDER;
   const deliveryProvider =
-    deliveryProviderRaw === "webchat"
-      ? "webchat"
-      : normalizeProviderId(deliveryProviderRaw);
-  const deliveryPlugin =
-    deliveryProvider && deliveryProvider !== "webchat"
-      ? getProviderPlugin(deliveryProvider)
-      : undefined;
+    resolveGatewayMessageProvider(opts.provider) ?? DEFAULT_CHAT_PROVIDER;
+  // Provider docking: delivery providers are resolved via plugin registry.
+  const deliveryPlugin = !isInternalMessageProvider(deliveryProvider)
+    ? getProviderPlugin(
+        normalizeProviderId(deliveryProvider) ?? deliveryProvider,
+      )
+    : undefined;
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
@@ -589,7 +592,7 @@ export async function agentCommand(
   };
 
   const isDeliveryProviderKnown =
-    deliveryProvider === "webchat" || Boolean(deliveryPlugin);
+    isInternalMessageProvider(deliveryProvider) || Boolean(deliveryPlugin);
 
   const targetMode: ProviderOutboundTargetMode =
     opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
@@ -650,7 +653,11 @@ export async function agentCommand(
       logPayload(payload);
     }
   }
-  if (deliver && deliveryProvider && deliveryProvider !== "webchat") {
+  if (
+    deliver &&
+    deliveryProvider &&
+    !isInternalMessageProvider(deliveryProvider)
+  ) {
     if (deliveryTarget) {
       await deliverOutboundPayloads({
         cfg,
@@ -660,14 +667,7 @@ export async function agentCommand(
         bestEffort: bestEffortDeliver,
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
-        deps: {
-          sendWhatsApp: deps.sendMessageWhatsApp,
-          sendTelegram: deps.sendMessageTelegram,
-          sendDiscord: deps.sendMessageDiscord,
-          sendSlack: deps.sendMessageSlack,
-          sendSignal: deps.sendMessageSignal,
-          sendIMessage: deps.sendMessageIMessage,
-        },
+        deps: createOutboundSendDeps(deps),
       });
     }
   }

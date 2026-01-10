@@ -28,6 +28,7 @@ export type OutboundTargetResolution =
   | { ok: true; to: string }
   | { ok: false; error: Error };
 
+// Provider docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
   provider: GatewayMessageProvider;
   to?: string;
