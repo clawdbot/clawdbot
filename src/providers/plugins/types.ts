@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type {
   OutboundDeliveryResult,
@@ -391,6 +392,65 @@ export type ProviderMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
 };
 
+export type ProviderMessageActionName =
+  | "send"
+  | "poll"
+  | "react"
+  | "reactions"
+  | "read"
+  | "edit"
+  | "delete"
+  | "pin"
+  | "unpin"
+  | "list-pins"
+  | "permissions"
+  | "thread-create"
+  | "thread-list"
+  | "thread-reply"
+  | "search"
+  | "sticker"
+  | "member-info"
+  | "role-info"
+  | "emoji-list"
+  | "emoji-upload"
+  | "sticker-upload"
+  | "role-add"
+  | "role-remove"
+  | "channel-info"
+  | "channel-list"
+  | "voice-status"
+  | "event-list"
+  | "event-create"
+  | "timeout"
+  | "kick"
+  | "ban";
+
+export type ProviderMessageActionContext = {
+  provider: ProviderId;
+  action: ProviderMessageActionName;
+  cfg: ClawdbotConfig;
+  params: Record<string, unknown>;
+  accountId?: string | null;
+  gateway?: {
+    url?: string;
+    token?: string;
+    timeoutMs?: number;
+    clientName: "cli" | "agent";
+    mode: "cli" | "agent";
+  };
+  toolContext?: ProviderThreadingToolContext;
+  dryRun?: boolean;
+};
+
+export type ProviderMessageActionAdapter = {
+  listActions?: (params: { cfg: ClawdbotConfig }) => ProviderMessageActionName[];
+  supportsAction?: (params: { action: ProviderMessageActionName }) => boolean;
+  supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
+  handleAction?: (
+    ctx: ProviderMessageActionContext,
+  ) => Promise<AgentToolResult<unknown>>;
+};
+
 // biome-ignore lint/suspicious/noExplicitAny: registry aggregates heterogeneous account types.
 export type ProviderPlugin<ResolvedAccount = any> = {
   id: ProviderId;
@@ -410,5 +470,6 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   streaming?: ProviderStreamingAdapter;
   threading?: ProviderThreadingAdapter;
   messaging?: ProviderMessagingAdapter;
+  actions?: ProviderMessageActionAdapter;
   heartbeat?: ProviderHeartbeatAdapter;
 };

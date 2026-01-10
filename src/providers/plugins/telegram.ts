@@ -1,5 +1,4 @@
 import { chunkMarkdownText } from "../../auto-reply/chunk.js";
-import type { ClawdbotConfig } from "../../config/config.js";
 import { writeConfigFile } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
 import {
@@ -21,6 +20,7 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { getChatProviderMeta } from "../registry.js";
+import { telegramMessageActions } from "./actions/telegram.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -110,6 +110,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
   },
+  actions: telegramMessageActions,
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
