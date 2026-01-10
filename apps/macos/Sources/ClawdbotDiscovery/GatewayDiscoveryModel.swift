@@ -449,10 +449,10 @@ public final class GatewayDiscoveryModel {
         {
             return true
         }
-        if let service = normalizeServiceToken(serviceName) {
-            for token in local.hostTokens where service.contains(token) {
-                return true
-            }
+        if let serviceHost = normalizeServiceHostToken(serviceName),
+           local.hostTokens.contains(serviceHost)
+        {
+            return true
         }
         return false
     }
@@ -542,11 +542,14 @@ public final class GatewayDiscoveryModel {
         return trimmed.lowercased()
     }
 
-    private nonisolated static func normalizeServiceToken(_ raw: String?) -> String? {
+    private nonisolated static func normalizeServiceHostToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        return trimmed.lowercased()
+        let prettified = Self.prettifyInstanceName(raw)
+        let strippedBridge = prettified.replacingOccurrences(
+            of: #"\s*-?\s*bridge$"#,
+            with: "",
+            options: .regularExpression)
+        return normalizeHostToken(strippedBridge)
     }
 }
 

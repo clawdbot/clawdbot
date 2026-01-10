@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.10-1
+
+### Fixes
+- CLI/Status: expand tables to full terminal width; improve update + daemon summary lines; keep `status --all` gateway log tail pasteable.
+
 ## 2026.1.10
 
 ### New Features and Changes

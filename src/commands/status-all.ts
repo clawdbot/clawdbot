@@ -1,4 +1,5 @@
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { withProgress } from "../cli/progress.js";
 import {
   loadConfig,
   readConfigFileSnapshot,
@@ -35,6 +36,7 @@ import {
 import {
   pickGatewaySelfPresence,
   readFileTailLines,
+  summarizeLogTail,
 } from "./status-all/gateway.js";
 import { buildProvidersTable } from "./status-all/providers.js";
 
@@ -42,526 +44,575 @@ export async function statusAllCommand(
   runtime: RuntimeEnv,
   opts?: { timeoutMs?: number },
 ): Promise<void> {
-  const cfg = loadConfig();
-  const osSummary = resolveOsSummary();
-  const snap = await readConfigFileSnapshot().catch(() => null);
+  await withProgress(
+    { label: "Scanning status --all…", indeterminate: true },
+    async (progress) => {
+      progress.setLabel("Loading config…");
+      const cfg = loadConfig();
+      const osSummary = resolveOsSummary();
+      const snap = await readConfigFileSnapshot().catch(() => null);
 
-  const root = await resolveClawdbotPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
-  const update = await checkUpdateStatus({
-    root,
-    timeoutMs: 6500,
-    fetchGit: true,
-    includeRegistry: true,
-  });
+      progress.setLabel("Checking for updates…");
+      const root = await resolveClawdbotPackageRoot({
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      });
+      const update = await checkUpdateStatus({
+        root,
+        timeoutMs: 6500,
+        fetchGit: true,
+        includeRegistry: true,
+      });
 
-  const connection = buildGatewayConnectionDetails({ config: cfg });
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const remoteUrlRaw =
-    typeof cfg.gateway?.remote?.url === "string"
-      ? cfg.gateway.remote.url.trim()
-      : "";
-  const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
-  const gatewayMode = isRemoteMode ? "remote" : "local";
+      progress.setLabel("Probing gateway…");
+      const connection = buildGatewayConnectionDetails({ config: cfg });
+      const isRemoteMode = cfg.gateway?.mode === "remote";
+      const remoteUrlRaw =
+        typeof cfg.gateway?.remote?.url === "string"
+          ? cfg.gateway.remote.url.trim()
+          : "";
+      const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
+      const gatewayMode = isRemoteMode ? "remote" : "local";
 
-  const resolveProbeAuth = (mode: "local" | "remote") => {
-    const authToken = cfg.gateway?.auth?.token;
-    const authPassword = cfg.gateway?.auth?.password;
-    const remote = cfg.gateway?.remote;
-    const token =
-      mode === "remote"
-        ? typeof remote?.token === "string" && remote.token.trim()
-          ? remote.token.trim()
-          : undefined
-        : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim()
-            ? authToken.trim()
-            : undefined);
-    const password =
-      process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-      (mode === "remote"
-        ? typeof remote?.password === "string" && remote.password.trim()
-          ? remote.password.trim()
-          : undefined
-        : typeof authPassword === "string" && authPassword.trim()
-          ? authPassword.trim()
-          : undefined);
-    return { token, password };
-  };
-
-  const localFallbackAuth = resolveProbeAuth("local");
-  const remoteAuth = resolveProbeAuth("remote");
-
-  const gatewayProbe = await probeGateway({
-    url: connection.url,
-    auth: remoteUrlMissing ? localFallbackAuth : remoteAuth,
-    timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
-  }).catch(() => null);
-  const gatewayReachable = gatewayProbe?.ok === true;
-  const gatewaySelf = pickGatewaySelfPresence(gatewayProbe?.presence ?? null);
-
-  const daemon = await (async () => {
-    try {
-      const service = resolveGatewayService();
-      const [loaded, runtimeInfo] = await Promise.all([
-        service.isLoaded({ env: process.env }).catch(() => false),
-        service.readRuntime(process.env).catch(() => undefined),
-      ]);
-      return {
-        label: service.label,
-        loaded,
-        loadedText: loaded ? service.loadedText : service.notLoadedText,
-        runtime: runtimeInfo,
+      const resolveProbeAuth = (mode: "local" | "remote") => {
+        const authToken = cfg.gateway?.auth?.token;
+        const authPassword = cfg.gateway?.auth?.password;
+        const remote = cfg.gateway?.remote;
+        const token =
+          mode === "remote"
+            ? typeof remote?.token === "string" && remote.token.trim()
+              ? remote.token.trim()
+              : undefined
+            : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+              (typeof authToken === "string" && authToken.trim()
+                ? authToken.trim()
+                : undefined);
+        const password =
+          process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+          (mode === "remote"
+            ? typeof remote?.password === "string" && remote.password.trim()
+              ? remote.password.trim()
+              : undefined
+            : typeof authPassword === "string" && authPassword.trim()
+              ? authPassword.trim()
+              : undefined);
+        return { token, password };
       };
-    } catch {
-      return null;
-    }
-  })();
 
-  const agentStatus = await getAgentLocalStatuses(cfg);
-  const providers = await buildProvidersTable(cfg);
+      const localFallbackAuth = resolveProbeAuth("local");
+      const remoteAuth = resolveProbeAuth("remote");
 
-  const connectionDetailsForReport = (() => {
-    if (!remoteUrlMissing) return connection.message;
-    const bindMode = cfg.gateway?.bind ?? "loopback";
-    const configPath = snap?.path?.trim()
-      ? snap.path.trim()
-      : "(unknown config path)";
-    return [
-      "Gateway mode: remote",
-      "Gateway target: (missing gateway.remote.url)",
-      `Config: ${configPath}`,
-      `Bind: ${bindMode}`,
-      `Local fallback (used for probes): ${connection.url}`,
-      "Fix: set gateway.remote.url, or set gateway.mode=local.",
-    ].join("\n");
-  })();
-
-  const callOverrides = remoteUrlMissing
-    ? {
+      const gatewayProbe = await probeGateway({
         url: connection.url,
-        token: localFallbackAuth.token,
-        password: localFallbackAuth.password,
-      }
-    : {};
-
-  const health = gatewayReachable
-    ? await callGateway<unknown>({
-        method: "health",
-        timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
-        ...callOverrides,
-      }).catch((err) => ({ error: String(err) }))
-    : { error: gatewayProbe?.error ?? "gateway unreachable" };
-
-  const providersStatus = gatewayReachable
-    ? await callGateway<Record<string, unknown>>({
-        method: "providers.status",
-        params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
-        timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
-        ...callOverrides,
-      }).catch(() => null)
-    : null;
-  const providerIssues = providersStatus
-    ? collectProvidersStatusIssues(providersStatus)
-    : [];
-
-  const sentinel = await readRestartSentinel().catch(() => null);
-  const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
-  const port = resolveGatewayPort(cfg);
-  const portUsage = await inspectPortUsage(port).catch(() => null);
-
-  const defaultWorkspace =
-    agentStatus.agents.find((a) => a.id === agentStatus.defaultId)
-      ?.workspaceDir ??
-    agentStatus.agents[0]?.workspaceDir ??
-    null;
-  const skillStatus =
-    defaultWorkspace != null
-      ? (() => {
-          try {
-            return buildWorkspaceSkillStatus(defaultWorkspace, { config: cfg });
-          } catch {
-            return null;
-          }
-        })()
-      : null;
-
-  const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
-  const dashboard = controlUiEnabled
-    ? resolveControlUiLinks({
-        port,
-        bind: cfg.gateway?.bind,
-        basePath: cfg.gateway?.controlUi?.basePath,
-      }).httpUrl
-    : null;
-
-  const updateLine = (() => {
-    if (update.installKind === "git" && update.git) {
-      const parts: string[] = [];
-      parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
-      if (update.git.upstream) parts.push(`↔ ${update.git.upstream}`);
-      if (update.git.dirty) parts.push("dirty");
-      if (update.git.behind != null && update.git.ahead != null) {
-        if (update.git.behind === 0 && update.git.ahead === 0)
-          parts.push("up to date");
-        else if (update.git.behind > 0 && update.git.ahead === 0)
-          parts.push(`behind ${update.git.behind}`);
-        else if (update.git.behind === 0 && update.git.ahead > 0)
-          parts.push(`ahead ${update.git.ahead}`);
-        else
-          parts.push(
-            `diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`,
-          );
-      }
-      if (update.git.fetchOk === false) parts.push("fetch failed");
-      if (update.deps?.status === "stale") parts.push("deps stale");
-      if (update.deps?.status === "missing") parts.push("deps missing");
-      return parts.join(" · ");
-    }
-    const parts: string[] = [];
-    parts.push(
-      update.packageManager !== "unknown" ? update.packageManager : "pkg",
-    );
-    const latest = update.registry?.latestVersion;
-    if (latest) {
-      const cmp = compareSemverStrings(VERSION, latest);
-      if (cmp === 0) parts.push(`latest ${latest}`);
-      else if (cmp != null && cmp < 0) parts.push(`update available ${latest}`);
-      else parts.push(`latest ${latest}`);
-    } else if (update.registry?.error) {
-      parts.push("latest unknown");
-    }
-    if (update.deps?.status === "stale") parts.push("deps stale");
-    if (update.deps?.status === "missing") parts.push("deps missing");
-    return parts.join(" · ");
-  })();
-
-  const gatewayTarget = remoteUrlMissing
-    ? `fallback ${connection.url}`
-    : connection.url;
-  const gatewayStatus = gatewayReachable
-    ? `reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`
-    : gatewayProbe?.error
-      ? `unreachable (${gatewayProbe.error})`
-      : "unreachable";
-  const gatewaySelfLine =
-    gatewaySelf?.host ||
-    gatewaySelf?.ip ||
-    gatewaySelf?.version ||
-    gatewaySelf?.platform
-      ? [
-          gatewaySelf.host ? gatewaySelf.host : null,
-          gatewaySelf.ip ? `(${gatewaySelf.ip})` : null,
-          gatewaySelf.version ? `app ${gatewaySelf.version}` : null,
-          gatewaySelf.platform ? gatewaySelf.platform : null,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : null;
-
-  const aliveThresholdMs = 10 * 60_000;
-  const aliveAgents = agentStatus.agents.filter(
-    (a) => a.lastActiveAgeMs != null && a.lastActiveAgeMs <= aliveThresholdMs,
-  ).length;
-
-  const overviewRows = [
-    { Item: "Version", Value: VERSION },
-    { Item: "OS", Value: osSummary.label },
-    { Item: "Node", Value: process.versions.node },
-    {
-      Item: "Config",
-      Value: snap?.path?.trim() ? snap.path.trim() : "(unknown config path)",
-    },
-    dashboard
-      ? { Item: "Dashboard", Value: dashboard }
-      : { Item: "Dashboard", Value: "disabled" },
-    { Item: "Update", Value: updateLine },
-    {
-      Item: "Gateway",
-      Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}`,
-    },
-    gatewaySelfLine
-      ? { Item: "Gateway self", Value: gatewaySelfLine }
-      : { Item: "Gateway self", Value: "unknown" },
-    daemon
-      ? {
-          Item: "Daemon",
-          Value: `${daemon.label} ${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
-        }
-      : { Item: "Daemon", Value: "unknown" },
-    {
-      Item: "Agents",
-      Value: `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${aliveAgents} active · ${agentStatus.totalSessions} sessions`,
-    },
-  ];
-
-  const rich = isRich();
-  const heading = (text: string) => (rich ? theme.heading(text) : text);
-  const ok = (text: string) => (rich ? theme.success(text) : text);
-  const warn = (text: string) => (rich ? theme.warn(text) : text);
-  const fail = (text: string) => (rich ? theme.error(text) : text);
-  const muted = (text: string) => (rich ? theme.muted(text) : text);
-
-  const tableWidth = process.stdout.columns ?? 120;
-
-  const overview = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Item", header: "Item", minWidth: 10 },
-      { key: "Value", header: "Value", flex: true, minWidth: 24 },
-    ],
-    rows: overviewRows,
-  });
-
-  const providerRows = providers.rows.map((row) => ({
-    Provider: row.provider,
-    Enabled: row.enabled ? ok("ON") : muted("OFF"),
-    Configured: row.configured
-      ? ok("OK")
-      : row.enabled
-        ? warn("WARN")
-        : muted("OFF"),
-    Detail: row.detail,
-  }));
-
-  const providersTable = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Provider", header: "Provider", minWidth: 10 },
-      { key: "Enabled", header: "Enabled", minWidth: 7 },
-      { key: "Configured", header: "Configured", minWidth: 10 },
-      { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
-    ],
-    rows: providerRows,
-  });
-
-  const agentRows = agentStatus.agents.map((a) => ({
-    Agent: a.name?.trim() ? `${a.id} (${a.name.trim()})` : a.id,
-    Bootstrap:
-      a.bootstrapPending === true
-        ? warn("PENDING")
-        : a.bootstrapPending === false
-          ? ok("OK")
-          : "unknown",
-    Sessions: String(a.sessionsCount),
-    Active:
-      a.lastActiveAgeMs != null ? formatAge(a.lastActiveAgeMs) : "unknown",
-    Store: a.sessionsPath,
-  }));
-
-  const agentsTable = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Agent", header: "Agent", minWidth: 12 },
-      { key: "Bootstrap", header: "Bootstrap", minWidth: 10 },
-      { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
-      { key: "Active", header: "Active", minWidth: 10 },
-      { key: "Store", header: "Store", flex: true, minWidth: 34 },
-    ],
-    rows: agentRows,
-  });
-
-  const lines: string[] = [];
-  lines.push(heading("Clawdbot status --all"));
-  lines.push("");
-  lines.push(heading("Overview"));
-  lines.push(overview.trimEnd());
-  lines.push("");
-  lines.push(heading("Providers"));
-  lines.push(providersTable.trimEnd());
-  for (const detail of providers.details) {
-    lines.push("");
-    lines.push(heading(detail.title));
-    lines.push(
-      renderTable({
-        width: tableWidth,
-        columns: detail.columns.map((c) => ({
-          key: c,
-          header: c,
-          flex: c === "Notes",
-          minWidth: c === "Notes" ? 28 : 10,
-        })),
-        rows: detail.rows.map((r) => ({
-          ...r,
-          ...(r.Status === "OK"
-            ? { Status: ok("OK") }
-            : r.Status === "WARN"
-              ? { Status: warn("WARN") }
-              : {}),
-        })),
-      }).trimEnd(),
-    );
-  }
-  lines.push("");
-  lines.push(heading("Agents"));
-  lines.push(agentsTable.trimEnd());
-  lines.push("");
-  lines.push(heading("Diagnosis (read-only)"));
-
-  const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
-    const icon =
-      status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
-    const colored =
-      status === "ok"
-        ? ok(label)
-        : status === "warn"
-          ? warn(label)
-          : fail(label);
-    lines.push(`${icon} ${colored}`);
-  };
-
-  lines.push("");
-  lines.push(`${muted("Gateway connection details:")}`);
-  for (const line of redactSecrets(connectionDetailsForReport)
-    .split("\n")
-    .map((l) => l.trimEnd())) {
-    lines.push(`  ${muted(line)}`);
-  }
-
-  lines.push("");
-  if (snap) {
-    const status = !snap.exists ? "fail" : snap.valid ? "ok" : "warn";
-    emitCheck(`Config: ${snap.path ?? "(unknown)"}`, status);
-    const issues = [...(snap.legacyIssues ?? []), ...(snap.issues ?? [])];
-    const uniqueIssues = issues.filter(
-      (issue, index) =>
-        issues.findIndex(
-          (x) => x.path === issue.path && x.message === issue.message,
-        ) === index,
-    );
-    for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  - ${issue.path}: ${issue.message}`);
-    }
-    if (uniqueIssues.length > 12) {
-      lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
-    }
-  } else {
-    emitCheck("Config: read failed", "warn");
-  }
-
-  if (remoteUrlMissing) {
-    lines.push("");
-    emitCheck(
-      "Gateway remote mode misconfigured (gateway.remote.url missing)",
-      "warn",
-    );
-    lines.push(
-      `  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`,
-    );
-  }
-
-  if (sentinel?.payload) {
-    emitCheck("Restart sentinel present", "warn");
-    lines.push(
-      `  ${muted(`${summarizeRestartSentinel(sentinel.payload)} · ${formatAge(Date.now() - sentinel.payload.ts)}`)}`,
-    );
-  } else {
-    emitCheck("Restart sentinel: none", "ok");
-  }
-
-  const lastErrClean = lastErr?.trim() ?? "";
-  const isTrivialLastErr =
-    lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
-  if (lastErrClean && !isTrivialLastErr) {
-    lines.push("");
-    lines.push(`${muted("Gateway last log line:")}`);
-    lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
-  }
-
-  if (portUsage) {
-    const portOk = portUsage.listeners.length === 0;
-    emitCheck(`Port ${port}`, portOk ? "ok" : "warn");
-    if (!portOk) {
-      for (const line of formatPortDiagnostics(portUsage)) {
-        lines.push(`  ${muted(line)}`);
-      }
-    }
-  }
-
-  if (skillStatus) {
-    const eligible = skillStatus.skills.filter((s) => s.eligible).length;
-    const missing = skillStatus.skills.filter(
-      (s) => s.eligible && Object.values(s.missing).some((arr) => arr.length),
-    ).length;
-    emitCheck(
-      `Skills (${eligible} eligible · ${missing} missing requirements)`,
-      missing === 0 ? "ok" : "warn",
-    );
-    lines.push(`  ${muted(skillStatus.workspaceDir)}`);
-  }
-
-  const logPaths = (() => {
-    try {
-      return resolveGatewayLogPaths(process.env);
-    } catch {
-      return null;
-    }
-  })();
-  if (logPaths) {
-    const [stderrTail, stdoutTail] = await Promise.all([
-      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
-      readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
-    ]);
-    if (stderrTail.length > 0 || stdoutTail.length > 0) {
-      lines.push("");
-      lines.push(`${muted(`Gateway logs (tail): ${logPaths.logDir}`)}`);
-      lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-      for (const line of stderrTail.map(redactSecrets)) {
-        lines.push(`  ${muted(line)}`);
-      }
-      lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
-      for (const line of stdoutTail.map(redactSecrets)) {
-        lines.push(`  ${muted(line)}`);
-      }
-    }
-  }
-
-  if (providersStatus) {
-    emitCheck(
-      `Provider issues (${providerIssues.length || "none"})`,
-      providerIssues.length === 0 ? "ok" : "warn",
-    );
-    for (const issue of providerIssues.slice(0, 12)) {
-      const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-      lines.push(
-        `  - ${issue.provider}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
+        auth: remoteUrlMissing ? localFallbackAuth : remoteAuth,
+        timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
+      }).catch(() => null);
+      const gatewayReachable = gatewayProbe?.ok === true;
+      const gatewaySelf = pickGatewaySelfPresence(
+        gatewayProbe?.presence ?? null,
       );
-    }
-    if (providerIssues.length > 12) {
-      lines.push(`  ${muted(`… +${providerIssues.length - 12} more`)}`);
-    }
-  } else {
-    emitCheck(
-      `Provider issues skipped (gateway ${gatewayReachable ? "query failed" : "unreachable"})`,
-      "warn",
-    );
-  }
 
-  const healthErr = (() => {
-    if (!health || typeof health !== "object") return "";
-    const record = health as Record<string, unknown>;
-    if (!("error" in record)) return "";
-    const value = record.error;
-    if (!value) return "";
-    if (typeof value === "string") return value;
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return "[unserializable error]";
-    }
-  })();
-  if (healthErr) {
-    lines.push("");
-    lines.push(`${muted("Gateway health:")}`);
-    lines.push(`  ${muted(redactSecrets(healthErr))}`);
-  }
+      progress.setLabel("Checking daemon…");
+      const daemon = await (async () => {
+        try {
+          const service = resolveGatewayService();
+          const [loaded, runtimeInfo, command] = await Promise.all([
+            service.isLoaded({ env: process.env }).catch(() => false),
+            service.readRuntime(process.env).catch(() => undefined),
+            service.readCommand(process.env).catch(() => null),
+          ]);
+          const installed = command != null;
+          return {
+            label: service.label,
+            installed,
+            loaded,
+            loadedText: loaded ? service.loadedText : service.notLoadedText,
+            runtime: runtimeInfo,
+          };
+        } catch {
+          return null;
+        }
+      })();
 
-  lines.push("");
-  lines.push(muted("Pasteable debug report. Auth tokens redacted."));
-  lines.push("");
+      progress.setLabel("Scanning agents…");
+      const agentStatus = await getAgentLocalStatuses(cfg);
+      progress.setLabel("Summarizing providers…");
+      const providers = await buildProvidersTable(cfg);
 
-  runtime.log(lines.join("\n"));
+      const connectionDetailsForReport = (() => {
+        if (!remoteUrlMissing) return connection.message;
+        const bindMode = cfg.gateway?.bind ?? "loopback";
+        const configPath = snap?.path?.trim()
+          ? snap.path.trim()
+          : "(unknown config path)";
+        return [
+          "Gateway mode: remote",
+          "Gateway target: (missing gateway.remote.url)",
+          `Config: ${configPath}`,
+          `Bind: ${bindMode}`,
+          `Local fallback (used for probes): ${connection.url}`,
+          "Fix: set gateway.remote.url, or set gateway.mode=local.",
+        ].join("\n");
+      })();
+
+      const callOverrides = remoteUrlMissing
+        ? {
+            url: connection.url,
+            token: localFallbackAuth.token,
+            password: localFallbackAuth.password,
+          }
+        : {};
+
+      progress.setLabel("Querying gateway…");
+      const health = gatewayReachable
+        ? await callGateway<unknown>({
+            method: "health",
+            timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
+            ...callOverrides,
+          }).catch((err) => ({ error: String(err) }))
+        : { error: gatewayProbe?.error ?? "gateway unreachable" };
+
+      const providersStatus = gatewayReachable
+        ? await callGateway<Record<string, unknown>>({
+            method: "providers.status",
+            params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
+            timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
+            ...callOverrides,
+          }).catch(() => null)
+        : null;
+      const providerIssues = providersStatus
+        ? collectProvidersStatusIssues(providersStatus)
+        : [];
+
+      progress.setLabel("Checking local state…");
+      const sentinel = await readRestartSentinel().catch(() => null);
+      const lastErr = await readLastGatewayErrorLine(process.env).catch(
+        () => null,
+      );
+      const port = resolveGatewayPort(cfg);
+      const portUsage = await inspectPortUsage(port).catch(() => null);
+
+      const defaultWorkspace =
+        agentStatus.agents.find((a) => a.id === agentStatus.defaultId)
+          ?.workspaceDir ??
+        agentStatus.agents[0]?.workspaceDir ??
+        null;
+      const skillStatus =
+        defaultWorkspace != null
+          ? (() => {
+              try {
+                return buildWorkspaceSkillStatus(defaultWorkspace, {
+                  config: cfg,
+                });
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+
+      const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
+      const dashboard = controlUiEnabled
+        ? resolveControlUiLinks({
+            port,
+            bind: cfg.gateway?.bind,
+            basePath: cfg.gateway?.controlUi?.basePath,
+          }).httpUrl
+        : null;
+
+      const updateLine = (() => {
+        if (update.installKind === "git" && update.git) {
+          const parts: string[] = [];
+          parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
+          if (update.git.upstream) parts.push(`↔ ${update.git.upstream}`);
+          if (update.git.dirty) parts.push("dirty");
+          if (update.git.behind != null && update.git.ahead != null) {
+            if (update.git.behind === 0 && update.git.ahead === 0)
+              parts.push("up to date");
+            else if (update.git.behind > 0 && update.git.ahead === 0)
+              parts.push(`behind ${update.git.behind}`);
+            else if (update.git.behind === 0 && update.git.ahead > 0)
+              parts.push(`ahead ${update.git.ahead}`);
+            else
+              parts.push(
+                `diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`,
+              );
+          }
+          if (update.git.fetchOk === false) parts.push("fetch failed");
+
+          const latest = update.registry?.latestVersion;
+          if (latest) {
+            const cmp = compareSemverStrings(VERSION, latest);
+            if (cmp === 0) parts.push(`npm latest ${latest}`);
+            else if (cmp != null && cmp < 0) parts.push(`npm update ${latest}`);
+            else parts.push(`npm latest ${latest} (local newer)`);
+          } else if (update.registry?.error) {
+            parts.push("npm latest unknown");
+          }
+
+          if (update.deps?.status === "ok") parts.push("deps ok");
+          if (update.deps?.status === "stale") parts.push("deps stale");
+          if (update.deps?.status === "missing") parts.push("deps missing");
+          return parts.join(" · ");
+        }
+        const parts: string[] = [];
+        parts.push(
+          update.packageManager !== "unknown" ? update.packageManager : "pkg",
+        );
+        const latest = update.registry?.latestVersion;
+        if (latest) {
+          const cmp = compareSemverStrings(VERSION, latest);
+          if (cmp === 0) parts.push(`npm latest ${latest}`);
+          else if (cmp != null && cmp < 0) parts.push(`npm update ${latest}`);
+          else parts.push(`npm latest ${latest} (local newer)`);
+        } else if (update.registry?.error) {
+          parts.push("npm latest unknown");
+        }
+        if (update.deps?.status === "ok") parts.push("deps ok");
+        if (update.deps?.status === "stale") parts.push("deps stale");
+        if (update.deps?.status === "missing") parts.push("deps missing");
+        return parts.join(" · ");
+      })();
+
+      const gatewayTarget = remoteUrlMissing
+        ? `fallback ${connection.url}`
+        : connection.url;
+      const gatewayStatus = gatewayReachable
+        ? `reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`
+        : gatewayProbe?.error
+          ? `unreachable (${gatewayProbe.error})`
+          : "unreachable";
+      const gatewaySelfLine =
+        gatewaySelf?.host ||
+        gatewaySelf?.ip ||
+        gatewaySelf?.version ||
+        gatewaySelf?.platform
+          ? [
+              gatewaySelf.host ? gatewaySelf.host : null,
+              gatewaySelf.ip ? `(${gatewaySelf.ip})` : null,
+              gatewaySelf.version ? `app ${gatewaySelf.version}` : null,
+              gatewaySelf.platform ? gatewaySelf.platform : null,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          : null;
+
+      const aliveThresholdMs = 10 * 60_000;
+      const aliveAgents = agentStatus.agents.filter(
+        (a) =>
+          a.lastActiveAgeMs != null && a.lastActiveAgeMs <= aliveThresholdMs,
+      ).length;
+
+      const overviewRows = [
+        { Item: "Version", Value: VERSION },
+        { Item: "OS", Value: osSummary.label },
+        { Item: "Node", Value: process.versions.node },
+        {
+          Item: "Config",
+          Value: snap?.path?.trim()
+            ? snap.path.trim()
+            : "(unknown config path)",
+        },
+        dashboard
+          ? { Item: "Dashboard", Value: dashboard }
+          : { Item: "Dashboard", Value: "disabled" },
+        { Item: "Update", Value: updateLine },
+        {
+          Item: "Gateway",
+          Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}`,
+        },
+        gatewaySelfLine
+          ? { Item: "Gateway self", Value: gatewaySelfLine }
+          : { Item: "Gateway self", Value: "unknown" },
+        daemon
+          ? {
+              Item: "Daemon",
+              Value:
+                daemon.installed === false
+                  ? `${daemon.label} not installed`
+                  : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
+            }
+          : { Item: "Daemon", Value: "unknown" },
+        {
+          Item: "Agents",
+          Value: `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${aliveAgents} active · ${agentStatus.totalSessions} sessions`,
+        },
+      ];
+
+      const rich = isRich();
+      const heading = (text: string) => (rich ? theme.heading(text) : text);
+      const ok = (text: string) => (rich ? theme.success(text) : text);
+      const warn = (text: string) => (rich ? theme.warn(text) : text);
+      const fail = (text: string) => (rich ? theme.error(text) : text);
+      const muted = (text: string) => (rich ? theme.muted(text) : text);
+
+      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+
+      const overview = renderTable({
+        width: tableWidth,
+        columns: [
+          { key: "Item", header: "Item", minWidth: 10 },
+          { key: "Value", header: "Value", flex: true, minWidth: 24 },
+        ],
+        rows: overviewRows,
+      });
+
+      const providerRows = providers.rows.map((row) => ({
+        Provider: row.provider,
+        Enabled: row.enabled ? ok("ON") : muted("OFF"),
+        Configured: row.configured
+          ? ok("OK")
+          : row.enabled
+            ? warn("WARN")
+            : muted("OFF"),
+        Detail: row.detail,
+      }));
+
+      const providersTable = renderTable({
+        width: tableWidth,
+        columns: [
+          { key: "Provider", header: "Provider", minWidth: 10 },
+          { key: "Enabled", header: "Enabled", minWidth: 7 },
+          { key: "Configured", header: "Configured", minWidth: 10 },
+          { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
+        ],
+        rows: providerRows,
+      });
+
+      const agentRows = agentStatus.agents.map((a) => ({
+        Agent: a.name?.trim() ? `${a.id} (${a.name.trim()})` : a.id,
+        Bootstrap:
+          a.bootstrapPending === true
+            ? warn("PENDING")
+            : a.bootstrapPending === false
+              ? ok("OK")
+              : "unknown",
+        Sessions: String(a.sessionsCount),
+        Active:
+          a.lastActiveAgeMs != null ? formatAge(a.lastActiveAgeMs) : "unknown",
+        Store: a.sessionsPath,
+      }));
+
+      const agentsTable = renderTable({
+        width: tableWidth,
+        columns: [
+          { key: "Agent", header: "Agent", minWidth: 12 },
+          { key: "Bootstrap", header: "Bootstrap", minWidth: 10 },
+          { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
+          { key: "Active", header: "Active", minWidth: 10 },
+          { key: "Store", header: "Store", flex: true, minWidth: 34 },
+        ],
+        rows: agentRows,
+      });
+
+      const lines: string[] = [];
+      lines.push(heading("Clawdbot status --all"));
+      lines.push("");
+      lines.push(heading("Overview"));
+      lines.push(overview.trimEnd());
+      lines.push("");
+      lines.push(heading("Providers"));
+      lines.push(providersTable.trimEnd());
+      for (const detail of providers.details) {
+        lines.push("");
+        lines.push(heading(detail.title));
+        lines.push(
+          renderTable({
+            width: tableWidth,
+            columns: detail.columns.map((c) => ({
+              key: c,
+              header: c,
+              flex: c === "Notes",
+              minWidth: c === "Notes" ? 28 : 10,
+            })),
+            rows: detail.rows.map((r) => ({
+              ...r,
+              ...(r.Status === "OK"
+                ? { Status: ok("OK") }
+                : r.Status === "WARN"
+                  ? { Status: warn("WARN") }
+                  : {}),
+            })),
+          }).trimEnd(),
+        );
+      }
+      lines.push("");
+      lines.push(heading("Agents"));
+      lines.push(agentsTable.trimEnd());
+      lines.push("");
+      lines.push(heading("Diagnosis (read-only)"));
+
+      const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
+        const icon =
+          status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
+        const colored =
+          status === "ok"
+            ? ok(label)
+            : status === "warn"
+              ? warn(label)
+              : fail(label);
+        lines.push(`${icon} ${colored}`);
+      };
+
+      lines.push("");
+      lines.push(`${muted("Gateway connection details:")}`);
+      for (const line of redactSecrets(connectionDetailsForReport)
+        .split("\n")
+        .map((l) => l.trimEnd())) {
+        lines.push(`  ${muted(line)}`);
+      }
+
+      lines.push("");
+      if (snap) {
+        const status = !snap.exists ? "fail" : snap.valid ? "ok" : "warn";
+        emitCheck(`Config: ${snap.path ?? "(unknown)"}`, status);
+        const issues = [...(snap.legacyIssues ?? []), ...(snap.issues ?? [])];
+        const uniqueIssues = issues.filter(
+          (issue, index) =>
+            issues.findIndex(
+              (x) => x.path === issue.path && x.message === issue.message,
+            ) === index,
+        );
+        for (const issue of uniqueIssues.slice(0, 12)) {
+          lines.push(`  - ${issue.path}: ${issue.message}`);
+        }
+        if (uniqueIssues.length > 12) {
+          lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
+        }
+      } else {
+        emitCheck("Config: read failed", "warn");
+      }
+
+      if (remoteUrlMissing) {
+        lines.push("");
+        emitCheck(
+          "Gateway remote mode misconfigured (gateway.remote.url missing)",
+          "warn",
+        );
+        lines.push(
+          `  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`,
+        );
+      }
+
+      if (sentinel?.payload) {
+        emitCheck("Restart sentinel present", "warn");
+        lines.push(
+          `  ${muted(`${summarizeRestartSentinel(sentinel.payload)} · ${formatAge(Date.now() - sentinel.payload.ts)}`)}`,
+        );
+      } else {
+        emitCheck("Restart sentinel: none", "ok");
+      }
+
+      const lastErrClean = lastErr?.trim() ?? "";
+      const isTrivialLastErr =
+        lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
+      if (lastErrClean && !isTrivialLastErr) {
+        lines.push("");
+        lines.push(`${muted("Gateway last log line:")}`);
+        lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
+      }
+
+      if (portUsage) {
+        const portOk = portUsage.listeners.length === 0;
+        emitCheck(`Port ${port}`, portOk ? "ok" : "warn");
+        if (!portOk) {
+          for (const line of formatPortDiagnostics(portUsage)) {
+            lines.push(`  ${muted(line)}`);
+          }
+        }
+      }
+
+      if (skillStatus) {
+        const eligible = skillStatus.skills.filter((s) => s.eligible).length;
+        const missing = skillStatus.skills.filter(
+          (s) =>
+            s.eligible && Object.values(s.missing).some((arr) => arr.length),
+        ).length;
+        emitCheck(
+          `Skills: ${eligible} eligible · ${missing} missing · ${skillStatus.workspaceDir}`,
+          missing === 0 ? "ok" : "warn",
+        );
+      }
+
+      const logPaths = (() => {
+        try {
+          return resolveGatewayLogPaths(process.env);
+        } catch {
+          return null;
+        }
+      })();
+      if (logPaths) {
+        progress.setLabel("Reading logs…");
+        const [stderrTail, stdoutTail] = await Promise.all([
+          readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
+          readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
+        ]);
+        if (stderrTail.length > 0 || stdoutTail.length > 0) {
+          lines.push("");
+          lines.push(
+            `${muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`)}`,
+          );
+          lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
+          for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(
+            redactSecrets,
+          )) {
+            lines.push(`  ${muted(line)}`);
+          }
+          lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
+          for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(
+            redactSecrets,
+          )) {
+            lines.push(`  ${muted(line)}`);
+          }
+        }
+      }
+
+      if (providersStatus) {
+        emitCheck(
+          `Provider issues (${providerIssues.length || "none"})`,
+          providerIssues.length === 0 ? "ok" : "warn",
+        );
+        for (const issue of providerIssues.slice(0, 12)) {
+          const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
+          lines.push(
+            `  - ${issue.provider}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
+          );
+        }
+        if (providerIssues.length > 12) {
+          lines.push(`  ${muted(`… +${providerIssues.length - 12} more`)}`);
+        }
+      } else {
+        emitCheck(
+          `Provider issues skipped (gateway ${gatewayReachable ? "query failed" : "unreachable"})`,
+          "warn",
+        );
+      }
+
+      const healthErr = (() => {
+        if (!health || typeof health !== "object") return "";
+        const record = health as Record<string, unknown>;
+        if (!("error" in record)) return "";
+        const value = record.error;
+        if (!value) return "";
+        if (typeof value === "string") return value;
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch {
+          return "[unserializable error]";
+        }
+      })();
+      if (healthErr) {
+        lines.push("");
+        lines.push(`${muted("Gateway health:")}`);
+        lines.push(`  ${muted(redactSecrets(healthErr))}`);
+      }
+
+      lines.push("");
+      lines.push(muted("Pasteable debug report. Auth tokens redacted."));
+      lines.push("");
+
+      progress.setLabel("Rendering…");
+      runtime.log(lines.join("\n"));
+    },
+  );
 }

@@ -196,6 +196,39 @@ export function renderTable(opts: RenderTableOptions): string {
     shrink(nonFlexOrder, absoluteMinWidths);
   }
 
+  // If we have room and any flex columns, expand them to fill the available width.
+  // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
+  if (maxWidth) {
+    const sepCount = columns.length + 1;
+    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
+    let extra = maxWidth - currentTotal;
+    if (extra > 0) {
+      const flexCols = columns
+        .map((c, i) => ({ c, i }))
+        .filter(({ c }) => Boolean(c.flex))
+        .map(({ i }) => i);
+      if (flexCols.length > 0) {
+        const caps = columns.map((c) =>
+          typeof c.maxWidth === "number" && c.maxWidth > 0
+            ? Math.floor(c.maxWidth)
+            : Number.POSITIVE_INFINITY,
+        );
+        while (extra > 0) {
+          let progressed = false;
+          for (const i of flexCols) {
+            if ((widths[i] ?? 0) >= (caps[i] ?? Number.POSITIVE_INFINITY))
+              continue;
+            widths[i] = (widths[i] ?? 0) + 1;
+            extra -= 1;
+            progressed = true;
+            if (extra <= 0) break;
+          }
+          if (!progressed) break;
+        }
+      }
+    }
+  }
+
   const box =
     border === "ascii"
       ? {

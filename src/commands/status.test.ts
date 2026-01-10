@@ -104,6 +104,10 @@ vi.mock("../daemon/service.js", () => ({
     notLoadedText: "not loaded",
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 1234 }),
+    readCommand: async () => ({
+      programArguments: ["node", "dist/entry.js", "gateway"],
+      sourcePath: "/tmp/Library/LaunchAgents/com.clawdbot.gateway.plist",
+    }),
   }),
 }));
 
@@ -133,16 +137,17 @@ describe("statusCommand", () => {
     (runtime.log as vi.Mock).mockClear();
     await statusCommand({}, runtime as never);
     const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
-    expect(logs.some((l) => l.includes("Web session"))).toBe(true);
-    expect(logs.some((l) => l.includes("Active sessions"))).toBe(true);
-    expect(logs.some((l) => l.includes("Default model"))).toBe(true);
-    expect(logs.some((l) => l.includes("tokens:"))).toBe(true);
-    expect(logs.some((l) => l.includes("Daemon:"))).toBe(true);
+    expect(logs.some((l) => l.includes("Clawdbot status"))).toBe(true);
+    expect(logs.some((l) => l.includes("Overview"))).toBe(true);
+    expect(logs.some((l) => l.includes("Dashboard"))).toBe(true);
+    expect(logs.some((l) => l.includes("macos 14.0 (arm64)"))).toBe(true);
+    expect(logs.some((l) => l.includes("Providers"))).toBe(true);
+    expect(logs.some((l) => l.includes("Telegram"))).toBe(true);
+    expect(logs.some((l) => l.includes("Sessions"))).toBe(true);
+    expect(logs.some((l) => l.includes("+1000"))).toBe(true);
+    expect(logs.some((l) => l.includes("50%"))).toBe(true);
+    expect(logs.some((l) => l.includes("LaunchAgent"))).toBe(true);
     expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
     expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
-    expect(
-      logs.some((l) => l.includes("flags:") && l.includes("verbose:on")),
-    ).toBe(true);
-    expect(mocks.logWebSelfId).toHaveBeenCalled();
   });
 });
