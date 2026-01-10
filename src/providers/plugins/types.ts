@@ -11,7 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { ChatProviderId } from "../registry.js";
 import type { ProviderOnboardingAdapter } from "./onboarding-types.js";
 
-export type ProviderId = ChatProviderId | "msteams";
+export type ProviderId = ChatProviderId;
 
 export type ProviderOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 

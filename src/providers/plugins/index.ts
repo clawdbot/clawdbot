@@ -53,9 +53,7 @@ export function normalizeProviderId(raw?: string | null): ProviderId | null {
   const trimmed = (raw ?? "").trim().toLowerCase();
   if (!trimmed) return null;
   const normalized = PROVIDER_ALIASES.get(trimmed) ?? trimmed;
-  const chat = normalizeChatProviderId(normalized);
-  if (chat) return chat;
-  return normalized === "msteams" ? "msteams" : null;
+  return normalizeChatProviderId(normalized);
 }
 
 export {

@@ -39,6 +39,7 @@ Each `ProviderPlugin` bundles:
 - Provider reload rules are computed lazily to avoid static init cycles in tests.
 - Signal/iMessage media size limits are now resolved inside their plugins.
 - `normalizeProviderId()` handles aliases (ex: `imsg`, `teams`) so CLI and API inputs stay stable.
+- `ProviderId` is `ChatProviderId` (no extra special-cased provider IDs in shared code).
 - Gateway runtime defaults (`status.defaultRuntime`) replace the old per-provider runtime map.
 - Gateway health snapshots now iterate plugins (`status.probeAccount` + `status.buildProviderSummary`) and emit `providers` + `providerOrder` instead of provider-specific fields.
 - `providers.status` summary objects now come from `status.buildProviderSummary` (no per-provider branching in the handler).
