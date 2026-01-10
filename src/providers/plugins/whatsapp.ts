@@ -5,10 +5,6 @@ import {
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import {
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "../../whatsapp/normalize.js";
-import {
   listWhatsAppAccountIds,
   type ResolvedWhatsAppAccount,
   resolveDefaultWhatsAppAccountId,
@@ -23,6 +19,10 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../../web/session.js";
+import {
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../../whatsapp/normalize.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
@@ -109,11 +109,11 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
-        .filter(Boolean)
+        .filter((entry): entry is string => Boolean(entry))
         .map((entry) =>
           entry === "*" ? entry : normalizeWhatsAppTarget(entry),
         )
-        .filter(Boolean),
+        .filter((entry): entry is string => Boolean(entry)),
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
