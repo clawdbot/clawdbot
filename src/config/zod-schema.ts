@@ -40,7 +40,7 @@ const ModelDefinitionSchema = z.object({
 
 const ModelProviderSchema = z.object({
   baseUrl: z.string().min(1),
-  apiKey: z.string().min(1),
+  apiKey: z.string().min(1).optional(),
   api: ModelApiSchema.optional(),
   headers: z.record(z.string(), z.string()).optional(),
   authHeader: z.boolean().optional(),

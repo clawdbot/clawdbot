@@ -4,7 +4,8 @@ import path from "node:path";
 
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { getCustomProviderApiKey } from "../agents/model-auth.js";
+import { ClawdbotSchema } from "../config/config.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
@@ -310,3 +311,257 @@ describe("applyOpencodeZenConfig", () => {
     ]);
   });
 });
+
+describe("apiKey optional validation", () => {
+  it("minimax provider config passes Zod validation without apiKey", () => {
+    // Apply the MiniMax API config which omits apiKey
+    const cfg = applyMinimaxApiConfig({});
+
+    // Verify apiKey is undefined in the generated config
+    expect(cfg.models?.providers?.minimax?.apiKey).toBeUndefined();
+
+    // Verify the generated config passes Zod schema validation
+    // This is the critical test: config without apiKey must be valid
+    const parseResult = ClawdbotSchema.safeParse({
+      models: cfg.models,
+    });
+
+    expect(parseResult.success).toBe(true);
+    if (!parseResult.success) {
+      console.error("Zod validation failed:", parseResult.error?.issues);
+    }
+  });
+
+  it("minimax provider config with only baseUrl and api is valid", () => {
+    // Simulate a minimal provider config (what MiniMax generates)
+    const minimalConfig = {
+      models: {
+        mode: "merge" as const,
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages" as const,
+            models: [
+              {
+                id: "MiniMax-M2.1",
+                name: "MiniMax M2.1",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+                contextWindow: 200000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const parseResult = ClawdbotSchema.safeParse(minimalConfig);
+    expect(parseResult.success).toBe(true);
+  });
+
+  it("applyMinimaxApiConfig replaces entire provider (apiKey not preserved)", () => {
+    // Verify that applyMinimaxApiConfig replaces the entire provider config
+    // This is expected behavior - it generates a fresh config for MiniMax
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://old.example.com",
+            apiKey: "explicit-key",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    });
+
+    // Config should be replaced with new MiniMax API settings
+    expect(cfg.models?.providers?.minimax?.baseUrl).toBe(
+      "https://api.minimax.io/anthropic",
+    );
+    expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.minimax?.apiKey).toBeUndefined();
+  });
+
+  it("config with explicit apiKey is still valid (backwards compatibility)", () => {
+    // Verify that configs with apiKey defined still pass validation
+    const configWithApiKey = {
+      models: {
+        mode: "merge" as const,
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-12345",
+            api: "anthropic-messages" as const,
+            models: [
+              {
+                id: "gpt-4o",
+                name: "GPT-4o",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 5, output: 15, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 16384,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const parseResult = ClawdbotSchema.safeParse(configWithApiKey);
+    expect(parseResult.success).toBe(true);
+  });
+
+  it("config without apiKey is valid (new behavior)", () => {
+    // Verify that configs without apiKey now pass validation
+    const configWithoutApiKey = {
+      models: {
+        mode: "merge" as const,
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            // No apiKey - will be resolved from env or auth profile
+            api: "anthropic-messages" as const,
+            models: [
+              {
+                id: "claude-opus-4-5",
+                name: "Claude Opus 4.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const parseResult = ClawdbotSchema.safeParse(configWithoutApiKey);
+    expect(parseResult.success).toBe(true);
+  });
+
+  it("config with empty apiKey is rejected", () => {
+    // Verify that configs with empty apiKey fail validation
+    const configWithEmptyApiKey = {
+      models: {
+        mode: "merge" as const,
+        providers: {
+          test: {
+            baseUrl: "https://api.test.com",
+            apiKey: "", // Empty string should be rejected
+            api: "openai-responses" as const,
+            models: [
+              {
+                id: "test-model",
+                name: "Test Model",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const parseResult = ClawdbotSchema.safeParse(configWithEmptyApiKey);
+    expect(parseResult.success).toBe(false);
+    if (!parseResult.success) {
+      // Zod returns "Too small: expected string to have >=1 characters" for empty strings
+      expect(parseResult.error?.issues[0]?.message).toMatch(
+        /Too small|string/i,
+      );
+    }
+  });
+
+  it("provider with apiKey uses config value over env var", () => {
+    // Verify that when apiKey is in config, it takes precedence
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = "env-api-key-12345";
+
+      const cfg = {
+        models: {
+          mode: "merge" as const,
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "config-api-key-67890",
+              api: "openai-responses" as const,
+              models: [
+                {
+                  id: "gpt-4o",
+                  name: "GPT-4o",
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 5, output: 15, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 16384,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const apiKey = getCustomProviderApiKey(cfg, "openai");
+      expect(apiKey).toBe("config-api-key-67890");
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+  });
+
+  it("provider without apiKey falls back to env var", () => {
+    // Verify that when apiKey is NOT in config, env var is used
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = "env-api-key-12345";
+
+      const cfg = {
+        models: {
+          mode: "merge" as const,
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              // No apiKey - should return undefined
+              api: "openai-responses" as const,
+              models: [
+                {
+                  id: "gpt-4o",
+                  name: "GPT-4o",
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 5, output: 15, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 16384,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const apiKey = getCustomProviderApiKey(cfg, "openai");
+      // Should be undefined because apiKey is not in config
+      expect(apiKey).toBeUndefined();
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+  });
+});
+

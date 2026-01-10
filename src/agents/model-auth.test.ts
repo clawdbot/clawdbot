@@ -199,4 +199,96 @@ describe("getApiKeyForModel", () => {
       }
     }
   });
+
+  it("resolves MINIMAX_API_KEY from environment variable", async () => {
+    const previousMinimaxKey = process.env.MINIMAX_API_KEY;
+
+    try {
+      process.env.MINIMAX_API_KEY = "test-minimax-key-12345";
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const result = await resolveApiKeyForProvider({
+        provider: "minimax",
+        store: { version: 1, profiles: {} },
+      });
+
+      expect(result.apiKey).toBe("test-minimax-key-12345");
+      expect(result.source).toBe("env: MINIMAX_API_KEY");
+    } finally {
+      if (previousMinimaxKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = previousMinimaxKey;
+      }
+    }
+  });
+
+  it("resolves MiniMax from auth profile with explicit profileId", async () => {
+    const previousMinimaxKey = process.env.MINIMAX_API_KEY;
+
+    try {
+      delete process.env.MINIMAX_API_KEY;
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      // Use explicit profileId parameter to bypass order resolution
+      // Note: auth profile store uses `key` for api_key type, not `apiKey`
+      const result = await resolveApiKeyForProvider({
+        provider: "minimax",
+        profileId: "minimax:default",
+        store: {
+          version: 1,
+          profiles: {
+            "minimax:default": {
+              type: "api_key",
+              provider: "minimax",
+              key: "profile-minimax-key",
+            },
+          },
+        },
+      });
+
+      expect(result.apiKey).toBe("profile-minimax-key");
+      expect(result.source).toBe("profile:minimax:default");
+    } finally {
+      if (previousMinimaxKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = previousMinimaxKey;
+      }
+    }
+  });
+
+  it("throws when MiniMax API key is missing (no env, no profile)", async () => {
+    const previousMinimaxKey = process.env.MINIMAX_API_KEY;
+
+    try {
+      delete process.env.MINIMAX_API_KEY;
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      let error: unknown = null;
+      try {
+        await resolveApiKeyForProvider({
+          provider: "minimax",
+          store: { version: 1, profiles: {} },
+        });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(String(error)).toContain(
+        'No API key found for provider "minimax".',
+      );
+    } finally {
+      if (previousMinimaxKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = previousMinimaxKey;
+      }
+    }
+  });
 });

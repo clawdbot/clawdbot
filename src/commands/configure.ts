@@ -70,6 +70,7 @@ import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import {
   applyAuthProfileConfig,
+  applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   applyOpencodeZenConfig,
@@ -369,6 +370,7 @@ async function promptAuthConfig(
     | "gemini-api-key"
     | "apiKey"
     | "minimax-cloud"
+    | "minimax-api"
     | "minimax"
     | "opencode-zen"
     | "skip";
@@ -788,6 +790,21 @@ async function promptAuthConfig(
     next = applyMinimaxHostedConfig(next);
   } else if (authChoice === "minimax") {
     next = applyMinimaxConfig(next);
+  } else if (authChoice === "minimax-api") {
+    const key = guardCancel(
+      await text({
+        message: "Enter MiniMax API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    await setMinimaxApiKey(String(key).trim());
+    next = applyAuthProfileConfig(next, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    next = applyMinimaxApiConfig(next);
   } else if (authChoice === "opencode-zen") {
     note(
       [

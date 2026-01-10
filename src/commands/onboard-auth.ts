@@ -336,7 +336,7 @@ export function applyMinimaxApiProviderConfig(
   const providers = { ...cfg.models?.providers };
   providers.minimax = {
     baseUrl: MINIMAX_API_BASE_URL,
-    apiKey: "", // Resolved via MINIMAX_API_KEY env var or auth profile
+    // apiKey omitted: resolved via MINIMAX_API_KEY env var or auth profile by default.
     api: "anthropic-messages",
     models: [buildMinimaxApiModelDefinition(modelId)],
   };
