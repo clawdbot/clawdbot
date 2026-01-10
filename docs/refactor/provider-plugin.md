@@ -40,10 +40,12 @@ Each `ProviderPlugin` bundles:
 - `providers.status` warnings now flow through `status.collectStatusIssues` per plugin.
 - CLI list uses `meta.showConfigured` to decide whether to show configured state.
 - CLI provider options and prompt provider lists are generated from `listProviderPlugins()` (avoid hardcoded arrays).
+- Provider selection (`resolveMessageProviderSelection`) now inspects `config.isEnabled` + `config.isConfigured` per plugin instead of hardcoded provider checks.
 - Pairing flows (CLI + store) now use `plugin.pairing` (`idLabel`, `normalizeAllowEntry`, `notifyApproval`) via `src/providers/plugins/pairing.ts`.
 - CLI provider remove/disable delegates to `config.setAccountEnabled` + `config.deleteAccount` per plugin.
 - Onboarding quickstart allowlist uses `meta.quickstartAllowFrom` to avoid hardcoded provider lists.
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
+- Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
 - Provider logout now routes through `providers.logout` using `gateway.logoutAccount` on each plugin (clients should call the generic method).
 - WhatsApp web login aliases are handled by the plugin (`meta.aliases: ["web"]`) so gateway API inputs can stay stable.
 - Gateway message-provider normalization uses registry aliases (including `web`) so CLI/API inputs stay stable without plugin init cycles.
