@@ -19,7 +19,7 @@ import {
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { resolveTelegramDraftStreamingChunking } from "../auto-reply/reply/block-streaming.js";
+import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import {
   buildHistoryContextFromMap,
   clearHistoryEntries,
