@@ -43,6 +43,7 @@ export function defaultGroupActivation(
 }
 
 export function buildGroupIntro(params: {
+  cfg: ClawdbotConfig;
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
@@ -53,15 +54,15 @@ export function buildGroupIntro(params: {
     params.defaultActivation;
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
-  const provider = params.sessionCtx.Provider?.trim().toLowerCase();
+  const rawProvider = params.sessionCtx.Provider?.trim();
+  const providerKey = rawProvider?.toLowerCase() ?? "";
+  const providerId = normalizeProviderId(rawProvider);
+  const plugin = providerId ? getProviderPlugin(providerId) : undefined;
   const providerLabel = (() => {
-    if (!provider) return "chat";
-    if (isInternalMessageProvider(provider)) return "WebChat";
-    const normalized = normalizeProviderId(provider);
-    if (normalized) {
-      return getProviderPlugin(normalized)?.meta.label ?? normalized;
-    }
-    return `${provider.at(0)?.toUpperCase() ?? ""}${provider.slice(1)}`;
+    if (!providerKey) return "chat";
+    if (isInternalMessageProvider(providerKey)) return "WebChat";
+    if (plugin) return plugin.meta.label ?? plugin.id;
+    return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
   })();
   const subjectLine = subject
     ? `You are replying inside the ${providerLabel} group "${subject}".`
@@ -71,10 +72,16 @@ export function buildGroupIntro(params: {
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  const whatsappIdsLine =
-    provider === "whatsapp"
-      ? "WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant)."
-      : undefined;
+  const groupId = params.sessionCtx.From?.replace(/^group:/, "");
+  const groupRoom = params.sessionCtx.GroupRoom?.trim() ?? subject;
+  const groupSpace = params.sessionCtx.GroupSpace?.trim();
+  const providerIdsLine = plugin?.groups?.resolveGroupIntroHint?.({
+    cfg: params.cfg,
+    groupId,
+    groupRoom,
+    groupSpace,
+    accountId: params.sessionCtx.AccountId,
+  });
   const silenceLine =
     activation === "always"
       ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so Clawdbot stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
@@ -89,7 +96,7 @@ export function buildGroupIntro(params: {
     subjectLine,
     membersLine,
     activationLine,
-    whatsappIdsLine,
+    providerIdsLine,
     silenceLine,
     cautionLine,
     lurkLine,

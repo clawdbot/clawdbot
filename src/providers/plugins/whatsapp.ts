@@ -193,6 +193,8 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   },
   groups: {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
+    resolveGroupIntroHint: () =>
+      "WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant).",
   },
   mentions: {
     stripPatterns: ({ ctx }) => {

@@ -2,9 +2,9 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
 import {
   getProviderPlugin,
+  listProviderPlugins,
   normalizeProviderId,
 } from "../../providers/plugins/index.js";
-import { PROVIDER_IDS } from "../../providers/registry.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
@@ -13,8 +13,8 @@ const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
 const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
-  ...PROVIDER_IDS,
   INTERNAL_MESSAGE_PROVIDER,
+  ...listProviderPlugins().map((plugin) => plugin.id),
 ]);
 
 function normalizeChunkProvider(

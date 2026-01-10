@@ -198,6 +198,7 @@ export type ProviderGroupContext = {
 
 export type ProviderGroupAdapter = {
   resolveRequireMention?: (params: ProviderGroupContext) => boolean | undefined;
+  resolveGroupIntroHint?: (params: ProviderGroupContext) => string | undefined;
 };
 
 export type ProviderOutboundContext = {
