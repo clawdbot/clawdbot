@@ -27,7 +27,7 @@ Each `ProviderPlugin` bundles:
 - `config`: list/resolve/default/isConfigured/describeAccount + isEnabled + (un)configured reasons + `resolveAllowFrom` + `formatAllowFrom`.
 - `outbound`: deliveryMode + chunker + resolveTarget (mode-aware) + sendText/sendMedia/sendPoll + pollMaxOptions.
 - `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary + logSelfId + collectStatusIssues.
-- `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`).
+- `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`), plus optional `loginWithQrStart/loginWithQrWait` for gateway-owned QR login flows.
 - `security`: dmPolicy + allowFrom hints used by `doctor security`.
 - `heartbeat`: optional readiness checks + heartbeat recipient resolution when providers own targeting.
 - `auth`: optional login hook used by `clawdbot providers login`.
@@ -64,6 +64,7 @@ Each `ProviderPlugin` bundles:
 - Agent provider status entries are now built from plugin config/status (`status.resolveAccountState` for custom state labels).
 - Agent binding defaults use `meta.forceAccountBinding` to avoid hardcoded provider checks.
 - Onboarding quickstart allowlist uses `meta.quickstartAllowFrom` to avoid hardcoded provider lists.
+- `resolveProviderDefaultAccountId()` is the shared helper for picking default accounts from `accountIds` + plugin config.
 - `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
 - Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
 - Outbound delivery results accept `meta` for provider-specific fields to avoid core type churn in new plugins.
@@ -84,6 +85,8 @@ Each `ProviderPlugin` bundles:
 - Onboarding provider setup is delegated to adapter modules under `src/providers/plugins/onboarding/*`, keeping `setupProviders` provider-agnostic.
 - Onboarding registry now reads `plugin.onboarding` from each provider (no standalone onboarding map).
 - Provider login flows (`clawdbot providers login`) route through `plugin.auth.login` when available.
+- `clawdbot status` reports `linkProvider` (derived from `status.buildProviderSummary().linked`) instead of a hardcoded `web` provider field.
+- Gateway `web.login.*` methods use `plugin.gatewayMethods` ownership to pick the provider (no hardcoded `normalizeProviderId("web")` in the handler).
 
 ## CLI Commands (inline references)
 - Add/remove providers: `clawdbot providers add <provider>` / `clawdbot providers remove <provider>`.

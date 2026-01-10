@@ -309,6 +309,16 @@ export type ProviderLogoutResult = {
   [key: string]: unknown;
 };
 
+export type ProviderLoginWithQrStartResult = {
+  qrDataUrl?: string;
+  message: string;
+};
+
+export type ProviderLoginWithQrWaitResult = {
+  connected: boolean;
+  message: string;
+};
+
 export type ProviderLogoutContext<ResolvedAccount = unknown> = {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -332,6 +342,16 @@ export type ProviderGatewayAdapter<ResolvedAccount = unknown> = {
     ctx: ProviderGatewayContext<ResolvedAccount>,
   ) => Promise<unknown>;
   stopAccount?: (ctx: ProviderGatewayContext<ResolvedAccount>) => Promise<void>;
+  loginWithQrStart?: (params: {
+    accountId?: string;
+    force?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+  }) => Promise<ProviderLoginWithQrStartResult>;
+  loginWithQrWait?: (params: {
+    accountId?: string;
+    timeoutMs?: number;
+  }) => Promise<ProviderLoginWithQrWaitResult>;
   logoutAccount?: (
     ctx: ProviderLogoutContext<ResolvedAccount>,
   ) => Promise<ProviderLogoutResult>;

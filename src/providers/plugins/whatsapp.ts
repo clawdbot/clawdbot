@@ -18,6 +18,7 @@ import {
 } from "../../web/accounts.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
 import { loginWeb } from "../../web/login.js";
+import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
@@ -456,6 +457,15 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         },
       );
     },
+    loginWithQrStart: async ({ accountId, force, timeoutMs, verbose }) =>
+      await startWebLoginWithQr({
+        accountId,
+        force,
+        timeoutMs,
+        verbose,
+      }),
+    loginWithQrWait: async ({ accountId, timeoutMs }) =>
+      await waitForWebLogin({ accountId, timeoutMs }),
     logoutAccount: async ({ account, runtime }) => {
       const cleared = await logoutWeb({
         authDir: account.authDir,
