@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeProviderId } from "../providers/plugins/index.js";
 import type { ClawdbotConfig } from "./config.js";
 
 function normalizeCapabilities(
@@ -49,43 +50,17 @@ export function resolveProviderCapabilities(params: {
   accountId?: string | null;
 }): string[] | undefined {
   const cfg = params.cfg;
-  const provider = params.provider?.trim().toLowerCase();
+  const provider = normalizeProviderId(params.provider);
   if (!cfg || !provider) return undefined;
 
-  switch (provider) {
-    case "whatsapp":
-      return resolveAccountCapabilities({
-        cfg: cfg.whatsapp,
-        accountId: params.accountId,
-      });
-    case "telegram":
-      return resolveAccountCapabilities({
-        cfg: cfg.telegram,
-        accountId: params.accountId,
-      });
-    case "discord":
-      return resolveAccountCapabilities({
-        cfg: cfg.discord,
-        accountId: params.accountId,
-      });
-    case "slack":
-      return resolveAccountCapabilities({
-        cfg: cfg.slack,
-        accountId: params.accountId,
-      });
-    case "signal":
-      return resolveAccountCapabilities({
-        cfg: cfg.signal,
-        accountId: params.accountId,
-      });
-    case "imessage":
-      return resolveAccountCapabilities({
-        cfg: cfg.imessage,
-        accountId: params.accountId,
-      });
-    case "msteams":
-      return normalizeCapabilities(cfg.msteams?.capabilities);
-    default:
-      return undefined;
-  }
+  const providerConfig = (cfg as Record<string, unknown>)[provider] as
+    | {
+        accounts?: Record<string, { capabilities?: string[] }>;
+        capabilities?: string[];
+      }
+    | undefined;
+  return resolveAccountCapabilities({
+    cfg: providerConfig,
+    accountId: params.accountId,
+  });
 }

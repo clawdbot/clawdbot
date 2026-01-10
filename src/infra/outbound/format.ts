@@ -1,3 +1,5 @@
+import { getProviderPlugin } from "../../providers/plugins/index.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
 export type OutboundDeliveryJson = {
@@ -23,7 +25,7 @@ type OutboundDeliveryMeta = {
 };
 
 const resolveProviderLabel = (provider: string) =>
-  provider === "imessage" ? "iMessage" : provider;
+  getProviderPlugin(provider as ProviderId)?.meta.label ?? provider;
 
 export function formatOutboundDeliverySummary(
   provider: string,
