@@ -4,35 +4,29 @@ import Observation
 import SwiftUI
 
 struct HealthSnapshot: Codable, Sendable {
-    struct Telegram: Codable, Sendable {
+    struct ProviderSummary: Codable, Sendable {
         struct Probe: Codable, Sendable {
             struct Bot: Codable, Sendable {
-                let id: Int?
                 let username: String?
             }
 
-            let ok: Bool
+            struct Webhook: Codable, Sendable {
+                let url: String?
+            }
+
+            let ok: Bool?
             let status: Int?
             let error: String?
             let elapsedMs: Double?
             let bot: Bot?
+            let webhook: Webhook?
         }
 
-        let configured: Bool
-        let probe: Probe?
-    }
-
-    struct Web: Codable, Sendable {
-        struct Connect: Codable, Sendable {
-            let ok: Bool
-            let status: Int?
-            let error: String?
-            let elapsedMs: Double?
-        }
-
-        let linked: Bool
+        let configured: Bool?
+        let linked: Bool?
         let authAgeMs: Double?
-        let connect: Connect?
+        let probe: Probe?
+        let lastProbeAt: Double?
     }
 
     struct SessionInfo: Codable, Sendable {
@@ -50,8 +44,9 @@ struct HealthSnapshot: Codable, Sendable {
     let ok: Bool?
     let ts: Double
     let durationMs: Double
-    let web: Web
-    let telegram: Telegram?
+    let providers: [String: ProviderSummary]
+    let providerOrder: [String]?
+    let providerLabels: [String: String]?
     let heartbeatSeconds: Int?
     let sessions: Sessions
 }
@@ -142,10 +137,32 @@ final class HealthStore {
         }
     }
 
-    private static func isTelegramHealthy(_ snap: HealthSnapshot) -> Bool {
-        guard let tg = snap.telegram, tg.configured else { return false }
+    private static func isProviderHealthy(_ summary: HealthSnapshot.ProviderSummary) -> Bool {
+        guard summary.configured == true else { return false }
         // If probe is missing, treat it as "configured but unknown health" (not a hard fail).
-        return tg.probe?.ok ?? true
+        return summary.probe?.ok ?? true
+    }
+
+    private func resolveLinkProvider(_ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ProviderSummary)? {
+        let order = snap.providerOrder ?? Array(snap.providers.keys)
+        for id in order {
+            if let summary = snap.providers[id], summary.linked != nil {
+                return (id: id, summary: summary)
+            }
+        }
+        return nil
+    }
+
+    private func resolveFallbackProvider(_ snap: HealthSnapshot, excluding id: String?) -> (id: String, summary: HealthSnapshot.ProviderSummary)? {
+        let order = snap.providerOrder ?? Array(snap.providers.keys)
+        for providerId in order {
+            if providerId == id { continue }
+            guard let summary = snap.providers[providerId] else { continue }
+            if Self.isProviderHealthy(summary) {
+                return (id: providerId, summary: summary)
+            }
+        }
+        return nil
     }
 
     var state: HealthState {
@@ -153,13 +170,11 @@ final class HealthStore {
             return .degraded(error)
         }
         guard let snap = self.snapshot else { return .unknown }
-        if !snap.web.linked {
-            // WhatsApp Web linking is optional if Telegram is healthy; don't paint the whole app red.
-            return Self.isTelegramHealthy(snap) ? .degraded("Not linked") : .linkingNeeded
-        }
-        if let connect = snap.web.connect, !connect.ok {
-            let reason = connect.error ?? "connect failed"
-            return .degraded(reason)
+        guard let link = self.resolveLinkProvider(snap) else { return .unknown }
+        if link.summary.linked != true {
+            // Linking is optional if any other provider is healthy; don't paint the whole app red.
+            let fallback = self.resolveFallbackProvider(snap, excluding: link.id)
+            return fallback != nil ? .degraded("Not linked") : .linkingNeeded
         }
         return .ok
     }
@@ -168,19 +183,17 @@ final class HealthStore {
         if self.isRefreshing { return "Health check running…" }
         if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
-        if !snap.web.linked {
-            if let tg = snap.telegram, tg.configured {
-                let tgLabel = (tg.probe?.ok ?? true) ? "Telegram ok" : "Telegram degraded"
-                return "\(tgLabel) · Not linked — run clawdbot login"
+        guard let link = self.resolveLinkProvider(snap) else { return "Health check pending" }
+        if link.summary.linked != true {
+            if let fallback = self.resolveFallbackProvider(snap, excluding: link.id) {
+                let fallbackLabel = snap.providerLabels?[fallback.id] ?? fallback.id.capitalized
+                let fallbackState = (fallback.summary.probe?.ok ?? true) ? "ok" : "degraded"
+                return "\(fallbackLabel) \(fallbackState) · Not linked — run clawdbot login"
             }
             return "Not linked — run clawdbot login"
         }
-        let auth = snap.web.authAgeMs.map { msToAge($0) } ?? "unknown"
-        if let connect = snap.web.connect, !connect.ok {
-            let code = connect.status.map(String.init) ?? "?"
-            return "Link stale? status \(code)"
-        }
-        return "linked · auth \(auth) · socket ok"
+        let auth = link.summary.authAgeMs.map { msToAge($0) } ?? "unknown"
+        return "linked · auth \(auth)"
     }
 
     /// Short, human-friendly detail for the last failure, used in the UI.
@@ -201,17 +214,8 @@ final class HealthStore {
     }
 
     func describeFailure(from snap: HealthSnapshot, fallback: String?) -> String {
-        if !snap.web.linked {
+        if let link = self.resolveLinkProvider(snap), link.summary.linked != true {
             return "Not linked — run clawdbot login"
-        }
-        if let connect = snap.web.connect, !connect.ok {
-            let elapsed = connect.elapsedMs.map { "\(Int($0))ms" } ?? "unknown duration"
-            if let err = connect.error, err.lowercased().contains("timeout") || connect.status == nil {
-                return "Health check timed out (\(elapsed))"
-            }
-            let code = connect.status.map { "status \($0)" } ?? "status unknown"
-            let reason = connect.error ?? "connect failed"
-            return "\(reason) (\(code), \(elapsed))"
         }
         if let fallback, !fallback.isEmpty {
             return fallback
