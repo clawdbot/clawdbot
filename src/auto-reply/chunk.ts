@@ -10,8 +10,9 @@ import {
 } from "../markdown/fences.js";
 import type { ProviderId } from "../providers/plugins/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 
-export type TextChunkProvider = ProviderId | "webchat";
+export type TextChunkProvider = ProviderId | typeof INTERNAL_MESSAGE_PROVIDER;
 
 const DEFAULT_CHUNK_LIMIT = 4000;
 const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Partial<Record<ProviderId, number>> = {
@@ -52,7 +53,7 @@ export function resolveTextChunkLimit(
   accountId?: string | null,
 ): number {
   const providerOverride = (() => {
-    if (!provider || provider === "webchat") return undefined;
+    if (!provider || provider === INTERNAL_MESSAGE_PROVIDER) return undefined;
     const providerConfig = (cfg as Record<string, unknown> | undefined)?.[
       provider
     ] as ProviderChunkConfig | undefined;
@@ -61,7 +62,7 @@ export function resolveTextChunkLimit(
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
   }
-  if (provider && provider !== "webchat") {
+  if (provider && provider !== INTERNAL_MESSAGE_PROVIDER) {
     return DEFAULT_CHUNK_LIMIT_BY_PROVIDER[provider] ?? DEFAULT_CHUNK_LIMIT;
   }
   return DEFAULT_CHUNK_LIMIT;

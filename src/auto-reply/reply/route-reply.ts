@@ -14,6 +14,7 @@ import {
   getProviderPlugin,
   normalizeProviderId,
 } from "../../providers/plugins/index.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -90,7 +91,7 @@ export async function routeReply(
     return { ok: true };
   }
 
-  if (channel === "webchat") {
+  if (channel === INTERNAL_MESSAGE_PROVIDER) {
     return {
       ok: false,
       error: "Webchat routing not supported for queued replies",
@@ -180,8 +181,11 @@ export async function routeReply(
  */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
-): channel is Exclude<OriginatingChannelType, "webchat"> {
-  if (!channel || channel === "webchat") return false;
+): channel is Exclude<
+  OriginatingChannelType,
+  typeof INTERNAL_MESSAGE_PROVIDER
+> {
+  if (!channel || channel === INTERNAL_MESSAGE_PROVIDER) return false;
   const provider = normalizeProviderId(channel);
   if (!provider) return false;
   const plugin = getProviderPlugin(provider);

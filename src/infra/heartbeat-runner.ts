@@ -26,6 +26,7 @@ import {
 } from "../providers/plugins/index.js";
 import type { ProviderHeartbeatDeps } from "../providers/plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -221,7 +222,7 @@ export async function runHeartbeatOnce(opts: {
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
   const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== "webchat"
+    entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
       ? normalizeProviderId(entry.lastProvider)
       : undefined;
   const senderProvider =

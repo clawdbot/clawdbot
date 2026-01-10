@@ -12,6 +12,7 @@ import type {
   DeliverableMessageProvider,
   GatewayMessageProvider,
 } from "../../utils/message-provider.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 
 export type OutboundProvider = DeliverableMessageProvider | "none";
 
@@ -35,7 +36,7 @@ export function resolveOutboundTarget(params: {
   accountId?: string | null;
   mode?: ProviderOutboundTargetMode;
 }): OutboundTargetResolution {
-  if (params.provider === "webchat") {
+  if (params.provider === INTERNAL_MESSAGE_PROVIDER) {
     return {
       ok: false,
       error: new Error(
@@ -107,7 +108,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
       : undefined;
 
   const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== "webchat"
+    entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
       ? normalizeProviderId(entry.lastProvider)
       : undefined;
   const lastTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
