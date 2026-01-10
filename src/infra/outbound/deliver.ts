@@ -30,14 +30,18 @@ export type OutboundSendDeps = {
   ) => Promise<{ messageId: string; conversationId: string }>;
 };
 
-export type OutboundDeliveryResult =
-  | { provider: "whatsapp"; messageId: string; toJid: string }
-  | { provider: "telegram"; messageId: string; chatId: string }
-  | { provider: "discord"; messageId: string; channelId: string }
-  | { provider: "slack"; messageId: string; channelId: string }
-  | { provider: "signal"; messageId: string; timestamp?: number }
-  | { provider: "imessage"; messageId: string }
-  | { provider: "msteams"; messageId: string; conversationId: string };
+export type OutboundDeliveryResult = {
+  provider: Exclude<OutboundProvider, "none">;
+  messageId: string;
+  chatId?: string;
+  channelId?: string;
+  conversationId?: string;
+  timestamp?: number;
+  toJid?: string;
+  pollId?: string;
+  // Provider docking: stash provider-specific fields here to avoid core type churn.
+  meta?: Record<string, unknown>;
+};
 
 type Chunker = (text: string, limit: number) => string[];
 
