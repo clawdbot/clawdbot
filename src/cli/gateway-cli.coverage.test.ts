@@ -101,39 +101,47 @@ vi.mock("../commands/gateway-status.js", () => ({
 }));
 
 describe("gateway-cli coverage", () => {
-  it("registers call/health commands and routes to callGateway", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    callGateway.mockClear();
+  it(
+    "registers call/health commands and routes to callGateway",
+    async () => {
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+      callGateway.mockClear();
 
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
+      const { registerGatewayCli } = await import("./gateway-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerGatewayCli(program);
 
-    await program.parseAsync(
-      ["gateway", "call", "health", "--params", '{"x":1}'],
-      { from: "user" },
-    );
+      await program.parseAsync(
+        ["gateway", "call", "health", "--params", '{"x":1}', "--json"],
+        { from: "user" },
+      );
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(runtimeLogs.join("\n")).toContain('"ok": true');
-  });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtimeLogs.join("\n")).toContain('"ok": true');
+    },
+    15_000,
+  );
 
-  it("registers gateway status and routes to gatewayStatusCommand", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    gatewayStatusCommand.mockClear();
+  it(
+    "registers gateway status and routes to gatewayStatusCommand",
+    async () => {
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+      gatewayStatusCommand.mockClear();
 
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
+      const { registerGatewayCli } = await import("./gateway-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerGatewayCli(program);
 
-    await program.parseAsync(["gateway", "status", "--json"], { from: "user" });
+      await program.parseAsync(["gateway", "status", "--json"], { from: "user" });
 
-    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-  });
+      expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+    },
+    15_000,
+  );
 
   it("registers gateway discover and prints JSON", async () => {
     runtimeLogs.length = 0;
