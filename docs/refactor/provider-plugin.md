@@ -67,6 +67,11 @@ Each `ProviderPlugin` bundles:
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
 - Onboarding provider setup is delegated to adapter modules under `src/commands/onboarding/providers/*`, keeping `setupProviders` provider-agnostic.
 
+## CLI Commands (inline references)
+- Add/remove providers: `clawdbot providers add <provider>` / `clawdbot providers remove <provider>`.
+- Inspect provider state: `clawdbot providers list`, `clawdbot providers status`.
+- Pairing approvals: `clawdbot pairing list <provider>`, `clawdbot pairing approve <provider> <code>`.
+
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
 2) Register in `src/providers/plugins/index.ts` + aliases if needed.
