@@ -23,6 +23,11 @@ export type ChatProviderMeta = {
   docsPath: string;
   docsLabel?: string;
   blurb: string;
+  // Provider docking: selection-line formatting for onboarding prompts.
+  // Keep this data-driven to avoid provider-specific branches in shared code.
+  selectionDocsPrefix?: string;
+  selectionDocsOmitLabel?: boolean;
+  selectionExtras?: string[];
 };
 
 const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
@@ -34,6 +39,9 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
     docsLabel: "telegram",
     blurb:
       "simplest way to get started — register a bot with @BotFather and get going.",
+    selectionDocsPrefix: "",
+    selectionDocsOmitLabel: true,
+    selectionExtras: [WEBSITE_URL],
   },
   whatsapp: {
     id: "whatsapp",
@@ -130,13 +138,11 @@ export function formatProviderSelectionLine(
   meta: ChatProviderMeta,
   docsLink: (path: string, label?: string) => string,
 ): string {
-  if (meta.id === "telegram") {
-    return `${meta.label} — ${meta.blurb} ${docsLink(
-      meta.docsPath,
-    )} ${WEBSITE_URL}`;
-  }
-  return `${meta.label} — ${meta.blurb} Docs: ${docsLink(
-    meta.docsPath,
-    meta.docsLabel ?? meta.id,
-  )}`;
+  const docsPrefix = meta.selectionDocsPrefix ?? "Docs:";
+  const docsLabel = meta.docsLabel ?? meta.id;
+  const docs = meta.selectionDocsOmitLabel
+    ? docsLink(meta.docsPath)
+    : docsLink(meta.docsPath, docsLabel);
+  const extras = (meta.selectionExtras ?? []).filter(Boolean).join(" ");
+  return `${meta.label} — ${meta.blurb} ${docsPrefix ? `${docsPrefix} ` : ""}${docs}${extras ? ` ${extras}` : ""}`;
 }
