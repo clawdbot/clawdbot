@@ -33,6 +33,7 @@ import {
 } from "../../whatsapp/normalize.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
+import { createWhatsAppLoginTool } from "./agent-tools/whatsapp-login.js";
 import { formatPairingApproveHint } from "./helpers.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
@@ -60,6 +61,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: whatsappOnboardingAdapter,
+  agentTools: () => [createWhatsAppLoginTool()],
   pairing: {
     idLabel: "whatsappSenderId",
   },
