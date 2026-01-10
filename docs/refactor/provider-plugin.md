@@ -25,6 +25,7 @@ Each `ProviderPlugin` bundles:
 - `outbound`: deliveryMode + chunker + resolveTarget (mode-aware) + sendText/sendMedia/sendPoll + pollMaxOptions.
 - `status`: defaultRuntime + probe/audit/buildAccountSnapshot + buildProviderSummary + logSelfId + collectStatusIssues.
 - `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`).
+- `security`: dmPolicy + allowFrom hints used by `doctor security`.
 - `heartbeat`: optional readiness checks (e.g., WhatsApp linked + running).
 - `reload`: `configPrefixes` that map to hot restarts.
 
@@ -58,6 +59,7 @@ Each `ProviderPlugin` bundles:
 - Gateway message-provider normalization uses registry aliases (including `web`) so CLI/API inputs stay stable without plugin init cycles.
 - Group mention gating now flows through `plugin.groups.resolveRequireMention` (Discord/Slack/Telegram/WhatsApp/iMessage) instead of branching in reply handlers.
 - Command authorization uses `config.resolveAllowFrom` + `config.formatAllowFrom`, with `commands.enforceOwnerForCommands` and `commands.skipWhenConfigEmpty` driving provider-specific behavior.
+- Security warnings (`doctor security`) use `plugin.security.resolveDmPolicy` + `plugin.security.collectWarnings`; supply `policyPath` + `allowFromPath` for accurate config hints.
 - Reply threading uses `plugin.threading.resolveReplyToMode` and `plugin.threading.allowTagsWhenOff` rather than provider switches in reply helpers.
 - Tool auto-threading context flows through `plugin.threading.buildToolContext` (e.g., Slack threadTs injection).
 - Messaging tool dedupe now relies on `plugin.messaging.normalizeTarget` for provider-specific target normalization.
