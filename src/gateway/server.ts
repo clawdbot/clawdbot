@@ -1461,6 +1461,8 @@ export async function startGatewayServer(
 
           const frame = parsed as RequestFrame;
           const connectParams = frame.params as ConnectParams;
+          const clientLabel =
+            connectParams.client.displayName ?? connectParams.client.id;
 
           // protocol negotiation
           const { minProtocol, maxProtocol } = connectParams;
@@ -1470,13 +1472,14 @@ export async function startGatewayServer(
           ) {
             handshakeState = "failed";
             logWsControl.warn(
-              `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
+              `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
             setCloseCause("protocol-mismatch", {
               minProtocol,
               maxProtocol,
               expectedProtocol: PROTOCOL_VERSION,
-              client: connectParams.client.name,
+              client: connectParams.client.id,
+              clientDisplayName: connectParams.client.displayName,
               mode: connectParams.client.mode,
               version: connectParams.client.version,
             });
@@ -1505,7 +1508,7 @@ export async function startGatewayServer(
           if (!authResult.ok) {
             handshakeState = "failed";
             logWsControl.warn(
-              `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
+              `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
             const authProvided = connectParams.auth?.token
               ? "token"
@@ -1517,7 +1520,8 @@ export async function startGatewayServer(
               authProvided,
               authReason: authResult.reason,
               allowTailscale: resolvedAuth.allowTailscale,
-              client: connectParams.client.name,
+              client: connectParams.client.id,
+              clientDisplayName: connectParams.client.displayName,
               mode: connectParams.client.mode,
               version: connectParams.client.version,
             });
@@ -1540,7 +1544,8 @@ export async function startGatewayServer(
 
           logWs("in", "connect", {
             connId,
-            client: connectParams.client.name,
+            client: connectParams.client.id,
+            clientDisplayName: connectParams.client.displayName,
             version: connectParams.client.version,
             mode: connectParams.client.mode,
             instanceId: connectParams.client.instanceId,
@@ -1550,13 +1555,16 @@ export async function startGatewayServer(
 
           if (isWebchatConnect(connectParams)) {
             logWsControl.info(
-              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
+              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
           }
 
           if (presenceKey) {
             upsertPresence(presenceKey, {
-              host: connectParams.client.name || os.hostname(),
+              host:
+                connectParams.client.displayName ??
+                connectParams.client.id ??
+                os.hostname(),
               ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
               version: connectParams.client.version,
               platform: connectParams.client.platform,

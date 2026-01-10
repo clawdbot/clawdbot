@@ -35,7 +35,7 @@ describe("gateway server chat", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
         version: "dev",
         platform: "web",
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,

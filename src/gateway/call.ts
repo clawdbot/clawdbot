@@ -10,6 +10,8 @@ import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
 } from "../utils/message-provider.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -22,10 +24,11 @@ export type CallGatewayOptions = {
   params?: unknown;
   expectFinal?: boolean;
   timeoutMs?: number;
-  clientName?: string;
+  clientName?: GatewayClientName;
+  clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
-  mode?: string;
+  mode?: GatewayClientMode;
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
@@ -196,6 +199,7 @@ export async function callGateway<T = unknown>(
       password,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: opts.clientDisplayName,
       clientVersion: opts.clientVersion ?? "dev",
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,

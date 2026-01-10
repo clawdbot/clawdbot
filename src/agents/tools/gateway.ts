@@ -1,4 +1,8 @@
 import { callGateway } from "../../gateway/call.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../utils/message-provider.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
@@ -39,7 +43,8 @@ export async function callGatewayTool<T = unknown>(
     params,
     timeoutMs: gateway.timeoutMs,
     expectFinal: extra?.expectFinal,
-    clientName: "agent",
-    mode: "agent",
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    clientDisplayName: "agent",
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
   });
 }

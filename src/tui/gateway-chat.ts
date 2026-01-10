@@ -7,6 +7,10 @@ import {
   type SessionsListParams,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 import { VERSION } from "../version.js";
 
 export type GatewayConnectionOptions = {
@@ -104,10 +108,11 @@ export class GatewayChatClient {
       url: resolved.url,
       token: resolved.token,
       password: resolved.password,
-      clientName: "clawdbot-tui",
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientDisplayName: "clawdbot-tui",
       clientVersion: VERSION,
       platform: process.platform,
-      mode: "tui",
+      mode: GATEWAY_CLIENT_MODES.UI,
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,

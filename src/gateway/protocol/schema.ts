@@ -1,11 +1,19 @@
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./client-info.js";
 
 const NonEmptyString = Type.String({ minLength: 1 });
 const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
+
+const GatewayClientIdSchema = Type.Union(
+  Object.values(GATEWAY_CLIENT_IDS).map((value) => Type.Literal(value)),
+);
+const GatewayClientModeSchema = Type.Union(
+  Object.values(GATEWAY_CLIENT_MODES).map((value) => Type.Literal(value)),
+);
 
 export const PresenceEntrySchema = Type.Object(
   {
@@ -69,12 +77,13 @@ export const ConnectParamsSchema = Type.Object(
     maxProtocol: Type.Integer({ minimum: 1 }),
     client: Type.Object(
       {
-        name: NonEmptyString,
+        id: GatewayClientIdSchema,
+        displayName: Type.Optional(NonEmptyString),
         version: NonEmptyString,
         platform: NonEmptyString,
         deviceFamily: Type.Optional(NonEmptyString),
         modelIdentifier: Type.Optional(NonEmptyString),
-        mode: NonEmptyString,
+        mode: GatewayClientModeSchema,
         instanceId: Type.Optional(NonEmptyString),
       },
       { additionalProperties: false },

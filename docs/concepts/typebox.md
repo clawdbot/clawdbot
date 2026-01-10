@@ -91,10 +91,11 @@ Connect (first message):
     "minProtocol": 2,
     "maxProtocol": 2,
     "client": {
-      "name": "macos",
+      "id": "clawdbot-macos",
+      "displayName": "macos",
       "version": "1.0.0",
       "platform": "macos 15.1",
-      "mode": "app",
+      "mode": "ui",
       "instanceId": "A1B2"
     }
   }
@@ -153,7 +154,8 @@ ws.on("open", () => {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        name: "example",
+        id: "cli",
+        displayName: "example",
         version: "dev",
         platform: "node",
         mode: "cli"

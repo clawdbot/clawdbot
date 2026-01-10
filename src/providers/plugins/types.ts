@@ -8,6 +8,10 @@ import type {
 } from "../../infra/outbound/deliver.js";
 import type { PollInput } from "../../polls.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../utils/message-provider.js";
 import type { ChatProviderId } from "../registry.js";
 import type { ProviderOnboardingAdapter } from "./onboarding-types.js";
 
@@ -497,8 +501,9 @@ export type ProviderMessageActionContext = {
     url?: string;
     token?: string;
     timeoutMs?: number;
-    clientName: "cli" | "agent";
-    mode: "cli" | "agent";
+    clientName: GatewayClientName;
+    clientDisplayName?: string;
+    mode: GatewayClientMode;
   };
   toolContext?: ProviderThreadingToolContext;
   dryRun?: boolean;

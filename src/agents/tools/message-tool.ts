@@ -16,6 +16,10 @@ import {
 } from "../../providers/plugins/message-actions.js";
 import type { ProviderMessageActionName } from "../../providers/plugins/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../utils/message-provider.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -195,8 +199,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         url: readStringParam(params, "gatewayUrl", { trim: false }),
         token: readStringParam(params, "gatewayToken", { trim: false }),
         timeoutMs: readNumberParam(params, "timeoutMs"),
-        clientName: "agent" as const,
-        mode: "agent" as const,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientDisplayName: "agent",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
       };
       const dryRun = Boolean(params.dryRun);
       const toolContext =

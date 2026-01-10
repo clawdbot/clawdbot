@@ -242,7 +242,7 @@ describe("gateway server health/presence", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: GATEWAY_CLIENT_NAMES.FINGERPRINT,
+        id: GATEWAY_CLIENT_NAMES.FINGERPRINT,
         version: "9.9.9",
         platform: "test",
         deviceFamily: "iPad",
@@ -283,7 +283,7 @@ describe("gateway server health/presence", () => {
     const cliId = `cli-${randomUUID()}`;
     await connectOk(ws, {
       client: {
-        name: GATEWAY_CLIENT_NAMES.CLI,
+        id: GATEWAY_CLIENT_NAMES.CLI,
         version: "dev",
         platform: "test",
         mode: GATEWAY_CLIENT_MODES.CLI,

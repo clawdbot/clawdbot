@@ -874,7 +874,7 @@ describe("gateway server node/bridge", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: GATEWAY_CLIENT_NAMES.WEBCHAT,
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,

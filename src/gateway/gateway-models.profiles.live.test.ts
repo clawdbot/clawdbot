@@ -14,7 +14,10 @@ import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../agents/models-config.js";
 import { loadConfig } from "../config/config.js";
-import { GATEWAY_CLIENT_MODES } from "../utils/message-provider.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -175,7 +178,8 @@ async function connectClient(params: { url: string; token: string }) {
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
-      clientName: "vitest-live",
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
+      clientDisplayName: "vitest-live",
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
       onHelloOk: () => stop(undefined, client),

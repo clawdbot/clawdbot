@@ -538,7 +538,8 @@ export async function connectReq(
     minProtocol?: number;
     maxProtocol?: number;
     client?: {
-      name: string;
+      id: string;
+      displayName?: string;
       version: string;
       platform: string;
       mode: string;
@@ -557,7 +558,7 @@ export async function connectReq(
         minProtocol: opts?.minProtocol ?? PROTOCOL_VERSION,
         maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,
         client: opts?.client ?? {
-          name: GATEWAY_CLIENT_NAMES.TEST,
+          id: GATEWAY_CLIENT_NAMES.TEST,
           version: "1.0.0",
           platform: "test",
           mode: GATEWAY_CLIENT_MODES.TEST,

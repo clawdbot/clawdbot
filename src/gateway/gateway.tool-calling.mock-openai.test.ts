@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
-import { GATEWAY_CLIENT_MODES } from "../utils/message-provider.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
@@ -247,7 +250,8 @@ async function connectClient(params: { url: string; token: string }) {
       const client = new GatewayClient({
         url: params.url,
         token: params.token,
-        clientName: "vitest-mock-openai",
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "vitest-mock-openai",
         clientVersion: "dev",
         mode: GATEWAY_CLIENT_MODES.TEST,
         onHelloOk: () => stop(undefined, client),

@@ -9,6 +9,12 @@ import {
 } from "../../providers/plugins/index.js";
 import type { ProviderId } from "../../providers/plugins/types.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../utils/message-provider.js";
+import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
@@ -17,14 +23,13 @@ import { resolveMessageProviderSelection } from "./provider-selection.js";
 import type { OutboundProvider } from "./targets.js";
 import { resolveOutboundTarget } from "./targets.js";
 
-type GatewayCallMode = "cli" | "agent";
-
 export type MessageGatewayOptions = {
   url?: string;
   token?: string;
   timeoutMs?: number;
-  clientName?: GatewayCallMode;
-  mode?: GatewayCallMode;
+  clientName?: GatewayClientName;
+  clientDisplayName?: string;
+  mode?: GatewayClientMode;
 };
 
 type MessageSendParams = {
@@ -90,8 +95,9 @@ function resolveGatewayOptions(opts?: MessageGatewayOptions) {
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
         : 10_000,
-    clientName: opts?.clientName ?? "cli",
-    mode: opts?.mode ?? "cli",
+    clientName: opts?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+    clientDisplayName: opts?.clientDisplayName,
+    mode: opts?.mode ?? GATEWAY_CLIENT_MODES.CLI,
   };
 }
 
@@ -168,6 +174,7 @@ export async function sendMessage(
     },
     timeoutMs: gateway.timeoutMs,
     clientName: gateway.clientName,
+    clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
   });
 
@@ -241,6 +248,7 @@ export async function sendPoll(
     },
     timeoutMs: gateway.timeoutMs,
     clientName: gateway.clientName,
+    clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
   });
 
