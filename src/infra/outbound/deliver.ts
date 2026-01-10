@@ -1,11 +1,10 @@
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { getProviderPlugin } from "../../providers/plugins/index.js";
-import type { ProviderOutboundAdapter } from "../../providers/plugins/types.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
-import type { sendMessageMSTeams } from "../../msteams/send.js";
+import { getProviderPlugin } from "../../providers/plugins/index.js";
+import type { ProviderOutboundAdapter } from "../../providers/plugins/types.js";
 import type { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";

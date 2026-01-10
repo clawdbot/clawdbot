@@ -178,6 +178,18 @@ export type ProviderConfigAdapter<ResolvedAccount> = {
   }) => string[];
 };
 
+export type ProviderGroupContext = {
+  cfg: ClawdbotConfig;
+  groupId?: string | null;
+  groupRoom?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+};
+
+export type ProviderGroupAdapter = {
+  resolveRequireMention?: (params: ProviderGroupContext) => boolean | undefined;
+};
+
 export type ProviderOutboundContext = {
   cfg: ClawdbotConfig;
   to: string;
@@ -334,11 +346,28 @@ export type ProviderElevatedAdapter = {
   }) => Array<string | number> | undefined;
 };
 
+export type ProviderCommandAdapter = {
+  enforceOwnerForCommands?: boolean;
+  skipWhenConfigEmpty?: boolean;
+};
+
 export type ProviderStreamingAdapter = {
   blockStreamingCoalesceDefaults?: {
     minChars: number;
     idleMs: number;
   };
+};
+
+export type ProviderThreadingAdapter = {
+  resolveReplyToMode?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+  }) => "off" | "first" | "all";
+  allowTagsWhenOff?: boolean;
+};
+
+export type ProviderMessagingAdapter = {
+  normalizeTarget?: (raw: string) => string | undefined;
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: registry aggregates heterogeneous account types.
@@ -350,11 +379,15 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   config: ProviderConfigAdapter<ResolvedAccount>;
   setup?: ProviderSetupAdapter;
   pairing?: ProviderPairingAdapter;
+  groups?: ProviderGroupAdapter;
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;
   gatewayMethods?: string[];
   gateway?: ProviderGatewayAdapter<ResolvedAccount>;
   elevated?: ProviderElevatedAdapter;
+  commands?: ProviderCommandAdapter;
   streaming?: ProviderStreamingAdapter;
+  threading?: ProviderThreadingAdapter;
+  messaging?: ProviderMessagingAdapter;
   heartbeat?: ProviderHeartbeatAdapter;
 };

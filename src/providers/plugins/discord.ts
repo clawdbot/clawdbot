@@ -21,6 +21,8 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { resolveDiscordGroupRequireMention } from "./group-mentions.js";
+import { normalizeDiscordMessagingTarget } from "./normalize-target.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,
@@ -84,6 +86,24 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      (
+        resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom ?? []
+      ).map((entry) => String(entry)),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.toLowerCase()),
+  },
+  groups: {
+    resolveRequireMention: resolveDiscordGroupRequireMention,
+  },
+  threading: {
+    resolveReplyToMode: ({ cfg }) => cfg.discord?.replyToMode ?? "off",
+  },
+  messaging: {
+    normalizeTarget: normalizeDiscordMessagingTarget,
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

@@ -463,17 +463,15 @@ async function buildProviderStatusIndex(
     for (const accountId of accountIds) {
       const account = plugin.config.resolveAccount(cfg, accountId);
       const snapshot = plugin.config.describeAccount?.(account, cfg);
-      const enabled =
-        plugin.config.isEnabled
-          ? plugin.config.isEnabled(account, cfg)
-          : typeof snapshot?.enabled === "boolean"
-            ? snapshot.enabled
-            : (account as { enabled?: boolean }).enabled;
+      const enabled = plugin.config.isEnabled
+        ? plugin.config.isEnabled(account, cfg)
+        : typeof snapshot?.enabled === "boolean"
+          ? snapshot.enabled
+          : (account as { enabled?: boolean }).enabled;
       const configured = plugin.config.isConfigured
         ? await plugin.config.isConfigured(account, cfg)
         : snapshot?.configured;
-      const resolvedEnabled =
-        typeof enabled === "boolean" ? enabled : true;
+      const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
       const resolvedConfigured =
         typeof configured === "boolean" ? configured : true;
       const state =

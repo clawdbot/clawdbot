@@ -42,7 +42,6 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveMessageProviderSelection } from "../infra/outbound/provider-selection.js";
@@ -53,7 +52,10 @@ import {
 import { normalizeProviderId } from "../providers/plugins/index.js";
 import type { ProviderId } from "../providers/plugins/types.js";
 import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
-import { normalizeMessageProvider } from "../utils/message-provider.js";
+import {
+  INTERNAL_MESSAGE_PROVIDER,
+  normalizeMessageProvider,
+} from "../utils/message-provider.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { CronJob } from "./types.js";
 

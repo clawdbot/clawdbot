@@ -6,6 +6,10 @@ import {
 } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import {
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../../whatsapp/normalize.js";
+import {
   listWhatsAppAccountIds,
   type ResolvedWhatsAppAccount,
   resolveDefaultWhatsAppAccountId,
@@ -22,6 +26,8 @@ import {
 } from "../../web/session.js";
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
+import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
+import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 import {
   applyAccountNameToProviderSection,
   migrateBaseNameToDefaultAccount,
@@ -105,7 +111,11 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       allowFrom
         .map((entry) => String(entry).trim())
         .filter(Boolean)
-        .map((entry) => (entry === "*" ? entry : normalizeE164(entry)))
+        .map((entry) =>
+          entry === "*"
+            ? entry
+            : normalizeWhatsAppTarget(entry) ?? normalizeE164(entry),
+        )
         .filter(Boolean),
   },
   setup: {
@@ -148,6 +158,16 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       };
     },
   },
+  groups: {
+    resolveRequireMention: resolveWhatsAppGroupRequireMention,
+  },
+  commands: {
+    enforceOwnerForCommands: true,
+    skipWhenConfigEmpty: true,
+  },
+  messaging: {
+    normalizeTarget: normalizeWhatsAppMessagingTarget,
+  },
   outbound: {
     deliveryMode: "gateway",
     chunker: chunkText,
@@ -160,11 +180,15 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       const hasWildcard = allowListRaw.includes("*");
       const allowList = allowListRaw
         .filter((entry) => entry !== "*")
-        .map((entry) => normalizeE164(entry))
+        .map((entry) => normalizeWhatsAppTarget(entry) ?? normalizeE164(entry))
         .filter((entry) => entry.length > 1);
 
       if (trimmed) {
-        const normalizedTo = normalizeE164(trimmed);
+        const normalizedTo =
+          normalizeWhatsAppTarget(trimmed) ?? normalizeE164(trimmed);
+        if (isWhatsAppGroupJid(normalizedTo)) {
+          return { ok: true, to: normalizedTo };
+        }
         if (mode === "implicit" || mode === "heartbeat") {
           if (hasWildcard || allowList.length === 0) {
             return { ok: true, to: normalizedTo };

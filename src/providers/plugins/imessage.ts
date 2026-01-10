@@ -17,6 +17,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
+import { resolveIMessageGroupRequireMention } from "./group-mentions.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
@@ -72,6 +73,15 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       enabled: account.enabled,
       configured: account.configured,
     }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
+      ),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+  },
+  groups: {
+    resolveRequireMention: resolveIMessageGroupRequireMention,
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -209,8 +219,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       lastInboundAt: runtime?.lastInboundAt ?? null,
       lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
-    resolveAccountState: ({ enabled }) =>
-      enabled ? "enabled" : "disabled",
+    resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
   },
   gateway: {
     startAccount: async (ctx) => {
