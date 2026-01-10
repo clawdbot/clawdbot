@@ -18,28 +18,28 @@ describe("gateway server providers", () => {
     await connectOk(ws);
 
     const res = await rpcReq<{
-      whatsapp?: { linked?: boolean };
-      telegram?: {
-        configured?: boolean;
-        tokenSource?: string;
-        probe?: unknown;
-        lastProbeAt?: unknown;
-      };
-      signal?: {
-        configured?: boolean;
-        probe?: unknown;
-        lastProbeAt?: unknown;
-      };
+      providers?: Record<
+        string,
+        | {
+            configured?: boolean;
+            tokenSource?: string;
+            probe?: unknown;
+            lastProbeAt?: unknown;
+          }
+        | { linked?: boolean }
+      >;
     }>(ws, "providers.status", { probe: false, timeoutMs: 2000 });
     expect(res.ok).toBe(true);
-    expect(res.payload?.whatsapp).toBeTruthy();
-    expect(res.payload?.telegram?.configured).toBe(false);
-    expect(res.payload?.telegram?.tokenSource).toBe("none");
-    expect(res.payload?.telegram?.probe).toBeUndefined();
-    expect(res.payload?.telegram?.lastProbeAt).toBeNull();
-    expect(res.payload?.signal?.configured).toBe(false);
-    expect(res.payload?.signal?.probe).toBeUndefined();
-    expect(res.payload?.signal?.lastProbeAt).toBeNull();
+    const telegram = res.payload?.providers?.telegram;
+    const signal = res.payload?.providers?.signal;
+    expect(res.payload?.providers?.whatsapp).toBeTruthy();
+    expect(telegram?.configured).toBe(false);
+    expect(telegram?.tokenSource).toBe("none");
+    expect(telegram?.probe).toBeUndefined();
+    expect(telegram?.lastProbeAt).toBeNull();
+    expect(signal?.configured).toBe(false);
+    expect(signal?.probe).toBeUndefined();
+    expect(signal?.lastProbeAt).toBeNull();
 
     ws.close();
     await server.close();
