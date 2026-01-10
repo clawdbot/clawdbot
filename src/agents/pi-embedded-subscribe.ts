@@ -72,13 +72,6 @@ function truncateToolText(text: string): string {
   return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
-/**
- * Sanitize tool result for storage/display.
- * Applies semantic compression based on tool type, then truncates if needed.
- *
- * @param result - The tool result object
- * @param toolName - Optional tool name for semantic compression
- */
 function sanitizeToolResult(result: unknown, toolName?: string): unknown {
   if (!result || typeof result !== "object") return result;
   const record = result as Record<string, unknown>;

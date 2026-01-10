@@ -254,9 +254,14 @@ export function compressBashOutput(text: string): string {
   if (uniqueLines.length > 0) {
     result.push("Unique content (first 20 lines):");
     result.push(...uniqueLines.slice(0, 20));
-    if (uniqueLines.length > 20) {
+
+    if (uniqueLines.length > 20 && uniqueLines.length <= 30) {
       result.push("");
-      result.push(`... ${uniqueLines.length - 40} unique lines omitted ...`);
+      result.push("Remaining unique lines:");
+      result.push(...uniqueLines.slice(20));
+    } else if (uniqueLines.length > 30) {
+      result.push("");
+      result.push(`... ${uniqueLines.length - 30} unique lines omitted ...`);
       result.push("");
       result.push("Last 10 unique lines:");
       result.push(...uniqueLines.slice(-10));
