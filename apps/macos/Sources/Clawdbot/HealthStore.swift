@@ -155,7 +155,9 @@ final class HealthStore {
         return "\(reason) (\(code))"
     }
 
-    private func resolveLinkProvider(_ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ProviderSummary)? {
+    private func resolveLinkProvider(
+        _ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ProviderSummary)?
+    {
         let order = snap.providerOrder ?? Array(snap.providers.keys)
         for id in order {
             if let summary = snap.providers[id], summary.linked != nil {
@@ -165,7 +167,10 @@ final class HealthStore {
         return nil
     }
 
-    private func resolveFallbackProvider(_ snap: HealthSnapshot, excluding id: String?) -> (id: String, summary: HealthSnapshot.ProviderSummary)? {
+    private func resolveFallbackProvider(
+        _ snap: HealthSnapshot,
+        excluding id: String?) -> (id: String, summary: HealthSnapshot.ProviderSummary)?
+    {
         let order = snap.providerOrder ?? Array(snap.providers.keys)
         for providerId in order {
             if providerId == id { continue }
@@ -188,6 +193,7 @@ final class HealthStore {
             let fallback = self.resolveFallbackProvider(snap, excluding: link.id)
             return fallback != nil ? .degraded("Not linked") : .linkingNeeded
         }
+        // A provider can be "linked" but still unhealthy (failed probe / cannot connect).
         if let probe = link.summary.probe, probe.ok == false {
             return .degraded(Self.describeProbeFailure(probe))
         }
