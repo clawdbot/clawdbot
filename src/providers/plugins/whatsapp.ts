@@ -30,6 +30,10 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     ...meta,
     aliases: ["web"],
     showConfigured: false,
+    quickstartAllowFrom: true,
+  },
+  pairing: {
+    idLabel: "whatsappSenderId",
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -44,6 +48,36 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveWhatsAppAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultWhatsAppAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) => {
+      const accountKey = accountId || DEFAULT_ACCOUNT_ID;
+      const accounts = { ...cfg.whatsapp?.accounts };
+      const existing = accounts[accountKey] ?? {};
+      return {
+        ...cfg,
+        whatsapp: {
+          ...cfg.whatsapp,
+          accounts: {
+            ...accounts,
+            [accountKey]: {
+              ...existing,
+              enabled,
+            },
+          },
+        },
+      };
+    },
+    deleteAccount: ({ cfg, accountId }) => {
+      const accountKey = accountId || DEFAULT_ACCOUNT_ID;
+      const accounts = { ...cfg.whatsapp?.accounts };
+      delete accounts[accountKey];
+      return {
+        ...cfg,
+        whatsapp: {
+          ...cfg.whatsapp,
+          accounts: Object.keys(accounts).length ? accounts : undefined,
+        },
+      };
+    },
     isEnabled: (account, cfg) =>
       account.enabled !== false && cfg.web?.enabled !== false,
     disabledReason: () => "disabled",

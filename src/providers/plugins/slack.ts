@@ -9,6 +9,11 @@ import { monitorSlackProvider } from "../../slack/index.js";
 import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatProviderMeta } from "../registry.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "./config-helpers.js";
+import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("slack");
@@ -18,6 +23,13 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
   meta: {
     ...meta,
     aliases: [],
+  },
+  pairing: {
+    idLabel: "slackUserId",
+    normalizeAllowEntry: (entry) => entry.replace(/^(slack|user):/i, ""),
+    notifyApproval: async ({ id }) => {
+      await sendMessageSlack(`user:${id}`, PAIRING_APPROVED_MESSAGE);
+    },
   },
   capabilities: {
     chatTypes: ["direct", "channel", "thread"],
@@ -31,6 +43,21 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
     listAccountIds: (cfg) => listSlackAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultSlackAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "slack",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "slack",
+        accountId,
+        clearBaseFields: ["botToken", "appToken", "name"],
+      }),
     isConfigured: (account) => Boolean(account.botToken && account.appToken),
     describeAccount: (account) => ({
       accountId: account.accountId,

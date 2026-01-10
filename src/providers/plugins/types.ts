@@ -34,6 +34,7 @@ export type ProviderMeta = {
   aliases?: string[];
   order?: number;
   showConfigured?: boolean;
+  quickstartAllowFrom?: boolean;
 };
 
 export type ProviderAccountSnapshot = {
@@ -94,6 +95,15 @@ export type ProviderConfigAdapter<ResolvedAccount> = {
     accountId?: string | null,
   ) => ResolvedAccount;
   defaultAccountId?: (cfg: ClawdbotConfig) => string;
+  setAccountEnabled?: (params: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+    enabled: boolean;
+  }) => ClawdbotConfig;
+  deleteAccount?: (params: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+  }) => ClawdbotConfig;
   isEnabled?: (account: ResolvedAccount, cfg: ClawdbotConfig) => boolean;
   disabledReason?: (account: ResolvedAccount, cfg: ClawdbotConfig) => string;
   isConfigured?: (
@@ -224,6 +234,16 @@ export type ProviderLogoutContext<ResolvedAccount = unknown> = {
   log?: ProviderLogSink;
 };
 
+export type ProviderPairingAdapter = {
+  idLabel: string;
+  normalizeAllowEntry?: (entry: string) => string;
+  notifyApproval?: (params: {
+    cfg: ClawdbotConfig;
+    id: string;
+    runtime?: RuntimeEnv;
+  }) => Promise<void>;
+};
+
 export type ProviderGatewayAdapter<ResolvedAccount = unknown> = {
   startAccount?: (
     ctx: ProviderGatewayContext<ResolvedAccount>,
@@ -258,6 +278,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   capabilities: ProviderCapabilities;
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   config: ProviderConfigAdapter<ResolvedAccount>;
+  pairing?: ProviderPairingAdapter;
   outbound?: ProviderOutboundAdapter;
   status?: ProviderStatusAdapter<ResolvedAccount>;
   gatewayMethods?: string[];

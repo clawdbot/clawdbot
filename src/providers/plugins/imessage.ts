@@ -11,7 +11,12 @@ import { sendMessageIMessage } from "../../imessage/send.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "./config-helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
+import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("imessage");
@@ -23,6 +28,12 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
     aliases: ["imsg"],
     showConfigured: false,
   },
+  pairing: {
+    idLabel: "imessageSenderId",
+    notifyApproval: async ({ id }) => {
+      await sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
+    },
+  },
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,
@@ -33,6 +44,21 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveIMessageAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultIMessageAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "imessage",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "imessage",
+        accountId,
+        clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
+      }),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,

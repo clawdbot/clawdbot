@@ -14,6 +14,11 @@ import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "./config-helpers.js";
+import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import { collectDiscordStatusIssues } from "./status-issues/discord.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -24,6 +29,13 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
   meta: {
     ...meta,
     aliases: [],
+  },
+  pairing: {
+    idLabel: "discordUserId",
+    normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
+    notifyApproval: async ({ id }) => {
+      await sendMessageDiscord(`user:${id}`, PAIRING_APPROVED_MESSAGE);
+    },
   },
   capabilities: {
     chatTypes: ["direct", "channel", "thread"],
@@ -39,6 +51,21 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveDiscordAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultDiscordAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "discord",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "discord",
+        accountId,
+        clearBaseFields: ["token", "name"],
+      }),
     isConfigured: (account) => Boolean(account.token?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,

@@ -10,7 +10,12 @@ import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { getChatProviderMeta } from "../registry.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "./config-helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
+import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import type { ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("signal");
@@ -20,6 +25,13 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
   meta: {
     ...meta,
     aliases: [],
+  },
+  pairing: {
+    idLabel: "signalNumber",
+    normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
+    notifyApproval: async ({ id }) => {
+      await sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
+    },
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -31,6 +43,28 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveSignalAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "signal",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "signal",
+        accountId,
+        clearBaseFields: [
+          "account",
+          "httpUrl",
+          "httpHost",
+          "httpPort",
+          "cliPath",
+          "name",
+        ],
+      }),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,

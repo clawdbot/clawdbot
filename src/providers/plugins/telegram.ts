@@ -16,7 +16,13 @@ import {
 import { monitorTelegramProvider } from "../../telegram/monitor.js";
 import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
+import { resolveTelegramToken } from "../../telegram/token.js";
 import { getChatProviderMeta } from "../registry.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "./config-helpers.js";
+import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -27,6 +33,16 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
   meta: {
     ...meta,
     aliases: [],
+    quickstartAllowFrom: true,
+  },
+  pairing: {
+    idLabel: "telegramUserId",
+    normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),
+    notifyApproval: async ({ cfg, id }) => {
+      const { token } = resolveTelegramToken(cfg);
+      if (!token) throw new Error("telegram token not configured");
+      await sendMessageTelegram(id, PAIRING_APPROVED_MESSAGE, { token });
+    },
   },
   capabilities: {
     chatTypes: ["direct", "group", "channel", "thread"],
@@ -41,6 +57,21 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveTelegramAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultTelegramAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "telegram",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "telegram",
+        accountId,
+        clearBaseFields: ["botToken", "tokenFile", "name"],
+      }),
     isConfigured: (account) => Boolean(account.token?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,

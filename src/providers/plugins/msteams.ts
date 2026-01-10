@@ -3,6 +3,7 @@ import { createMSTeamsPollStoreFs } from "../../msteams/polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "../../msteams/send.js";
 import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolvedMSTeamsAccount = {
@@ -26,6 +27,17 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
     ...meta,
     aliases: ["teams"],
   },
+  pairing: {
+    idLabel: "msteamsUserId",
+    normalizeAllowEntry: (entry) => entry.replace(/^(msteams|user):/i, ""),
+    notifyApproval: async ({ cfg, id }) => {
+      await sendMessageMSTeams({
+        cfg,
+        to: id,
+        text: PAIRING_APPROVED_MESSAGE,
+      });
+    },
+  },
   capabilities: {
     chatTypes: ["direct", "channel", "thread"],
     polls: true,
@@ -41,6 +53,18 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
       configured: Boolean(resolveMSTeamsCredentials(cfg.msteams)),
     }),
     defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    setAccountEnabled: ({ cfg, enabled }) => ({
+      ...cfg,
+      msteams: {
+        ...cfg.msteams,
+        enabled,
+      },
+    }),
+    deleteAccount: ({ cfg }) => {
+      const next = { ...cfg } as Record<string, unknown>;
+      delete next.msteams;
+      return next as typeof cfg;
+    },
     isConfigured: (_account, cfg) =>
       Boolean(resolveMSTeamsCredentials(cfg.msteams)),
     describeAccount: (account) => ({
