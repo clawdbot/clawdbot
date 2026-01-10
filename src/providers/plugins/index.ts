@@ -12,19 +12,30 @@ import { telegramPlugin } from "./telegram.js";
 import type { ProviderId, ProviderPlugin } from "./types.js";
 import { whatsappPlugin } from "./whatsapp.js";
 
-// Provider docking: register the plugin here (and keep registry/protocol docs in sync).
-const PROVIDERS: ProviderPlugin[] = [
-  telegramPlugin,
-  whatsappPlugin,
-  discordPlugin,
-  slackPlugin,
-  signalPlugin,
-  imessagePlugin,
-  msteamsPlugin,
-];
+// Provider plugins registry (runtime).
+//
+// This module is intentionally "heavy" (plugins may import provider monitors, web login, etc).
+// Shared code paths (reply flow, command auth, sandbox explain) should depend on `src/providers/dock.ts`
+// instead, and only call `getProviderPlugin()` at execution boundaries.
+//
+// Adding a provider:
+// - add `<id>Plugin` import + entry in `resolveProviders()`
+// - add an entry to `src/providers/dock.ts` for shared behavior (capabilities, allowFrom, threading, …)
+// - add ids/aliases in `src/providers/registry.ts`
+function resolveProviders(): ProviderPlugin[] {
+  return [
+    telegramPlugin,
+    whatsappPlugin,
+    discordPlugin,
+    slackPlugin,
+    signalPlugin,
+    imessagePlugin,
+    msteamsPlugin,
+  ];
+}
 
 export function listProviderPlugins(): ProviderPlugin[] {
-  return [...PROVIDERS].sort((a, b) => {
+  return resolveProviders().sort((a, b) => {
     const indexA = CHAT_PROVIDER_ORDER.indexOf(a.id as ChatProviderId);
     const indexB = CHAT_PROVIDER_ORDER.indexOf(b.id as ChatProviderId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -35,7 +46,7 @@ export function listProviderPlugins(): ProviderPlugin[] {
 }
 
 export function getProviderPlugin(id: ProviderId): ProviderPlugin | undefined {
-  return PROVIDERS.find((plugin) => plugin.id === id);
+  return resolveProviders().find((plugin) => plugin.id === id);
 }
 
 export function normalizeProviderId(raw?: string | null): ProviderId | null {

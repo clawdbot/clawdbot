@@ -11,6 +11,7 @@ Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and
 
 ## Architecture Overview
 - Registry: `src/providers/plugins/index.ts` owns the plugin list.
+- Provider dock: `src/providers/dock.ts` owns lightweight provider metadata used by shared flows (reply, command auth, block streaming) without importing full plugins.
 - IDs/aliases: `src/providers/registry.ts` owns stable provider ids + input aliases.
 - Shape: `src/providers/plugins/types.ts` defines the plugin contract.
 - Gateway: `src/gateway/server-providers.ts` drives start/stop + runtime snapshots via plugins.
@@ -36,6 +37,7 @@ Each `ProviderPlugin` bundles:
 
 ## Key Integration Notes
 - `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
+- Avoid importing `src/providers/plugins/index.ts` from shared modules (reply flow, command auth, sandbox explain). It’s intentionally “heavy” (providers may pull web login / monitor code). Use `getProviderDock()` + `normalizeProviderId()` for cheap metadata, and only `getProviderPlugin()` at execution boundaries (ex: `src/auto-reply/reply/route-reply.ts`).
 - Gateway protocol schema keeps provider selection as an open-ended string (no provider enum / static list) to avoid init cycles and so new plugins don’t require protocol changes.
 - Protocol v3: no more per-provider fields in `providers.status`; consumers must read map entries by provider id.
 - `DEFAULT_CHAT_PROVIDER` lives in `src/providers/registry.ts` and is used anywhere we need a fallback delivery surface.
@@ -92,10 +94,11 @@ Each `ProviderPlugin` bundles:
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
 2) Register in `src/providers/plugins/index.ts` and update `src/providers/registry.ts` (ids/aliases/meta) if needed.
-3) Add `reload.configPrefixes` for hot reload when config changes.
-4) Delegate to existing provider modules (send/probe/monitor) or create them.
-5) Update protocol clients (if you changed protocol): `pnpm protocol:gen` / `pnpm protocol:gen:swift`.
-6) Update docs/tests for any behavior changes.
+3) Add a dock entry in `src/providers/dock.ts` for any shared behavior (capabilities, allowFrom format/resolve, mention stripping, threading, streaming chunk defaults).
+4) Add `reload.configPrefixes` for hot reload when config changes.
+5) Delegate to existing provider modules (send/probe/monitor) or create them.
+6) If you changed the gateway protocol: run `pnpm protocol:check` (updates `dist/protocol.schema.json` + `apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`).
+7) Update docs/tests for any behavior changes.
 
 ## Cleanup Expectations
 - Keep plugin files small; move heavy logic into provider modules.

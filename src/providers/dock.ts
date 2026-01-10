@@ -66,8 +66,16 @@ const formatLower = (allowFrom: Array<string | number>) =>
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Provider docking: keep this module *light* (no monitors, probes, puppeteer, etc).
-// Shared logic (reply flow, command auth, sandbox explain) should depend on docks.
+// Provider docks: lightweight provider metadata/behavior for shared code paths.
+//
+// Rules:
+// - keep this module *light* (no monitors, probes, puppeteer/web login, etc)
+// - OK: config readers, allowFrom formatting, mention stripping patterns, threading defaults
+// - shared code should import from here (and from `src/providers/registry.ts`), not from the plugins registry
+//
+// Adding a provider:
+// - add a new entry to `DOCKS`
+// - keep it cheap; push heavy logic into `src/providers/plugins/<id>.ts` or provider modules
 const DOCKS: Record<ProviderId, ProviderDock> = {
   telegram: {
     id: "telegram",
