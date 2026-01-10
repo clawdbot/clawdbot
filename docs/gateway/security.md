@@ -46,8 +46,8 @@ All current DM-capable providers support a DM policy (`dmPolicy` or `*.dm.policy
 Approve via CLI:
 
 ```bash
-clawdbot pairing list --provider <provider>
-clawdbot pairing approve --provider <provider> <code>
+clawdbot pairing list <provider>
+clawdbot pairing approve <provider> <code>
 ```
 
 Details + files on disk: [Pairing](/start/pairing)

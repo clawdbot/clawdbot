@@ -7,15 +7,50 @@ read_when:
 # Authentication
 
 Clawdbot supports OAuth and API keys for model providers. For Anthropic
-subscription accounts, the most stable path is to **reuse Claude Code OAuth
-credentials**, including the 1‑year token created by `claude setup-token`.
+accounts, we recommend using an **API key**. Clawdbot can also reuse Claude Code
+credentials, including the long‑lived token created by `claude setup-token`.
 
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
 
-## Preferred Anthropic setup (Claude CLI setup-token)
+## Recommended Anthropic setup (API key)
 
-For Anthropic, the **preferred** path is the Claude CLI setup-token, not an API key.
+If you’re using Anthropic directly, use an API key.
+
+1) Create an API key in the Anthropic Console.
+2) Put it on the **gateway host** (the machine running `clawdbot gateway`).
+
+```bash
+export ANTHROPIC_API_KEY="..."
+clawdbot models status
+```
+
+3) If the Gateway runs under systemd/launchd, prefer putting the key in
+`~/.clawdbot/.env` so the daemon can read it:
+
+```bash
+cat >> ~/.clawdbot/.env <<'EOF'
+ANTHROPIC_API_KEY=...
+EOF
+```
+
+Then restart the daemon (or restart your Gateway process) and re-check:
+
+```bash
+clawdbot models status
+clawdbot doctor
+```
+
+If you’d rather not manage env vars yourself, the onboarding wizard can store
+API keys for daemon use: `clawdbot onboard`.
+
+See [/start/faq](/start/faq) for details on env inheritance (`env.shellEnv`,
+`~/.clawdbot/.env`, systemd/launchd).
+
+## Anthropic: Claude CLI setup-token (supported)
+
+For Anthropic, the recommended path is an **API key**. If you’re already using
+Claude Code, the Claude CLI setup-token is also supported.
 Run it on the **gateway host**:
 
 ```bash
@@ -29,6 +64,17 @@ clawdbot models status
 clawdbot doctor
 ```
 
+This should create (or refresh) an auth profile like `anthropic:claude-cli` in
+the agent auth store.
+
+If you see an Anthropic error like:
+
+```
+This credential is only authorized for use with Claude Code and cannot be used for other API requests.
+```
+
+…use an Anthropic API key instead.
+
 Alternative: run the wrapper (also updates Clawdbot config):
 
 ```bash
@@ -40,22 +86,6 @@ Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 ```bash
 clawdbot models auth paste-token --provider anthropic
 clawdbot models auth paste-token --provider openrouter
-```
-
-## Recommended: long‑lived Claude Code token
-
-Run this on the **gateway host** (the machine running the Gateway):
-
-```bash
-claude setup-token
-```
-
-This issues a long‑lived **OAuth token** (not an API key) and stores it for
-Claude Code. Then sync and verify:
-
-```bash
-clawdbot models status
-clawdbot doctor
 ```
 
 Automation-friendly check (exit `1` when expired/missing, `2` when expiring):

@@ -35,6 +35,21 @@ export const DiscordToolSchema = Type.Union([
     action: Type.Literal("permissions"),
     channelId: Type.String(),
   }),
+  Type.Union([
+    Type.Object({
+      action: Type.Literal("fetchMessage"),
+      messageLink: Type.String(),
+      guildId: Type.Optional(Type.String()),
+      channelId: Type.Optional(Type.String()),
+      messageId: Type.Optional(Type.String()),
+    }),
+    Type.Object({
+      action: Type.Literal("fetchMessage"),
+      guildId: Type.String(),
+      channelId: Type.String(),
+      messageId: Type.String(),
+    }),
+  ]),
   Type.Object({
     action: Type.Literal("readMessages"),
     channelId: Type.String(),

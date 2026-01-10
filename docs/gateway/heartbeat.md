@@ -8,6 +8,29 @@ read_when:
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
+## Quick start (beginner)
+
+1. Leave heartbeats enabled (default is `30m`) or set your own cadence.
+2. Create a tiny `HEARTBEAT.md` checklist in the agent workspace (optional but recommended).
+3. Decide where heartbeat messages should go (`target: "last"` is the default).
+4. Optional: enable heartbeat reasoning delivery for transparency.
+
+Example config:
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m",
+        target: "last",
+        // includeReasoning: true, // optional: send separate `Reasoning:` message too
+      }
+    }
+  }
+}
+```
+
 ## Defaults
 
 - Interval: `30m` (set `agents.defaults.heartbeat.every`; use `0m` to disable).
@@ -15,6 +38,19 @@ surface anything that needs attention without spamming you.
   `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
+
+## What the heartbeat prompt is for
+
+The default prompt is intentionally broad:
+- **Background tasks**: “Consider outstanding tasks” nudges the agent to review
+  follow-ups (inbox, calendar, reminders, queued work) and surface anything urgent.
+- **Human check-in**: “Checkup sometimes on your human during day time” nudges an
+  occasional lightweight “anything you need?” message, but avoids night-time spam
+  by using your configured local timezone (see [/concepts/timezone](/concepts/timezone)).
+
+If you want a heartbeat to do something very specific (e.g. “check Gmail PubSub
+stats” or “verify gateway health”), set `agents.defaults.heartbeat.prompt` to a
+custom body (sent verbatim).
 
 ## Response contract
 
@@ -38,6 +74,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
       heartbeat: {
         every: "30m",           // default: 30m (0m disables)
         model: "anthropic/claude-opus-4-5",
+        includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         target: "last",         // last | whatsapp | telegram | discord | slack | signal | imessage | none
         to: "+15551234567",     // optional provider-specific override
         prompt: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.",
@@ -52,6 +89,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
 
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
+- `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `target`:
   - `last` (default): deliver to the last used external provider.
   - explicit provider: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`.
@@ -72,8 +110,36 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
 ## HEARTBEAT.md (optional)
 
 If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
-agent to read it. Keep it tiny (short checklist or reminders) to avoid prompt
-bloat.
+agent to read it. Think of it as your “heartbeat checklist”: small, stable, and
+safe to include every 30 minutes.
+
+Keep it tiny (short checklist or reminders) to avoid prompt bloat.
+
+Example `HEARTBEAT.md`:
+
+```md
+# Heartbeat checklist
+
+- Quick scan: anything urgent in inboxes?
+- If it’s daytime, do a lightweight check-in if nothing else is pending.
+- If a task is blocked, write down *what is missing* and ask Peter next time.
+```
+
+### Can the agent update HEARTBEAT.md?
+
+Yes — if you ask it to.
+
+`HEARTBEAT.md` is just a normal file in the agent workspace, so you can tell the
+agent (in a normal chat) something like:
+- “Update `HEARTBEAT.md` to add a daily calendar check.”
+- “Rewrite `HEARTBEAT.md` so it’s shorter and focused on inbox follow-ups.”
+
+If you want this to happen proactively, you can also include an explicit line in
+your heartbeat prompt like: “If the checklist becomes stale, update HEARTBEAT.md
+with a better one.”
+
+Safety note: don’t put secrets (API keys, phone numbers, private tokens) into
+`HEARTBEAT.md` — it becomes part of the prompt context.
 
 ## Manual wake (on-demand)
 
@@ -84,6 +150,19 @@ clawdbot wake --text "Check for urgent follow-ups" --mode now
 ```
 
 Use `--mode next-heartbeat` to wait for the next scheduled tick.
+
+## Reasoning delivery (optional)
+
+By default, heartbeats deliver only the final “answer” payload.
+
+If you want transparency, enable:
+- `agents.defaults.heartbeat.includeReasoning: true`
+
+When enabled, heartbeats will also deliver a separate message prefixed
+`Reasoning:` (same shape as `/reasoning on`). This can be useful when the agent
+is managing multiple sessions/codexes and you want to see why it decided to ping
+you — but it can also leak more internal detail than you want. Prefer keeping it
+off in group chats.
 
 ## Cost awareness
 

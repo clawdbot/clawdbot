@@ -12,11 +12,12 @@ struct ConfigSettings: View {
         "Clawd uses a separate Chrome profile and ports (default 18791/18792) "
             + "so it won’t interfere with your daily browser."
     @State private var configModel: String = ""
-    @State private var customModel: String = ""
     @State private var configSaving = false
     @State private var hasLoaded = false
     @State private var models: [ModelChoice] = []
     @State private var modelsLoading = false
+    @State private var modelSearchQuery: String = ""
+    @State private var isModelPickerOpen = false
     @State private var modelError: String?
     @State private var modelsSourceLabel: String?
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
@@ -36,10 +37,10 @@ struct ConfigSettings: View {
     @State private var talkInterruptOnSpeech: Bool = true
     @State private var talkApiKey: String = ""
     @State private var gatewayApiKeyFound = false
+    @FocusState private var modelSearchFocused: Bool
 
     private struct ConfigDraft {
         let configModel: String
-        let customModel: String
         let heartbeatMinutes: Int?
         let heartbeatBody: String
         let browserEnabled: Bool
@@ -106,8 +107,7 @@ struct ConfigSettings: View {
                 GridRow {
                     self.gridLabel("Model")
                     VStack(alignment: .leading, spacing: 6) {
-                        self.modelPicker
-                        self.customModelField
+                        self.modelPickerField
                         self.modelMetaLabels
                     }
                 }
@@ -116,37 +116,114 @@ struct ConfigSettings: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var modelPicker: some View {
-        Picker("Model", selection: self.$configModel) {
-            ForEach(self.models) { choice in
-                Text("\(choice.name) — \(choice.provider.uppercased())")
-                    .tag(choice.id)
+    private var modelPickerField: some View {
+        Button {
+            guard !self.modelsLoading else { return }
+            self.isModelPickerOpen = true
+        } label: {
+            HStack(spacing: 8) {
+                Text(self.modelPickerLabel)
+                    .foregroundStyle(self.modelPickerLabelIsPlaceholder ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up.chevron.down")
+                    .foregroundStyle(.secondary)
             }
-            Text("Manual entry…").tag("__custom__")
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
         }
-        .labelsHidden()
-        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(
+                    Color(nsColor: .textBackgroundColor)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(
+                    Color.secondary.opacity(0.25),
+                    lineWidth: 1))
+        .popover(isPresented: self.$isModelPickerOpen, arrowEdge: .bottom) {
+            self.modelPickerPopover
+        }
         .disabled(self.modelsLoading || (!self.modelError.isNilOrEmpty && self.models.isEmpty))
-        .onChange(of: self.configModel) { _, _ in
-            self.autosaveConfig()
+        .onChange(of: self.isModelPickerOpen) { _, isOpen in
+            if isOpen {
+                self.modelSearchQuery = ""
+                self.modelSearchFocused = true
+            }
         }
     }
 
-    @ViewBuilder
-    private var customModelField: some View {
-        if self.configModel == "__custom__" {
-            TextField("Enter model ID", text: self.$customModel)
+    private var modelPickerPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Search models", text: self.$modelSearchQuery)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: .infinity)
-                .onChange(of: self.customModel) { _, newValue in
-                    self.configModel = newValue
-                    self.autosaveConfig()
+                .focused(self.$modelSearchFocused)
+                .controlSize(.small)
+                .onSubmit {
+                    if let exact = self.exactMatchForQuery() {
+                        self.selectModel(exact)
+                        return
+                    }
+                    if let manual = self.manualEntryCandidate {
+                        self.selectManualModel(manual)
+                        return
+                    }
+                    if self.modelSearchMatches.count == 1 {
+                        self.selectModel(self.modelSearchMatches[0])
+                    }
                 }
+            List {
+                if self.modelSearchMatches.isEmpty {
+                    Text("No models match \"\(self.modelSearchQuery)\"")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(self.modelSearchMatches) { choice in
+                        Button {
+                            self.selectModel(choice)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(choice.name)
+                                    .lineLimit(1)
+                                Spacer(minLength: 8)
+                                Text(choice.provider.uppercased())
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.vertical, 2)
+                                    .padding(.horizontal, 6)
+                                    .background(Color.secondary.opacity(0.15))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                    }
+                }
+
+                if let manual = self.manualEntryCandidate {
+                    Button("Use \"\(manual)\"") {
+                        self.selectManualModel(manual)
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                }
+            }
+            .listStyle(.inset)
         }
+        .frame(width: 340, height: 260)
+        .padding(8)
     }
 
     @ViewBuilder
     private var modelMetaLabels: some View {
+        if self.shouldShowProviderHintForSelection {
+            self.statusLine(label: "Tip: prefer provider/model (e.g. openai-codex/gpt-5.2)", color: .orange)
+        }
+
         if let contextLabel = self.selectedContextLabel {
             Text(contextLabel)
                 .font(.footnote)
@@ -403,10 +480,8 @@ struct ConfigSettings: View {
         }()
         if !loadedModel.isEmpty {
             self.configModel = loadedModel
-            self.customModel = loadedModel
         } else {
             self.configModel = SessionLoader.fallbackModel
-            self.customModel = SessionLoader.fallbackModel
         }
 
         if let heartbeatEvery {
@@ -459,7 +534,6 @@ struct ConfigSettings: View {
         defer { self.configSaving = false }
 
         let configModel = self.configModel
-        let customModel = self.customModel
         let heartbeatMinutes = self.heartbeatMinutes
         let heartbeatBody = self.heartbeatBody
         let browserEnabled = self.browserEnabled
@@ -472,7 +546,6 @@ struct ConfigSettings: View {
 
         let draft = ConfigDraft(
             configModel: configModel,
-            customModel: customModel,
             heartbeatMinutes: heartbeatMinutes,
             heartbeatBody: heartbeatBody,
             browserEnabled: browserEnabled,
@@ -498,8 +571,7 @@ struct ConfigSettings: View {
         var browser = root["browser"] as? [String: Any] ?? [:]
         var talk = root["talk"] as? [String: Any] ?? [:]
 
-        let chosenModel = (draft.configModel == "__custom__" ? draft.customModel : draft.configModel)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosenModel = draft.configModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = chosenModel
         if !trimmedModel.isEmpty {
             var model = defaults["model"] as? [String: Any] ?? [:]
@@ -678,23 +750,11 @@ struct ConfigSettings: View {
                         timeoutMs: 15000)
             self.models = res.models
             self.modelsSourceLabel = "gateway"
-            if !self.configModel.isEmpty,
-               !res.models.contains(where: { $0.id == self.configModel })
-            {
-                self.customModel = self.configModel
-                self.configModel = "__custom__"
-            }
         } catch {
             do {
                 let loaded = try await ModelCatalogLoader.load(from: self.modelCatalogPath)
                 self.models = loaded
                 self.modelsSourceLabel = "local fallback"
-                if !self.configModel.isEmpty,
-                   !loaded.contains(where: { $0.id == self.configModel })
-                {
-                    self.customModel = self.configModel
-                    self.configModel = "__custom__"
-                }
             } catch {
                 self.modelError = error.localizedDescription
                 self.models = []
@@ -707,11 +767,129 @@ struct ConfigSettings: View {
         let models: [ModelChoice]
     }
 
+    private var modelSearchMatches: [ModelChoice] {
+        let raw = self.modelSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !raw.isEmpty else { return self.models }
+        let tokens = raw
+            .split(whereSeparator: { $0.isWhitespace })
+            .map { token in
+                token.trimmingCharacters(in: CharacterSet(charactersIn: "%"))
+            }
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return self.models }
+        return self.models.filter { choice in
+            let haystack = [
+                choice.id,
+                choice.name,
+                choice.provider,
+                self.modelRef(for: choice),
+            ]
+                .joined(separator: " ")
+                .lowercased()
+            return tokens.allSatisfy { haystack.contains($0) }
+        }
+    }
+
+    private var selectedModelChoice: ModelChoice? {
+        guard !self.configModel.isEmpty else { return nil }
+        return self.models.first(where: { self.matchesConfigModel($0) })
+    }
+
+    private var modelPickerLabel: String {
+        if let choice = self.selectedModelChoice {
+            return "\(choice.name) — \(choice.provider.uppercased())"
+        }
+        if !self.configModel.isEmpty { return self.configModel }
+        return "Select model"
+    }
+
+    private var modelPickerLabelIsPlaceholder: Bool {
+        self.configModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var manualEntryCandidate: String? {
+        let trimmed = self.modelSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cleaned = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "%"))
+        guard !cleaned.isEmpty else { return nil }
+        guard !self.isKnownModelRef(cleaned) else { return nil }
+        return cleaned
+    }
+
+    private func isKnownModelRef(_ value: String) -> Bool {
+        let needle = value.lowercased()
+        return self.models.contains { choice in
+            choice.id.lowercased() == needle
+                || self.modelRef(for: choice).lowercased() == needle
+        }
+    }
+
+    private func modelRef(for choice: ModelChoice) -> String {
+        let id = choice.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = choice.provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !provider.isEmpty else { return id }
+        let normalizedProvider = provider.lowercased()
+        if id.lowercased().hasPrefix("\(normalizedProvider)/") {
+            return id
+        }
+        return "\(normalizedProvider)/\(id)"
+    }
+
+    private func matchesConfigModel(_ choice: ModelChoice) -> Bool {
+        let configured = self.configModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !configured.isEmpty else { return false }
+        if configured.caseInsensitiveCompare(choice.id) == .orderedSame { return true }
+        let ref = self.modelRef(for: choice)
+        return configured.caseInsensitiveCompare(ref) == .orderedSame
+    }
+
+    private func exactMatchForQuery() -> ModelChoice? {
+        let trimmed = self.modelSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cleaned = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "%")).lowercased()
+        guard !cleaned.isEmpty else { return nil }
+        return self.models.first(where: { choice in
+            let id = choice.id.lowercased()
+            if id == cleaned { return true }
+            return self.modelRef(for: choice).lowercased() == cleaned
+        })
+    }
+
+    private var shouldShowProviderHint: Bool {
+        let trimmed = self.modelSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let cleaned = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "%"))
+        return !cleaned.contains("/")
+    }
+
+    private var shouldShowProviderHintForSelection: Bool {
+        let trimmed = self.configModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return !trimmed.contains("/")
+    }
+
+    private func selectModel(_ choice: ModelChoice) {
+        self.configModel = self.modelRef(for: choice)
+        self.autosaveConfig()
+        self.isModelPickerOpen = false
+    }
+
+    private func selectManualModel(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let slash = trimmed.firstIndex(of: "/") {
+            let provider = trimmed[..<slash].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let model = trimmed[trimmed.index(after: slash)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            self.configModel = provider.isEmpty ? String(model) : "\(provider)/\(model)"
+        } else {
+            self.configModel = trimmed
+        }
+        self.autosaveConfig()
+        self.isModelPickerOpen = false
+    }
+
     private var selectedContextLabel: String? {
-        let chosenId = (self.configModel == "__custom__") ? self.customModel : self.configModel
         guard
-            !chosenId.isEmpty,
-            let choice = self.models.first(where: { $0.id == chosenId }),
+            let choice = self.selectedModelChoice,
             let context = choice.contextWindow
         else {
             return nil
@@ -722,8 +900,7 @@ struct ConfigSettings: View {
     }
 
     private var selectedAnthropicAuthMode: AnthropicAuthMode? {
-        let chosenId = (self.configModel == "__custom__") ? self.customModel : self.configModel
-        guard !chosenId.isEmpty, let choice = self.models.first(where: { $0.id == chosenId }) else { return nil }
+        guard let choice = self.selectedModelChoice else { return nil }
         guard choice.provider.lowercased() == "anthropic" else { return nil }
         return AnthropicAuthResolver.resolve()
     }

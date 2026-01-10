@@ -1,4 +1,5 @@
 import AppKit
+import ClawdbotDiscovery
 import ClawdbotIPC
 import ClawdbotProtocol
 import Foundation
@@ -533,7 +534,7 @@ final class NodePairingApprovalPrompter {
             return SSHTarget(host: host, port: port)
         }
 
-        let model = GatewayDiscoveryModel()
+        let model = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         model.start()
         defer { model.stop() }
 

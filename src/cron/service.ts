@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { computeNextRunAtMs } from "./schedule.js";
@@ -37,12 +38,19 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   enqueueSystemEvent: (text: string) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
+  runHeartbeatOnce?: (opts?: {
+    reason?: string;
+  }) => Promise<HeartbeatRunResult>;
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
     status: "ok" | "error" | "skipped";
     summary?: string;
     error?: string;
   }>;
   onEvent?: (evt: CronEvent) => void;
+};
+
+type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+  nowMs: () => number;
 };
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
@@ -99,8 +107,7 @@ function normalizePayloadToSystemText(payload: CronPayload) {
 }
 
 export class CronService {
-  private readonly deps: Required<Omit<CronServiceDeps, "onEvent">> &
-    Pick<CronServiceDeps, "onEvent">;
+  private readonly deps: CronServiceDepsInternal;
   private store: CronStoreFile | null = null;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -111,7 +118,6 @@ export class CronService {
     this.deps = {
       ...deps,
       nowMs: deps.nowMs ?? (() => Date.now()),
-      onEvent: deps.onEvent,
     };
   }
 
@@ -514,10 +520,42 @@ export class CronService {
           return;
         }
         this.deps.enqueueSystemEvent(text);
-        if (job.wakeMode === "now") {
+        if (job.wakeMode === "now" && this.deps.runHeartbeatOnce) {
+          const reason = `cron:${job.id}`;
+          const delay = (ms: number) =>
+            new Promise<void>((resolve) => setTimeout(resolve, ms));
+          const maxWaitMs = 2 * 60_000;
+          const waitStartedAt = this.deps.nowMs();
+
+          let heartbeatResult: HeartbeatRunResult;
+          for (;;) {
+            heartbeatResult = await this.deps.runHeartbeatOnce({ reason });
+            if (
+              heartbeatResult.status !== "skipped" ||
+              heartbeatResult.reason !== "requests-in-flight"
+            ) {
+              break;
+            }
+            if (this.deps.nowMs() - waitStartedAt > maxWaitMs) {
+              heartbeatResult = {
+                status: "skipped",
+                reason: "timeout waiting for main lane to become idle",
+              };
+              break;
+            }
+            await delay(250);
+          }
+
+          if (heartbeatResult.status === "ran") {
+            await finish("ok", undefined, text);
+          } else if (heartbeatResult.status === "skipped")
+            await finish("skipped", heartbeatResult.reason, text);
+          else await finish("error", heartbeatResult.reason, text);
+        } else {
+          // wakeMode is "next-heartbeat" or runHeartbeatOnce not available
           this.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+          await finish("ok", undefined, text);
         }
-        await finish("ok", undefined, text);
         return;
       }
 

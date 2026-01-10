@@ -1,3 +1,4 @@
+import ClawdbotDiscovery
 import SwiftUI
 import Testing
 @testable import Clawdbot
@@ -10,7 +11,7 @@ struct OnboardingViewSmokeTests {
         let view = OnboardingView(
             state: state,
             permissionMonitor: PermissionMonitor.shared,
-            discoveryModel: GatewayDiscoveryModel())
+            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
         _ = view.body
     }
 

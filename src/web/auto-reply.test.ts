@@ -1127,7 +1127,8 @@ describe("web auto-reply", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
     const payload = resolver.mock.calls[0][0];
     expect(payload.Body).toContain("Chat messages since your last reply");
-    expect(payload.Body).toContain("Alice: hello group");
+    expect(payload.Body).toContain("Alice (+111): hello group");
+    expect(payload.Body).toContain("[message_id: g1]");
     expect(payload.Body).toContain("@bot ping");
     expect(payload.Body).toContain("[from: Bob (+222)]");
   });
@@ -1483,7 +1484,8 @@ describe("web auto-reply", () => {
     expect(resolver).toHaveBeenCalledTimes(2);
     const payload = resolver.mock.calls[1][0];
     expect(payload.Body).toContain("Chat messages since your last reply");
-    expect(payload.Body).toContain("Alice: first");
+    expect(payload.Body).toContain("Alice (+111): first");
+    expect(payload.Body).toContain("[message_id: g-always-1]");
     expect(payload.Body).toContain("Bob: second");
     expect(reply).toHaveBeenCalledTimes(1);
 
@@ -2213,7 +2215,8 @@ describe("broadcast groups", () => {
     for (const call of resolver.mock.calls.slice(0, 2)) {
       const payload = call[0] as { Body: string };
       expect(payload.Body).toContain("Chat messages since your last reply");
-      expect(payload.Body).toContain("Alice: hello group");
+      expect(payload.Body).toContain("Alice (+111): hello group");
+      expect(payload.Body).toContain("[message_id: g1]");
       expect(payload.Body).toContain("@bot ping");
       expect(payload.Body).toContain("[from: Bob (+222)]");
     }
@@ -2239,7 +2242,7 @@ describe("broadcast groups", () => {
     expect(resolver).toHaveBeenCalledTimes(4);
     for (const call of resolver.mock.calls.slice(2, 4)) {
       const payload = call[0] as { Body: string };
-      expect(payload.Body).not.toContain("Alice: hello group");
+      expect(payload.Body).not.toContain("Alice (+111): hello group");
       expect(payload.Body).not.toContain("Chat messages since your last reply");
     }
 

@@ -91,14 +91,83 @@ public enum ToolDisplayRegistry {
 
     private static func loadConfig() -> ToolDisplayConfig {
         guard let url = ClawdbotKitResources.bundle.url(forResource: "tool-display", withExtension: "json") else {
-            return ToolDisplayConfig(version: nil, fallback: nil, tools: nil)
+            return self.defaultConfig()
         }
         do {
             let data = try Data(contentsOf: url)
             return try JSONDecoder().decode(ToolDisplayConfig.self, from: data)
         } catch {
-            return ToolDisplayConfig(version: nil, fallback: nil, tools: nil)
+            return self.defaultConfig()
         }
+    }
+
+    private static func defaultConfig() -> ToolDisplayConfig {
+        ToolDisplayConfig(
+            version: 1,
+            fallback: ToolDisplaySpec(
+                emoji: "🧩",
+                title: nil,
+                label: nil,
+                detailKeys: [
+                    "command",
+                    "path",
+                    "url",
+                    "targetUrl",
+                    "targetId",
+                    "ref",
+                    "element",
+                    "node",
+                    "nodeId",
+                    "id",
+                    "requestId",
+                    "to",
+                    "channelId",
+                    "guildId",
+                    "userId",
+                    "name",
+                    "query",
+                    "pattern",
+                    "messageId",
+                ],
+                actions: nil),
+            tools: [
+                "bash": ToolDisplaySpec(
+                    emoji: "🛠️",
+                    title: "Bash",
+                    label: nil,
+                    detailKeys: ["command"],
+                    actions: nil),
+                "read": ToolDisplaySpec(
+                    emoji: "📖",
+                    title: "Read",
+                    label: nil,
+                    detailKeys: ["path"],
+                    actions: nil),
+                "write": ToolDisplaySpec(
+                    emoji: "✍️",
+                    title: "Write",
+                    label: nil,
+                    detailKeys: ["path"],
+                    actions: nil),
+                "edit": ToolDisplaySpec(
+                    emoji: "📝",
+                    title: "Edit",
+                    label: nil,
+                    detailKeys: ["path"],
+                    actions: nil),
+                "attach": ToolDisplaySpec(
+                    emoji: "📎",
+                    title: "Attach",
+                    label: nil,
+                    detailKeys: ["path", "url", "fileName"],
+                    actions: nil),
+                "process": ToolDisplaySpec(
+                    emoji: "🧰",
+                    title: "Process",
+                    label: nil,
+                    detailKeys: ["sessionId"],
+                    actions: nil),
+            ])
     }
 
     private static func titleFromName(_ name: String) -> String {
@@ -122,8 +191,10 @@ public enum ToolDisplayRegistry {
 
     private static func readDetail(_ args: AnyCodable?) -> String? {
         guard let path = valueForKeyPath(args, path: "path") as? String else { return nil }
-        let offset = self.valueForKeyPath(args, path: "offset") as? Double
-        let limit = self.valueForKeyPath(args, path: "limit") as? Double
+        let offsetAny = self.valueForKeyPath(args, path: "offset")
+        let limitAny = self.valueForKeyPath(args, path: "limit")
+        let offset = (offsetAny as? Double) ?? (offsetAny as? Int).map(Double.init)
+        let limit = (limitAny as? Double) ?? (limitAny as? Int).map(Double.init)
         if let offset, let limit {
             let end = offset + limit
             return "\(path):\(Int(offset))-\(Int(end))"

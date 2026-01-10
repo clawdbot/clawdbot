@@ -4,6 +4,7 @@ import type { HealthSummary } from "../../commands/health.js";
 import type { CronService } from "../../cron/service.js";
 import type { startNodeBridgeServer } from "../../infra/bridge/server.js";
 import type { WizardSession } from "../../wizard/session.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type {
   ConnectParams,
   ErrorShape,
@@ -31,6 +32,7 @@ export type GatewayRequestContext = {
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
+  logGateway: { warn: (message: string) => void };
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
   broadcast: (
@@ -49,10 +51,8 @@ export type GatewayRequestContext = {
   ) => void;
   hasConnectedMobileNode: () => boolean;
   agentRunSeq: Map<string, number>;
-  chatAbortControllers: Map<
-    string,
-    { controller: AbortController; sessionId: string; sessionKey: string }
-  >;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   addChatRun: (

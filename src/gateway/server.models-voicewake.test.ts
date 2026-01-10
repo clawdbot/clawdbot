@@ -19,10 +19,12 @@ installGatewayTestHooks();
 describe("gateway server models + voicewake", () => {
   const setTempHome = (homeDir: string) => {
     const prevHome = process.env.HOME;
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
     const prevUserProfile = process.env.USERPROFILE;
     const prevHomeDrive = process.env.HOMEDRIVE;
     const prevHomePath = process.env.HOMEPATH;
     process.env.HOME = homeDir;
+    process.env.CLAWDBOT_STATE_DIR = path.join(homeDir, ".clawdbot");
     process.env.USERPROFILE = homeDir;
     if (process.platform === "win32") {
       const parsed = path.parse(homeDir);
@@ -34,6 +36,11 @@ describe("gateway server models + voicewake", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = prevHome;
+      }
+      if (prevStateDir === undefined) {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      } else {
+        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
       }
       if (prevUserProfile === undefined) {
         delete process.env.USERPROFILE;

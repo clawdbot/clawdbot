@@ -1,4 +1,5 @@
 import AppKit
+import ClawdbotDiscovery
 import ClawdbotIPC
 import ClawdbotKit
 import CoreLocation
@@ -12,7 +13,8 @@ struct GeneralSettings: View {
     @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
-    @State private var gatewayDiscovery = GatewayDiscoveryModel()
+    @State private var gatewayDiscovery = GatewayDiscoveryModel(
+        localDisplayName: InstanceIdentity.displayName)
     @State private var isInstallingCLI = false
     @State private var cliStatus: String?
     @State private var cliInstalled = false
@@ -185,6 +187,11 @@ struct GeneralSettings: View {
                 if !self.isNixMode {
                     self.gatewayInstallerCard
                 }
+                SettingsToggleRow(
+                    title: "Attach only",
+                    subtitle: "Use this when the gateway runs externally; the mac app will only attach " +
+                        "to an already-running gateway and won't start one locally.",
+                    binding: self.$state.attachExistingGatewayOnly)
                 TailscaleIntegrationSection(
                     connectionMode: self.state.connectionMode,
                     isPaused: self.state.isPaused)

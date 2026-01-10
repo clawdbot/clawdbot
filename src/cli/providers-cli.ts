@@ -10,6 +10,8 @@ import {
 import { danger } from "../globals.js";
 import { listChatProviders } from "../providers/registry.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 
@@ -43,7 +45,15 @@ export function registerProvidersCli(program: Command) {
   const providers = program
     .command("providers")
     .alias("provider")
-    .description("Manage chat provider accounts");
+    .description("Manage chat provider accounts")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/configuration",
+          "docs.clawd.bot/configuration",
+        )}\n`,
+    );
 
   providers
     .command("list")

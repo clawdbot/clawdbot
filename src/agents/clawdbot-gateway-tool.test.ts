@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { createClawdbotTools } from "./clawdbot-tools.js";
@@ -10,6 +13,9 @@ describe("gateway tool", () => {
   it("schedules SIGUSR1 restart", async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
+    process.env.CLAWDBOT_STATE_DIR = stateDir;
 
     try {
       const tool = createClawdbotTools({
@@ -29,12 +35,27 @@ describe("gateway tool", () => {
         delayMs: 0,
       });
 
+      const sentinelPath = path.join(stateDir, "restart-sentinel.json");
+      const raw = await fs.readFile(sentinelPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        payload?: { kind?: string; doctorHint?: string | null };
+      };
+      expect(parsed.payload?.kind).toBe("restart");
+      expect(parsed.payload?.doctorHint).toBe(
+        "Run: clawdbot doctor --non-interactive",
+      );
+
       expect(kill).not.toHaveBeenCalled();
       await vi.runAllTimersAsync();
       expect(kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
     } finally {
       kill.mockRestore();
       vi.useRealTimers();
+      if (previousStateDir === undefined) {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      } else {
+        process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+      }
     }
   });
 

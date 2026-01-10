@@ -900,7 +900,7 @@ export async function handleCommands(params: {
       await waitForEmbeddedPiRunEnd(sessionId, 15_000);
     }
     const customInstructions = extractCompactInstructions({
-      rawBody: ctx.Body,
+      rawBody: ctx.CommandBody ?? ctx.RawBody ?? ctx.Body,
       ctx,
       cfg,
       agentId: params.agentId,

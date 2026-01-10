@@ -219,6 +219,7 @@ final class WorkActivityStore {
         if let detail = display.detailLine, !detail.isEmpty {
             return "\(display.label): \(detail)"
         }
+
         return display.label
     }
 

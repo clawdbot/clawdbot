@@ -46,10 +46,11 @@ read_when:
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 
 ## Related
-- Elevated mode docs live in [`docs/elevated.md`](/tools/elevated).
+- Elevated mode docs live in [Elevated mode](/tools/elevated).
 
 ## Heartbeats
 - Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat delivery defaults to the final payload only. To also send the separate `Reasoning:` message (when available), set `agents.defaults.heartbeat.includeReasoning: true`.
 
 ## Web chat UI
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.

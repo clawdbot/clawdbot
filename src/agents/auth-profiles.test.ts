@@ -574,7 +574,7 @@ describe("markAuthProfileFailure", () => {
 });
 
 describe("external CLI credential sync", () => {
-  it("syncs Claude CLI credentials into anthropic:claude-cli", async () => {
+  it("syncs Claude CLI OAuth credentials into anthropic:claude-cli", async () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-cli-sync-"),
     );
@@ -582,7 +582,7 @@ describe("external CLI credential sync", () => {
       // Create a temp home with Claude CLI credentials
       await withTempHome(
         async (tempHome) => {
-          // Create Claude CLI credentials
+          // Create Claude CLI credentials with refreshToken (OAuth)
           const claudeDir = path.join(tempHome, ".claude");
           fs.mkdirSync(claudeDir, { recursive: true });
           const claudeCreds = {
@@ -613,7 +613,7 @@ describe("external CLI credential sync", () => {
             }),
           );
 
-          // Load the store - should sync from CLI
+          // Load the store - should sync from CLI as OAuth credential
           const store = ensureAuthProfileStore(agentDir);
 
           expect(store.profiles["anthropic:default"]).toBeDefined();
@@ -621,13 +621,120 @@ describe("external CLI credential sync", () => {
             (store.profiles["anthropic:default"] as { key: string }).key,
           ).toBe("sk-default");
           expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
-          expect(
-            (store.profiles[CLAUDE_CLI_PROFILE_ID] as { token: string }).token,
-          ).toBe("fresh-access-token");
-          expect(
-            (store.profiles[CLAUDE_CLI_PROFILE_ID] as { expires: number })
-              .expires,
-          ).toBeGreaterThan(Date.now());
+          // Should be stored as OAuth credential (type: "oauth") for auto-refresh
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("oauth");
+          expect((cliProfile as { access: string }).access).toBe(
+            "fresh-access-token",
+          );
+          expect((cliProfile as { refresh: string }).refresh).toBe(
+            "fresh-refresh-token",
+          );
+          expect((cliProfile as { expires: number }).expires).toBeGreaterThan(
+            Date.now(),
+          );
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("syncs Claude CLI credentials without refreshToken as token type", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-token-sync-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          // Create Claude CLI credentials WITHOUT refreshToken (fallback to token type)
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          const claudeCreds = {
+            claudeAiOauth: {
+              accessToken: "access-only-token",
+              // No refreshToken - backward compatibility scenario
+              expiresAt: Date.now() + 60 * 60 * 1000,
+            },
+          };
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify(claudeCreds),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({ version: 1, profiles: {} }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+
+          expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
+          // Should be stored as token type (no refresh capability)
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("token");
+          expect((cliProfile as { token: string }).token).toBe(
+            "access-only-token",
+          );
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades token to oauth when Claude CLI gets refreshToken", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-upgrade-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          // Create Claude CLI credentials with refreshToken
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "new-oauth-access",
+                refreshToken: "new-refresh-token",
+                expiresAt: Date.now() + 60 * 60 * 1000,
+              },
+            }),
+          );
+
+          // Create auth-profiles.json with existing token type credential
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({
+              version: 1,
+              profiles: {
+                [CLAUDE_CLI_PROFILE_ID]: {
+                  type: "token",
+                  provider: "anthropic",
+                  token: "old-token",
+                  expires: Date.now() + 30 * 60 * 1000,
+                },
+              },
+            }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+
+          // Should upgrade from token to oauth
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("oauth");
+          expect((cliProfile as { access: string }).access).toBe(
+            "new-oauth-access",
+          );
+          expect((cliProfile as { refresh: string }).refresh).toBe(
+            "new-refresh-token",
+          );
         },
         { prefix: "clawdbot-home-" },
       );
@@ -732,20 +839,21 @@ describe("external CLI credential sync", () => {
     }
   });
 
-  it("does not overwrite fresher store token with older Claude CLI credentials", async () => {
+  it("prefers oauth over token even if token has later expiry (oauth enables auto-refresh)", async () => {
     const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-"),
+      path.join(os.tmpdir(), "clawdbot-cli-oauth-preferred-"),
     );
     try {
       await withTempHome(
         async (tempHome) => {
           const claudeDir = path.join(tempHome, ".claude");
           fs.mkdirSync(claudeDir, { recursive: true });
+          // CLI has OAuth credentials (with refresh token) expiring in 30 min
           fs.writeFileSync(
             path.join(claudeDir, ".credentials.json"),
             JSON.stringify({
               claudeAiOauth: {
-                accessToken: "cli-access",
+                accessToken: "cli-oauth-access",
                 refreshToken: "cli-refresh",
                 expiresAt: Date.now() + 30 * 60 * 1000,
               },
@@ -753,6 +861,7 @@ describe("external CLI credential sync", () => {
           );
 
           const authPath = path.join(agentDir, "auth-profiles.json");
+          // Store has token credentials expiring in 60 min (later than CLI)
           fs.writeFileSync(
             authPath,
             JSON.stringify({
@@ -761,7 +870,7 @@ describe("external CLI credential sync", () => {
                 [CLAUDE_CLI_PROFILE_ID]: {
                   type: "token",
                   provider: "anthropic",
-                  token: "store-access",
+                  token: "store-token-access",
                   expires: Date.now() + 60 * 60 * 1000,
                 },
               },
@@ -769,9 +878,119 @@ describe("external CLI credential sync", () => {
           );
 
           const store = ensureAuthProfileStore(agentDir);
-          expect(
-            (store.profiles[CLAUDE_CLI_PROFILE_ID] as { token: string }).token,
-          ).toBe("store-access");
+          // OAuth should be preferred over token because it can auto-refresh
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("oauth");
+          expect((cliProfile as { access: string }).access).toBe(
+            "cli-oauth-access",
+          );
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite fresher store oauth with older CLI oauth", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-oauth-no-downgrade-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          // CLI has OAuth credentials expiring in 30 min
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "cli-oauth-access",
+                refreshToken: "cli-refresh",
+                expiresAt: Date.now() + 30 * 60 * 1000,
+              },
+            }),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          // Store has OAuth credentials expiring in 60 min (later than CLI)
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({
+              version: 1,
+              profiles: {
+                [CLAUDE_CLI_PROFILE_ID]: {
+                  type: "oauth",
+                  provider: "anthropic",
+                  access: "store-oauth-access",
+                  refresh: "store-refresh",
+                  expires: Date.now() + 60 * 60 * 1000,
+                },
+              },
+            }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+          // Fresher store oauth should be kept
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("oauth");
+          expect((cliProfile as { access: string }).access).toBe(
+            "store-oauth-access",
+          );
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not downgrade store oauth to token when CLI lacks refresh token", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-oauth-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          // CLI has token-only credentials (no refresh token)
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "cli-token-access",
+                expiresAt: Date.now() + 30 * 60 * 1000,
+              },
+            }),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          // Store already has OAuth credentials with refresh token
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({
+              version: 1,
+              profiles: {
+                [CLAUDE_CLI_PROFILE_ID]: {
+                  type: "oauth",
+                  provider: "anthropic",
+                  access: "store-oauth-access",
+                  refresh: "store-refresh",
+                  expires: Date.now() + 60 * 60 * 1000,
+                },
+              },
+            }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+          // Keep oauth to preserve auto-refresh capability
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("oauth");
+          expect((cliProfile as { access: string }).access).toBe(
+            "store-oauth-access",
+          );
         },
         { prefix: "clawdbot-home-" },
       );

@@ -4,7 +4,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import {
+  type SessionEntry,
+  updateSessionStoreEntry,
+} from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -232,7 +235,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      if (sessionStore && sessionKey) {
+      if (storePath && sessionKey) {
         const usage = runResult.meta.agentMeta?.usage;
         const modelUsed =
           runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
@@ -243,39 +246,48 @@ export function createFollowupRunner(params: {
           DEFAULT_CONTEXT_TOKENS;
 
         if (hasNonzeroUsage(usage)) {
-          const entry = sessionStore[sessionKey];
-          if (entry) {
-            const input = usage.input ?? 0;
-            const output = usage.output ?? 0;
-            const promptTokens =
-              input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-            sessionStore[sessionKey] = {
-              ...entry,
-              inputTokens: input,
-              outputTokens: output,
-              totalTokens:
-                promptTokens > 0 ? promptTokens : (usage.total ?? input),
-              modelProvider: fallbackProvider ?? entry.modelProvider,
-              model: modelUsed,
-              contextTokens: contextTokensUsed ?? entry.contextTokens,
-              updatedAt: Date.now(),
-            };
-            if (storePath) {
-              await saveSessionStore(storePath, sessionStore);
-            }
+          try {
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async (entry) => {
+                const input = usage.input ?? 0;
+                const output = usage.output ?? 0;
+                const promptTokens =
+                  input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+                return {
+                  inputTokens: input,
+                  outputTokens: output,
+                  totalTokens:
+                    promptTokens > 0 ? promptTokens : (usage.total ?? input),
+                  modelProvider: fallbackProvider ?? entry.modelProvider,
+                  model: modelUsed,
+                  contextTokens: contextTokensUsed ?? entry.contextTokens,
+                  updatedAt: Date.now(),
+                };
+              },
+            });
+          } catch (err) {
+            logVerbose(
+              `failed to persist followup usage update: ${String(err)}`,
+            );
           }
         } else if (modelUsed || contextTokensUsed) {
-          const entry = sessionStore[sessionKey];
-          if (entry) {
-            sessionStore[sessionKey] = {
-              ...entry,
-              modelProvider: fallbackProvider ?? entry.modelProvider,
-              model: modelUsed ?? entry.model,
-              contextTokens: contextTokensUsed ?? entry.contextTokens,
-            };
-            if (storePath) {
-              await saveSessionStore(storePath, sessionStore);
-            }
+          try {
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async (entry) => ({
+                modelProvider: fallbackProvider ?? entry.modelProvider,
+                model: modelUsed ?? entry.model,
+                contextTokens: contextTokensUsed ?? entry.contextTokens,
+                updatedAt: Date.now(),
+              }),
+            });
+          } catch (err) {
+            logVerbose(
+              `failed to persist followup model/context update: ${String(err)}`,
+            );
           }
         }
       }

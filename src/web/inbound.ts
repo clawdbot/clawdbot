@@ -620,7 +620,7 @@ export async function monitorWebInbox(options: {
             remoteJid: jid,
             id: messageId,
             fromMe,
-            participant,
+            participant: participant ? toWhatsappJid(participant) : undefined,
           },
         },
       });

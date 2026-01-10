@@ -384,6 +384,19 @@ describe("createClawdbotCodingTools", () => {
       "$ref",
       "$defs",
       "definitions",
+      "examples",
+      "minLength",
+      "maxLength",
+      "minimum",
+      "maximum",
+      "multipleOf",
+      "pattern",
+      "format",
+      "minItems",
+      "maxItems",
+      "uniqueItems",
+      "minProperties",
+      "maxProperties",
     ]);
 
     const findUnsupportedKeywords = (
@@ -398,9 +411,24 @@ describe("createClawdbotCodingTools", () => {
         });
         return found;
       }
-      for (const [key, value] of Object.entries(
-        schema as Record<string, unknown>,
-      )) {
+
+      const record = schema as Record<string, unknown>;
+      const properties =
+        record.properties &&
+        typeof record.properties === "object" &&
+        !Array.isArray(record.properties)
+          ? (record.properties as Record<string, unknown>)
+          : undefined;
+      if (properties) {
+        for (const [key, value] of Object.entries(properties)) {
+          found.push(
+            ...findUnsupportedKeywords(value, `${path}.properties.${key}`),
+          );
+        }
+      }
+
+      for (const [key, value] of Object.entries(record)) {
+        if (key === "properties") continue;
         if (unsupportedKeywords.has(key)) {
           found.push(`${path}.${key}`);
         }
@@ -418,5 +446,99 @@ describe("createClawdbotCodingTools", () => {
       );
       expect(violations).toEqual([]);
     }
+  });
+
+  it("uses workspaceDir for Read tool path resolution", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    try {
+      // Create a test file in the "workspace"
+      const testFile = "test-workspace-file.txt";
+      const testContent = "workspace path resolution test";
+      await fs.writeFile(path.join(tmpDir, testFile), testContent, "utf8");
+
+      // Create tools with explicit workspaceDir
+      const tools = createClawdbotCodingTools({ workspaceDir: tmpDir });
+      const readTool = tools.find((tool) => tool.name === "read");
+      expect(readTool).toBeDefined();
+
+      // Read using relative path - should resolve against workspaceDir
+      const result = await readTool?.execute("tool-ws-1", {
+        path: testFile,
+      });
+
+      const textBlocks = result?.content?.filter(
+        (block) => block.type === "text",
+      ) as Array<{ text?: string }> | undefined;
+      const combinedText = textBlocks
+        ?.map((block) => block.text ?? "")
+        .join("\n");
+      expect(combinedText).toContain(testContent);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses workspaceDir for Write tool path resolution", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    try {
+      const testFile = "test-write-file.txt";
+      const testContent = "written via workspace path";
+
+      // Create tools with explicit workspaceDir
+      const tools = createClawdbotCodingTools({ workspaceDir: tmpDir });
+      const writeTool = tools.find((tool) => tool.name === "write");
+      expect(writeTool).toBeDefined();
+
+      // Write using relative path - should resolve against workspaceDir
+      await writeTool?.execute("tool-ws-2", {
+        path: testFile,
+        content: testContent,
+      });
+
+      // Verify file was written to workspaceDir
+      const written = await fs.readFile(path.join(tmpDir, testFile), "utf8");
+      expect(written).toBe(testContent);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses workspaceDir for Edit tool path resolution", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    try {
+      const testFile = "test-edit-file.txt";
+      const originalContent = "hello world";
+      const expectedContent = "hello universe";
+      await fs.writeFile(path.join(tmpDir, testFile), originalContent, "utf8");
+
+      // Create tools with explicit workspaceDir
+      const tools = createClawdbotCodingTools({ workspaceDir: tmpDir });
+      const editTool = tools.find((tool) => tool.name === "edit");
+      expect(editTool).toBeDefined();
+
+      // Edit using relative path - should resolve against workspaceDir
+      await editTool?.execute("tool-ws-3", {
+        path: testFile,
+        oldText: "world",
+        newText: "universe",
+      });
+
+      // Verify file was edited in workspaceDir
+      const edited = await fs.readFile(path.join(tmpDir, testFile), "utf8");
+      expect(edited).toBe(expectedContent);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to process.cwd() when workspaceDir not provided", () => {
+    const prevCwd = process.cwd();
+    const tools = createClawdbotCodingTools();
+    // Tools should be created without error
+    expect(tools.some((tool) => tool.name === "read")).toBe(true);
+    expect(tools.some((tool) => tool.name === "write")).toBe(true);
+    expect(tools.some((tool) => tool.name === "edit")).toBe(true);
+    // cwd should be unchanged
+    expect(process.cwd()).toBe(prevCwd);
   });
 });

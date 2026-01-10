@@ -33,6 +33,7 @@ export type GmailHookOverrides = {
   servePath?: string;
   tailscaleMode?: HooksGmailTailscaleMode;
   tailscalePath?: string;
+  tailscaleTarget?: string;
 };
 
 export type GmailHookRuntimeConfig = {
@@ -54,6 +55,7 @@ export type GmailHookRuntimeConfig = {
   tailscale: {
     mode: HooksGmailTailscaleMode;
     path: string;
+    target?: string;
   };
 };
 
@@ -160,23 +162,30 @@ export function resolveGmailHookRuntimeConfig(
       ? Math.floor(servePortRaw)
       : DEFAULT_GMAIL_SERVE_PORT;
   const servePathRaw = overrides.servePath ?? gmail?.serve?.path;
-  const hasExplicitServePath =
-    typeof servePathRaw === "string" && servePathRaw.trim().length > 0;
+  const normalizedServePathRaw =
+    typeof servePathRaw === "string" && servePathRaw.trim().length > 0
+      ? normalizeServePath(servePathRaw)
+      : DEFAULT_GMAIL_SERVE_PATH;
+  const tailscaleTargetRaw =
+    overrides.tailscaleTarget ?? gmail?.tailscale?.target;
 
   const tailscaleMode =
     overrides.tailscaleMode ?? gmail?.tailscale?.mode ?? "off";
-  // When exposing the push endpoint via Tailscale, the public path is stripped
-  // before proxying; use "/" internally unless the user set a path explicitly.
+  const tailscaleTarget =
+    tailscaleMode !== "off" &&
+    typeof tailscaleTargetRaw === "string" &&
+    tailscaleTargetRaw.trim().length > 0
+      ? tailscaleTargetRaw.trim()
+      : undefined;
+  // Tailscale strips the public path before proxying, so listen on "/" when on.
   const servePath = normalizeServePath(
-    tailscaleMode !== "off" && !hasExplicitServePath ? "/" : servePathRaw,
+    tailscaleMode !== "off" && !tailscaleTarget ? "/" : normalizedServePathRaw,
   );
 
   const tailscalePathRaw = overrides.tailscalePath ?? gmail?.tailscale?.path;
   const tailscalePath = normalizeServePath(
-    tailscaleMode !== "off" && !tailscalePathRaw
-      ? hasExplicitServePath
-        ? servePathRaw
-        : DEFAULT_GMAIL_SERVE_PATH
+    tailscaleMode !== "off"
+      ? (tailscalePathRaw ?? normalizedServePathRaw)
       : (tailscalePathRaw ?? servePath),
   );
 
@@ -201,6 +210,7 @@ export function resolveGmailHookRuntimeConfig(
       tailscale: {
         mode: tailscaleMode,
         path: tailscalePath,
+        target: tailscaleTarget,
       },
     },
   };

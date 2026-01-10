@@ -57,7 +57,7 @@ The Gateway advertises `_clawdbot-bridge._tcp` on `local.`. The iOS app lists th
 ### Tailnet (cross-network)
 
 If mDNS is blocked, use a unicast DNS-SD zone (recommended domain: `clawdbot.internal.`) and Tailscale split DNS.
-See [`docs/bonjour.md`](/gateway/bonjour) for the CoreDNS example.
+See [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### Manual host/port
 
@@ -94,7 +94,7 @@ clawdbot nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Common errors
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise a canvas host URL; check `canvasHost` in [`docs/configuration.md`](/gateway/configuration).
+- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise a canvas host URL; check `canvasHost` in [Gateway configuration](/gateway/configuration).
 - Pairing prompt never appears: run `clawdbot nodes pending` and approve manually.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 

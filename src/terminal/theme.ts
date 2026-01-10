@@ -2,7 +2,13 @@ import chalk, { Chalk } from "chalk";
 
 import { LOBSTER_PALETTE } from "./palette.js";
 
-const baseChalk = process.env.NO_COLOR ? new Chalk({ level: 0 }) : chalk;
+const hasForceColor =
+  typeof process.env.FORCE_COLOR === "string" &&
+  process.env.FORCE_COLOR.trim().length > 0 &&
+  process.env.FORCE_COLOR.trim() !== "0";
+
+const baseChalk =
+  process.env.NO_COLOR && !hasForceColor ? new Chalk({ level: 0 }) : chalk;
 
 const hex = (value: string) => baseChalk.hex(value);
 
@@ -20,8 +26,7 @@ export const theme = {
   option: hex(LOBSTER_PALETTE.warn),
 } as const;
 
-export const isRich = () =>
-  Boolean(process.stdout.isTTY && baseChalk.level > 0);
+export const isRich = () => Boolean(baseChalk.level > 0);
 
 export const colorize = (
   rich: boolean,

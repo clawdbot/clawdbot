@@ -11,6 +11,15 @@ export type OriginatingChannelType =
 
 export type MsgContext = {
   Body?: string;
+  /**
+   * Raw message body without structural context (history, sender labels).
+   * Legacy alias for CommandBody. Falls back to Body if not set.
+   */
+  RawBody?: string;
+  /**
+   * Prefer for command detection; RawBody is treated as legacy alias.
+   */
+  CommandBody?: string;
   From?: string;
   To?: string;
   SessionKey?: string;

@@ -37,7 +37,7 @@ describe("buildPairingReply", () => {
       expect(text).toContain(testCase.idLine);
       expect(text).toContain(`Pairing code: ${testCase.code}`);
       expect(text).toContain(
-        `clawdbot pairing approve --provider ${testCase.provider} <code>`,
+        `clawdbot pairing approve ${testCase.provider} <code>`,
       );
     });
   }

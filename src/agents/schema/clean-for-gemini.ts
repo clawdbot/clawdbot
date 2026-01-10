@@ -10,6 +10,23 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "$ref",
   "$defs",
   "definitions",
+  // Non-standard (OpenAPI) keyword; Claude validators reject it.
+  "examples",
+
+  // Cloud Code Assist appears to validate tool schemas more strictly/quirkily than
+  // draft 2020-12 in practice; these constraints frequently trigger 400s.
+  "minLength",
+  "maxLength",
+  "minimum",
+  "maximum",
+  "multipleOf",
+  "pattern",
+  "format",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
 ]);
 
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
@@ -134,14 +151,14 @@ function cleanSchemaForGeminiWithDefs(
       const result: Record<string, unknown> = {
         ...(cleaned as Record<string, unknown>),
       };
-      for (const key of ["description", "title", "default", "examples"]) {
+      for (const key of ["description", "title", "default"]) {
         if (key in obj && obj[key] !== undefined) result[key] = obj[key];
       }
       return result;
     }
 
     const result: Record<string, unknown> = {};
-    for (const key of ["description", "title", "default", "examples"]) {
+    for (const key of ["description", "title", "default"]) {
       if (key in obj && obj[key] !== undefined) result[key] = obj[key];
     }
     return result;
@@ -157,7 +174,7 @@ function cleanSchemaForGeminiWithDefs(
         type: flattened.type,
         enum: flattened.enum,
       };
-      for (const key of ["description", "title", "default", "examples"]) {
+      for (const key of ["description", "title", "default"]) {
         if (key in obj && obj[key] !== undefined) result[key] = obj[key];
       }
       return result;
@@ -171,7 +188,7 @@ function cleanSchemaForGeminiWithDefs(
         type: flattened.type,
         enum: flattened.enum,
       };
-      for (const key of ["description", "title", "default", "examples"]) {
+      for (const key of ["description", "title", "default"]) {
         if (key in obj && obj[key] !== undefined) result[key] = obj[key];
       }
       return result;

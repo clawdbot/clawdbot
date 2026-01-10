@@ -187,6 +187,83 @@ describe("trigger handling", () => {
     });
   });
 
+  it("applies native /model to the target session", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const slashSessionKey = "telegram:slash:111";
+      const targetSessionKey = MAIN_SESSION_KEY;
+
+      // Seed the target session to ensure the native command mutates it.
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify(
+          {
+            [targetSessionKey]: {
+              sessionId: "session-target",
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model openai/gpt-4.1-mini",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: slashSessionKey,
+          CommandSource: "native",
+          CommandTargetSessionKey: targetSessionKey,
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to openai/gpt-4.1-mini");
+
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[targetSessionKey]?.providerOverride).toBe("openai");
+      expect(store[targetSessionKey]?.modelOverride).toBe("gpt-4.1-mini");
+      expect(store[slashSessionKey]).toBeUndefined();
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      await getReplyFromConfig(
+        {
+          Body: "hi",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        {},
+        cfg,
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      expect(vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        }),
+      );
+    });
+  });
+
   it("rejects /restart by default", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
@@ -479,7 +556,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("elevated is not available right now.");
+      expect(text).toContain("tools.elevated.enabled");
 
       const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
       const store = JSON.parse(storeRaw) as Record<
@@ -718,7 +795,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).not.toBe("elevated is not available right now.");
+      expect(text).not.toContain("elevated is not available right now");
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
     });
   });
@@ -799,7 +876,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("elevated is not available right now.");
+      expect(text).toContain("tools.elevated.allowFrom.discord");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -1440,7 +1517,7 @@ describe("group intro prompts", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
           ?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        `You are replying inside the WhatsApp group "Ops". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `You are replying inside the WhatsApp group "Ops". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });

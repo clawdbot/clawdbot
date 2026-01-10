@@ -36,10 +36,12 @@ import {
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   applyOpencodeZenConfig,
+  applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
   setOpencodeZenApiKey,
+  setZaiApiKey,
 } from "./onboard-auth.js";
 import {
   applyWizardMetadata,
@@ -225,6 +227,25 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
     nextConfig = applyGoogleGeminiModelDefault(nextConfig).next;
+  } else if (authChoice === "zai-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "zai",
+      cfg: baseConfig,
+      flagValue: opts.zaiApiKey,
+      flagName: "--zai-api-key",
+      envVar: "ZAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setZaiApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zai:default",
+      provider: "zai",
+      mode: "api_key",
+    });
+    nextConfig = applyZaiConfig(nextConfig);
   } else if (authChoice === "openai-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "openai",
@@ -316,11 +337,11 @@ export async function runNonInteractiveOnboarding(
     nextConfig = applyMinimaxConfig(nextConfig);
   } else if (authChoice === "opencode-zen") {
     const resolved = await resolveNonInteractiveApiKey({
-      provider: "opencode-zen",
+      provider: "opencode",
       cfg: baseConfig,
       flagValue: opts.opencodeZenApiKey,
       flagName: "--opencode-zen-api-key",
-      envVar: "OPENCODE_ZEN_API_KEY",
+      envVar: "OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY)",
       runtime,
     });
     if (!resolved) return;
@@ -328,8 +349,8 @@ export async function runNonInteractiveOnboarding(
       await setOpencodeZenApiKey(resolved.key);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "opencode-zen:default",
-      provider: "opencode-zen",
+      profileId: "opencode:default",
+      provider: "opencode",
       mode: "api_key",
     });
     nextConfig = applyOpencodeZenConfig(nextConfig);

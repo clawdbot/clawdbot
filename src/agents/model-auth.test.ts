@@ -199,4 +199,35 @@ describe("getApiKeyForModel", () => {
       }
     }
   });
+
+  it("accepts legacy Z_AI_API_KEY for zai", async () => {
+    const previousZai = process.env.ZAI_API_KEY;
+    const previousLegacy = process.env.Z_AI_API_KEY;
+
+    try {
+      delete process.env.ZAI_API_KEY;
+      process.env.Z_AI_API_KEY = "zai-test-key";
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "zai",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("zai-test-key");
+      expect(resolved.source).toContain("Z_AI_API_KEY");
+    } finally {
+      if (previousZai === undefined) {
+        delete process.env.ZAI_API_KEY;
+      } else {
+        process.env.ZAI_API_KEY = previousZai;
+      }
+      if (previousLegacy === undefined) {
+        delete process.env.Z_AI_API_KEY;
+      } else {
+        process.env.Z_AI_API_KEY = previousLegacy;
+      }
+    }
+  });
 });

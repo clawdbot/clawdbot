@@ -71,6 +71,10 @@ export function registerHooksCli(program: Command) {
       "funnel",
     )
     .option("--tailscale-path <path>", "Path for tailscale serve/funnel")
+    .option(
+      "--tailscale-target <target>",
+      "Tailscale serve/funnel target (port, host:port, or URL)",
+    )
     .option("--push-endpoint <url>", "Explicit Pub/Sub push endpoint")
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
@@ -104,6 +108,10 @@ export function registerHooksCli(program: Command) {
       "Expose push endpoint via tailscale (funnel|serve|off)",
     )
     .option("--tailscale-path <path>", "Path for tailscale serve/funnel")
+    .option(
+      "--tailscale-target <target>",
+      "Tailscale serve/funnel target (port, host:port, or URL)",
+    )
     .action(async (opts) => {
       try {
         const parsed = parseGmailRunOptions(opts);
@@ -138,6 +146,7 @@ function parseGmailSetupOptions(
     renewEveryMinutes: numberOption(raw.renewMinutes),
     tailscale: stringOption(raw.tailscale) as GmailSetupOptions["tailscale"],
     tailscalePath: stringOption(raw.tailscalePath),
+    tailscaleTarget: stringOption(raw.tailscaleTarget),
     pushEndpoint: stringOption(raw.pushEndpoint),
     json: Boolean(raw.json),
   };
@@ -160,6 +169,7 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
     renewEveryMinutes: numberOption(raw.renewMinutes),
     tailscale: stringOption(raw.tailscale) as GmailRunOptions["tailscale"],
     tailscalePath: stringOption(raw.tailscalePath),
+    tailscaleTarget: stringOption(raw.tailscaleTarget),
   };
 }
 

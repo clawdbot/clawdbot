@@ -201,6 +201,7 @@ export type AppViewState = {
   handleWhatsAppLogout: () => Promise<void>;
   handleTelegramSave: () => Promise<void>;
   handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+  handleAbortChat: () => Promise<void>;
   removeQueuedMessage: (id: string) => void;
   resetToolStream: () => void;
   handleLogsScroll: (event: Event) => void;
@@ -493,11 +494,13 @@ export function renderApp(state: AppViewState) {
                   ...state.settings,
                   useNewChatLayout: !state.settings.useNewChatLayout,
                 }),
-              onDraftChange: (next) => (state.chatMessage = next),
-              onSend: () => state.handleSendChat(),
-              onQueueRemove: (id) => state.removeQueuedMessage(id),
-              onNewSession: () =>
-                state.handleSendChat("/new", { restoreDraft: true }),
+	              onDraftChange: (next) => (state.chatMessage = next),
+	              onSend: () => state.handleSendChat(),
+	              canAbort: Boolean(state.chatRunId),
+	              onAbort: () => void state.handleAbortChat(),
+	              onQueueRemove: (id) => state.removeQueuedMessage(id),
+	              onNewSession: () =>
+	                state.handleSendChat("/new", { restoreDraft: true }),
               // Sidebar props for tool output viewing
               sidebarOpen: state.sidebarOpen,
               sidebarContent: state.sidebarContent,

@@ -261,7 +261,8 @@ export async function ensureSubscription(
 export async function ensureTailscaleEndpoint(params: {
   mode: "off" | "serve" | "funnel";
   path: string;
-  port: number;
+  port?: number;
+  target?: string;
   token?: string;
 }): Promise<string> {
   if (params.mode === "off") return "";
@@ -285,7 +286,15 @@ export async function ensureTailscaleEndpoint(params: {
     throw new Error("tailscale DNS name missing; run tailscale up");
   }
 
-  const target = String(params.port);
+  const target =
+    typeof params.target === "string" && params.target.trim().length > 0
+      ? params.target.trim()
+      : params.port
+        ? String(params.port)
+        : "";
+  if (!target) {
+    throw new Error("tailscale target missing; set a port or target URL");
+  }
   const pathArg = normalizeServePath(params.path);
   const funnelArgs = [
     params.mode,

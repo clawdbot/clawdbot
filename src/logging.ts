@@ -402,7 +402,11 @@ function isRichConsoleEnv(): boolean {
 }
 
 function getColorForConsole(): ChalkInstance {
-  if (process.env.NO_COLOR) return new Chalk({ level: 0 });
+  const hasForceColor =
+    typeof process.env.FORCE_COLOR === "string" &&
+    process.env.FORCE_COLOR.trim().length > 0 &&
+    process.env.FORCE_COLOR.trim() !== "0";
+  if (process.env.NO_COLOR && !hasForceColor) return new Chalk({ level: 0 });
   const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
   return hasTty || isRichConsoleEnv()
     ? new Chalk({ level: 1 })

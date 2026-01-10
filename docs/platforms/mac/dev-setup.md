@@ -13,10 +13,7 @@ Before building the app, ensure you have the following installed:
 
 1.  **Xcode 26.2+**: Required for Swift development.
 2.  **Node.js & pnpm**: Required for the gateway and CLI components.
-3.  **Bun**: Required to package the embedded gateway relay.
-    ```bash
-    curl -fsSL https://bun.sh/install | bash
-    ```
+3.  **Node**: Required to package the embedded gateway relay (the script can download a bundled runtime).
 
 ## 1. Initialize Submodules
 
@@ -41,6 +38,8 @@ To build the macOS app and package it into `dist/Clawdbot.app`, run:
 ```bash
 ./scripts/package-mac-app.sh
 ```
+
+Use `BUNDLED_RUNTIME=node|bun` to switch the embedded gateway runtime (default: node).
 
 If you don't have an Apple Developer ID certificate, the script will automatically use **ad-hoc signing** (`-`). 
 

@@ -118,7 +118,7 @@ describe("discord tool result dispatch", () => {
     expect(runtimeError).not.toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[1]).toMatch(/^PFX /);
-  }, 10000);
+  }, 15_000);
 
   it("caches channel info lookups between messages", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
@@ -191,6 +191,96 @@ describe("discord tool result dispatch", () => {
     );
 
     expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes forwarded message snapshots in body", async () => {
+    const { createDiscordMessageHandler } = await import("./monitor.js");
+    let capturedBody = "";
+    dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
+      capturedBody = ctx.Body ?? "";
+      dispatcher.sendFinalReply({ text: "ok" });
+      return { queuedFinal: true, counts: { final: 1 } };
+    });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: "/tmp/clawd",
+        },
+      },
+      session: { store: "/tmp/clawdbot-sessions.json" },
+      discord: { dm: { enabled: true, policy: "open" } },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const handler = createDiscordMessageHandler({
+      cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
+      token: "token",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code: number): never => {
+          throw new Error(`exit ${code}`);
+        },
+      },
+      botUserId: "bot-id",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 10_000,
+      textLimit: 2000,
+      replyToMode: "off",
+      dmEnabled: true,
+      groupDmEnabled: false,
+    });
+
+    const client = {
+      fetchChannel: vi.fn().mockResolvedValue({
+        type: ChannelType.DM,
+        name: "dm",
+      }),
+    } as unknown as Client;
+
+    await handler(
+      {
+        message: {
+          id: "m-forward-1",
+          content: "",
+          channelId: "c-forward-1",
+          timestamp: new Date().toISOString(),
+          type: MessageType.Default,
+          attachments: [],
+          embeds: [],
+          mentionedEveryone: false,
+          mentionedUsers: [],
+          mentionedRoles: [],
+          author: { id: "u1", bot: false, username: "Ada" },
+          rawData: {
+            message_snapshots: [
+              {
+                message: {
+                  content: "forwarded hello",
+                  embeds: [],
+                  attachments: [],
+                  author: {
+                    id: "u2",
+                    username: "Bob",
+                    discriminator: "0",
+                  },
+                },
+              },
+            ],
+          },
+        },
+        author: { id: "u1", bot: false, username: "Ada" },
+        guild_id: null,
+      },
+      client,
+    );
+
+    expect(capturedBody).toContain("[Forwarded message from @Bob]");
+    expect(capturedBody).toContain("forwarded hello");
   });
 
   it("uses channel id allowlists for non-thread channels with categories", async () => {

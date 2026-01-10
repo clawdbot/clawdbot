@@ -33,6 +33,15 @@ const decodeWsData = (data: unknown): string => {
   return "";
 };
 
+async function waitFor(condition: () => boolean, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error("timeout waiting for condition");
+}
+
 installGatewayTestHooks();
 
 describe("gateway server node/bridge", () => {
@@ -729,6 +738,64 @@ describe("gateway server node/bridge", () => {
         event: "chat",
       }),
     );
+
+    await server.close();
+  });
+
+  test("bridge chat.send forwards image attachments to agentCommand", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
+
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
+    const reqRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "img-1",
+      method: "chat.send",
+      paramsJSON: JSON.stringify({
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: "idem-bridge-img",
+        attachments: [
+          {
+            type: "image",
+            fileName: "dot.png",
+            content: `data:image/png;base64,${pngB64}`,
+          },
+        ],
+      }),
+    });
+    expect(reqRes?.ok).toBe(true);
+
+    await waitFor(() => spy.mock.calls.length > callsBefore, 8000);
+    const call = spy.mock.calls.at(-1)?.[0] as
+      | { images?: Array<{ type: string; data: string; mimeType: string }> }
+      | undefined;
+    expect(call?.images).toEqual([
+      { type: "image", data: pngB64, mimeType: "image/png" },
+    ]);
 
     await server.close();
   });

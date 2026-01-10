@@ -147,7 +147,7 @@ describe("applyAuthChoice", () => {
     expect(result.config.agents?.defaults?.model?.primary).toBe(
       "anthropic/claude-opus-4-5",
     );
-    expect(result.config.models?.providers?.["opencode-zen"]).toBeDefined();
-    expect(result.agentModelOverride).toBe("opencode-zen/claude-opus-4-5");
+    expect(result.config.models?.providers?.["opencode-zen"]).toBeUndefined();
+    expect(result.agentModelOverride).toBe("opencode/claude-opus-4-5");
   });
 });

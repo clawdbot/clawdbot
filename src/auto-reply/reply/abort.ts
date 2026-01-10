@@ -81,7 +81,10 @@ export async function tryFastAbortFromMessage(params: {
     sessionKey: targetKey ?? ctx.SessionKey ?? "",
     config: cfg,
   });
-  const raw = stripStructuralPrefixes(ctx.Body ?? "");
+  // Use RawBody/CommandBody for abort detection (clean message without structural context).
+  const raw = stripStructuralPrefixes(
+    ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
+  );
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
   const normalized = normalizeCommandBody(stripped);

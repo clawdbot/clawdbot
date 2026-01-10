@@ -101,7 +101,7 @@ Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideal
 clawdbot setup
 ```
 
-Full workspace layout + backup guide: [`docs/agent-workspace.md`](/concepts/agent-workspace)
+Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 
 Optional: choose a different workspace with `agents.defaults.workspace` (supports `~`).
 
@@ -206,6 +206,7 @@ Clawdbot extracts these and sends them as media alongside the text.
 
 ```bash
 clawdbot status          # local status (creds, sessions, queued events)
+clawdbot status --all    # full diagnosis (read-only, pasteable)
 clawdbot status --deep   # also probes the running Gateway (WA connect + Telegram)
 clawdbot health --json   # gateway health snapshot (WS)
 ```

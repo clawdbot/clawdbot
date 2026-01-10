@@ -50,10 +50,13 @@ enum ShellExecutor {
                 errorMessage: "failed to start: \(error.localizedDescription)")
         }
 
+        let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
+        let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
+
         let waitTask = Task { () -> ShellResult in
             process.waitUntilExit()
-            let out = stdoutPipe.fileHandleForReading.readToEndSafely()
-            let err = stderrPipe.fileHandleForReading.readToEndSafely()
+            let out = await outTask.value
+            let err = await errTask.value
             let status = Int(process.terminationStatus)
             return ShellResult(
                 stdout: String(bytes: out, encoding: .utf8) ?? "",

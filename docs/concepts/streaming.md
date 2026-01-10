@@ -71,6 +71,16 @@ progressive output.
 - Provider overrides are available via `*.blockStreamingCoalesce` (including per-account configs).
 - Default coalesce `minChars` is bumped to 1500 for Signal/Slack/Discord unless overridden.
 
+## Human-like pacing between blocks
+
+When block streaming is enabled, you can add a **randomized pause** between
+block replies (after the first block). This makes multi-bubble responses feel
+more natural.
+
+- Config: `agents.defaults.humanDelay` (override per agent via `agents.list[].humanDelay`).
+- Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
+- Applies only to **block replies**, not final replies or tool summaries.
+
 ## “Stream chunks or everything”
 
 This maps to:
@@ -90,6 +100,7 @@ Telegram is the only provider with draft streaming:
   - `partial`: draft updates with the latest stream text.
   - `block`: draft updates in chunked blocks (same chunker rules).
   - `off`: no draft streaming.
+- Draft chunk config (only for `streamMode: "block"`): `telegram.draftChunk` (defaults: `minChars: 200`, `maxChars: 800`).
 - Draft streaming is separate from block streaming; block replies are off by default and only enabled by `*.blockStreaming: true` on non-Telegram providers.
 - Final reply is still a normal message.
 - `/reasoning stream` writes reasoning into the draft bubble (Telegram only).

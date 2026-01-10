@@ -272,6 +272,14 @@ describe("classifyFailoverReason", () => {
     );
     expect(classifyFailoverReason("bad request")).toBeNull();
   });
+
+  it("classifies OpenAI usage limit errors as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "You have hit your ChatGPT usage limit (plus plan)",
+      ),
+    ).toBe("rate_limit");
+  });
 });
 
 describe("isCloudCodeAssistFormatError", () => {
@@ -363,6 +371,39 @@ describe("sanitizeSessionMessagesImages", () => {
     expect((content as Array<{ type?: string }>)[0]?.type).toBe("toolCall");
   });
 
+  it("sanitizes tool ids for assistant blocks and tool results when enabled", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call_abc|item:123", name: "test", input: {} },
+          {
+            type: "toolCall",
+            id: "call_abc|item:456",
+            name: "bash",
+            arguments: {},
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolUseId: "call_abc|item:123",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      sanitizeToolCallIds: true,
+    });
+
+    const assistant = out[0] as { content?: Array<{ id?: string }> };
+    expect(assistant.content?.[0]?.id).toBe("call_abc_item_123");
+    expect(assistant.content?.[1]?.id).toBe("call_abc_item_456");
+
+    const toolResult = out[1] as { toolUseId?: string };
+    expect(toolResult.toolUseId).toBe("call_abc_item_123");
+  });
+
   it("filters whitespace-only assistant text blocks", async () => {
     const input = [
       {
@@ -413,7 +454,7 @@ describe("sanitizeSessionMessagesImages", () => {
       { role: "user", content: "hello" },
       {
         role: "toolResult",
-        toolUseId: "tool-1",
+        toolCallId: "tool-1",
         content: [{ type: "text", text: "result" }],
       },
     ] satisfies AgentMessage[];
@@ -423,6 +464,131 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(2);
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("toolResult");
+  });
+
+  it("keeps tool call + tool result IDs unchanged by default", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_123|fc_456",
+            name: "read",
+            arguments: { path: "package.json" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_456",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    const assistant = out[0] as unknown as { role?: string; content?: unknown };
+    expect(assistant.role).toBe("assistant");
+    expect(Array.isArray(assistant.content)).toBe(true);
+    const toolCall = (
+      assistant.content as Array<{ type?: string; id?: string }>
+    ).find((b) => b.type === "toolCall");
+    expect(toolCall?.id).toBe("call_123|fc_456");
+
+    const toolResult = out[1] as unknown as {
+      role?: string;
+      toolCallId?: string;
+    };
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResult.toolCallId).toBe("call_123|fc_456");
+  });
+
+  it("sanitizes tool call + tool result IDs when enabled", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_123|fc_456",
+            name: "read",
+            arguments: { path: "package.json" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_456",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      sanitizeToolCallIds: true,
+    });
+
+    const assistant = out[0] as unknown as { role?: string; content?: unknown };
+    expect(assistant.role).toBe("assistant");
+    expect(Array.isArray(assistant.content)).toBe(true);
+    const toolCall = (
+      assistant.content as Array<{ type?: string; id?: string }>
+    ).find((b) => b.type === "toolCall");
+    expect(toolCall?.id).toBe("call_123_fc_456");
+
+    const toolResult = out[1] as unknown as {
+      role?: string;
+      toolCallId?: string;
+    };
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResult.toolCallId).toBe("call_123_fc_456");
+  });
+
+  it("drops assistant blocks after a tool call when enforceToolCallLast is enabled", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "thinking", thinking: "after", thinkingSignature: "sig" },
+          { type: "text", text: "after text" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      enforceToolCallLast: true,
+    });
+    const assistant = out[0] as { content?: Array<{ type?: string }> };
+    expect(assistant.content?.map((b) => b.type)).toEqual(["text", "toolCall"]);
+  });
+
+  it("keeps assistant blocks after a tool call when enforceToolCallLast is disabled", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "thinking", thinking: "after", thinkingSignature: "sig" },
+          { type: "text", text: "after text" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+    const assistant = out[0] as { content?: Array<{ type?: string }> };
+    expect(assistant.content?.map((b) => b.type)).toEqual([
+      "text",
+      "toolCall",
+      "thinking",
+      "text",
+    ]);
   });
 });
 

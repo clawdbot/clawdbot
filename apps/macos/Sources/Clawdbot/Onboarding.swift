@@ -1,5 +1,6 @@
 import AppKit
 import ClawdbotChatUI
+import ClawdbotDiscovery
 import ClawdbotIPC
 import Combine
 import Observation
@@ -156,7 +157,8 @@ struct OnboardingView: View {
     init(
         state: AppState = AppStateStore.shared,
         permissionMonitor: PermissionMonitor = .shared,
-        discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel())
+        discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
+            localDisplayName: InstanceIdentity.displayName))
     {
         self.state = state
         self.permissionMonitor = permissionMonitor

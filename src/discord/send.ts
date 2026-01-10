@@ -903,6 +903,17 @@ export async function readMessagesDiscord(
   )) as APIMessage[];
 }
 
+export async function fetchMessageDiscord(
+  channelId: string,
+  messageId: string,
+  opts: DiscordReactOpts = {},
+): Promise<APIMessage> {
+  const rest = resolveDiscordRest(opts);
+  return (await rest.get(
+    Routes.channelMessage(channelId, messageId),
+  )) as APIMessage;
+}
+
 export async function editMessageDiscord(
   channelId: string,
   messageId: string,

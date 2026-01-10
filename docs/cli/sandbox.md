@@ -1,3 +1,10 @@
+---
+title: Sandbox CLI
+summary: "Manage sandbox containers and inspect effective sandbox policy"
+read_when: "You are managing sandbox containers or debugging sandbox/tool-policy behavior."
+status: active
+---
+
 # Sandbox CLI
 
 Manage Docker-based sandbox containers for isolated agent execution.
@@ -7,6 +14,17 @@ Manage Docker-based sandbox containers for isolated agent execution.
 Clawdbot can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
 
 ## Commands
+
+### `clawdbot sandbox explain`
+
+Inspect the **effective** sandbox mode/scope/workspace access, sandbox tool policy, and elevated gates (with fix-it config key paths).
+
+```bash
+clawdbot sandbox explain
+clawdbot sandbox explain --session agent:main:main
+clawdbot sandbox explain --agent work
+clawdbot sandbox explain --json
+```
 
 ### `clawdbot sandbox list`
 
@@ -56,7 +74,7 @@ docker pull clawdbot-sandbox:latest
 docker tag clawdbot-sandbox:latest clawdbot-sandbox:bookworm-slim
 
 # Update config to use new image
-# Edit clawdbot.config.json: agent.sandbox.docker.image
+# Edit config: agents.defaults.sandbox.docker.image (or agents.list[].sandbox.docker.image)
 
 # Recreate containers
 clawdbot sandbox recreate --all
@@ -65,7 +83,7 @@ clawdbot sandbox recreate --all
 ### After changing sandbox configuration
 
 ```bash
-# Edit clawdbot.config.json: agent.sandbox.*
+# Edit config: agents.defaults.sandbox.* (or agents.list[].sandbox.*)
 
 # Recreate to apply new config
 clawdbot sandbox recreate --all

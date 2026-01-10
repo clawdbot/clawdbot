@@ -18,6 +18,10 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import {
+  buildHistoryContext,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+} from "../auto-reply/reply/history.js";
+import {
   buildMentionRegexes,
   normalizeMentionText,
 } from "../auto-reply/reply/mentions.js";
@@ -75,7 +79,6 @@ import {
 } from "./reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "./session.js";
 
-const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 const whatsappLog = createSubsystemLogger("gateway/providers/whatsapp");
 const whatsappInboundLog = whatsappLog.child("inbound");
 const whatsappOutboundLog = whatsappLog.child("outbound");
@@ -817,10 +820,19 @@ export async function monitorWebProvider(
     buildMentionConfig(cfg, agentId);
   const baseMentionConfig = resolveMentionConfig();
   const groupHistoryLimit =
-    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    cfg.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
+    cfg.whatsapp?.historyLimit ??
+    cfg.messages?.groupChat?.historyLimit ??
+    DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
     string,
-    Array<{ sender: string; body: string; timestamp?: number }>
+    Array<{
+      sender: string;
+      body: string;
+      timestamp?: number;
+      id?: string;
+      senderJid?: string;
+    }>
   >();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const sleep =
@@ -1098,6 +1110,8 @@ export async function monitorWebProvider(
           sender: string;
           body: string;
           timestamp?: number;
+          id?: string;
+          senderJid?: string;
         }>;
         suppressGroupHistoryClear?: boolean;
       },
@@ -1115,20 +1129,25 @@ export async function monitorWebProvider(
         const historyWithoutCurrent =
           history.length > 0 ? history.slice(0, -1) : [];
         if (historyWithoutCurrent.length > 0) {
+          const lineBreak = "\\n";
           const historyText = historyWithoutCurrent
-            .map((m) =>
-              formatAgentEnvelope({
+            .map((m) => {
+              const bodyWithId = m.id
+                ? `${m.body}\n[message_id: ${m.id}]`
+                : m.body;
+              return formatAgentEnvelope({
                 provider: "WhatsApp",
                 from: conversationId,
                 timestamp: m.timestamp,
-                body: `${m.sender}: ${m.body}`,
-              }),
-            )
-            .join("\\n");
-          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(
-            msg,
-            route.agentId,
-          )}`;
+                body: `${m.sender}: ${bodyWithId}`,
+              });
+            })
+            .join(lineBreak);
+          combinedBody = buildHistoryContext({
+            historyText,
+            currentMessage: buildLine(msg, route.agentId),
+            lineBreak,
+          });
         }
         // Always surface who sent the triggering message so the agent can address them.
         const senderLabel =
@@ -1221,6 +1240,8 @@ export async function monitorWebProvider(
       const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
         ctx: {
           Body: combinedBody,
+          RawBody: msg.body,
+          CommandBody: msg.body,
           From: msg.from,
           To: msg.to,
           SessionKey: route.sessionKey,
@@ -1240,6 +1261,7 @@ export async function monitorWebProvider(
             msg.senderE164,
           ),
           SenderName: msg.senderName,
+          SenderId: msg.senderJid ?? msg.senderE164,
           SenderE164: msg.senderE164,
           WasMentioned: msg.wasMentioned,
           ...(msg.location ? toLocationContext(msg.location) : {}),
@@ -1544,11 +1566,19 @@ export async function monitorWebProvider(
                 sender: string;
                 body: string;
                 timestamp?: number;
+                id?: string;
+                senderJid?: string;
               }>);
+            const sender =
+              msg.senderName && msg.senderE164
+                ? `${msg.senderName} (${msg.senderE164})`
+                : (msg.senderName ?? msg.senderE164 ?? "Unknown");
             history.push({
-              sender: msg.senderName ?? msg.senderE164 ?? "Unknown",
+              sender,
               body: msg.body,
               timestamp: msg.timestamp,
+              id: msg.id,
+              senderJid: msg.senderJid,
             });
             while (history.length > groupHistoryLimit) history.shift();
             groupHistories.set(groupHistoryKey, history);

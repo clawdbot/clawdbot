@@ -31,8 +31,11 @@ import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
@@ -95,6 +98,58 @@ function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
+  const providers = cfg.models?.providers;
+  if (!providers) return;
+
+  // 2026-01-10: warn when OpenCode Zen overrides mask built-in routing/costs (8a194b4abc360c6098f157956bb9322576b44d51, 2d105d16f8a099276114173836d46b46cdfbdbae).
+  const overrides: string[] = [];
+  if (providers.opencode) overrides.push("opencode");
+  if (providers["opencode-zen"]) overrides.push("opencode-zen");
+  if (overrides.length === 0) return;
+
+  const lines = overrides.flatMap((id) => {
+    const providerEntry = providers[id];
+    const api =
+      isRecord(providerEntry) && typeof providerEntry.api === "string"
+        ? providerEntry.api
+        : undefined;
+    return [
+      `- models.providers.${id} is set; this overrides the built-in OpenCode Zen catalog.`,
+      api ? `- models.providers.${id}.api=${api}` : null,
+    ].filter((line): line is string => Boolean(line));
+  });
+
+  lines.push(
+    "- Remove these entries to restore per-model API routing + costs (then re-run onboarding if needed).",
+  );
+
+  note(lines.join("\n"), "OpenCode Zen");
+}
+
+async function detectClawdbotGitCheckout(
+  root: string,
+): Promise<"git" | "not-git" | "unknown"> {
+  const res = await runCommandWithTimeout(
+    ["git", "-C", root, "rev-parse", "--show-toplevel"],
+    { timeoutMs: 5000 },
+  ).catch(() => null);
+  if (!res) return "unknown";
+  if (res.code !== 0) {
+    // Avoid noisy "Update via package manager" notes when git is missing/broken,
+    // but do show it when this is clearly not a git checkout.
+    if (res.stderr.toLowerCase().includes("not a git repository")) {
+      return "not-git";
+    }
+    return "unknown";
+  }
+  return res.stdout.trim() === root ? "git" : "not-git";
+}
+
 export async function doctorCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DoctorOptions = {},
@@ -102,6 +157,68 @@ export async function doctorCommand(
   const prompter = createDoctorPrompter({ runtime, options });
   printWizardHeader(runtime);
   intro("Clawdbot doctor");
+
+  const updateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS === "1";
+  const canOfferUpdate =
+    !updateInProgress &&
+    options.nonInteractive !== true &&
+    options.yes !== true &&
+    options.repair !== true &&
+    Boolean(process.stdin.isTTY);
+  if (canOfferUpdate) {
+    const root = await resolveClawdbotPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+    if (root) {
+      const git = await detectClawdbotGitCheckout(root);
+      if (git === "git") {
+        const shouldUpdate = await prompter.confirm({
+          message: "Update Clawdbot from git before running doctor?",
+          initialValue: true,
+        });
+        if (shouldUpdate) {
+          note(
+            "Running update (fetch/rebase/build/ui:build/doctor)…",
+            "Update",
+          );
+          const result = await runGatewayUpdate({
+            cwd: root,
+            argv1: process.argv[1],
+          });
+          note(
+            [
+              `Status: ${result.status}`,
+              `Mode: ${result.mode}`,
+              result.root ? `Root: ${result.root}` : null,
+              result.reason ? `Reason: ${result.reason}` : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            "Update result",
+          );
+          if (result.status === "ok") {
+            outro(
+              "Update completed (doctor already ran as part of the update).",
+            );
+            return;
+          }
+        }
+      } else if (git === "not-git") {
+        note(
+          [
+            "This install is not a git checkout.",
+            "Update via your package manager, then rerun doctor:",
+            "- npm i -g clawdbot@latest",
+            "- pnpm add -g clawdbot@latest",
+            "- bun add -g clawdbot@latest",
+          ].join("\n"),
+          "Update",
+        );
+      }
+    }
+  }
 
   await maybeMigrateLegacyConfigFile(runtime);
 
@@ -148,6 +265,8 @@ export async function doctorCommand(
     note(normalized.changes.join("\n"), "Doctor changes");
     cfg = normalized.config;
   }
+
+  noteOpencodeProviderOverrides(cfg);
 
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
   await noteAuthProfileHealth({

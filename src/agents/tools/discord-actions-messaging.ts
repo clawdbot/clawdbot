@@ -5,6 +5,7 @@ import {
   deleteMessageDiscord,
   editMessageDiscord,
   fetchChannelPermissionsDiscord,
+  fetchMessageDiscord,
   fetchReactionsDiscord,
   listPinsDiscord,
   listThreadsDiscord,
@@ -51,6 +52,23 @@ function formatDiscordTimestamp(ts?: string | null): string | undefined {
   // Compact ISO-like *local* timestamp with minutes precision.
   // Example: 2025-01-02T03:04-08:00{America/Los_Angeles}
   return `${yyyy}-${mm}-${dd}T${hh}:${min}${sign}${offsetH}:${offsetM}${tzSuffix}`;
+}
+
+function parseDiscordMessageLink(link: string) {
+  const normalized = link.trim();
+  const match = normalized.match(
+    /^(?:https?:\/\/)?(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?:\/?|\?.*)$/i,
+  );
+  if (!match) {
+    throw new Error(
+      "Invalid Discord message link. Expected https://discord.com/channels/<guildId>/<channelId>/<messageId>.",
+    );
+  }
+  return {
+    guildId: match[1],
+    channelId: match[2],
+    messageId: match[3],
+  };
 }
 
 export async function handleDiscordMessagingAction(
@@ -156,6 +174,28 @@ export async function handleDiscordMessagingAction(
       });
       const permissions = await fetchChannelPermissionsDiscord(channelId);
       return jsonResult({ ok: true, permissions });
+    }
+    case "fetchMessage": {
+      if (!isActionEnabled("messages")) {
+        throw new Error("Discord message reads are disabled.");
+      }
+      const messageLink = readStringParam(params, "messageLink");
+      let guildId = readStringParam(params, "guildId");
+      let channelId = readStringParam(params, "channelId");
+      let messageId = readStringParam(params, "messageId");
+      if (messageLink) {
+        const parsed = parseDiscordMessageLink(messageLink);
+        guildId = parsed.guildId;
+        channelId = parsed.channelId;
+        messageId = parsed.messageId;
+      }
+      if (!guildId || !channelId || !messageId) {
+        throw new Error(
+          "Discord message fetch requires guildId, channelId, and messageId (or a valid messageLink).",
+        );
+      }
+      const message = await fetchMessageDiscord(channelId, messageId);
+      return jsonResult({ ok: true, message, guildId, channelId, messageId });
     }
     case "readMessages": {
       if (!isActionEnabled("messages")) {

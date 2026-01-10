@@ -421,6 +421,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionkey: String?
     public let thinking: String?
     public let deliver: Bool?
+    public let attachments: [AnyCodable]?
     public let provider: String?
     public let timeout: Int?
     public let lane: String?
@@ -436,6 +437,7 @@ public struct AgentParams: Codable, Sendable {
         sessionkey: String?,
         thinking: String?,
         deliver: Bool?,
+        attachments: [AnyCodable]?,
         provider: String?,
         timeout: Int?,
         lane: String?,
@@ -450,6 +452,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessionkey = sessionkey
         self.thinking = thinking
         self.deliver = deliver
+        self.attachments = attachments
         self.provider = provider
         self.timeout = timeout
         self.lane = lane
@@ -465,6 +468,7 @@ public struct AgentParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case thinking
         case deliver
+        case attachments
         case provider
         case timeout
         case lane
@@ -1629,11 +1633,11 @@ public struct ChatSendParams: Codable, Sendable {
 
 public struct ChatAbortParams: Codable, Sendable {
     public let sessionkey: String
-    public let runid: String
+    public let runid: String?
 
     public init(
         sessionkey: String,
-        runid: String
+        runid: String?
     ) {
         self.sessionkey = sessionkey
         self.runid = runid

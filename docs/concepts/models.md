@@ -9,6 +9,7 @@ read_when:
 
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
 rotation, cooldowns, and how that interacts with fallbacks.
+Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 ## How model selection works
 
@@ -22,6 +23,23 @@ Clawdbot selects models in this order:
 Related:
 - `agents.defaults.models` is the allowlist/catalog of models Clawdbot can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
+
+## Quick model picks (anecdotal)
+
+- **GLM**: a bit better for coding/tool calling.
+- **MiniMax**: better for writing and vibes.
+
+## Setup wizard (recommended)
+
+If you don’t want to hand-edit config, run the onboarding wizard:
+
+```bash
+clawdbot onboard
+```
+
+It can set up model + auth for common providers, including **OpenAI Code (Codex)
+subscription** (OAuth) and **Anthropic** (API key recommended; `claude
+setup-token` also supported).
 
 ## Config keys (overview)
 

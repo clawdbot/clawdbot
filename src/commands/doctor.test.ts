@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
+let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
 
 function setStdinTty(value: boolean | undefined) {
@@ -19,9 +20,66 @@ function setStdinTty(value: boolean | undefined) {
 }
 
 beforeEach(() => {
+  confirm.mockReset().mockResolvedValue(true);
+  select.mockReset().mockResolvedValue("node");
+  note.mockClear();
+
+  readConfigFileSnapshot.mockReset();
+  writeConfigFile.mockReset().mockResolvedValue(undefined);
+  resolveClawdbotPackageRoot.mockReset().mockResolvedValue(null);
+  runGatewayUpdate.mockReset().mockResolvedValue({
+    status: "skipped",
+    mode: "unknown",
+    steps: [],
+    durationMs: 0,
+  });
+  legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
+    path: "/tmp/clawdis.json",
+    exists: false,
+    raw: null,
+    parsed: {},
+    valid: true,
+    config: {},
+    issues: [],
+    legacyIssues: [],
+  });
+  createConfigIO.mockReset().mockImplementation(() => ({
+    readConfigFileSnapshot: legacyReadConfigFileSnapshot,
+  }));
+  runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+  runCommandWithTimeout.mockReset().mockResolvedValue({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+  });
+  ensureAuthProfileStore
+    .mockReset()
+    .mockReturnValue({ version: 1, profiles: {} });
+  migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
+    config: raw as Record<string, unknown>,
+    changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+  }));
+  findLegacyGatewayServices.mockReset().mockResolvedValue([]);
+  uninstallLegacyGatewayServices.mockReset().mockResolvedValue([]);
+  findExtraGatewayServices.mockReset().mockResolvedValue([]);
+  renderGatewayServiceCleanupHints.mockReset().mockReturnValue(["cleanup"]);
+  resolveGatewayProgramArguments.mockReset().mockResolvedValue({
+    programArguments: ["node", "cli", "gateway", "--port", "18789"],
+  });
+  serviceInstall.mockReset().mockResolvedValue(undefined);
+  serviceIsLoaded.mockReset().mockResolvedValue(false);
+  serviceStop.mockReset().mockResolvedValue(undefined);
+  serviceRestart.mockReset().mockResolvedValue(undefined);
+  serviceUninstall.mockReset().mockResolvedValue(undefined);
+  callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
+
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
   originalStateDir = process.env.CLAWDBOT_STATE_DIR;
+  originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+  process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
   tempStateDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "clawdbot-doctor-state-"),
   );
@@ -39,6 +97,11 @@ afterEach(() => {
   } else {
     process.env.CLAWDBOT_STATE_DIR = originalStateDir;
   }
+  if (originalUpdateInProgress === undefined) {
+    delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+  } else {
+    process.env.CLAWDBOT_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+  }
   if (tempStateDir) {
     fs.rmSync(tempStateDir, { recursive: true, force: true });
     tempStateDir = undefined;
@@ -50,6 +113,13 @@ const confirm = vi.fn().mockResolvedValue(true);
 const select = vi.fn().mockResolvedValue("node");
 const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
+const resolveClawdbotPackageRoot = vi.fn().mockResolvedValue(null);
+const runGatewayUpdate = vi.fn().mockResolvedValue({
+  status: "skipped",
+  mode: "unknown",
+  steps: [],
+  durationMs: 0,
+});
 const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
@@ -145,6 +215,14 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
 vi.mock("../process/exec.js", () => ({
   runExec,
   runCommandWithTimeout,
+}));
+
+vi.mock("../infra/clawdbot-root.js", () => ({
+  resolveClawdbotPackageRoot,
+}));
+
+vi.mock("../infra/update-runner.js", () => ({
+  runGatewayUpdate,
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
@@ -328,6 +406,57 @@ describe("doctor", () => {
 
     expect(uninstallLegacyGatewayServices).toHaveBeenCalledTimes(1);
     expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers to update first for git checkouts", async () => {
+    delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+
+    const root = "/tmp/clawdbot";
+    resolveClawdbotPackageRoot.mockResolvedValueOnce(root);
+    runCommandWithTimeout.mockResolvedValueOnce({
+      stdout: `${root}\n`,
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    runGatewayUpdate.mockResolvedValueOnce({
+      status: "ok",
+      mode: "git",
+      root,
+      steps: [],
+      durationMs: 1,
+    });
+
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {},
+      issues: [],
+      legacyIssues: [],
+    });
+
+    const { doctorCommand } = await import("./doctor.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await doctorCommand(runtime);
+
+    expect(runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: root }),
+    );
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(
+      note.mock.calls.some(
+        ([, title]) => typeof title === "string" && title === "Update result",
+      ),
+    ).toBe(true);
   });
 
   it("migrates legacy config file", async () => {
@@ -535,8 +664,13 @@ describe("doctor", () => {
       .mockReturnValue("/Users/steipete");
     const realExists = fs.existsSync;
     const legacyPath = path.join("/Users/steipete", "clawdis");
+    const legacyAgentsPath = path.join(legacyPath, "AGENTS.md");
     const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
-      if (value === "/Users/steipete/clawdis" || value === legacyPath)
+      if (
+        value === "/Users/steipete/clawdis" ||
+        value === legacyPath ||
+        value === legacyAgentsPath
+      )
         return true;
       return realExists(value as never);
     });
@@ -866,5 +1000,40 @@ describe("doctor", () => {
     );
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
+  });
+
+  it("warns about opencode provider overrides", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {
+        models: {
+          providers: {
+            opencode: {
+              api: "openai-completions",
+              baseUrl: "https://opencode.ai/zen/v1",
+            },
+          },
+        },
+      },
+      issues: [],
+      legacyIssues: [],
+    });
+
+    const { doctorCommand } = await import("./doctor.js");
+    await doctorCommand(
+      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      { nonInteractive: true, workspaceSuggestions: false },
+    );
+
+    const warned = note.mock.calls.some(
+      ([message, title]) =>
+        title === "OpenCode Zen" &&
+        String(message).includes("models.providers.opencode"),
+    );
+    expect(warned).toBe(true);
   });
 });

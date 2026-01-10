@@ -49,6 +49,7 @@ android {
 
   lint {
     disable += setOf("IconLauncherShape")
+    warningsAsErrors = true
   }
 
   testOptions {
@@ -72,6 +73,7 @@ androidComponents {
 kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    allWarningsAsErrors.set(true)
   }
 }
 
@@ -100,6 +102,7 @@ dependencies {
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
   implementation("androidx.security:security-crypto:1.1.0")
+  implementation("androidx.exifinterface:exifinterface:1.4.2")
 
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")

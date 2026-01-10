@@ -92,3 +92,7 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
   process.stdout.write(`\n${line}\n\n`);
   bannerEmitted = true;
 }
+
+export function hasEmittedCliBanner(): boolean {
+  return bannerEmitted;
+}

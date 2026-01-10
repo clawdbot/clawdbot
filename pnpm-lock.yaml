@@ -8,32 +8,17 @@ overrides:
   '@sinclair/typebox': 0.34.47
 
 patchedDependencies:
-  '@buape/carbon@0.0.0-beta-20260109194934':
-    hash: c36ae878bfd2e2ec2d6eb4fa12ebcd3b0797b033020c0a95d8a3e67ba82228e3
-    path: patches/@buape__carbon@0.0.0-beta-20260109194934.patch
-  '@mariozechner/pi-agent-core':
-    hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
-    path: patches/@mariozechner__pi-agent-core.patch
   '@mariozechner/pi-ai@0.42.2':
-    hash: 0786e946616db65fea37764750c64745131880092ccd082a0016cc9a8788702c
+    hash: d8d7c692952a4064a56dc4c67818939d17a48886eb355867de2bcc9118915c97
     path: patches/@mariozechner__pi-ai@0.42.2.patch
-  '@mariozechner/pi-coding-agent':
-    hash: 58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e
-    path: patches/@mariozechner__pi-coding-agent.patch
-  playwright-core@1.57.0:
-    hash: 66f1f266424dbe354068aaa5bba87bfb0e1d7d834a938c25dd70d43cdf1c1b02
-    path: patches/playwright-core@1.57.0.patch
-  qrcode-terminal:
-    hash: ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12
-    path: patches/qrcode-terminal.patch
 
 importers:
 
   .:
     dependencies:
       '@buape/carbon':
-        specifier: 0.0.0-beta-20260109194934
-        version: 0.0.0-beta-20260109194934(patch_hash=c36ae878bfd2e2ec2d6eb4fa12ebcd3b0797b033020c0a95d8a3e67ba82228e3)(hono@4.11.3)
+        specifier: 0.0.0-beta-20260110172854
+        version: 0.0.0-beta-20260110172854(hono@4.11.3)
       '@clack/prompts':
         specifier: ^0.11.0
         version: 0.11.0
@@ -48,13 +33,13 @@ importers:
         version: 1.3.4
       '@mariozechner/pi-agent-core':
         specifier: ^0.42.2
-        version: 0.42.2(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
+        version: 0.42.2(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
         specifier: ^0.42.2
-        version: 0.42.2(patch_hash=0786e946616db65fea37764750c64745131880092ccd082a0016cc9a8788702c)(ws@8.19.0)(zod@4.3.5)
+        version: 0.42.2(patch_hash=d8d7c692952a4064a56dc4c67818939d17a48886eb355867de2bcc9118915c97)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
         specifier: ^0.42.2
-        version: 0.42.2(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)
+        version: 0.42.2(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
         specifier: ^0.42.2
         version: 0.42.2
@@ -132,13 +117,13 @@ importers:
         version: 0.2.0
       playwright-core:
         specifier: 1.57.0
-        version: 1.57.0(patch_hash=66f1f266424dbe354068aaa5bba87bfb0e1d7d834a938c25dd70d43cdf1c1b02)
+        version: 1.57.0
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
       qrcode-terminal:
         specifier: ^0.12.0
-        version: 0.12.0(patch_hash=ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12)
+        version: 0.12.0
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -381,8 +366,8 @@ packages:
   '@borewit/text-codec@0.2.1':
     resolution: {integrity: sha512-k7vvKPbf7J2fZ5klGRD9AeKfUvojuZIQ3BT5u7Jfv+puwXkUBUT5PVyMDfJZpy30CBDXGMgw7fguK/lpOMBvgw==}
 
-  '@buape/carbon@0.0.0-beta-20260109194934':
-    resolution: {integrity: sha512-rtyoOhtihd25k8ABHf+BTCOQSF3XjUMX+TPtS7UATC3dWVE8BXvmrLeX+s7q1LBh0LLRiz6w1YtGL145laoSJA==}
+  '@buape/carbon@0.0.0-beta-20260110172854':
+    resolution: {integrity: sha512-hYUr5Glz+oDEQbl58r6AExqM4yObZCjB8JwXit7chn0LIkb5WDFP4Rj1taP3OP+PgwB7GHOVSbnCnBPBzUxpRw==}
 
   '@cacheable/memory@2.0.7':
     resolution: {integrity: sha512-RbxnxAMf89Tp1dLhXMS7ceft/PGsDl1Ip7T20z5nZ+pwIAsQ1p2izPjVG69oCLv/jfQ7HDPHTWK0c9rcAWXN3A==}
@@ -3383,7 +3368,7 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.0.0-beta-20260109194934(patch_hash=c36ae878bfd2e2ec2d6eb4fa12ebcd3b0797b033020c0a95d8a3e67ba82228e3)(hono@4.11.3)':
+  '@buape/carbon@0.0.0-beta-20260110172854(hono@4.11.3)':
     dependencies:
       '@types/node': 24.10.4
       discord-api-types: 0.38.36
@@ -3790,9 +3775,9 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.42.2(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-agent-core@0.42.2(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.42.2(patch_hash=0786e946616db65fea37764750c64745131880092ccd082a0016cc9a8788702c)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.42.2(patch_hash=d8d7c692952a4064a56dc4c67818939d17a48886eb355867de2bcc9118915c97)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.42.2
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -3802,7 +3787,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.42.2(patch_hash=0786e946616db65fea37764750c64745131880092ccd082a0016cc9a8788702c)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.42.2(patch_hash=d8d7c692952a4064a56dc4c67818939d17a48886eb355867de2bcc9118915c97)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@google/genai': 1.34.0
@@ -3822,11 +3807,11 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.42.2(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-coding-agent@0.42.2(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@mariozechner/clipboard': 0.3.0
-      '@mariozechner/pi-agent-core': 0.42.2(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.42.2(patch_hash=0786e946616db65fea37764750c64745131880092ccd082a0016cc9a8788702c)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-agent-core': 0.42.2(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.42.2(patch_hash=d8d7c692952a4064a56dc4c67818939d17a48886eb355867de2bcc9118915c97)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.42.2
       chalk: 5.6.2
       cli-highlight: 2.1.11
@@ -5689,11 +5674,11 @@ snapshots:
     dependencies:
       pngjs: 7.0.0
 
-  playwright-core@1.57.0(patch_hash=66f1f266424dbe354068aaa5bba87bfb0e1d7d834a938c25dd70d43cdf1c1b02): {}
+  playwright-core@1.57.0: {}
 
   playwright@1.57.0:
     dependencies:
-      playwright-core: 1.57.0(patch_hash=66f1f266424dbe354068aaa5bba87bfb0e1d7d834a938c25dd70d43cdf1c1b02)
+      playwright-core: 1.57.0
     optionalDependencies:
       fsevents: 2.3.2
 
@@ -5778,7 +5763,7 @@ snapshots:
       '@thi.ng/bitstream': 2.4.37
     optional: true
 
-  qrcode-terminal@0.12.0(patch_hash=ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12): {}
+  qrcode-terminal@0.12.0: {}
 
   qs@6.14.1:
     dependencies:

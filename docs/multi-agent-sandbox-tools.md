@@ -19,6 +19,7 @@ This allows you to run multiple agents with different security profiles:
 - Public-facing agents in sandboxes
 
 For how sandboxing behaves at runtime, see [Sandboxing](/gateway/sandboxing).
+For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `clawdbot sandbox explain`.
 
 ---
 

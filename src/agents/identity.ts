@@ -1,4 +1,8 @@
-import type { ClawdbotConfig, IdentityConfig } from "../config/config.js";
+import type {
+  ClawdbotConfig,
+  HumanDelayConfig,
+  IdentityConfig,
+} from "../config/config.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -70,5 +74,19 @@ export function resolveEffectiveMessagesConfig(
       fallback: opts?.fallbackMessagePrefix,
     }),
     responsePrefix: resolveResponsePrefix(cfg, agentId),
+  };
+}
+
+export function resolveHumanDelayConfig(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): HumanDelayConfig | undefined {
+  const defaults = cfg.agents?.defaults?.humanDelay;
+  const overrides = resolveAgentConfig(cfg, agentId)?.humanDelay;
+  if (!defaults && !overrides) return undefined;
+  return {
+    mode: overrides?.mode ?? defaults?.mode,
+    minMs: overrides?.minMs ?? defaults?.minMs,
+    maxMs: overrides?.maxMs ?? defaults?.maxMs,
   };
 }

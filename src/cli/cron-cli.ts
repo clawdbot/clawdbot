@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
@@ -221,7 +222,15 @@ export function registerCronCli(program: Command) {
 
   const cron = program
     .command("cron")
-    .description("Manage cron jobs (via Gateway)");
+    .description("Manage cron jobs (via Gateway)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/cron-jobs",
+          "docs.clawd.bot/cron-jobs",
+        )}\n`,
+    );
 
   addGatewayClientOptions(
     cron

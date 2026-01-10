@@ -58,7 +58,7 @@
     "docs:list": "tsx scripts/docs-list.ts",
     "docs:bin": "bun build scripts/docs-list.ts --compile --outfile bin/docs-list",
     "docs:dev": "cd docs && mint dev",
-    "docs:build": "cd docs && pnpm dlx mint broken-links",
+    "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
     "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts",
     "release:check": "tsx scripts/release-check.ts",
     "ui:install": "node scripts/ui.js install",
@@ -117,7 +117,7 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
-    "@buape/carbon": "0.0.0-beta-20260109194934",
+    "@buape/carbon": "0.0.0-beta-20260110172854",
     "@clack/prompts": "^0.11.0",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
@@ -193,12 +193,7 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@buape/carbon@0.0.0-beta-20260109194934": "patches/@buape__carbon@0.0.0-beta-20260109194934.patch",
-      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
-      "@mariozechner/pi-ai@0.42.2": "patches/@mariozechner__pi-ai@0.42.2.patch",
-      "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
-      "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch",
-      "qrcode-terminal": "patches/qrcode-terminal.patch"
+      "@mariozechner/pi-ai@0.42.2": "patches/@mariozechner__pi-ai@0.42.2.patch"
     }
   },
   "vitest": {

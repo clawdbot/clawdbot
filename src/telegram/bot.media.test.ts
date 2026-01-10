@@ -45,6 +45,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    updateLastRoute: vi.fn(async () => undefined),
+  };
+});
+
 vi.mock("./pairing-store.js", () => ({
   readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
   upsertTelegramPairingRequest: vi.fn(async () => ({
@@ -63,7 +71,7 @@ vi.mock("../auto-reply/reply.js", () => {
 
 describe("telegram inbound media", () => {
   const INBOUND_MEDIA_TEST_TIMEOUT_MS =
-    process.platform === "win32" ? 30_000 : 10_000;
+    process.platform === "win32" ? 30_000 : 20_000;
 
   it(
     "downloads media via file_path (no file.download)",

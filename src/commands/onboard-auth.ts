@@ -1,11 +1,7 @@
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import {
-  getOpencodeZenStaticFallbackModels,
-  OPENCODE_ZEN_API_BASE_URL,
-  OPENCODE_ZEN_DEFAULT_MODEL_REF,
-} from "../agents/opencode-zen-models.js";
+import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 
@@ -132,6 +128,51 @@ export async function setMinimaxApiKey(key: string, agentDir?: string) {
     },
     agentDir: agentDir ?? resolveDefaultAgentDir(),
   });
+}
+
+export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
+
+export async function setZaiApiKey(key: string, agentDir?: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  upsertAuthProfile({
+    profileId: "zai:default",
+    credential: {
+      type: "api_key",
+      provider: "zai",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
+export function applyZaiConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[ZAI_DEFAULT_MODEL_REF] = {
+    ...models[ZAI_DEFAULT_MODEL_REF],
+    alias: models[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
+  };
+
+  const existingModel = cfg.agents?.defaults?.model;
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+        model: {
+          ...(existingModel &&
+          "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] })
+                  .fallbacks,
+              }
+            : undefined),
+          primary: ZAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyAuthProfileConfig(
@@ -334,11 +375,27 @@ export function applyMinimaxApiProviderConfig(
   modelId: string = "MiniMax-M2.1",
 ): ClawdbotConfig {
   const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.minimax;
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  const apiModel = buildMinimaxApiModelDefinition(modelId);
+  const hasApiModel = existingModels.some((model) => model.id === modelId);
+  const mergedModels = hasApiModel
+    ? existingModels
+    : [...existingModels, apiModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    (existingProvider ?? {}) as Record<string, unknown> as { apiKey?: string };
+  const resolvedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey =
+    resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
   providers.minimax = {
+    ...existingProviderRest,
     baseUrl: MINIMAX_API_BASE_URL,
-    apiKey: "", // Resolved via MINIMAX_API_KEY env var or auth profile
     api: "anthropic-messages",
-    models: [buildMinimaxApiModelDefinition(modelId)],
+    ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
 
   const models = { ...cfg.agents?.defaults?.models };
@@ -389,10 +446,10 @@ export function applyMinimaxApiConfig(
 
 export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
-    profileId: "opencode-zen:default",
+    profileId: "opencode:default",
     credential: {
       type: "api_key",
-      provider: "opencode-zen",
+      provider: "opencode",
       key,
     },
     agentDir: agentDir ?? resolveDefaultAgentDir(),
@@ -402,21 +459,8 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
 export function applyOpencodeZenProviderConfig(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
-  const opencodeModels = getOpencodeZenStaticFallbackModels();
-
-  const providers = { ...cfg.models?.providers };
-  providers["opencode-zen"] = {
-    baseUrl: OPENCODE_ZEN_API_BASE_URL,
-    apiKey: "opencode-zen",
-    api: "openai-completions",
-    models: opencodeModels,
-  };
-
+  // Use the built-in opencode provider from pi-ai; only seed the allowlist alias.
   const models = { ...cfg.agents?.defaults?.models };
-  for (const model of opencodeModels) {
-    const key = `opencode-zen/${model.id}`;
-    models[key] = models[key] ?? {};
-  }
   models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
     ...models[OPENCODE_ZEN_DEFAULT_MODEL_REF],
     alias: models[OPENCODE_ZEN_DEFAULT_MODEL_REF]?.alias ?? "Opus",
@@ -430,10 +474,6 @@ export function applyOpencodeZenProviderConfig(
         ...cfg.agents?.defaults,
         models,
       },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
     },
   };
 }

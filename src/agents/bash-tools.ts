@@ -61,6 +61,7 @@ export type BashToolDefaults = {
   elevated?: BashElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;
+  cwd?: string;
 };
 
 export type ProcessToolDefaults = {
@@ -113,6 +114,7 @@ export type BashToolDetails =
       sessionId: string;
       pid?: number;
       startedAt: number;
+      cwd?: string;
       tail?: string;
     }
   | {
@@ -120,6 +122,7 @@ export type BashToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      cwd?: string;
     };
 
 export function createBashTool(
@@ -191,7 +194,28 @@ export function createBashTool(
           : elevatedDefaultOn;
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
-          throw new Error("elevated is not available right now.");
+          const runtime = defaults?.sandbox ? "sandboxed" : "direct";
+          const gates: string[] = [];
+          if (!elevatedDefaults?.enabled) {
+            gates.push(
+              "enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)",
+            );
+          } else {
+            gates.push(
+              "allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)",
+            );
+          }
+          throw new Error(
+            [
+              `elevated is not available right now (runtime=${runtime}).`,
+              `Failing gates: ${gates.join(", ")}`,
+              "Fix-it keys:",
+              "- tools.elevated.enabled",
+              "- tools.elevated.allowFrom.<provider>",
+              "- agents.list[].tools.elevated.enabled",
+              "- agents.list[].tools.elevated.allowFrom.<provider>",
+            ].join("\n"),
+          );
         }
         logInfo(
           `bash: elevated command (${sessionId.slice(0, 8)}) ${truncateMiddle(
@@ -202,7 +226,8 @@ export function createBashTool(
       }
 
       const sandbox = elevatedRequested ? undefined : defaults?.sandbox;
-      const rawWorkdir = params.workdir?.trim() || process.cwd();
+      const rawWorkdir =
+        params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
@@ -314,6 +339,7 @@ export function createBashTool(
             sessionId,
             pid: session.pid ?? undefined,
             startedAt,
+            cwd: session.cwd,
             tail: session.tail,
           },
         });
@@ -354,6 +380,7 @@ export function createBashTool(
                   sessionId,
                   pid: session.pid ?? undefined,
                   startedAt,
+                  cwd: session.cwd,
                   tail: session.tail,
                 },
               }),
@@ -429,12 +456,15 @@ export function createBashTool(
                   exitCode: code ?? 0,
                   durationMs,
                   aggregated,
+                  cwd: session.cwd,
                 },
               }),
             );
           };
 
-          child.once("exit", (code, exitSignal) => {
+          // `exit` can fire before stdio fully flushes (notably on Windows).
+          // `close` waits for streams to close, so aggregated output is complete.
+          child.once("close", (code, exitSignal) => {
             handleExit(code, exitSignal);
           });
 

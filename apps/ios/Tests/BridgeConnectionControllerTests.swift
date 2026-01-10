@@ -175,7 +175,6 @@ private func withKeychainValues<T>(
     }
 
     @Test @MainActor func makeHelloBuildsCapsAndCommands() {
-        let defaults = UserDefaults.standard
         let voiceWakeKey = VoiceWakePreferences.enabledKey
 
         withKeychainValues([instanceIdEntry: nil, preferredBridgeEntry: nil, lastBridgeEntry: nil]) {

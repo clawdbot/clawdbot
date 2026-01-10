@@ -2,12 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { formatHealthCheckFailure } from "./health-format.js";
 
-const stripAnsi = (input: string) =>
-  input.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
-    /\u001b\[[0-9;]*m/g,
-    "",
-  );
+const ansiEscape = String.fromCharCode(27);
+const ansiRegex = new RegExp(`${ansiEscape}\\[[0-9;]*m`, "g");
+const stripAnsi = (input: string) => input.replace(ansiRegex, "");
 
 describe("formatHealthCheckFailure", () => {
   it("keeps non-rich output stable", () => {

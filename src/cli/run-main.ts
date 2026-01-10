@@ -9,6 +9,15 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
 
+export function rewriteUpdateFlagArgv(argv: string[]): string[] {
+  const index = argv.indexOf("--update");
+  if (index === -1) return argv;
+
+  const next = [...argv];
+  next.splice(index, 1, "update");
+  return next;
+}
+
 export async function runCli(argv: string[] = process.argv) {
   loadDotEnv({ quiet: true });
   normalizeEnv();
@@ -35,7 +44,7 @@ export async function runCli(argv: string[] = process.argv) {
     process.exit(1);
   });
 
-  await program.parseAsync(argv);
+  await program.parseAsync(rewriteUpdateFlagArgv(argv));
 }
 
 export function isCliMainModule(): boolean {

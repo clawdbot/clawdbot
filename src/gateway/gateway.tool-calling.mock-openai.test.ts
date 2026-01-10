@@ -6,6 +6,9 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { GatewayClient } from "./client.js";
+import { startGatewayServer } from "./server.js";
+
 type OpenAIResponsesParams = {
   input?: unknown[];
 };
@@ -227,7 +230,6 @@ function extractPayloadText(result: unknown): string {
 }
 
 async function connectClient(params: { url: string; token: string }) {
-  const { GatewayClient } = await import("./client.js");
   return await new Promise<InstanceType<typeof GatewayClient>>(
     (resolve, reject) => {
       let settled = false;
@@ -276,6 +278,10 @@ describe("gateway (mock openai): tool calling", () => {
 
     const originalFetch = globalThis.fetch;
     const openaiResponsesUrl = "https://api.openai.com/v1/responses";
+    const isOpenAIResponsesRequest = (url: string) =>
+      url === openaiResponsesUrl ||
+      url.startsWith(`${openaiResponsesUrl}/`) ||
+      url.startsWith(`${openaiResponsesUrl}?`);
     const fetchImpl = async (
       input: RequestInfo | URL,
       init?: RequestInit,
@@ -287,7 +293,7 @@ describe("gateway (mock openai): tool calling", () => {
             ? input.toString()
             : input.url;
 
-      if (url === openaiResponsesUrl) {
+      if (isOpenAIResponsesRequest(url)) {
         const bodyText =
           typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
             ? decodeBodyText((init as { body?: unknown }).body)
@@ -368,7 +374,6 @@ describe("gateway (mock openai): tool calling", () => {
     process.env.CLAWDBOT_CONFIG_PATH = configPath;
 
     const port = await getFreeGatewayPort();
-    const { startGatewayServer } = await import("./server.js");
     const server = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token },

@@ -23,6 +23,7 @@ export type ChatProps = {
   thinkingLevel: string | null;
   loading: boolean;
   sending: boolean;
+  canAbort?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   stream: string | null;
@@ -52,6 +53,7 @@ export type ChatProps = {
   onToggleLayout?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onOpenSidebar?: (content: string) => void;
@@ -61,7 +63,7 @@ export type ChatProps = {
 
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
-  const isBusy = props.sending || Boolean(props.stream);
+  const isBusy = props.sending || props.stream !== null;
   const activeSession = props.sessions?.sessions?.find(
     (row) => row.key === props.sessionKey,
   );
@@ -222,6 +224,17 @@ export function renderChat(props: ChatProps) {
           >
             New session
           </button>
+          ${props.onAbort
+            ? html`
+                <button
+                  class="btn danger"
+                  ?disabled=${!props.connected || !isBusy || props.canAbort === false}
+                  @click=${props.onAbort}
+                >
+                  Stop
+                </button>
+              `
+            : nothing}
           <button
             class="btn primary"
             ?disabled=${!props.connected}

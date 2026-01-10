@@ -1,5 +1,5 @@
+import ClawdbotDiscovery
 import Testing
-@testable import Clawdbot
 
 @Suite
 @MainActor

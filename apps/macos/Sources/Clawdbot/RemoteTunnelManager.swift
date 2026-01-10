@@ -7,8 +7,15 @@ actor RemoteTunnelManager {
 
     private let logger = Logger(subsystem: "com.clawdbot", category: "remote-tunnel")
     private var controlTunnel: RemotePortTunnel?
+    private var restartInFlight = false
+    private var lastRestartAt: Date?
+    private let restartBackoffSeconds: TimeInterval = 2.0
 
     func controlTunnelPortIfRunning() async -> UInt16? {
+        if self.restartInFlight {
+            self.logger.info("control tunnel restart in flight; skipping reuse check")
+            return nil
+        }
         if let tunnel = self.controlTunnel,
            tunnel.process.isRunning,
            let local = tunnel.localPort
@@ -18,6 +25,7 @@ actor RemoteTunnelManager {
                 return local
             }
             self.logger.error("active SSH tunnel on port \(local, privacy: .public) is unhealthy; restarting")
+            await self.beginRestart()
             tunnel.terminate()
             self.controlTunnel = nil
         }
@@ -34,6 +42,11 @@ actor RemoteTunnelManager {
                         "pid=\(desc.pid, privacy: .public)")
                 return desiredPort
             }
+            if self.restartInFlight {
+                self.logger.info("control tunnel restart in flight; skip stale tunnel cleanup")
+                return nil
+            }
+            await self.beginRestart()
             await self.cleanupStaleTunnel(desc: desc, port: desiredPort)
         }
         return nil
@@ -56,12 +69,15 @@ actor RemoteTunnelManager {
                 "identitySet=\(identitySet, privacy: .public)")
 
         if let local = await self.controlTunnelPortIfRunning() { return local }
+        await self.waitForRestartBackoffIfNeeded()
 
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
         let tunnel = try await RemotePortTunnel.create(
             remotePort: GatewayEnvironment.gatewayPort(),
-            preferredLocalPort: desiredPort)
+            preferredLocalPort: desiredPort,
+            allowRandomLocalPort: false)
         self.controlTunnel = tunnel
+        self.endRestart()
         let resolvedPort = tunnel.localPort ?? desiredPort
         self.logger.info("ssh tunnel ready localPort=\(resolvedPort, privacy: .public)")
         return tunnel.localPort ?? desiredPort
@@ -81,6 +97,35 @@ actor RemoteTunnelManager {
         if cmd.contains("ssh") { return true }
         if let path = desc.executablePath?.lowercased(), path.contains("/ssh") { return true }
         return false
+    }
+
+    private func beginRestart() async {
+        guard !self.restartInFlight else { return }
+        self.restartInFlight = true
+        self.lastRestartAt = Date()
+        self.logger.info("control tunnel restart started")
+        Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.restartBackoffSeconds * 1_000_000_000))
+            await self.endRestart()
+        }
+    }
+
+    private func endRestart() {
+        if self.restartInFlight {
+            self.restartInFlight = false
+            self.logger.info("control tunnel restart finished")
+        }
+    }
+
+    private func waitForRestartBackoffIfNeeded() async {
+        guard let last = self.lastRestartAt else { return }
+        let elapsed = Date().timeIntervalSince(last)
+        let remaining = self.restartBackoffSeconds - elapsed
+        guard remaining > 0 else { return }
+        self.logger.info(
+            "control tunnel restart backoff \(remaining, privacy: .public)s")
+        try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
     }
 
     private func cleanupStaleTunnel(desc: PortGuardian.Descriptor, port: UInt16) async {

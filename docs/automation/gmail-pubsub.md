@@ -13,7 +13,7 @@ Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> Clawdbot webhook
 
 - `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
-- Clawdbot hooks enabled (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).
+- Clawdbot hooks enabled (see [Webhooks](/automation/webhook)).
 - `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
   Other tunnel services can work, but are DIY/unsupported and require manual wiring.
   Right now, Tailscale is what we support.
@@ -85,7 +85,7 @@ Notes:
 - If `agents.defaults.models` is set, the Gmail model must be in the allowlist.
 
 To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
-under `hooks.transformsDir` (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).
+under `hooks.transformsDir` (see [Webhooks](/automation/webhook)).
 
 ## Wizard (recommended)
 
@@ -105,6 +105,9 @@ Path note: when `tailscale.mode` is enabled, Clawdbot automatically sets
 `hooks.gmail.serve.path` to `/` and keeps the public path at
 `hooks.gmail.tailscale.path` (default `/gmail-pubsub`) because Tailscale
 strips the set-path prefix before proxying.
+If you need the backend to receive the prefixed path, set
+`hooks.gmail.tailscale.target` (or `--tailscale-target`) to a full URL like
+`http://127.0.0.1:8788/gmail-pubsub` and match `hooks.gmail.serve.path`.
 
 Want a custom endpoint? Use `--push-endpoint <url>` or `--tailscale off`.
 

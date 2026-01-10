@@ -425,6 +425,7 @@ struct SettingsTab: View {
 
             self.appModel.connectToBridge(
                 endpoint: bridge.endpoint,
+                bridgeStableID: bridge.stableID,
                 hello: BridgeHello(
                     nodeId: self.instanceId,
                     displayName: self.displayName,
@@ -499,6 +500,7 @@ struct SettingsTab: View {
 
             self.appModel.connectToBridge(
                 endpoint: endpoint,
+                bridgeStableID: BridgeEndpointID.stableID(endpoint),
                 hello: BridgeHello(
                     nodeId: self.instanceId,
                     displayName: self.displayName,

@@ -36,9 +36,9 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 - [ ] Build + sign the macOS app, then zip it for distribution.
 - [ ] Generate the Sparkle appcast (HTML notes via [`scripts/make_appcast.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/make_appcast.sh)) and update `appcast.xml`.
 - [ ] Keep the app zip (and optional dSYM zip) ready to attach to the GitHub release.
-- [ ] Follow [`docs/mac/release.md`](/platforms/mac/release) for the exact commands and required env vars.
+- [ ] Follow [macOS release](/platforms/mac/release) for the exact commands and required env vars.
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
-  - If notarizing, use the `clawdbot-notary` keychain profile created from App Store Connect API env vars (see [`docs/mac/release.md`](/platforms/mac/release)).
+  - If notarizing, use the `clawdbot-notary` keychain profile created from App Store Connect API env vars (see [macOS release](/platforms/mac/release)).
 
 6) **Publish (npm)**
 - [ ] Confirm git status is clean; commit and push as needed.

@@ -23,6 +23,7 @@ import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
 } from "../../whatsapp/normalize.js";
+import { parseMessageWithAttachments } from "../chat-attachments.js";
 import {
   type AgentWaitParams,
   ErrorCodes,
@@ -57,6 +58,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       thinking?: string;
       deliver?: boolean;
+      attachments?: Array<{
+        type?: string;
+        mimeType?: string;
+        fileName?: string;
+        content?: unknown;
+      }>;
       provider?: string;
       lane?: string;
       extraSystemPrompt?: string;
@@ -73,7 +80,45 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const message = request.message.trim();
+    const normalizedAttachments =
+      request.attachments
+        ?.map((a) => ({
+          type: typeof a?.type === "string" ? a.type : undefined,
+          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
+          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
+          content:
+            typeof a?.content === "string"
+              ? a.content
+              : ArrayBuffer.isView(a?.content)
+                ? Buffer.from(
+                    a.content.buffer,
+                    a.content.byteOffset,
+                    a.content.byteLength,
+                  ).toString("base64")
+                : undefined,
+        }))
+        .filter((a) => a.content) ?? [];
+
+    let message = request.message.trim();
+    let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+    if (normalizedAttachments.length > 0) {
+      try {
+        const parsed = await parseMessageWithAttachments(
+          message,
+          normalizedAttachments,
+          { maxBytes: 5_000_000, log: context.logGateway },
+        );
+        message = parsed.message.trim();
+        images = parsed.images;
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(err)),
+        );
+        return;
+      }
+    }
     const rawProvider =
       typeof request.provider === "string" ? request.provider.trim() : "";
     if (rawProvider) {
@@ -275,6 +320,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     void agentCommand(
       {
         message,
+        images,
         to: sanitizedTo,
         sessionId: resolvedSessionId,
         sessionKey: requestedSessionKey,

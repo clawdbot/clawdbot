@@ -1,5 +1,6 @@
 node_modules
 .env
+docker-compose.extra.yml
 dist
 *.bun-build
 pnpm-lock.yaml

@@ -57,7 +57,7 @@ function candidateBinDirs(opts: EnsureClawdbotPathOpts): string[] {
 
   const candidates: string[] = [];
 
-  // Bun bundled (macOS app): `clawdbot` lives in the Relay dir (process.execPath).
+  // Bundled macOS app: `clawdbot` lives in the Relay dir (process.execPath).
   try {
     const execDir = path.dirname(execPath);
     const siblingClawdbot = path.join(execDir, "clawdbot");
@@ -95,7 +95,7 @@ function candidateBinDirs(opts: EnsureClawdbotPathOpts): string[] {
 
 /**
  * Best-effort PATH bootstrap so skills that require the `clawdbot` CLI can run
- * under launchd/minimal environments (and inside the macOS bun bundle).
+ * under launchd/minimal environments (and inside the macOS app bundle).
  */
 export function ensureClawdbotCliOnPath(opts: EnsureClawdbotPathOpts = {}) {
   if (process.env.CLAWDBOT_PATH_BOOTSTRAPPED === "1") return;

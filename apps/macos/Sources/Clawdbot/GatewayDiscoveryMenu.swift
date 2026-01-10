@@ -1,3 +1,4 @@
+import ClawdbotDiscovery
 import SwiftUI
 
 struct GatewayDiscoveryInlineList: View {

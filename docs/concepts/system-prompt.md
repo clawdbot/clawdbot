@@ -19,10 +19,12 @@ The prompt is intentionally compact and uses fixed sections:
 - **Clawdbot Self-Update**: how to run `config.apply` and `update.run`.
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
+- **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated bash is available.
 - **Time**: UTC default + the user’s local time (already converted).
 - **Reply Tags**: optional reply tag syntax for supported providers.
 - **Heartbeats**: heartbeat prompt and ack behavior.
 - **Runtime**: host, OS, node, model, thinking level (one line).
+- **Reasoning**: current visibility level + /reasoning toggle hint.
 
 ## Workspace bootstrap injection
 

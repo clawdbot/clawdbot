@@ -5,4 +5,4 @@ read_when:
 ---
 # Sessions
 
-Canonical session management docs live in [`docs/session.md`](/concepts/session).
+Canonical session management docs live in [Session management](/concepts/session).

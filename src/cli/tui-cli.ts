@@ -1,5 +1,7 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { runTui } from "../tui/tui.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 
@@ -25,6 +27,14 @@ export function registerTuiCli(program: Command) {
       "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)",
     )
     .option("--history-limit <n>", "History entries to load", "200")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/tui",
+          "docs.clawd.bot/tui",
+        )}\n`,
+    )
     .action(async (opts) => {
       try {
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);

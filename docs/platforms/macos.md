@@ -88,10 +88,30 @@ Safety:
 - `cd apps/macos && swift build`
 - `swift run Clawdbot` (or Xcode)
 - Package app + CLI: `scripts/package-mac-app.sh`
+  - Switch bundled gateway runtime with `BUNDLED_RUNTIME=node|bun` (default: node).
+
+## Debug gateway discovery (macOS CLI)
+
+Use the debug CLI to exercise the same Bonjour + wide‑area discovery code that the
+macOS app uses, without launching the app.
+
+```bash
+cd apps/macos
+swift run clawdbot-mac-discovery --timeout 3000 --json
+```
+
+Options:
+- `--include-local`: include gateways that would be filtered as “local”
+- `--timeout <ms>`: overall discovery window (default `2000`)
+- `--json`: structured output for diffing
+
+Tip: compare against `pnpm clawdbot gateway discover --json` to see whether the
+macOS app’s discovery pipeline (NWBrowser + tailnet DNS‑SD fallback) differs from
+the Node CLI’s `dns-sd` based discovery.
 
 ## Related docs
 
 - [Gateway runbook](/gateway)
-- [Bundled bun Gateway](/platforms/mac/bun)
+- [Bundled Node Gateway](/platforms/mac/bundled-gateway)
 - [macOS permissions](/platforms/mac/permissions)
 - [Canvas](/platforms/mac/canvas)

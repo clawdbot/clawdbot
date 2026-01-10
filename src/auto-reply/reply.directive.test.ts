@@ -828,7 +828,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("elevated is not available right now.");
+      expect(text).toContain("agents.list[].tools.elevated.enabled");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -875,7 +875,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("elevated is not available right now.");
+      expect(text).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

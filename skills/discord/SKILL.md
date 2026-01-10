@@ -12,6 +12,7 @@ Use `discord` to manage messages, reactions, threads, polls, and moderation. You
 ## Inputs to collect
 
 - For reactions: `channelId`, `messageId`, and an `emoji`.
+- For fetchMessage: `guildId`, `channelId`, `messageId`, or a `messageLink` like `https://discord.com/channels/<guildId>/<channelId>/<messageId>`.
 - For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text.
 - Polls also need a `question` plus 2–10 `answers`.
 - For media: `mediaUrl` with `file:///path` for local files or `https://...` for remote.
@@ -21,6 +22,7 @@ Use `discord` to manage messages, reactions, threads, polls, and moderation. You
 Message context lines include `discord message id` and `channel` fields you can reuse directly.
 
 **Note:** `sendMessage` uses `to: "channel:<id>"` format, not `channelId`. Other actions like `react`, `readMessages`, `editMessage` use `channelId` directly.
+**Note:** `fetchMessage` accepts message IDs or full links like `https://discord.com/channels/<guildId>/<channelId>/<messageId>`.
 
 ## Actions
 
@@ -141,6 +143,24 @@ Use `discord.actions.*` to disable action groups:
   "action": "readMessages",
   "channelId": "123",
   "limit": 20
+}
+```
+
+### Fetch a single message
+
+```json
+{
+  "action": "fetchMessage",
+  "guildId": "999",
+  "channelId": "123",
+  "messageId": "456"
+}
+```
+
+```json
+{
+  "action": "fetchMessage",
+  "messageLink": "https://discord.com/channels/999/123/456"
 }
 ```
 

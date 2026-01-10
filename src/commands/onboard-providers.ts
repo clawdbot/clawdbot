@@ -123,7 +123,7 @@ async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
-      "Approve with: clawdbot pairing approve --provider <provider> <code>",
+      "Approve with: clawdbot pairing approve <provider> <code>",
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
       `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
       "",
@@ -401,7 +401,7 @@ async function maybeConfigureDmPolicies(params: {
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: clawdbot pairing approve --provider ${params.provider} <code>`,
+        `Approve: clawdbot pairing approve ${params.provider} <code>`,
         `Public DMs: ${params.policyKey}="open" + ${params.allowFromKey} includes "*".`,
         `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
       ].join("\n"),

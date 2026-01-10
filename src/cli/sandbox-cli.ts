@@ -4,7 +4,10 @@ import {
   sandboxListCommand,
   sandboxRecreateCommand,
 } from "../commands/sandbox.js";
+import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 // --- Types ---
 
@@ -19,7 +22,8 @@ Examples:
   clawdbot sandbox list --browser           # List only browser containers
   clawdbot sandbox recreate --all           # Recreate all containers
   clawdbot sandbox recreate --session main  # Recreate specific session
-  clawdbot sandbox recreate --agent mybot   # Recreate agent containers`,
+  clawdbot sandbox recreate --agent mybot   # Recreate agent containers
+  clawdbot sandbox explain                  # Explain effective sandbox config`,
 
   list: `
 Examples:
@@ -55,6 +59,13 @@ Filter options:
 Modifiers:
   --browser      Only affect browser containers (not regular sandbox)
   --force        Skip confirmation prompt`,
+
+  explain: `
+Examples:
+  clawdbot sandbox explain
+  clawdbot sandbox explain --session agent:main:main
+  clawdbot sandbox explain --agent work
+  clawdbot sandbox explain --json`,
 };
 
 function createRunner(
@@ -80,6 +91,14 @@ export function registerSandboxCli(program: Command) {
     .command("sandbox")
     .description("Manage sandbox containers (Docker-based agent isolation)")
     .addHelpText("after", EXAMPLES.main)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/sandbox",
+          "docs.clawd.bot/sandbox",
+        )}\n`,
+    )
     .action(() => {
       sandbox.help({ error: true });
     });
@@ -124,6 +143,31 @@ export function registerSandboxCli(program: Command) {
             agent: opts.agent as string | undefined,
             browser: Boolean(opts.browser),
             force: Boolean(opts.force),
+          },
+          defaultRuntime,
+        ),
+      ),
+    );
+
+  // --- Explain Command ---
+
+  sandbox
+    .command("explain")
+    .description("Explain effective sandbox/tool policy for a session/agent")
+    .option(
+      "--session <key>",
+      "Session key to inspect (defaults to agent main)",
+    )
+    .option("--agent <id>", "Agent id to inspect (defaults to derived agent)")
+    .option("--json", "Output result as JSON", false)
+    .addHelpText("after", EXAMPLES.explain)
+    .action(
+      createRunner((opts) =>
+        sandboxExplainCommand(
+          {
+            session: opts.session as string | undefined,
+            agent: opts.agent as string | undefined,
+            json: Boolean(opts.json),
           },
           defaultRuntime,
         ),

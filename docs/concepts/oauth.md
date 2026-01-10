@@ -102,7 +102,24 @@ At runtime:
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
 
-The refresh flow is automatic; you generally don’t need to manage tokens manually.
+The refresh flow is automatic; you generally don't need to manage tokens manually.
+
+### Bidirectional sync with Claude Code
+
+When Clawdbot refreshes an Anthropic OAuth token (profile `anthropic:claude-cli`), it **writes the new credentials back** to Claude Code's storage:
+
+- **Linux/Windows**: updates `~/.claude/.credentials.json`
+- **macOS**: updates Keychain item "Claude Code-credentials"
+
+This ensures both tools stay in sync and neither gets "logged out" after the other refreshes.
+
+**Why this matters for long-running agents:**
+
+Anthropic OAuth tokens expire after a few hours. Without bidirectional sync:
+1. Clawdbot refreshes the token → gets new access token
+2. Claude Code still has the old token → gets logged out
+
+With bidirectional sync, both tools always have the latest valid token, enabling autonomous operation for days or weeks without manual intervention.
 
 ## Multiple accounts (profiles) + routing
 

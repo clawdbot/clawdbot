@@ -52,6 +52,7 @@ import {
 import {
   loadChatHistory,
   sendChatMessage,
+  abortChatRun,
   handleChatEvent,
   type ChatEventPayload,
 } from "./controllers/chat";
@@ -1028,6 +1029,26 @@ export class ClawdbotApp extends LitElement {
     return this.chatSending || Boolean(this.chatRunId);
   }
 
+  private isChatStopCommand(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "/stop") return true;
+    return (
+      normalized === "stop" ||
+      normalized === "esc" ||
+      normalized === "abort" ||
+      normalized === "wait" ||
+      normalized === "exit"
+    );
+  }
+
+  async handleAbortChat() {
+    if (!this.connected) return;
+    this.chatMessage = "";
+    await abortChatRun(this);
+  }
+
   private enqueueChatMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -1052,14 +1073,6 @@ export class ClawdbotApp extends LitElement {
     }
     if (ok) {
       this.setLastActiveSessionKey(this.sessionKey);
-    }
-    if (ok && this.chatRunId) {
-      // chat.send returned (run finished), but we missed the chat final event.
-      this.chatRunId = null;
-      this.chatStream = null;
-      this.chatStreamStartedAt = null;
-      this.resetToolStream();
-      void loadChatHistory(this);
     }
     if (ok && opts?.restoreDraft && opts.previousDraft?.trim()) {
       this.chatMessage = opts.previousDraft;
@@ -1094,6 +1107,11 @@ export class ClawdbotApp extends LitElement {
     const previousDraft = this.chatMessage;
     const message = (messageOverride ?? this.chatMessage).trim();
     if (!message) return;
+
+    if (this.isChatStopCommand(message)) {
+      await this.handleAbortChat();
+      return;
+    }
 
     if (messageOverride == null) {
       this.chatMessage = "";

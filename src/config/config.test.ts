@@ -240,6 +240,57 @@ describe("config identity defaults", () => {
     });
   });
 
+  it("accepts blank model provider apiKey values", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            models: {
+              mode: "merge",
+              providers: {
+                minimax: {
+                  baseUrl: "https://api.minimax.io/anthropic",
+                  apiKey: "",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "MiniMax-M2.1",
+                      name: "MiniMax M2.1",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                      },
+                      contextWindow: 200000,
+                      maxTokens: 8192,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(
+        "https://api.minimax.io/anthropic",
+      );
+    });
+  });
+
   it("respects empty responsePrefix to disable identity defaults", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdbot");
@@ -1171,6 +1222,34 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.signal?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it("accepts historyLimit overrides per provider and account", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      messages: { groupChat: { historyLimit: 12 } },
+      whatsapp: { historyLimit: 9, accounts: { work: { historyLimit: 4 } } },
+      telegram: { historyLimit: 8, accounts: { ops: { historyLimit: 3 } } },
+      slack: { historyLimit: 7, accounts: { ops: { historyLimit: 2 } } },
+      signal: { historyLimit: 6 },
+      imessage: { historyLimit: 5 },
+      msteams: { historyLimit: 4 },
+      discord: { historyLimit: 3 },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.whatsapp?.historyLimit).toBe(9);
+      expect(res.config.whatsapp?.accounts?.work?.historyLimit).toBe(4);
+      expect(res.config.telegram?.historyLimit).toBe(8);
+      expect(res.config.telegram?.accounts?.ops?.historyLimit).toBe(3);
+      expect(res.config.slack?.historyLimit).toBe(7);
+      expect(res.config.slack?.accounts?.ops?.historyLimit).toBe(2);
+      expect(res.config.signal?.historyLimit).toBe(6);
+      expect(res.config.imessage?.historyLimit).toBe(5);
+      expect(res.config.msteams?.historyLimit).toBe(4);
+      expect(res.config.discord?.historyLimit).toBe(3);
     }
   });
 

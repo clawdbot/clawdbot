@@ -1,3 +1,4 @@
+import ClawdbotDiscovery
 import ClawdbotKit
 import Foundation
 import Network
@@ -61,11 +62,16 @@ final class MacNodeModeCoordinator {
             retryDelay = 1_000_000_000
             do {
                 let hello = await self.makeHello()
+                self.logger.info(
+                    "mac node bridge connecting endpoint=\(endpoint, privacy: .public)")
                 try await self.session.connect(
                     endpoint: endpoint,
                     hello: hello,
                     onConnected: { [weak self] serverName in
                         self?.logger.info("mac node connected to \(serverName, privacy: .public)")
+                    },
+                    onDisconnected: { reason in
+                        await MacNodeModeCoordinator.handleBridgeDisconnect(reason: reason)
                     },
                     onInvoke: { [weak self] req in
                         guard let self else {
@@ -80,7 +86,8 @@ final class MacNodeModeCoordinator {
                 if await self.tryPair(endpoint: endpoint, error: error) {
                     continue
                 }
-                self.logger.error("mac node bridge connect failed: \(error.localizedDescription, privacy: .public)")
+                self.logger.error(
+                    "mac node bridge connect failed: \(error.localizedDescription, privacy: .public)")
                 try? await Task.sleep(nanoseconds: min(retryDelay, 5_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
@@ -285,15 +292,33 @@ final class MacNodeModeCoordinator {
         let mode = await MainActor.run(body: { AppStateStore.shared.connectionMode })
         if mode == .remote {
             do {
-                if self.tunnel == nil || self.tunnel?.process.isRunning == false {
-                    let remotePort = Self.remoteBridgePort()
-                    self.tunnel = try await RemotePortTunnel.create(
-                        remotePort: remotePort,
-                        allowRemoteUrlOverride: false)
+                if let tunnel = self.tunnel,
+                   tunnel.process.isRunning,
+                   let localPort = tunnel.localPort
+                {
+                    let healthy = await self.bridgeTunnelHealthy(localPort: localPort, timeoutSeconds: 1.0)
+                    if healthy, let port = NWEndpoint.Port(rawValue: localPort) {
+                        self.logger.info(
+                            "reusing mac node bridge tunnel localPort=\(localPort, privacy: .public)")
+                        return .hostPort(host: "127.0.0.1", port: port)
+                    }
+                    self.logger.error(
+                        "mac node bridge tunnel unhealthy localPort=\(localPort, privacy: .public); restarting")
+                    tunnel.terminate()
+                    self.tunnel = nil
                 }
+
+                let remotePort = Self.remoteBridgePort()
+                self.tunnel = try await RemotePortTunnel.create(
+                    remotePort: remotePort,
+                    allowRemoteUrlOverride: false)
                 if let localPort = self.tunnel?.localPort,
                    let port = NWEndpoint.Port(rawValue: localPort)
                 {
+                    self.logger.info(
+                        "mac node bridge tunnel ready " +
+                            "localPort=\(localPort, privacy: .public) " +
+                            "remotePort=\(remotePort, privacy: .public)")
                     return .hostPort(host: "127.0.0.1", port: port)
                 }
             } catch {
@@ -309,6 +334,21 @@ final class MacNodeModeCoordinator {
             return endpoint
         }
         return await Self.discoverBridgeEndpoint(timeoutSeconds: timeoutSeconds)
+    }
+
+    @MainActor
+    private static func handleBridgeDisconnect(reason: String) async {
+        guard reason.localizedCaseInsensitiveContains("ping") else { return }
+        let coordinator = MacNodeModeCoordinator.shared
+        coordinator.logger.error(
+            "mac node bridge disconnected (\(reason, privacy: .public)); resetting tunnel")
+        coordinator.tunnel?.terminate()
+        coordinator.tunnel = nil
+    }
+
+    private func bridgeTunnelHealthy(localPort: UInt16, timeoutSeconds: Double) async -> Bool {
+        guard let port = NWEndpoint.Port(rawValue: localPort) else { return false }
+        return await Self.probeEndpoint(.hostPort(host: "127.0.0.1", port: port), timeoutSeconds: timeoutSeconds)
     }
 
     private static func discoverBridgeEndpoint(timeoutSeconds: Double) async -> NWEndpoint? {

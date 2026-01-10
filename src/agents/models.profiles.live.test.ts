@@ -19,6 +19,16 @@ const REQUIRE_PROFILE_KEYS =
 
 const describeLive = LIVE && ALL_MODELS ? describe : describe.skip;
 
+function parseProviderFilter(raw?: string): Set<string> | null {
+  const trimmed = raw?.trim();
+  if (!trimmed || trimmed === "all") return null;
+  const ids = trimmed
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.length ? new Set(ids) : null;
+}
+
 function parseModelFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") return null;
@@ -27,6 +37,15 @@ function parseModelFilter(raw?: string): Set<string> | null {
     .map((s) => s.trim())
     .filter(Boolean);
   return ids.length ? new Set(ids) : null;
+}
+
+function isGoogleModelNotFoundError(err: unknown): boolean {
+  const msg = String(err);
+  if (!/not found/i.test(msg)) return false;
+  if (/models\/.+ is not found for api version/i.test(msg)) return true;
+  if (/"status"\\s*:\\s*"NOT_FOUND"/.test(msg)) return true;
+  if (/"code"\\s*:\\s*404/.test(msg)) return true;
+  return false;
 }
 
 describeLive("live models (profile keys)", () => {
@@ -42,11 +61,15 @@ describeLive("live models (profile keys)", () => {
       const models = modelRegistry.getAll() as Array<Model<Api>>;
 
       const filter = parseModelFilter(process.env.CLAWDBOT_LIVE_MODELS);
+      const providers = parseProviderFilter(
+        process.env.CLAWDBOT_LIVE_PROVIDERS,
+      );
 
       const failures: Array<{ model: string; error: string }> = [];
       const skipped: Array<{ model: string; reason: string }> = [];
 
       for (const model of models) {
+        if (providers && !providers.has(model.provider)) continue;
         const id = `${model.provider}/${model.id}`;
         if (filter && !filter.has(id)) continue;
 
@@ -96,7 +119,6 @@ describeLive("live models (profile keys)", () => {
                 apiKey: apiKeyInfo.apiKey,
                 reasoning: model.reasoning ? "low" : undefined,
                 maxTokens: 128,
-                temperature: 0,
               },
             );
 
@@ -136,7 +158,6 @@ describeLive("live models (profile keys)", () => {
                 apiKey: apiKeyInfo.apiKey,
                 reasoning: model.reasoning ? "low" : undefined,
                 maxTokens: 64,
-                temperature: 0,
               },
             );
 
@@ -163,7 +184,6 @@ describeLive("live models (profile keys)", () => {
               apiKey: apiKeyInfo.apiKey,
               reasoning: model.reasoning ? "low" : undefined,
               maxTokens: 64,
-              temperature: 0,
             },
           );
 
@@ -171,8 +191,19 @@ describeLive("live models (profile keys)", () => {
             .filter((block) => block.type === "text")
             .map((block) => block.text.trim())
             .join(" ");
+          if (text.length === 0 && model.provider === "google") {
+            skipped.push({
+              model: id,
+              reason: "no text returned (likely unavailable model id)",
+            });
+            continue;
+          }
           expect(text.length).toBeGreaterThan(0);
         } catch (err) {
+          if (model.provider === "google" && isGoogleModelNotFoundError(err)) {
+            skipped.push({ model: id, reason: String(err) });
+            continue;
+          }
           failures.push({ model: id, error: String(err) });
         }
       }

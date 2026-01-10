@@ -161,18 +161,10 @@ actor BridgeClient {
         purpose: String,
         _ op: @escaping @Sendable () async throws -> T) async throws -> T
     {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await op()
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
-                throw TimeoutError(purpose: purpose, seconds: seconds)
-            }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
-        }
+        try await AsyncTimeout.withTimeout(
+            seconds: Double(seconds),
+            onTimeout: { TimeoutError(purpose: purpose, seconds: seconds) },
+            operation: op)
     }
 
     private func startAndWaitForReady(_ connection: NWConnection, queue: DispatchQueue) async throws {

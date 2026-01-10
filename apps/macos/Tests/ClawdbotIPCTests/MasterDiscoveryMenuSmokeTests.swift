@@ -1,3 +1,4 @@
+import ClawdbotDiscovery
 import SwiftUI
 import Testing
 @testable import Clawdbot
@@ -6,7 +7,7 @@ import Testing
 @MainActor
 struct MasterDiscoveryMenuSmokeTests {
     @Test func inlineListBuildsBodyWhenEmpty() {
-        let discovery = GatewayDiscoveryModel()
+        let discovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         discovery.statusText = "Searching…"
         discovery.gateways = []
 
@@ -15,7 +16,7 @@ struct MasterDiscoveryMenuSmokeTests {
     }
 
     @Test func inlineListBuildsBodyWithMasterAndSelection() {
-        let discovery = GatewayDiscoveryModel()
+        let discovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         discovery.statusText = "Found 1"
         discovery.gateways = [
             GatewayDiscoveryModel.DiscoveredGateway(
@@ -23,6 +24,8 @@ struct MasterDiscoveryMenuSmokeTests {
                 lanHost: "office.local",
                 tailnetDns: "office.tailnet-123.ts.net",
                 sshPort: 2222,
+                gatewayPort: nil,
+                cliPath: nil,
                 stableID: "office",
                 debugID: "office",
                 isLocal: false),
@@ -34,7 +37,7 @@ struct MasterDiscoveryMenuSmokeTests {
     }
 
     @Test func menuBuildsBodyWithMasters() {
-        let discovery = GatewayDiscoveryModel()
+        let discovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
         discovery.statusText = "Found 2"
         discovery.gateways = [
             GatewayDiscoveryModel.DiscoveredGateway(
@@ -42,6 +45,8 @@ struct MasterDiscoveryMenuSmokeTests {
                 lanHost: "a.local",
                 tailnetDns: nil,
                 sshPort: 22,
+                gatewayPort: nil,
+                cliPath: nil,
                 stableID: "a",
                 debugID: "a",
                 isLocal: false),
@@ -50,6 +55,8 @@ struct MasterDiscoveryMenuSmokeTests {
                 lanHost: nil,
                 tailnetDns: "b.ts.net",
                 sshPort: 22,
+                gatewayPort: nil,
+                cliPath: nil,
                 stableID: "b",
                 debugID: "b",
                 isLocal: false),

@@ -8,6 +8,7 @@ import {
 import { buildConfigSchema } from "../../config/schema.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
+  DOCTOR_NONINTERACTIVE_HINT,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -176,6 +177,7 @@ export const configHandlers: GatewayRequestHandlers = {
       ts: Date.now(),
       sessionKey,
       message: note ?? null,
+      doctorHint: DOCTOR_NONINTERACTIVE_HINT,
       stats: {
         mode: "config.apply",
         root: CONFIG_PATH_CLAWDBOT,

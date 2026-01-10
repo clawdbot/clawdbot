@@ -36,7 +36,7 @@ Note:
 ## Setting a session default
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/elevated on`.
 - Confirmation reply is sent (`Elevated mode enabled.` / `Elevated mode disabled.`).
-- If elevated access is disabled or the sender is not on the approved allowlist, the directive replies `elevated is not available right now.` and does not change session state.
+- If elevated access is disabled or the sender is not on the approved allowlist, the directive replies with an actionable error (runtime sandboxed/direct + failing config key paths) and does not change session state.
 - Send `/elevated` (or `/elevated:`) with no argument to see the current elevated level.
 
 ## Availability + allowlists

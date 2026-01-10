@@ -11,6 +11,8 @@ import {
 } from "../agents/skills-status.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 export type SkillsListOptions = {
   json?: boolean;
@@ -352,7 +354,15 @@ export function formatSkillsCheck(
 export function registerSkillsCli(program: Command) {
   const skills = program
     .command("skills")
-    .description("List and inspect available skills");
+    .description("List and inspect available skills")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/skills",
+          "docs.clawd.bot/skills",
+        )}\n`,
+    );
 
   skills
     .command("list")

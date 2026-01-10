@@ -4,7 +4,9 @@ import process from "node:process";
 declare const __CLAWDBOT_VERSION__: string | undefined;
 
 const BUNDLED_VERSION =
-  typeof __CLAWDBOT_VERSION__ === "string" ? __CLAWDBOT_VERSION__ : "0.0.0";
+  (typeof __CLAWDBOT_VERSION__ === "string" && __CLAWDBOT_VERSION__) ||
+  process.env.CLAWDBOT_BUNDLED_VERSION ||
+  "0.0.0";
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);

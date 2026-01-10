@@ -5,6 +5,10 @@ options:
     iOS: "17.0"
   xcodeVersion: "16.0"
 
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
 packages:
   ClawdbotKit:
     path: ../shared/ClawdbotKit
@@ -68,11 +72,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios
         PROVISIONING_PROFILE_SPECIFIER: "com.clawdbot.ios Development"
         SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_APPINTENTS_METADATA: NO
     info:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Clawdbot
         CFBundleIconName: AppIcon
+        CFBundleShortVersionString: "2026.1.9"
+        CFBundleVersion: "20260109"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -84,8 +92,20 @@ targets:
         NSBonjourServices:
           - _clawdbot-bridge._tcp
         NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the bridge.
+        NSLocationWhenInUseUsageDescription: Clawdbot uses your location when you allow location sharing.
+        NSLocationAlwaysAndWhenInUseUsageDescription: Clawdbot can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: Clawdbot needs microphone access for voice wake.
         NSSpeechRecognitionUsageDescription: Clawdbot uses on-device speech recognition for voice wake.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
 
   ClawdbotTests:
     type: bundle.unit-test
@@ -96,13 +116,17 @@ targets:
       - target: Clawdbot
       - package: Swabble
         product: SwabbleKit
+      - sdk: AppIntents.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios.tests
         SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdbot.app/Clawdbot"
         BUNDLE_LOADER: "$(TEST_HOST)"
     info:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: ClawdbotTests
+        CFBundleShortVersionString: "2026.1.9"
+        CFBundleVersion: "20260109"

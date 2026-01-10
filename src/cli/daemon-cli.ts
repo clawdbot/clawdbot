@@ -48,6 +48,7 @@ import {
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { createDefaultDeps } from "./deps.js";
 import { withProgress } from "./progress.js";
@@ -992,7 +993,12 @@ export async function runDaemonStop() {
   }
 }
 
-export async function runDaemonRestart() {
+/**
+ * Restart the gateway daemon service.
+ * @returns `true` if restart succeeded, `false` if the service was not loaded.
+ * Throws/exits on check or restart failures.
+ */
+export async function runDaemonRestart(): Promise<boolean> {
   const service = resolveGatewayService();
   let loaded = false;
   try {
@@ -1000,28 +1006,36 @@ export async function runDaemonRestart() {
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
-    return;
+    return false;
   }
   if (!loaded) {
     defaultRuntime.log(`Gateway service ${service.notLoadedText}.`);
     for (const hint of renderGatewayServiceStartHints()) {
       defaultRuntime.log(`Start with: ${hint}`);
     }
-    return;
+    return false;
   }
   try {
     await service.restart({ stdout: process.stdout });
+    return true;
   } catch (err) {
     defaultRuntime.error(`Gateway restart failed: ${String(err)}`);
     defaultRuntime.exit(1);
+    return false;
   }
 }
 
 export function registerDaemonCli(program: Command) {
   const daemon = program
     .command("daemon")
-    .description(
-      "Manage the Gateway daemon service (launchd/systemd/schtasks)",
+    .description("Manage the Gateway daemon service (launchd/systemd/schtasks)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/gateway",
+          "docs.clawd.bot/gateway",
+        )}\n`,
     );
 
   daemon

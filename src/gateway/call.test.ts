@@ -141,7 +141,9 @@ describe("buildGatewayConnectionDetails", () => {
     const details = buildGatewayConnectionDetails();
 
     expect(details.url).toBe("ws://127.0.0.1:18789");
-    expect(details.urlSource).toBe("local loopback");
+    expect(details.urlSource).toBe(
+      "missing gateway.remote.url (fallback local)",
+    );
     expect(details.bindDetail).toBe("Bind: loopback");
     expect(details.remoteFallbackNote).toContain(
       "gateway.mode=remote but gateway.remote.url is missing",
@@ -230,6 +232,18 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
+  });
+
+  it("fails fast when remote mode is missing remote url", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", bind: "loopback", remote: {} },
+    });
+    await expect(
+      callGateway({
+        method: "health",
+        timeoutMs: 10,
+      }),
+    ).rejects.toThrow("gateway remote mode misconfigured");
   });
 });
 

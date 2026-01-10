@@ -273,6 +273,30 @@ This runs your login shell and imports only missing expected keys (never overrid
 
 Send `/new` or `/reset` as a standalone message. See [Session management](/concepts/session).
 
+### Do I need to add a “bot account” to a WhatsApp group?
+
+No. Clawdbot runs on **your own account**, so if you’re in the group, Clawdbot can see it.
+By default, anyone in that group can **mention** the bot to trigger a reply.
+
+If you want only **you** to be able to trigger group replies:
+
+```json5
+{
+  whatsapp: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15551234567"]
+  }
+}
+```
+
+### Why doesn’t Clawdbot reply in a group?
+
+Two common causes:
+- Mention gating is on (default). You must @mention the bot (or match `mentionPatterns`).
+- You configured `whatsapp.groups` without `"*"` and the group isn’t allowlisted.
+
+See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
+
 ### Do groups/threads share context with DMs?
 
 Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
@@ -631,8 +655,8 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
 - Default behavior on DM‑capable providers is **pairing**:
   - Unknown senders receive a pairing code; the bot does not process their message.
-  - Approve with: `clawdbot pairing approve --provider <provider> <code>`
-  - Pending requests are capped at **3 per provider**; check `clawdbot pairing list --provider <provider>` if a code didn’t arrive.
+  - Approve with: `clawdbot pairing approve <provider> <code>`
+  - Pending requests are capped at **3 per provider**; check `clawdbot pairing list <provider>` if a code didn’t arrive.
 - Opening DMs publicly requires explicit opt‑in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `clawdbot doctor` to surface risky DM policies.

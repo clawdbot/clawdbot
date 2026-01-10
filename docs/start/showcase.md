@@ -98,6 +98,38 @@ Full setup walkthrough (28m) by VelvetShark.
   <img src="/assets/showcase/wienerlinien.png" alt="Wiener Linien skill on ClawdHub" />
 </Card>
 
+<Card title="ParentPay School Meals" icon="utensils" href="#">
+  **@George5562** • `automation` `browser` `parenting`
+
+  Automated UK school meal booking via ParentPay. Uses mouse coordinates for reliable table cell clicking.
+</Card>
+
+<Card title="R2 Upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawdhub.com/skills/r2-upload">
+  **@julianengel** • `files` `r2` `presigned-urls`
+
+  Upload to Cloudflare R2/S3 and generate secure presigned download links. Perfect for remote Clawdbot instances.
+</Card>
+
+<Card title="iOS App via Telegram" icon="mobile" href="#">
+  **@coard** • `ios` `xcode` `testflight`
+
+  Built a complete iOS app with maps and voice recording, deployed to TestFlight entirely via Telegram chat.
+
+  <img src="/assets/showcase/ios-testflight.jpg" alt="iOS app on TestFlight" />
+</Card>
+
+<Card title="Oura Ring Health Assistant" icon="heart-pulse" href="#">
+  **@AS** • `health` `oura` `calendar`
+
+  Personal AI health assistant integrating Oura ring data with calendar, appointments, and gym schedule.
+
+  <img src="/assets/showcase/oura-health.png" alt="Oura ring health assistant" />
+</Card>
+<Card title="Multi-Agent Swarm (14+ Agents)" icon="robot" href="https://github.com/adam91holt/clawdspace">
+  **@adam91holt** • `multi-agent` `slack` `orchestration` `swarm`
+
+  14+ Clawdbot agents under one gateway. Opus 4.5 orchestrator delegates to Codex workers. Self-maintaining agents that continuously improve. Open-sourced clawdspace for agent sandboxing.
+</Card>
 </CardGroup>
 
 ## 🤖 Automation & Workflows

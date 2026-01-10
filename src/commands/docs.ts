@@ -1,10 +1,11 @@
 import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { isRich, theme } from "../terminal/theme.js";
 
 const SEARCH_TOOL = "https://docs.clawd.bot/mcp.SearchClawdbot";
 const SEARCH_TIMEOUT_MS = 30_000;
-const RENDER_TIMEOUT_MS = 10_000;
 const DEFAULT_SNIPPET_MAX = 220;
 
 type DocResult = {
@@ -125,21 +126,33 @@ function buildMarkdown(query: string, results: DocResult[]): string {
   return lines.join("\n");
 }
 
-async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
-  const width = process.stdout.columns ?? 0;
-  const args = width > 0 ? ["--width", String(width)] : [];
-  try {
-    const res = await runTool("markdansi", args, {
-      timeoutMs: RENDER_TIMEOUT_MS,
-      input: markdown,
-    });
-    if (res.code === 0 && res.stdout.trim()) {
-      runtime.log(res.stdout.trimEnd());
-      return;
-    }
-  } catch {
-    // Fall back to plain Markdown if renderer fails or cannot be installed.
+function formatLinkLabel(link: string): string {
+  return link.replace(/^https?:\/\//i, "");
+}
+
+function renderRichResults(
+  query: string,
+  results: DocResult[],
+  runtime: RuntimeEnv,
+) {
+  runtime.log(`${theme.heading("Docs search:")} ${theme.info(query)}`);
+  if (results.length === 0) {
+    runtime.log(theme.muted("No results."));
+    return;
   }
+  for (const item of results) {
+    const linkLabel = formatLinkLabel(item.link);
+    const link = formatDocsLink(item.link, linkLabel);
+    runtime.log(
+      `${theme.muted("-")} ${theme.command(item.title)} ${theme.muted("(")}${link}${theme.muted(")")}`,
+    );
+    if (item.snippet) {
+      runtime.log(`  ${theme.muted(item.snippet)}`);
+    }
+  }
+}
+
+async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
   runtime.log(markdown.trimEnd());
 }
 
@@ -149,8 +162,14 @@ export async function docsSearchCommand(
 ) {
   const query = queryParts.join(" ").trim();
   if (!query) {
-    runtime.log("Docs: https://docs.clawd.bot/");
-    runtime.log('Search: clawdbot docs "your query"');
+    const docs = formatDocsLink("/", "docs.clawd.bot");
+    if (isRich()) {
+      runtime.log(`${theme.muted("Docs:")} ${docs}`);
+      runtime.log(`${theme.muted("Search:")} clawdbot docs "your query"`);
+    } else {
+      runtime.log("Docs: https://docs.clawd.bot/");
+      runtime.log('Search: clawdbot docs "your query"');
+    }
     return;
   }
 
@@ -169,6 +188,10 @@ export async function docsSearchCommand(
   }
 
   const results = parseSearchOutput(res.stdout);
+  if (isRich()) {
+    renderRichResults(query, results, runtime);
+    return;
+  }
   const markdown = buildMarkdown(query, results);
   await renderMarkdown(markdown, runtime);
 }

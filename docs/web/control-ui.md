@@ -42,6 +42,15 @@ The dashboard settings panel lets you store a token; passwords are not persisted
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
 
+## Chat behavior
+
+- `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
+- Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
+- Stop:
+  - Click **Stop** (calls `chat.abort`)
+  - Type `/stop` (or `stop|esc|abort|wait|exit`) to abort out-of-band
+  - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
+
 ## Tailnet access (recommended)
 
 ### Integrated Tailscale Serve (preferred)

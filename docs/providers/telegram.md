@@ -78,6 +78,7 @@ group messages, so use admin if you need full visibility.
 ## Limits
 - Outbound text is chunked to `telegram.textChunkLimit` (default 4000).
 - Media downloads/uploads are capped by `telegram.mediaMaxMb` (default 5).
+- Group history context uses `telegram.historyLimit` (or `telegram.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Group activation modes
 
@@ -131,6 +132,10 @@ Send in the group:
 
 Forward any message from the group to `@userinfobot` or `@getidsbot` on Telegram to see the chat ID (negative number like `-1001234567890`).
 
+**Tip:** For your own user ID, DM `@userinfobot` with `/start`. Useful for allowlists or debugging access control.
+
+**Privacy note:** `@userinfobot` is a third-party bot. If you prefer, use gateway logs (`clawdbot logs`) or Telegram developer tools to find user/chat IDs.
+
 ## Topics (forum supergroups)
 Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - Appends `:topic:<threadId>` to the Telegram group session key so each topic is isolated.
@@ -147,8 +152,8 @@ Private topics (DM forum mode) also include `message_thread_id`. Clawdbot:
 ### DM access
 - Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `clawdbot pairing list --provider telegram`
-  - `clawdbot pairing approve --provider telegram <CODE>`
+  - `clawdbot pairing list telegram`
+  - `clawdbot pairing approve telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
 
 ### Group access
@@ -205,6 +210,9 @@ Config:
   - `partial`: update the draft bubble with the latest streaming text.
   - `block`: update the draft bubble in larger blocks (chunked).
   - `off`: disable draft streaming.
+- Optional (only for `streamMode: "block"`):
+  - `telegram.draftChunk: { minChars?, maxChars?, breakPreference? }`
+    - defaults: `minChars: 200`, `maxChars: 800`, `breakPreference: "paragraph"` (clamped to `telegram.textChunkLimit`).
 
 Note: draft streaming is separate from **block streaming** (provider messages).
 Block streaming is off by default and requires `telegram.blockStreaming: true`

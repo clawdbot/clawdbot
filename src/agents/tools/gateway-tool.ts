@@ -2,6 +2,11 @@ import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import {
+  DOCTOR_NONINTERACTIVE_HINT,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
@@ -61,6 +66,10 @@ export function createGatewayTool(opts?: {
             "Gateway restart is disabled. Set commands.restart=true to enable.",
           );
         }
+        const sessionKey =
+          typeof params.sessionKey === "string" && params.sessionKey.trim()
+            ? params.sessionKey.trim()
+            : opts?.agentSessionKey?.trim() || undefined;
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
@@ -69,6 +78,27 @@ export function createGatewayTool(opts?: {
           typeof params.reason === "string" && params.reason.trim()
             ? params.reason.trim().slice(0, 200)
             : undefined;
+        const note =
+          typeof params.note === "string" && params.note.trim()
+            ? params.note.trim()
+            : undefined;
+        const payload: RestartSentinelPayload = {
+          kind: "restart",
+          status: "ok",
+          ts: Date.now(),
+          sessionKey,
+          message: note ?? reason ?? null,
+          doctorHint: DOCTOR_NONINTERACTIVE_HINT,
+          stats: {
+            mode: "gateway.restart",
+            reason,
+          },
+        };
+        try {
+          await writeRestartSentinel(payload);
+        } catch {
+          // ignore: sentinel is best-effort
+        }
         console.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );

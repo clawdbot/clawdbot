@@ -10,7 +10,8 @@ import {
   normalizeThinkLevel,
   type ThinkLevel,
 } from "../auto-reply/thinking.js";
-
+import type { ClawdbotConfig } from "../config/config.js";
+import { formatSandboxToolPolicyBlockedMessage } from "./sandbox.js";
 import { sanitizeContentBlocksImages } from "./tool-images.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -85,6 +86,7 @@ function isEmptyAssistantErrorMessage(
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
+  options?: { sanitizeToolCallIds?: boolean; enforceToolCallLast?: boolean },
 ): Promise<AgentMessage[]> {
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (see MAX_IMAGE_DIMENSION_PX).
@@ -103,14 +105,25 @@ export async function sanitizeSessionMessagesImages(
         content as ContentBlock[],
         label,
       )) as unknown as typeof toolMsg.content;
-      const sanitizedToolCallId = toolMsg.toolCallId
-        ? sanitizeToolCallId(toolMsg.toolCallId)
-        : undefined;
+      const sanitizedToolCallId =
+        options?.sanitizeToolCallIds && toolMsg.toolCallId
+          ? sanitizeToolCallId(toolMsg.toolCallId)
+          : undefined;
+      const toolUseId = (toolMsg as { toolUseId?: unknown }).toolUseId;
+      const sanitizedToolUseId =
+        options?.sanitizeToolCallIds &&
+        typeof toolUseId === "string" &&
+        toolUseId
+          ? sanitizeToolCallId(toolUseId)
+          : undefined;
       const sanitizedMsg = {
         ...toolMsg,
         content: nextContent,
         ...(sanitizedToolCallId && {
           toolCallId: sanitizedToolCallId,
+        }),
+        ...(sanitizedToolUseId && {
+          toolUseId: sanitizedToolUseId,
         }),
       };
       out.push(sanitizedMsg);
@@ -143,24 +156,51 @@ export async function sanitizeSessionMessagesImages(
           if (rec.type !== "text" || typeof rec.text !== "string") return true;
           return rec.text.trim().length > 0;
         });
-        // Also sanitize tool call IDs in assistant messages (function call blocks)
-        const sanitizedContent = await Promise.all(
-          filteredContent.map(async (block) => {
-            if (
-              block &&
-              typeof block === "object" &&
-              (block as { type?: unknown }).type === "functionCall" &&
-              (block as { id?: unknown }).id
-            ) {
-              const functionBlock = block as { type: string; id: string };
-              return {
-                ...functionBlock,
-                id: sanitizeToolCallId(functionBlock.id),
-              };
-            }
-            return block;
-          }),
-        );
+        const normalizedContent = options?.enforceToolCallLast
+          ? (() => {
+              let lastToolIndex = -1;
+              for (let i = filteredContent.length - 1; i >= 0; i -= 1) {
+                const block = filteredContent[i];
+                if (!block || typeof block !== "object") continue;
+                const type = (block as { type?: unknown }).type;
+                if (
+                  type === "functionCall" ||
+                  type === "toolUse" ||
+                  type === "toolCall"
+                ) {
+                  lastToolIndex = i;
+                  break;
+                }
+              }
+              if (lastToolIndex === -1) return filteredContent;
+              return filteredContent.slice(0, lastToolIndex + 1);
+            })()
+          : filteredContent;
+        const sanitizedContent = options?.sanitizeToolCallIds
+          ? await Promise.all(
+              normalizedContent.map(async (block) => {
+                if (!block || typeof block !== "object") return block;
+
+                const type = (block as { type?: unknown }).type;
+                const id = (block as { id?: unknown }).id;
+                if (typeof id !== "string" || !id) return block;
+
+                // Cloud Code Assist tool blocks require ids matching ^[a-zA-Z0-9_-]+$.
+                if (
+                  type === "functionCall" ||
+                  type === "toolUse" ||
+                  type === "toolCall"
+                ) {
+                  return {
+                    ...(block as unknown as Record<string, unknown>),
+                    id: sanitizeToolCallId(id),
+                  };
+                }
+
+                return block;
+              }),
+            )
+          : normalizedContent;
         const finalContent = (await sanitizeContentBlocksImages(
           sanitizedContent as unknown as ContentBlock[],
           label,
@@ -248,10 +288,25 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
+  opts?: { cfg?: ClawdbotConfig; sessionKey?: string },
 ): string | undefined {
   if (msg.stopReason !== "error") return undefined;
   const raw = (msg.errorMessage ?? "").trim();
   if (!raw) return "LLM request failed with an unknown error.";
+
+  const unknownTool =
+    raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
+    raw.match(
+      /tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i,
+    );
+  if (unknownTool?.[1]) {
+    const rewritten = formatSandboxToolPolicyBlockedMessage({
+      cfg: opts?.cfg,
+      sessionKey: opts?.sessionKey,
+      toolName: unknownTool[1],
+    });
+    if (rewritten) return rewritten;
+  }
 
   // Check for context overflow (413) errors
   if (isContextOverflowError(raw)) {
@@ -288,6 +343,7 @@ const ERROR_PATTERNS = {
     "resource has been exhausted",
     "quota exceeded",
     "resource_exhausted",
+    "usage limit",
   ],
   timeout: [
     "timeout",
@@ -517,7 +573,7 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
 }
 
 // ── Messaging tool duplicate detection ──────────────────────────────────────
-// When the agent uses a messaging tool (telegram, discord, slack, sessions_send)
+// When the agent uses a messaging tool (telegram, discord, slack, message, sessions_send)
 // to send a message, we track the text so we can suppress duplicate block replies.
 // The LLM sometimes elaborates or wraps the same content, so we use substring matching.
 
@@ -537,6 +593,22 @@ export function normalizeTextForComparison(text: string): string {
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function isMessagingToolDuplicateNormalized(
+  normalized: string,
+  normalizedSentTexts: string[],
+): boolean {
+  if (normalizedSentTexts.length === 0) return false;
+  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH)
+    return false;
+  return normalizedSentTexts.some((normalizedSent) => {
+    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH)
+      return false;
+    return (
+      normalized.includes(normalizedSent) || normalizedSent.includes(normalized)
+    );
+  });
 }
 
 /**
@@ -577,13 +649,8 @@ export function isMessagingToolDuplicate(
   const normalized = normalizeTextForComparison(text);
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH)
     return false;
-  return sentTexts.some((sent) => {
-    const normalizedSent = normalizeTextForComparison(sent);
-    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH)
-      return false;
-    // Substring match: either text contains the other
-    return (
-      normalized.includes(normalizedSent) || normalizedSent.includes(normalized)
-    );
-  });
+  return isMessagingToolDuplicateNormalized(
+    normalized,
+    sentTexts.map(normalizeTextForComparison),
+  );
 }

@@ -1,65 +1,28 @@
 import { describe, expect, it } from "vitest";
+
 import type { ClawdbotConfig } from "../config/config.js";
-import { resolveMessagePrefix, resolveResponsePrefix } from "./identity.js";
+import { resolveHumanDelayConfig } from "./identity.js";
 
-describe("message prefix resolution", () => {
-  it("returns configured messagePrefix override", () => {
+describe("resolveHumanDelayConfig", () => {
+  it("returns undefined when no humanDelay config is set", () => {
     const cfg: ClawdbotConfig = {};
-    expect(
-      resolveMessagePrefix(cfg, "main", {
-        configured: "[x]",
-        hasAllowFrom: true,
-      }),
-    ).toBe("[x]");
-    expect(
-      resolveMessagePrefix(cfg, "main", {
-        configured: "",
-        hasAllowFrom: false,
-      }),
-    ).toBe("");
+    expect(resolveHumanDelayConfig(cfg, "main")).toBeUndefined();
   });
 
-  it("defaults messagePrefix based on allowFrom + identity", () => {
+  it("merges defaults with per-agent overrides", () => {
     const cfg: ClawdbotConfig = {
-      agents: { list: [{ id: "main", identity: { name: "Richbot" } }] },
+      agents: {
+        defaults: {
+          humanDelay: { mode: "natural", minMs: 800, maxMs: 1800 },
+        },
+        list: [{ id: "main", humanDelay: { mode: "custom", minMs: 400 } }],
+      },
     };
-    expect(resolveMessagePrefix(cfg, "main", { hasAllowFrom: true })).toBe("");
-    expect(resolveMessagePrefix(cfg, "main", { hasAllowFrom: false })).toBe(
-      "[Richbot]",
-    );
-  });
 
-  it("falls back to [clawdbot] when identity is missing", () => {
-    const cfg: ClawdbotConfig = {};
-    expect(resolveMessagePrefix(cfg, "main", { hasAllowFrom: false })).toBe(
-      "[clawdbot]",
-    );
-  });
-});
-
-describe("response prefix resolution", () => {
-  it("does not apply any default when unset", () => {
-    const cfg: ClawdbotConfig = {
-      agents: { list: [{ id: "main", identity: { name: "Richbot" } }] },
-    };
-    expect(resolveResponsePrefix(cfg, "main")).toBeUndefined();
-  });
-
-  it("returns explicit responsePrefix when set", () => {
-    const cfg: ClawdbotConfig = { messages: { responsePrefix: "PFX" } };
-    expect(resolveResponsePrefix(cfg, "main")).toBe("PFX");
-  });
-
-  it("supports responsePrefix: auto (identity-derived opt-in)", () => {
-    const withIdentity: ClawdbotConfig = {
-      agents: { list: [{ id: "main", identity: { name: "Richbot" } }] },
-      messages: { responsePrefix: "auto" },
-    };
-    expect(resolveResponsePrefix(withIdentity, "main")).toBe("[Richbot]");
-
-    const withoutIdentity: ClawdbotConfig = {
-      messages: { responsePrefix: "auto" },
-    };
-    expect(resolveResponsePrefix(withoutIdentity, "main")).toBeUndefined();
+    expect(resolveHumanDelayConfig(cfg, "main")).toEqual({
+      mode: "custom",
+      minMs: 400,
+      maxMs: 1800,
+    });
   });
 });

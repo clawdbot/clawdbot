@@ -86,8 +86,8 @@ DMs:
 - Default: `imessage.dmPolicy = "pairing"`.
 - Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `clawdbot pairing list --provider imessage`
-  - `clawdbot pairing approve --provider imessage <CODE>`
+  - `clawdbot pairing list imessage`
+  - `clawdbot pairing approve imessage <CODE>`
 - Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/start/pairing)
 
 Groups:
@@ -154,6 +154,7 @@ Provider options:
 - `imessage.allowFrom`: DM allowlist (handles or `chat_id:*`). `open` requires `"*"`.
 - `imessage.groupPolicy`: `open | allowlist | disabled` (default: open).
 - `imessage.groupAllowFrom`: group sender allowlist.
+- `imessage.historyLimit` / `imessage.accounts.*.historyLimit`: max group messages to include as context (0 disables).
 - `imessage.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
 - `imessage.includeAttachments`: ingest attachments into context.
 - `imessage.mediaMaxMb`: inbound/outbound media cap (MB).

@@ -112,6 +112,20 @@ function resolveHeartbeatReplyPayload(
   return undefined;
 }
 
+function resolveHeartbeatReasoningPayloads(
+  replyResult: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload[] {
+  const payloads = Array.isArray(replyResult)
+    ? replyResult
+    : replyResult
+      ? [replyResult]
+      : [];
+  return payloads.filter((payload) => {
+    const text = typeof payload.text === "string" ? payload.text : "";
+    return text.trimStart().startsWith("Reasoning:");
+  });
+}
+
 function resolveHeartbeatSender(params: {
   allowFrom: Array<string | number>;
   lastTo?: string;
@@ -246,6 +260,8 @@ export async function runHeartbeatOnce(opts: {
       cfg,
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    const includeReasoning =
+      cfg.agents?.defaults?.heartbeat?.includeReasoning === true;
 
     if (
       !replyPayload ||
@@ -294,6 +310,12 @@ export async function runHeartbeatOnce(opts: {
       replyPayload.mediaUrls ??
       (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
 
+    const reasoningPayloads = includeReasoning
+      ? resolveHeartbeatReasoningPayloads(replyResult).filter(
+          (payload) => payload !== replyPayload,
+        )
+      : [];
+
     if (delivery.provider === "none" || !delivery.to) {
       emitHeartbeatEvent({
         status: "skipped",
@@ -327,6 +349,7 @@ export async function runHeartbeatOnce(opts: {
       provider: delivery.provider,
       to: delivery.to,
       payloads: [
+        ...reasoningPayloads,
         {
           text: normalized.text,
           mediaUrls,

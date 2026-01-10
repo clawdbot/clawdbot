@@ -14,6 +14,6 @@ export function buildPairingReply(params: {
     `Pairing code: ${code}`,
     "",
     "Ask the bot owner to approve with:",
-    `clawdbot pairing approve --provider ${provider} <code>`,
+    `clawdbot pairing approve ${provider} <code>`,
   ].join("\n");
 }

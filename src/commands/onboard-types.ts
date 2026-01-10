@@ -14,6 +14,7 @@ export type AuthChoice =
   | "antigravity"
   | "apiKey"
   | "gemini-api-key"
+  | "zai-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
@@ -43,6 +44,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   geminiApiKey?: string;
+  zaiApiKey?: string;
   minimaxApiKey?: string;
   opencodeZenApiKey?: string;
   gatewayPort?: number;

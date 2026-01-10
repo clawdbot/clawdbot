@@ -22,11 +22,7 @@ import {
   applyTalkApiKey,
 } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
-import {
-  CONFIG_PATH_CLAWDBOT,
-  resolveConfigPath,
-  resolveStateDir,
-} from "./paths.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type {
   ClawdbotConfig,
@@ -348,8 +344,21 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   };
 }
 
-const defaultIO = createConfigIO({ configPath: CONFIG_PATH_CLAWDBOT });
+// NOTE: These wrappers intentionally do *not* cache the resolved config path at
+// module scope. `CLAWDBOT_CONFIG_PATH` (and friends) are expected to work even
+// when set after the module has been imported (tests, one-off scripts, etc.).
+export function loadConfig(): ClawdbotConfig {
+  return createConfigIO({ configPath: resolveConfigPath() }).loadConfig();
+}
 
-export const loadConfig = defaultIO.loadConfig;
-export const readConfigFileSnapshot = defaultIO.readConfigFileSnapshot;
-export const writeConfigFile = defaultIO.writeConfigFile;
+export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
+  return await createConfigIO({
+    configPath: resolveConfigPath(),
+  }).readConfigFileSnapshot();
+}
+
+export async function writeConfigFile(cfg: ClawdbotConfig): Promise<void> {
+  await createConfigIO({ configPath: resolveConfigPath() }).writeConfigFile(
+    cfg,
+  );
+}

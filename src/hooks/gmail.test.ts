@@ -85,7 +85,30 @@ describe("gmail hook config", () => {
     }
   });
 
-  it("keeps explicit serve path for tailscale when set", () => {
+  it("keeps the default public path when serve path is explicit", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "clawdbot@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            pushToken: "push-token",
+            serve: { path: "/gmail-pubsub" },
+            tailscale: { mode: "funnel" },
+          },
+        },
+      },
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.serve.path).toBe("/");
+      expect(result.value.tailscale.path).toBe("/gmail-pubsub");
+    }
+  });
+
+  it("keeps custom public path when serve path is set", () => {
     const result = resolveGmailHookRuntimeConfig(
       {
         hooks: {
@@ -103,8 +126,37 @@ describe("gmail hook config", () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
+      expect(result.value.serve.path).toBe("/");
+      expect(result.value.tailscale.path).toBe("/custom");
+    }
+  });
+
+  it("keeps serve path when tailscale target is set", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "clawdbot@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            pushToken: "push-token",
+            serve: { path: "/custom" },
+            tailscale: {
+              mode: "funnel",
+              target: "http://127.0.0.1:8788/custom",
+            },
+          },
+        },
+      },
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
       expect(result.value.serve.path).toBe("/custom");
       expect(result.value.tailscale.path).toBe("/custom");
+      expect(result.value.tailscale.target).toBe(
+        "http://127.0.0.1:8788/custom",
+      );
     }
   });
 });

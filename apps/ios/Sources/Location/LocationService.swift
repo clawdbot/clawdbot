@@ -86,24 +86,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    private func withTimeout<T>(
+    private func withTimeout<T: Sendable>(
         timeoutMs: Int,
-        operation: @escaping () async throws -> T) async throws -> T
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
-        if timeoutMs == 0 {
-            return try await operation()
-        }
-
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
-                throw Error.timeout
-            }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
-        }
+        try await AsyncTimeout.withTimeoutMs(timeoutMs: timeoutMs, onTimeout: { Error.timeout }, operation: operation)
     }
 
     private static func accuracyValue(_ accuracy: ClawdbotLocationAccuracy) -> CLLocationAccuracy {
@@ -117,26 +104,35 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        if let cont = self.authContinuation {
-            self.authContinuation = nil
-            cont.resume(returning: manager.authorizationStatus)
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        Task { @MainActor in
+            if let cont = self.authContinuation {
+                self.authContinuation = nil
+                cont.resume(returning: status)
+            }
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let cont = self.locationContinuation else { return }
-        self.locationContinuation = nil
-        if let latest = locations.last {
-            cont.resume(returning: latest)
-        } else {
-            cont.resume(throwing: Error.unavailable)
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let locs = locations
+        Task { @MainActor in
+            guard let cont = self.locationContinuation else { return }
+            self.locationContinuation = nil
+            if let latest = locs.last {
+                cont.resume(returning: latest)
+            } else {
+                cont.resume(throwing: Error.unavailable)
+            }
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
-        guard let cont = self.locationContinuation else { return }
-        self.locationContinuation = nil
-        cont.resume(throwing: error)
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
+        let err = error
+        Task { @MainActor in
+            guard let cont = self.locationContinuation else { return }
+            self.locationContinuation = nil
+            cont.resume(throwing: err)
+        }
     }
 }

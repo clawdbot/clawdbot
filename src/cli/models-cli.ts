@@ -25,6 +25,8 @@ import {
   modelsStatusCommand,
 } from "../commands/models.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 export function registerModelsCli(program: Command) {
   const models = program
@@ -39,6 +41,14 @@ export function registerModelsCli(program: Command) {
       "--status-plain",
       "Plain output (alias for `models status --plain`)",
       false,
+    )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/models",
+          "docs.clawd.bot/models",
+        )}\n`,
     );
 
   models

@@ -7,7 +7,7 @@ import {
 } from "./opencode-zen-model-default.js";
 
 describe("applyOpencodeZenModelDefault", () => {
-  it("sets opencode-zen default when model is unset", () => {
+  it("sets opencode default when model is unset", () => {
     const cfg: ClawdbotConfig = { agents: { defaults: {} } };
     const applied = applyOpencodeZenModelDefault(cfg);
     expect(applied.changed).toBe(true);
@@ -30,6 +30,15 @@ describe("applyOpencodeZenModelDefault", () => {
   it("no-ops when already opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: OPENCODE_ZEN_DEFAULT_MODEL } },
+    } as ClawdbotConfig;
+    const applied = applyOpencodeZenModelDefault(cfg);
+    expect(applied.changed).toBe(false);
+    expect(applied.next).toEqual(cfg);
+  });
+
+  it("no-ops when already legacy opencode-zen default", () => {
+    const cfg = {
+      agents: { defaults: { model: "opencode-zen/claude-opus-4-5" } },
     } as ClawdbotConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expect(applied.changed).toBe(false);

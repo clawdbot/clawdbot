@@ -531,6 +531,7 @@ export function createClawdbotCodingTools(options?: {
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   agentDir?: string;
+  workspaceDir?: string;
   config?: ClawdbotConfig;
   abortSignal?: AbortSignal;
   /**
@@ -571,20 +572,30 @@ export function createClawdbotCodingTools(options?: {
   ]);
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
+  const workspaceRoot = options?.workspaceDir ?? process.cwd();
+
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
-      return sandboxRoot
-        ? [createSandboxedReadTool(sandboxRoot)]
-        : [createClawdbotReadTool(tool)];
+      if (sandboxRoot) {
+        return [createSandboxedReadTool(sandboxRoot)];
+      }
+      const freshReadTool = createReadTool(workspaceRoot);
+      return [createClawdbotReadTool(freshReadTool)];
     }
     if (tool.name === bashToolName) return [];
-    if (sandboxRoot && (tool.name === "write" || tool.name === "edit")) {
-      return [];
+    if (tool.name === "write") {
+      if (sandboxRoot) return [];
+      return [createWriteTool(workspaceRoot)];
+    }
+    if (tool.name === "edit") {
+      if (sandboxRoot) return [];
+      return [createEditTool(workspaceRoot)];
     }
     return [tool as AnyAgentTool];
   });
   const bashTool = createBashTool({
     ...options?.bash,
+    cwd: options?.workspaceDir,
     allowBackground,
     scopeKey,
     sandbox: sandbox

@@ -1,5 +1,11 @@
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import {
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
 import type { ClawdbotConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -111,6 +117,13 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const msteamsCfg = cfg.msteams;
+  const historyLimit = Math.max(
+    0,
+    msteamsCfg?.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const conversationHistories = new Map<string, HistoryEntry[]>();
 
   return async function handleTeamsMessage(context: MSTeamsTurnContext) {
     const activity = context.activity;
@@ -415,10 +428,38 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       timestamp,
       body: rawBody,
     });
+    let combinedBody = body;
+    const isRoomish = !isDirectMessage;
+    const historyKey = isRoomish ? conversationId : undefined;
+    if (isRoomish && historyKey && historyLimit > 0) {
+      combinedBody = buildHistoryContextFromMap({
+        historyMap: conversationHistories,
+        historyKey,
+        limit: historyLimit,
+        entry: {
+          sender: senderName,
+          body: rawBody,
+          timestamp: timestamp?.getTime(),
+          messageId: activity.id ?? undefined,
+        },
+        currentMessage: combinedBody,
+        formatEntry: (entry) =>
+          formatAgentEnvelope({
+            provider: "Teams",
+            from: conversationType,
+            timestamp: entry.timestamp,
+            body: `${entry.sender}: ${entry.body}${
+              entry.messageId ? ` [id:${entry.messageId}]` : ""
+            }`,
+          }),
+      });
+    }
 
     // Build context payload for agent
     const ctxPayload = {
-      Body: body,
+      Body: combinedBody,
+      RawBody: rawBody,
+      CommandBody: rawBody,
       From: teamsFrom,
       To: teamsTo,
       SessionKey: route.sessionKey,
@@ -472,12 +513,27 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       markDispatchIdle();
       log.info("dispatch complete", { queuedFinal, counts });
 
-      if (!queuedFinal) return;
+      const didSendReply = counts.final + counts.tool + counts.block > 0;
+      if (!queuedFinal) {
+        if (isRoomish && historyKey && historyLimit > 0 && didSendReply) {
+          clearHistoryEntries({
+            historyMap: conversationHistories,
+            historyKey,
+          });
+        }
+        return;
+      }
       if (shouldLogVerbose()) {
         const finalCount = counts.final;
         logVerbose(
           `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
         );
+      }
+      if (isRoomish && historyKey && historyLimit > 0 && didSendReply) {
+        clearHistoryEntries({
+          historyMap: conversationHistories,
+          historyKey,
+        });
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });

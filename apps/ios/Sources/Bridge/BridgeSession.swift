@@ -321,20 +321,10 @@ actor BridgeSession {
         seconds: Double,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw TimeoutError(message: "UNAVAILABLE: connection timeout")
-            }
-
-            guard let first = try await group.next() else {
-                throw TimeoutError(message: "UNAVAILABLE: connection timeout")
-            }
-
-            group.cancelAll()
-            return first
-        }
+        try await AsyncTimeout.withTimeout(
+            seconds: seconds,
+            onTimeout: { TimeoutError(message: "UNAVAILABLE: connection timeout") },
+            operation: operation)
     }
 
     private static func makeStateStream(for connection: NWConnection) -> AsyncStream<NWConnection.State> {

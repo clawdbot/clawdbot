@@ -7,6 +7,7 @@ import {
   listIMessageAccountIds,
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
+import { resolveMSTeamsCredentials } from "../msteams/token.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   listSignalAccountIds,
@@ -294,6 +295,27 @@ export async function buildProviderSummary(
       : [];
     if (allowFrom.length) {
       lines.push(tint(`AllowFrom: ${allowFrom.join(", ")}`, theme.muted));
+    }
+  }
+
+  const msEnabled = effective.msteams?.enabled !== false;
+  if (!msEnabled) {
+    lines.push(tint("MS Teams: disabled", theme.muted));
+  } else {
+    const configured = Boolean(resolveMSTeamsCredentials(effective.msteams));
+    lines.push(
+      configured
+        ? tint("MS Teams: configured", theme.success)
+        : tint("MS Teams: not configured", theme.muted),
+    );
+    if (configured && resolved.includeAllowFrom) {
+      const allowFrom = (effective.msteams?.allowFrom ?? [])
+        .map((val) => val.trim())
+        .filter(Boolean)
+        .slice(0, 2);
+      if (allowFrom.length > 0) {
+        lines.push(accountLine("default", [`allow:${allowFrom.join(",")}`]));
+      }
     }
   }
 

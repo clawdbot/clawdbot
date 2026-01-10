@@ -1,6 +1,5 @@
 import { spinner } from "@clack/prompts";
 import { createOscProgressController, supportsOscProgress } from "osc-progress";
-
 import { theme } from "../terminal/theme.js";
 
 const DEFAULT_DELAY_MS = 300;
@@ -47,8 +46,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
   const canOsc = supportsOscProgress(process.env, stream.isTTY);
   const allowSpinner =
-    !canOsc &&
-    (options.fallback === undefined || options.fallback === "spinner");
+    options.fallback === undefined || options.fallback === "spinner";
 
   let started = false;
   let label = options.label;
@@ -77,7 +75,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     if (controller) {
       if (indeterminate) controller.setIndeterminate(label);
       else controller.setPercent(label, percent);
-    } else if (spin) {
+    }
+    if (spin) {
       spin.message(theme.accent(label));
     }
   };

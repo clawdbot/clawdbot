@@ -97,7 +97,7 @@ Mapping options (summary):
 - Set `deliver: true` + `provider`/`to` on mappings to route replies to a chat surface
   (`provider` defaults to `last` and falls back to WhatsApp).
 - `clawdbot hooks gmail setup` writes `hooks.gmail` config for `clawdbot hooks gmail run`.
-See [`docs/gmail-pubsub.md`](https://docs.clawd.bot/automation/gmail-pubsub) for the full Gmail watch flow.
+See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
 ## Responses
 

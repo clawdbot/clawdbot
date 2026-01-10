@@ -83,13 +83,17 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("list")
     .description("List pending pairing requests")
-    .requiredOption(
-      "--provider <provider>",
-      `Provider (${PROVIDERS.join(", ")})`,
-    )
+    .option("--provider <provider>", `Provider (${PROVIDERS.join(", ")})`)
+    .argument("[provider]", `Provider (${PROVIDERS.join(", ")})`)
     .option("--json", "Print JSON", false)
-    .action(async (opts) => {
-      const provider = parseProvider(opts.provider);
+    .action(async (providerArg, opts) => {
+      const providerRaw = opts.provider ?? providerArg;
+      if (!providerRaw) {
+        throw new Error(
+          `Provider required. Use --provider <provider> or pass it as the first argument (expected one of: ${PROVIDERS.join(", ")})`,
+        );
+      }
+      const provider = parseProvider(providerRaw);
       const requests = await listProviderPairingRequests(provider);
       if (opts.json) {
         console.log(JSON.stringify({ provider, requests }, null, 2));
@@ -111,20 +115,35 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("approve")
     .description("Approve a pairing code and allow that sender")
-    .requiredOption(
-      "--provider <provider>",
-      `Provider (${PROVIDERS.join(", ")})`,
+    .option("--provider <provider>", `Provider (${PROVIDERS.join(", ")})`)
+    .argument(
+      "<codeOrProvider>",
+      "Pairing code (or provider when using 2 args)",
     )
-    .argument("<code>", "Pairing code (shown to the requester)")
+    .argument("[code]", "Pairing code (when provider is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same provider", false)
-    .action(async (code, opts) => {
-      const provider = parseProvider(opts.provider);
+    .action(async (codeOrProvider, code, opts) => {
+      const providerRaw = opts.provider ?? codeOrProvider;
+      const resolvedCode = opts.provider ? codeOrProvider : code;
+      if (!opts.provider && !code) {
+        throw new Error(
+          `Usage: clawdbot pairing approve <provider> <code> (or: clawdbot pairing approve --provider <provider> <code>)`,
+        );
+      }
+      if (opts.provider && code != null) {
+        throw new Error(
+          `Too many arguments. Use: clawdbot pairing approve --provider <provider> <code>`,
+        );
+      }
+      const provider = parseProvider(providerRaw);
       const approved = await approveProviderPairingCode({
         provider,
-        code: String(code),
+        code: String(resolvedCode),
       });
       if (!approved) {
-        throw new Error(`No pending pairing request found for code: ${code}`);
+        throw new Error(
+          `No pending pairing request found for code: ${String(resolvedCode)}`,
+        );
       }
 
       console.log(`Approved ${provider} sender ${approved.id}.`);

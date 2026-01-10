@@ -115,7 +115,11 @@ final class BridgeConnectionController {
 
             self.didAutoConnect = true
             let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(manualHost), port: port)
-            self.startAutoConnect(endpoint: endpoint, token: token, instanceId: instanceId)
+            self.startAutoConnect(
+                endpoint: endpoint,
+                bridgeStableID: BridgeEndpointID.stableID(endpoint),
+                token: token,
+                instanceId: instanceId)
             return
         }
 
@@ -132,7 +136,11 @@ final class BridgeConnectionController {
         guard let target = self.bridges.first(where: { $0.stableID == targetStableID }) else { return }
 
         self.didAutoConnect = true
-        self.startAutoConnect(endpoint: target.endpoint, token: token, instanceId: instanceId)
+        self.startAutoConnect(
+            endpoint: target.endpoint,
+            bridgeStableID: target.stableID,
+            token: token,
+            instanceId: instanceId)
     }
 
     private func updateLastDiscoveredBridge(from bridges: [BridgeDiscoveryModel.DiscoveredBridge]) {
@@ -171,7 +179,12 @@ final class BridgeConnectionController {
         "bridge-token.\(instanceId)"
     }
 
-    private func startAutoConnect(endpoint: NWEndpoint, token: String, instanceId: String) {
+    private func startAutoConnect(
+        endpoint: NWEndpoint,
+        bridgeStableID: String,
+        token: String,
+        instanceId: String)
+    {
         guard let appModel else { return }
         Task { [weak self] in
             guard let self else { return }
@@ -192,7 +205,10 @@ final class BridgeConnectionController {
                         service: "com.clawdbot.bridge",
                         account: self.keychainAccount(instanceId: instanceId))
                 }
-                appModel.connectToBridge(endpoint: endpoint, hello: self.makeHello(token: resolvedToken))
+                appModel.connectToBridge(
+                    endpoint: endpoint,
+                    bridgeStableID: bridgeStableID,
+                    hello: self.makeHello(token: resolvedToken))
             } catch {
                 await MainActor.run {
                     appModel.bridgeStatusText = "Bridge error: \(error.localizedDescription)"

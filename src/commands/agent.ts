@@ -66,8 +66,17 @@ import {
 } from "../utils/message-provider.js";
 import { normalizeE164 } from "../utils.js";
 
+/** Image content block for Claude API multimodal messages. */
+type ImageContent = {
+  type: "image";
+  data: string;
+  mimeType: string;
+};
+
 type AgentCommandOpts = {
   message: string;
+  /** Optional image attachments for multimodal messages. */
+  images?: ImageContent[];
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -450,6 +459,7 @@ export async function agentCommand(
           config: cfg,
           skillsSnapshot,
           prompt: body,
+          images: opts.images,
           provider: providerOverride,
           model: modelOverride,
           authProfileId: sessionEntry?.authProfileOverride,

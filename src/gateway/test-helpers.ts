@@ -386,7 +386,12 @@ export function installGatewayTestHooks() {
   afterEach(async () => {
     process.env.HOME = previousHome;
     if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
+      await fs.rm(tempHome, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 25,
+      });
       tempHome = undefined;
     }
   });

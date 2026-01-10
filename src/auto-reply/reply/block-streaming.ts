@@ -5,6 +5,8 @@ import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
+const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
+const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;
 const PROVIDER_COALESCE_DEFAULTS: Partial<
   Record<TextChunkProvider, { minChars: number; idleMs: number }>
 > = {
@@ -68,6 +70,39 @@ export function resolveBlockStreamingChunking(
     chunkCfg?.breakPreference === "newline" ||
     chunkCfg?.breakPreference === "sentence"
       ? chunkCfg.breakPreference
+      : "paragraph";
+  return { minChars, maxChars, breakPreference };
+}
+
+export function resolveTelegramDraftStreamingChunking(
+  cfg: ClawdbotConfig | undefined,
+  accountId?: string | null,
+): {
+  minChars: number;
+  maxChars: number;
+  breakPreference: "paragraph" | "newline" | "sentence";
+} {
+  const providerKey: TextChunkProvider = "telegram";
+  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const draftCfg =
+    cfg?.telegram?.accounts?.[normalizedAccountId]?.draftChunk ??
+    cfg?.telegram?.draftChunk;
+
+  const maxRequested = Math.max(
+    1,
+    Math.floor(draftCfg?.maxChars ?? DEFAULT_TELEGRAM_DRAFT_STREAM_MAX),
+  );
+  const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
+  const minRequested = Math.max(
+    1,
+    Math.floor(draftCfg?.minChars ?? DEFAULT_TELEGRAM_DRAFT_STREAM_MIN),
+  );
+  const minChars = Math.min(minRequested, maxChars);
+  const breakPreference =
+    draftCfg?.breakPreference === "newline" ||
+    draftCfg?.breakPreference === "sentence"
+      ? draftCfg.breakPreference
       : "paragraph";
   return { minChars, maxChars, breakPreference };
 }

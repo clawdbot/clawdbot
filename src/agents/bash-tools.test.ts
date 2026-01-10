@@ -164,7 +164,7 @@ describe("bash tool backgrounding", () => {
         command: "echo hi",
         elevated: true,
       }),
-    ).rejects.toThrow("elevated is not available right now.");
+    ).rejects.toThrow("tools.elevated.allowFrom.<provider>");
   });
 
   it("does not default to elevated when not allowed", async () => {

@@ -97,6 +97,7 @@ export function buildAuthChoiceOptions(params: {
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
+  options.push({ value: "zai-api-key", label: "Z.AI (GLM) API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({

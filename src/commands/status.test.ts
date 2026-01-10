@@ -20,6 +20,17 @@ const mocks = vi.hoisted(() => ({
   getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
   logWebSelfId: vi.fn(),
+  probeGateway: vi.fn().mockResolvedValue({
+    ok: false,
+    url: "ws://127.0.0.1:18789",
+    connectLatencyMs: null,
+    error: "timeout",
+    close: null,
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+  }),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -32,6 +43,52 @@ vi.mock("../web/session.js", () => ({
   getWebAuthAgeMs: mocks.getWebAuthAgeMs,
   readWebSelfId: mocks.readWebSelfId,
   logWebSelfId: mocks.logWebSelfId,
+}));
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway: mocks.probeGateway,
+}));
+vi.mock("../gateway/session-utils.js", () => ({
+  listAgentsForGateway: () => ({
+    defaultId: "main",
+    mainKey: "agent:main:main",
+    scope: "per-sender",
+    agents: [{ id: "main", name: "Main" }],
+  }),
+}));
+vi.mock("../infra/clawdbot-root.js", () => ({
+  resolveClawdbotPackageRoot: vi.fn().mockResolvedValue("/tmp/clawdbot"),
+}));
+vi.mock("../infra/os-summary.js", () => ({
+  resolveOsSummary: () => ({
+    platform: "darwin",
+    arch: "arm64",
+    release: "23.0.0",
+    label: "macos 14.0 (arm64)",
+  }),
+}));
+vi.mock("../infra/update-check.js", () => ({
+  checkUpdateStatus: vi.fn().mockResolvedValue({
+    root: "/tmp/clawdbot",
+    installKind: "git",
+    packageManager: "pnpm",
+    git: {
+      root: "/tmp/clawdbot",
+      branch: "main",
+      upstream: "origin/main",
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+      fetchOk: true,
+    },
+    deps: {
+      manager: "pnpm",
+      status: "ok",
+      lockfilePath: "/tmp/clawdbot/pnpm-lock.yaml",
+      markerPath: "/tmp/clawdbot/node_modules/.modules.yaml",
+    },
+    registry: { latestVersion: "0.0.0" },
+  }),
+  compareSemverStrings: vi.fn(() => 0),
 }));
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();

@@ -7,7 +7,7 @@ TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 ENT_TMP_BASE=$(mktemp -t clawdbot-entitlements-base.XXXXXX)
 ENT_TMP_APP=$(mktemp -t clawdbot-entitlements-app.XXXXXX)
 ENT_TMP_APP_BASE=$(mktemp -t clawdbot-entitlements-app-base.XXXXXX)
-ENT_TMP_BUN=$(mktemp -t clawdbot-entitlements-bun.XXXXXX)
+ENT_TMP_RUNTIME=$(mktemp -t clawdbot-entitlements-runtime.XXXXXX)
 
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
@@ -150,7 +150,7 @@ cat > "$ENT_TMP_APP_BASE" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$ENT_TMP_BUN" <<'PLIST'
+cat > "$ENT_TMP_RUNTIME" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -215,8 +215,11 @@ if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   find "$APP_BUNDLE/Contents/Resources/Relay" -type f \( -name "*.node" -o -name "*.dylib" \) -print0 | while IFS= read -r -d '' f; do
     echo "Signing gateway payload: $f"; sign_item "$f" "$ENT_TMP_BASE"
   done
+  if [ -f "$APP_BUNDLE/Contents/Resources/Relay/node" ]; then
+    echo "Signing embedded node"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/node" "$ENT_TMP_RUNTIME"
+  fi
   if [ -f "$APP_BUNDLE/Contents/Resources/Relay/clawdbot" ]; then
-    echo "Signing embedded relay"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/clawdbot" "$ENT_TMP_BUN"
+    echo "Signing embedded relay wrapper"; sign_plain_item "$APP_BUNDLE/Contents/Resources/Relay/clawdbot"
   fi
 fi
 
@@ -246,5 +249,5 @@ fi
 # Finally sign the bundle
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
-rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_APP" "$ENT_TMP_BUN"
+rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_APP" "$ENT_TMP_RUNTIME"
 echo "Codesign complete for $APP_BUNDLE"

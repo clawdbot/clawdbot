@@ -156,6 +156,29 @@ describe("cli program", () => {
     );
   });
 
+  it("passes zai api key to onboard", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "onboard",
+        "--non-interactive",
+        "--auth-choice",
+        "zai-api-key",
+        "--zai-api-key",
+        "sk-zai-test",
+      ],
+      { from: "user" },
+    );
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonInteractive: true,
+        authChoice: "zai-api-key",
+        zaiApiKey: "sk-zai-test",
+      }),
+      runtime,
+    );
+  });
+
   it("runs providers login", async () => {
     const program = buildProgram();
     await program.parseAsync(["providers", "login", "--account", "work"], {

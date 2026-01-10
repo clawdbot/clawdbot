@@ -35,10 +35,10 @@
 	<string>Clawdbot can capture photos or short video clips when requested via the bridge.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Clawdbot discovers and connects to your Clawdbot bridge on the local network.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Clawdbot uses your location when you allow location sharing.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Clawdbot can share your location in the background when you enable Always.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Clawdbot uses your location when you allow location sharing.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clawdbot needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

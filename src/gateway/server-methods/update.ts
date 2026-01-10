@@ -1,5 +1,7 @@
+import { resolveClawdbotPackageRoot } from "../../infra/clawdbot-root.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
+  DOCTOR_NONINTERACTIVE_HINT,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -48,9 +50,15 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
+      const root =
+        (await resolveClawdbotPackageRoot({
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        })) ?? process.cwd();
       result = await runGatewayUpdate({
         timeoutMs,
-        cwd: process.cwd(),
+        cwd: root,
         argv1: process.argv[1],
       });
     } catch (err) {
@@ -69,6 +77,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       ts: Date.now(),
       sessionKey,
       message: note ?? null,
+      doctorHint: DOCTOR_NONINTERACTIVE_HINT,
       stats: {
         mode: result.mode,
         root: result.root ?? undefined,

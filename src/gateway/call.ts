@@ -66,18 +66,20 @@ export function buildGatewayConnectionDetails(
     typeof remote?.url === "string" && remote.url.trim().length > 0
       ? remote.url.trim()
       : undefined;
+  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
     ? "cli --url"
     : remoteUrl
       ? "config gateway.remote.url"
-      : preferTailnet && tailnetIPv4
-        ? `local tailnet ${tailnetIPv4}`
-        : "local loopback";
-  const remoteFallbackNote =
-    isRemoteMode && !urlOverride && !remoteUrl
-      ? "Note: gateway.mode=remote but gateway.remote.url is missing; using local URL."
-      : undefined;
+      : remoteMisconfigured
+        ? "missing gateway.remote.url (fallback local)"
+        : preferTailnet && tailnetIPv4
+          ? `local tailnet ${tailnetIPv4}`
+          : "local loopback";
+  const remoteFallbackNote = remoteMisconfigured
+    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
+    : undefined;
   const bindDetail =
     !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const message = [
@@ -106,11 +108,31 @@ export async function callGateway<T = unknown>(
   const config = loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
+  const urlOverride =
+    typeof opts.url === "string" && opts.url.trim().length > 0
+      ? opts.url.trim()
+      : undefined;
+  const remoteUrl =
+    typeof remote?.url === "string" && remote.url.trim().length > 0
+      ? remote.url.trim()
+      : undefined;
+  if (isRemoteMode && !urlOverride && !remoteUrl) {
+    const configPath =
+      opts.configPath ??
+      resolveConfigPath(process.env, resolveStateDir(process.env));
+    throw new Error(
+      [
+        "gateway remote mode misconfigured: gateway.remote.url missing",
+        `Config: ${configPath}`,
+        "Fix: set gateway.remote.url, or set gateway.mode=local.",
+      ].join("\n"),
+    );
+  }
   const authToken = config.gateway?.auth?.token;
   const authPassword = config.gateway?.auth?.password;
   const connectionDetails = buildGatewayConnectionDetails({
     config,
-    url: opts.url,
+    url: urlOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;

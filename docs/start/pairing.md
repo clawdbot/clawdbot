@@ -30,8 +30,8 @@ Pairing codes:
 ### Approve a sender
 
 ```bash
-clawdbot pairing list --provider telegram
-clawdbot pairing approve --provider telegram <CODE>
+clawdbot pairing list telegram
+clawdbot pairing approve telegram <CODE>
 ```
 
 Supported providers: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.

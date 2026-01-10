@@ -113,11 +113,11 @@ When a run starts with a model override (hooks or CLI), fallbacks still end at
 
 ## Related config
 
-See [`docs/configuration.md`](/gateway/configuration) for:
+See [Gateway configuration](/gateway/configuration) for:
 - `auth.profiles` / `auth.order`
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
 - `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 
-See [`docs/models.md`](/concepts/models) for the broader model selection and fallback overview.
+See [Models](/concepts/models) for the broader model selection and fallback overview.

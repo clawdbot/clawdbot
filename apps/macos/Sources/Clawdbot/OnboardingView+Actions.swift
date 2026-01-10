@@ -1,4 +1,5 @@
 import AppKit
+import ClawdbotDiscovery
 import ClawdbotIPC
 import SwiftUI
 

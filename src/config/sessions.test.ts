@@ -11,6 +11,7 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
   updateLastRoute,
+  updateSessionStoreEntry,
 } from "./sessions.js";
 
 describe("sessions", () => {
@@ -111,6 +112,12 @@ describe("sessions", () => {
             updatedAt: 123,
             systemSent: true,
             thinkingLevel: "low",
+            responseUsage: "on",
+            queueDebounceMs: 1234,
+            reasoningLevel: "on",
+            elevatedLevel: "on",
+            authProfileOverride: "auth-1",
+            compactionCount: 2,
           },
         },
         null,
@@ -131,6 +138,12 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
     expect(store[mainSessionKey]?.lastProvider).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("12345");
+    expect(store[mainSessionKey]?.responseUsage).toBe("on");
+    expect(store[mainSessionKey]?.queueDebounceMs).toBe(1234);
+    expect(store[mainSessionKey]?.reasoningLevel).toBe("on");
+    expect(store[mainSessionKey]?.elevatedLevel).toBe("on");
+    expect(store[mainSessionKey]?.authProfileOverride).toBe("auth-1");
+    expect(store[mainSessionKey]?.compactionCount).toBe(2);
   });
 
   it("derives session transcripts dir from CLAWDBOT_STATE_DIR", () => {
@@ -174,5 +187,53 @@ describe("sessions", () => {
         process.env.CLAWDBOT_STATE_DIR = prev;
       }
     }
+  });
+
+  it("updateSessionStoreEntry merges concurrent patches", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [mainSessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 123,
+            thinkingLevel: "low",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await Promise.all([
+      updateSessionStoreEntry({
+        storePath,
+        sessionKey: mainSessionKey,
+        update: async () => {
+          await sleep(50);
+          return { modelOverride: "anthropic/claude-opus-4-5" };
+        },
+      }),
+      updateSessionStoreEntry({
+        storePath,
+        sessionKey: mainSessionKey,
+        update: async () => {
+          await sleep(10);
+          return { thinkingLevel: "high" };
+        },
+      }),
+    ]);
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.modelOverride).toBe(
+      "anthropic/claude-opus-4-5",
+    );
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
+    await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });
 });

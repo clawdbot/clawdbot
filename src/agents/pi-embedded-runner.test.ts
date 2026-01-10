@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -8,6 +11,7 @@ import {
   applyGoogleTurnOrderingFix,
   buildEmbeddedSandboxInfo,
   createSystemPromptOverride,
+  runEmbeddedPiAgent,
   splitSdkTools,
 } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -55,6 +59,47 @@ describe("buildEmbeddedSandboxInfo", () => {
       agentWorkspaceMount: undefined,
       browserControlUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
+    });
+  });
+
+  it("includes elevated info when allowed", () => {
+    const sandbox = {
+      enabled: true,
+      sessionKey: "session:test",
+      workspaceDir: "/tmp/clawdbot-sandbox",
+      agentWorkspaceDir: "/tmp/clawdbot-workspace",
+      workspaceAccess: "none",
+      containerName: "clawdbot-sbx-test",
+      containerWorkdir: "/workspace",
+      docker: {
+        image: "clawdbot-sandbox:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: ["/tmp"],
+        network: "none",
+        user: "1000:1000",
+        capDrop: ["ALL"],
+        env: { LANG: "C.UTF-8" },
+      },
+      tools: {
+        allow: ["bash"],
+        deny: ["browser"],
+      },
+    } satisfies SandboxContext;
+
+    expect(
+      buildEmbeddedSandboxInfo(sandbox, {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "on",
+      }),
+    ).toEqual({
+      enabled: true,
+      workspaceDir: "/tmp/clawdbot-sandbox",
+      workspaceAccess: "none",
+      agentWorkspaceMount: undefined,
+      elevated: { allowed: true, defaultLevel: "on" },
     });
   });
 });
@@ -227,5 +272,59 @@ describe("applyGoogleTurnOrderingFix", () => {
     });
     expect(result.messages).toBe(input);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("runEmbeddedPiAgent", () => {
+  it("writes models.json into the provided agentDir", async () => {
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-agent-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-workspace-"),
+    );
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+
+    const cfg = {
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/v1",
+            api: "openai-completions",
+            apiKey: "sk-minimax-test",
+            models: [
+              {
+                id: "minimax-m2.1",
+                name: "MiniMax M2.1",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies ClawdbotConfig;
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:dev:test",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "hi",
+        provider: "definitely-not-a-provider",
+        model: "definitely-not-a-model",
+        timeoutMs: 1,
+        agentDir,
+      }),
+    ).rejects.toThrow(/Unknown model:/);
+
+    await expect(
+      fs.stat(path.join(agentDir, "models.json")),
+    ).resolves.toBeTruthy();
   });
 });

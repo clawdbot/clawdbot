@@ -2,6 +2,8 @@ import type { Command } from "commander";
 
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.js";
 import { registerBrowserActionObserveCommands } from "./browser-cli-actions-observe.js";
 import {
@@ -27,7 +29,11 @@ export function registerBrowserCli(program: Command) {
     .option("--json", "Output machine-readable JSON", false)
     .addHelpText(
       "after",
-      `\nExamples:\n  ${[...browserCoreExamples, ...browserActionExamples].join("\n  ")}\n`,
+      () =>
+        `\nExamples:\n  ${[...browserCoreExamples, ...browserActionExamples].join("\n  ")}\n\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/browser",
+          "docs.clawd.bot/browser",
+        )}\n`,
     )
     .action(() => {
       browser.outputHelp();

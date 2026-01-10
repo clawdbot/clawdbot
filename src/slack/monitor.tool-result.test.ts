@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
+import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { monitorSlackProvider } from "./monitor.js";
 
 const sendMock = vi.fn();
@@ -216,6 +218,68 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock.mock.calls[0][1]).toBe("tool update");
     expect(sendMock.mock.calls[1][1]).toBe("final reply");
+  });
+
+  it("wraps room history in Body and preserves RawBody", async () => {
+    config = {
+      messages: { ackReactionScope: "group-mentions" },
+      slack: {
+        historyLimit: 5,
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        channels: { "*": { requireMention: false } },
+      },
+    };
+
+    let capturedCtx: { Body?: string; RawBody?: string; CommandBody?: string } =
+      {};
+    replyMock.mockImplementation(async (ctx) => {
+      capturedCtx = ctx ?? {};
+      return undefined;
+    });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "first",
+        ts: "123",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U2",
+        text: "second",
+        ts: "124",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    expect(capturedCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
+    expect(capturedCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
+    expect(capturedCtx.Body).toContain("first");
+    expect(capturedCtx.RawBody).toBe("second");
+    expect(capturedCtx.CommandBody).toBe("second");
   });
 
   it("updates assistant thread status when replies start", async () => {

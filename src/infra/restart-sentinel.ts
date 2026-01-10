@@ -28,11 +28,12 @@ export type RestartSentinelStats = {
 };
 
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "update";
+  kind: "config-apply" | "update" | "restart";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
   message?: string | null;
+  doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };
 
@@ -42,6 +43,9 @@ export type RestartSentinel = {
 };
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
+
+export const DOCTOR_NONINTERACTIVE_HINT =
+  "Run: clawdbot doctor --non-interactive";
 
 export function resolveRestartSentinelPath(
   env: NodeJS.ProcessEnv = process.env,

@@ -12,6 +12,17 @@ function restoreEnv(entries: RestoreEntry[]): void {
 }
 
 export function installTestEnv(): { cleanup: () => void; tempHome: string } {
+  const live =
+    process.env.LIVE === "1" ||
+    process.env.CLAWDBOT_LIVE_TEST === "1" ||
+    process.env.CLAWDBOT_LIVE_GATEWAY === "1";
+
+  // Live tests must use the real user environment (keys, profiles, config).
+  // The default test env isolates HOME to avoid touching real state.
+  if (live) {
+    return { cleanup: () => {}, tempHome: process.env.HOME ?? "" };
+  }
+
   const restore: RestoreEntry[] = [
     { key: "HOME", value: process.env.HOME },
     { key: "USERPROFILE", value: process.env.USERPROFILE },

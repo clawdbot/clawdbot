@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 
 export type NodePairingPendingRequest = {
   requestId: string;
@@ -48,12 +48,8 @@ type NodePairingStateFile = {
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
 
-function defaultBaseDir() {
-  return path.join(os.homedir(), ".clawdbot");
-}
-
 function resolvePaths(baseDir?: string) {
-  const root = baseDir ?? defaultBaseDir();
+  const root = baseDir ?? resolveStateDir();
   const dir = path.join(root, "nodes");
   return {
     dir,

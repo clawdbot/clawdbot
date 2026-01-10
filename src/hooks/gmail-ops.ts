@@ -60,6 +60,7 @@ export type GmailSetupOptions = {
   renewEveryMinutes?: number;
   tailscale?: "off" | "serve" | "funnel";
   tailscalePath?: string;
+  tailscaleTarget?: string;
   pushEndpoint?: string;
   json?: boolean;
 };
@@ -80,6 +81,7 @@ export type GmailRunOptions = {
   renewEveryMinutes?: number;
   tailscale?: "off" | "serve" | "funnel";
   tailscalePath?: string;
+  tailscaleTarget?: string;
 };
 
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER =
@@ -134,6 +136,18 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   const serveBind = opts.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePort = opts.port ?? DEFAULT_GMAIL_SERVE_PORT;
   const configuredServePath = opts.path ?? baseConfig.hooks?.gmail?.serve?.path;
+  const configuredTailscaleTarget =
+    opts.tailscaleTarget ?? baseConfig.hooks?.gmail?.tailscale?.target;
+  const normalizedServePath =
+    typeof configuredServePath === "string" &&
+    configuredServePath.trim().length > 0
+      ? normalizeServePath(configuredServePath)
+      : DEFAULT_GMAIL_SERVE_PATH;
+  const normalizedTailscaleTarget =
+    typeof configuredTailscaleTarget === "string" &&
+    configuredTailscaleTarget.trim().length > 0
+      ? configuredTailscaleTarget.trim()
+      : undefined;
 
   const includeBody = opts.includeBody ?? true;
   const maxBytes = opts.maxBytes ?? DEFAULT_GMAIL_MAX_BYTES;
@@ -142,18 +156,16 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const tailscaleMode = opts.tailscale ?? "funnel";
   // Tailscale strips the path before proxying; keep a public path while gog
-  // listens on "/" unless the user explicitly configured a serve path.
+  // listens on "/" whenever Tailscale is enabled.
   const servePath = normalizeServePath(
-    tailscaleMode !== "off" && !configuredServePath
+    tailscaleMode !== "off" && !normalizedTailscaleTarget
       ? "/"
-      : (configuredServePath ?? DEFAULT_GMAIL_SERVE_PATH),
+      : normalizedServePath,
   );
   const tailscalePath = normalizeServePath(
     opts.tailscalePath ??
       baseConfig.hooks?.gmail?.tailscale?.path ??
-      (tailscaleMode !== "off"
-        ? (configuredServePath ?? DEFAULT_GMAIL_SERVE_PATH)
-        : servePath),
+      (tailscaleMode !== "off" ? normalizedServePath : servePath),
   );
 
   await runGcloud(["config", "set", "project", projectId, "--quiet"]);
@@ -188,6 +200,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
         mode: tailscaleMode,
         path: tailscalePath,
         port: servePort,
+        target: normalizedTailscaleTarget,
         token: pushToken,
       });
 
@@ -235,6 +248,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
           ...baseConfig.hooks?.gmail?.tailscale,
           mode: tailscaleMode,
           path: tailscalePath,
+          target: normalizedTailscaleTarget,
         },
       },
     },
@@ -298,6 +312,7 @@ export async function runGmailService(opts: GmailRunOptions) {
     renewEveryMinutes: opts.renewEveryMinutes,
     tailscaleMode: opts.tailscale,
     tailscalePath: opts.tailscalePath,
+    tailscaleTarget: opts.tailscaleTarget,
   };
 
   const resolved = resolveGmailHookRuntimeConfig(config, overrides);
@@ -313,6 +328,7 @@ export async function runGmailService(opts: GmailRunOptions) {
       mode: runtimeConfig.tailscale.mode,
       path: runtimeConfig.tailscale.path,
       port: runtimeConfig.serve.port,
+      target: runtimeConfig.tailscale.target,
     });
   }
 

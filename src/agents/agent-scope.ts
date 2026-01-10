@@ -22,6 +22,7 @@ type ResolvedAgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: string;
+  humanDelay?: AgentEntry["humanDelay"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
@@ -94,6 +95,7 @@ export function resolveAgentConfig(
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model: typeof entry.model === "string" ? entry.model : undefined,
+    humanDelay: entry.humanDelay,
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents:

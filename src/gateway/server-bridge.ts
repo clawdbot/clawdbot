@@ -23,6 +23,7 @@ import {
 import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
+  mergeSessionEntry,
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
   saveSessionStore,
@@ -35,7 +36,17 @@ import {
 import { clearCommandLane } from "../process/command-queue.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { buildMessageWithAttachments } from "./chat-attachments.js";
+import {
+  abortChatRunById,
+  abortChatRunsForSessionKey,
+  type ChatAbortControllerEntry,
+  isChatStopCommandText,
+  resolveChatRunExpiresAtMs,
+} from "./chat-abort.js";
+import {
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "./chat-attachments.js";
 import {
   ErrorCodes,
   errorShape,
@@ -105,10 +116,8 @@ export type BridgeHandlersContext = {
     clientRunId: string,
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
-  chatAbortControllers: Map<
-    string,
-    { controller: AbortController; sessionId: string; sessionKey: string }
-  >;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
@@ -699,13 +708,41 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
 
           const { sessionKey, runId } = params as {
             sessionKey: string;
-            runId: string;
+            runId?: string;
           };
+          const ops = {
+            chatAbortControllers: ctx.chatAbortControllers,
+            chatRunBuffers: ctx.chatRunBuffers,
+            chatDeltaSentAt: ctx.chatDeltaSentAt,
+            chatAbortedRuns: ctx.chatAbortedRuns,
+            removeChatRun: ctx.removeChatRun,
+            agentRunSeq: ctx.agentRunSeq,
+            broadcast: ctx.broadcast,
+            bridgeSendToSession: ctx.bridgeSendToSession,
+          };
+          if (!runId) {
+            const res = abortChatRunsForSessionKey(ops, {
+              sessionKey,
+              stopReason: "rpc",
+            });
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                aborted: res.aborted,
+                runIds: res.runIds,
+              }),
+            };
+          }
           const active = ctx.chatAbortControllers.get(runId);
           if (!active) {
             return {
               ok: true,
-              payloadJSON: JSON.stringify({ ok: true, aborted: false }),
+              payloadJSON: JSON.stringify({
+                ok: true,
+                aborted: false,
+                runIds: [],
+              }),
             };
           }
           if (active.sessionKey !== sessionKey) {
@@ -717,24 +754,18 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               },
             };
           }
-
-          active.controller.abort();
-          ctx.chatAbortControllers.delete(runId);
-          ctx.chatRunBuffers.delete(runId);
-          ctx.chatDeltaSentAt.delete(runId);
-          ctx.removeChatRun(runId, runId, sessionKey);
-
-          const payload = {
+          const res = abortChatRunById(ops, {
             runId,
             sessionKey,
-            seq: (ctx.agentRunSeq.get(runId) ?? 0) + 1,
-            state: "aborted" as const,
-          };
-          ctx.broadcast("chat", payload);
-          ctx.bridgeSendToSession(sessionKey, "chat", payload);
+            stopReason: "rpc",
+          });
           return {
             ok: true,
-            payloadJSON: JSON.stringify({ ok: true, aborted: true }),
+            payloadJSON: JSON.stringify({
+              ok: true,
+              aborted: res.aborted,
+              runIds: res.aborted ? [runId] : [],
+            }),
           };
         }
         case "chat.send": {
@@ -763,33 +794,39 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             timeoutMs?: number;
             idempotencyKey: string;
           };
+          const stopCommand = isChatStopCommandText(p.message);
           const normalizedAttachments =
-            p.attachments?.map((a) => ({
-              type: typeof a?.type === "string" ? a.type : undefined,
-              mimeType:
-                typeof a?.mimeType === "string" ? a.mimeType : undefined,
-              fileName:
-                typeof a?.fileName === "string" ? a.fileName : undefined,
-              content:
-                typeof a?.content === "string"
-                  ? a.content
-                  : ArrayBuffer.isView(a?.content)
-                    ? Buffer.from(
-                        a.content.buffer,
-                        a.content.byteOffset,
-                        a.content.byteLength,
-                      ).toString("base64")
-                    : undefined,
-            })) ?? [];
+            p.attachments
+              ?.map((a) => ({
+                type: typeof a?.type === "string" ? a.type : undefined,
+                mimeType:
+                  typeof a?.mimeType === "string" ? a.mimeType : undefined,
+                fileName:
+                  typeof a?.fileName === "string" ? a.fileName : undefined,
+                content:
+                  typeof a?.content === "string"
+                    ? a.content
+                    : ArrayBuffer.isView(a?.content)
+                      ? Buffer.from(
+                          a.content.buffer,
+                          a.content.byteOffset,
+                          a.content.byteLength,
+                        ).toString("base64")
+                      : undefined,
+              }))
+              .filter((a) => a.content) ?? [];
 
-          let messageWithAttachments = p.message;
+          let parsedMessage = p.message;
+          let parsedImages: ChatImageContent[] = [];
           if (normalizedAttachments.length > 0) {
             try {
-              messageWithAttachments = buildMessageWithAttachments(
+              const parsed = await parseMessageWithAttachments(
                 p.message,
                 normalizedAttachments,
-                { maxBytes: 5_000_000 },
+                { maxBytes: 5_000_000, log: ctx.logBridge },
               );
+              parsedMessage = parsed.message;
+              parsedImages = parsed.images;
             } catch (err) {
               return {
                 ok: false,
@@ -810,18 +847,36 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           });
           const now = Date.now();
           const sessionId = entry?.sessionId ?? randomUUID();
-          const sessionEntry: SessionEntry = {
+          const sessionEntry = mergeSessionEntry(entry, {
             sessionId,
             updatedAt: now,
-            thinkingLevel: entry?.thinkingLevel,
-            verboseLevel: entry?.verboseLevel,
-            reasoningLevel: entry?.reasoningLevel,
-            systemSent: entry?.systemSent,
-            lastProvider: entry?.lastProvider,
-            lastTo: entry?.lastTo,
-          };
+          });
           const clientRunId = p.idempotencyKey;
           registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
+
+          if (stopCommand) {
+            const res = abortChatRunsForSessionKey(
+              {
+                chatAbortControllers: ctx.chatAbortControllers,
+                chatRunBuffers: ctx.chatRunBuffers,
+                chatDeltaSentAt: ctx.chatDeltaSentAt,
+                chatAbortedRuns: ctx.chatAbortedRuns,
+                removeChatRun: ctx.removeChatRun,
+                agentRunSeq: ctx.agentRunSeq,
+                broadcast: ctx.broadcast,
+                bridgeSendToSession: ctx.bridgeSendToSession,
+              },
+              { sessionKey: p.sessionKey, stopReason: "stop" },
+            );
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                aborted: res.aborted,
+                runIds: res.runIds,
+              }),
+            };
+          }
 
           const cached = ctx.dedupe.get(`chat:${clientRunId}`);
           if (cached) {
@@ -837,12 +892,25 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             };
           }
 
+          const activeExisting = ctx.chatAbortControllers.get(clientRunId);
+          if (activeExisting) {
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                runId: clientRunId,
+                status: "in_flight",
+              }),
+            };
+          }
+
           try {
             const abortController = new AbortController();
             ctx.chatAbortControllers.set(clientRunId, {
               controller: abortController,
               sessionId,
               sessionKey: p.sessionKey,
+              startedAtMs: now,
+              expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
             });
             ctx.addChatRun(clientRunId, {
               sessionKey: p.sessionKey,
@@ -856,9 +924,14 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               }
             }
 
-            await agentCommand(
+            const ackPayload = {
+              runId: clientRunId,
+              status: "started" as const,
+            };
+            void agentCommand(
               {
-                message: messageWithAttachments,
+                message: parsedMessage,
+                images: parsedImages.length > 0 ? parsedImages : undefined,
                 sessionId,
                 sessionKey: p.sessionKey,
                 runId: clientRunId,
@@ -870,17 +943,32 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               },
               defaultRuntime,
               ctx.deps,
-            );
-            const payload = {
-              runId: clientRunId,
-              status: "ok" as const,
-            };
-            ctx.dedupe.set(`chat:${clientRunId}`, {
-              ts: Date.now(),
-              ok: true,
-              payload,
-            });
-            return { ok: true, payloadJSON: JSON.stringify(payload) };
+            )
+              .then(() => {
+                ctx.dedupe.set(`chat:${clientRunId}`, {
+                  ts: Date.now(),
+                  ok: true,
+                  payload: { runId: clientRunId, status: "ok" as const },
+                });
+              })
+              .catch((err) => {
+                const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+                ctx.dedupe.set(`chat:${clientRunId}`, {
+                  ts: Date.now(),
+                  ok: false,
+                  payload: {
+                    runId: clientRunId,
+                    status: "error" as const,
+                    summary: String(err),
+                  },
+                  error,
+                });
+              })
+              .finally(() => {
+                ctx.chatAbortControllers.delete(clientRunId);
+              });
+
+            return { ok: true, payloadJSON: JSON.stringify(ackPayload) };
           } catch (err) {
             const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
             const payload = {
@@ -901,8 +989,6 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 message: String(err),
               },
             };
-          } finally {
-            ctx.chatAbortControllers.delete(clientRunId);
           }
         }
         default:

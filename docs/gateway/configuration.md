@@ -251,8 +251,8 @@ Controls how WhatsApp direct chats (DMs) are handled:
 Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per provider** by default.
 
 Pairing approvals:
-- `clawdbot pairing list --provider whatsapp`
-- `clawdbot pairing approve --provider whatsapp <code>`
+- `clawdbot pairing list whatsapp`
+- `clawdbot pairing approve whatsapp <code>`
 
 ### `whatsapp.allowFrom`
 
@@ -342,6 +342,8 @@ Group messages default to **require mention** (either metadata mention or regex 
   }
 }
 ```
+
+`messages.groupChat.historyLimit` sets the global default for group history context. Providers can override with `<provider>.historyLimit` (or `<provider>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
 
 Per-agent override (takes precedence when set, even `[]`):
 ```json5
@@ -674,8 +676,14 @@ Multi-account support lives under `telegram.accounts` (see the multi-account sec
         }
       }
     },
+    historyLimit: 50,                     // include last N group messages as context (0 disables)
     replyToMode: "first",                 // off | first | all
     streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
+    draftChunk: {                        // optional; only for streamMode=block
+      minChars: 200,
+      maxChars: 800,
+      breakPreference: "paragraph"       // paragraph | newline | sentence
+    },
     actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
     mediaMaxMb: 5,
     retry: {                             // outbound retry policy
@@ -803,6 +811,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
         systemPrompt: "Short answers only."
       }
     },
+    historyLimit: 50,          // include last N channel/group messages as context (0 disables)
     allowBots: false,
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
@@ -855,7 +864,8 @@ Signal reactions can emit system events (shared reaction tooling):
 {
   signal: {
     reactionNotifications: "own", // off | own | all | allowlist
-    reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"]
+    reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+    historyLimit: 50 // include last N group messages as context (0 disables)
   }
 }
 ```
@@ -878,6 +888,7 @@ Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
     dbPath: "~/Library/Messages/chat.db",
     dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
+    historyLimit: 50,    // include last N group messages as context (0 disables)
     includeAttachments: false,
     mediaMaxMb: 16,
     service: "auto",
@@ -1186,6 +1197,15 @@ Block streaming:
   Provider overrides: `whatsapp.blockStreamingCoalesce`, `telegram.blockStreamingCoalesce`,
   `discord.blockStreamingCoalesce`, `slack.blockStreamingCoalesce`, `signal.blockStreamingCoalesce`,
   `imessage.blockStreamingCoalesce`, `msteams.blockStreamingCoalesce` (and per-account variants).
+- `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
+  Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
+  Per-agent override: `agents.list[].humanDelay`.
+  Example:
+  ```json5
+  {
+    agents: { defaults: { humanDelay: { mode: "natural" } } }
+  }
+  ```
 See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 
 Typing indicators:
@@ -1207,6 +1227,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Default:
   `30m`. Set `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
+- `includeReasoning`: when `true`, heartbeats will also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`). Default: `false`.
 - `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (provider-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Overrides are sent verbatim; include a `Read HEARTBEAT.md if exists` line if you still want the file read.
@@ -1403,6 +1424,7 @@ Clawdbot uses the **pi-coding-agent** model catalog. You can add custom provider
 (LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
 `~/.clawdbot/agents/<agentId>/agent/models.json` or by defining the same schema inside your
 Clawdbot config under `models.providers`.
+Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 When `models.providers` is present, Clawdbot writes/merges a `models.json` into
 `~/.clawdbot/agents/<agentId>/agent/` on startup:
@@ -1447,10 +1469,12 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 
 ### OpenCode Zen (multi-model proxy)
 
-OpenCode Zen is an OpenAI-compatible proxy at `https://opencode.ai/zen/v1`. Get an API key at https://opencode.ai/auth and set `OPENCODE_ZEN_API_KEY`.
+OpenCode Zen is a multi-model gateway with per-model endpoints. Clawdbot uses
+the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
+`OPENCODE_ZEN_API_KEY`) from https://opencode.ai/auth.
 
 Notes:
-- Model refs use `opencode-zen/<modelId>` (example: `opencode-zen/claude-opus-4-5`).
+- Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-5`).
 - If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
 - Shortcut: `clawdbot onboard --auth-choice opencode-zen`.
 
@@ -1458,29 +1482,8 @@ Notes:
 {
   agents: {
     defaults: {
-      model: { primary: "opencode-zen/claude-opus-4-5" },
-      models: { "opencode-zen/claude-opus-4-5": { alias: "Opus" } }
-    }
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      "opencode-zen": {
-        baseUrl: "https://opencode.ai/zen/v1",
-        apiKey: "${OPENCODE_ZEN_API_KEY}",
-        api: "openai-completions",
-        models: [
-          {
-            id: "claude-opus-4-5",
-            name: "Claude Opus 4.5",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200000,
-            maxTokens: 32000
-          }
-        ]
-      }
+      model: { primary: "opencode/claude-opus-4-5" },
+      models: { "opencode/claude-opus-4-5": { alias: "Opus" } }
     }
   }
 }
@@ -1490,6 +1493,8 @@ Notes:
 
 Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
 in your environment and reference the model by provider/model.
+
+Shortcut: `clawdbot onboard --auth-choice zai-api-key`.
 
 ```json5
 {
@@ -1799,6 +1804,7 @@ Related docs:
 Notes:
 - `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
+- OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
 - Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
@@ -1890,7 +1896,7 @@ Convenience flags (CLI):
 - `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
-See [`docs/gateway.md`](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
+See [Gateway runbook](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
 
 Example:
 ```bash
@@ -1999,6 +2005,8 @@ Gateway auto-start:
 
 Note: when `tailscale.mode` is on, Clawdbot defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).
+If you need the backend to receive the prefixed path, set
+`hooks.gmail.tailscale.target` to a full URL (and align `serve.path`).
 
 ### `canvasHost` (LAN/tailnet Canvas file server + live reload)
 
@@ -2087,6 +2095,7 @@ Template placeholders are expanded in `audio.transcription.command` (and any fut
 | Variable | Description |
 |----------|-------------|
 | `{{Body}}` | Full inbound message body |
+| `{{RawBody}}` | Raw inbound message body (no history/sender wrappers; best for command parsing) |
 | `{{BodyStripped}}` | Body with group mentions stripped (best default for agents) |
 | `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per provider) |
 | `{{To}}` | Destination identifier |

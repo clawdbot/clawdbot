@@ -110,3 +110,71 @@ describe("initSessionState thread forking", () => {
     );
   });
 });
+
+describe("initSessionState RawBody", () => {
+  it("triggerBodyNormalized correctly extracts commands when Body contains context but RawBody is clean", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-rawbody-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as ClawdbotConfig;
+
+    const groupMessageCtx = {
+      Body: `[Chat messages since your last reply - for context]\n[WhatsApp ...] Someone: hello\n\n[Current message - respond to this]\n[WhatsApp ...] Jake: /status\n[from: Jake McInteer (+6421807830)]`,
+      RawBody: "/status",
+      ChatType: "group",
+      SessionKey: "agent:main:whatsapp:group:G1",
+    };
+
+    const result = await initSessionState({
+      ctx: groupMessageCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.triggerBodyNormalized).toBe("/status");
+  });
+
+  it("Reset triggers (/new, /reset) work with RawBody", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-rawbody-reset-"),
+    );
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as ClawdbotConfig;
+
+    const groupMessageCtx = {
+      Body: `[Context]\nJake: /new\n[from: Jake]`,
+      RawBody: "/new",
+      ChatType: "group",
+      SessionKey: "agent:main:whatsapp:group:G1",
+    };
+
+    const result = await initSessionState({
+      ctx: groupMessageCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("");
+  });
+
+  it("falls back to Body when RawBody is undefined", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-rawbody-fallback-"),
+    );
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as ClawdbotConfig;
+
+    const ctx = {
+      Body: "/status",
+      SessionKey: "agent:main:whatsapp:dm:S1",
+    };
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.triggerBodyNormalized).toBe("/status");
+  });
+});

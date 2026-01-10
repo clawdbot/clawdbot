@@ -57,6 +57,25 @@ struct LowCoverageHelperTests {
         #expect(result.timedOut == true)
     }
 
+    @Test func shellExecutorDrainsStdoutAndStderr() async {
+        let script = """
+        i=0
+        while [ $i -lt 2000 ]; do
+          echo "stdout-$i"
+          echo "stderr-$i" 1>&2
+          i=$((i+1))
+        done
+        """
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", script],
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+        #expect(result.success == true)
+        #expect(result.stdout.contains("stdout-1999"))
+        #expect(result.stderr.contains("stderr-1999"))
+    }
+
     @Test func pairedNodesStorePersists() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("paired-\(UUID().uuidString)", isDirectory: true)
