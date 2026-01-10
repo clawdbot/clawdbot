@@ -198,7 +198,11 @@ export function createFollowupRunner(params: {
         (queued.run.messageProvider?.toLowerCase() as
           | OriginatingChannelType
           | undefined);
-      const replyToMode = resolveReplyToMode(queued.run.config, replyToChannel);
+      const replyToMode = resolveReplyToMode(
+        queued.run.config,
+        replyToChannel,
+        queued.originatingAccountId,
+      );
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
         payloads: sanitizedPayloads,
