@@ -12,4 +12,3 @@ describe("provider plugin registry", () => {
     expect(pluginIds).toEqual(providerIds);
   });
 });
-
