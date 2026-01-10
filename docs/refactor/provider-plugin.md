@@ -62,6 +62,7 @@ Each `ProviderPlugin` bundles:
 - Messaging tool dedupe now relies on `plugin.messaging.normalizeTarget` for provider-specific target normalization.
 - Message tool + CLI action dispatch now use `plugin.actions.listActions` + `plugin.actions.handleAction`; use `plugin.actions.supportsAction` for dispatch-only gating when you still want fallback send/poll.
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
+- Onboarding provider setup is delegated to adapter modules under `src/commands/onboarding/providers/*`, keeping `setupProviders` provider-agnostic.
 
 ## Adding a Provider (checklist)
 1) Create `src/providers/plugins/<id>.ts` exporting `ProviderPlugin`.
