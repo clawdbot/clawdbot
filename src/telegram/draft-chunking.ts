@@ -1,6 +1,6 @@
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { getProviderPlugin } from "../providers/plugins/index.js";
+import { getProviderDock } from "../providers/dock.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
@@ -15,7 +15,7 @@ export function resolveTelegramDraftStreamingChunking(
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
   const providerChunkLimit =
-    getProviderPlugin("telegram")?.outbound?.textChunkLimit;
+    getProviderDock("telegram")?.outbound?.textChunkLimit;
   const textLimit = resolveTextChunkLimit(cfg, "telegram", accountId, {
     fallbackLimit: providerChunkLimit,
   });
