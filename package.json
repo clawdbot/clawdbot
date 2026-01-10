@@ -138,6 +138,7 @@
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
     "chromium-bidi": "12.0.1",
+    "claude": "^0.1.2",
     "commander": "^14.0.2",
     "croner": "^9.1.0",
     "detect-libc": "^2.1.2",

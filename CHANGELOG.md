@@ -2,6 +2,9 @@
 
 ## 2026.1.10
 
+### New Features
+- Voice Call: add call modes (`notify` vs `conversation`) with configurable auto-hangup delay; enforce `maxDurationSeconds` safety timer; `mode` parameter in `initiate_call` tool action.
+
 ### Fixes
 - Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”).
 - Onboarding/Gateway: persist non-interactive gateway token auth in config; add WS wizard + gateway tool-calling regression coverage.
