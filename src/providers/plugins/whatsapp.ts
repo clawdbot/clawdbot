@@ -17,9 +17,8 @@ import {
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import { loginWeb } from "../../web/login.js";
-import { whatsappOnboardingAdapter } from "./onboarding/whatsapp.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -34,16 +33,17 @@ import {
 import { getChatProviderMeta } from "../registry.js";
 import { monitorWebProvider } from "../web/index.js";
 import { createWhatsAppLoginTool } from "./agent-tools/whatsapp-login.js";
-import { formatPairingApproveHint } from "./helpers.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
-import { resolveWhatsAppHeartbeatRecipients } from "./whatsapp-heartbeat.js";
+import { whatsappOnboardingAdapter } from "./onboarding/whatsapp.js";
 import {
   applyAccountNameToProviderSection,
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
 import type { ProviderMessageActionName, ProviderPlugin } from "./types.js";
+import { resolveWhatsAppHeartbeatRecipients } from "./whatsapp-heartbeat.js";
 
 const meta = getChatProviderMeta("whatsapp");
 
@@ -338,7 +338,13 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
       const raw = providerInput?.trim().toLowerCase();
       const provider = raw === "web" ? "web" : "whatsapp";
-      await loginWeb(Boolean(verbose), provider, undefined, runtime, resolvedAccountId);
+      await loginWeb(
+        Boolean(verbose),
+        provider,
+        undefined,
+        runtime,
+        resolvedAccountId,
+      );
     },
   },
   heartbeat: {

@@ -9,6 +9,10 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../providers/plugins/index.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -22,7 +26,6 @@ import {
   type MessagingToolSend,
   normalizeTargetForProvider,
 } from "./pi-embedded-messaging.js";
-import { getProviderPlugin, normalizeProviderId } from "../providers/plugins/index.js";
 import {
   extractAssistantText,
   extractAssistantThinking,

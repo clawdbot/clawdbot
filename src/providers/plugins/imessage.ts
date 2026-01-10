@@ -13,14 +13,14 @@ import {
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
-import { imessageOnboardingAdapter } from "./onboarding/imessage.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
-import { formatPairingApproveHint } from "./helpers.js";
 import { resolveIMessageGroupRequireMention } from "./group-mentions.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
+import { imessageOnboardingAdapter } from "./onboarding/imessage.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,

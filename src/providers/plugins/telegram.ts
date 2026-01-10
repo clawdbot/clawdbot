@@ -21,15 +21,15 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { getChatProviderMeta } from "../registry.js";
-import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { telegramMessageActions } from "./actions/telegram.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
-import { formatPairingApproveHint } from "./helpers.js";
 import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { normalizeTelegramMessagingTarget } from "./normalize-target.js";
+import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,
