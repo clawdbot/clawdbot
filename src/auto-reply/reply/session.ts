@@ -23,6 +23,7 @@ import {
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
+import { getProviderPlugin } from "../../providers/plugins/index.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -236,7 +237,9 @@ export async function initSessionState(params: {
     const subject = ctx.GroupSubject?.trim();
     const space = ctx.GroupSpace?.trim();
     const explicitRoom = ctx.GroupRoom?.trim();
-    const isRoomProvider = provider === "discord" || provider === "slack";
+    const isRoomProvider = Boolean(
+      getProviderPlugin(provider)?.capabilities.chatTypes.includes("channel"),
+    );
     const nextRoom =
       explicitRoom ??
       (isRoomProvider && subject && subject.startsWith("#")
