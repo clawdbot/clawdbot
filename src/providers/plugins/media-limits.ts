@@ -14,7 +14,10 @@ export function resolveProviderMediaMaxBytes(params: {
   accountId?: string | null;
 }): number | undefined {
   const accountId = normalizeAccountId(params.accountId);
-  const providerLimit = params.resolveProviderLimitMb({ cfg: params.cfg, accountId });
+  const providerLimit = params.resolveProviderLimitMb({
+    cfg: params.cfg,
+    accountId,
+  });
   if (providerLimit) return providerLimit * MB;
   if (params.cfg.agents?.defaults?.mediaMaxMb) {
     return params.cfg.agents.defaults.mediaMaxMb * MB;
