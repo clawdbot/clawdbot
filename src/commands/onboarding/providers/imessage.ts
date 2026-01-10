@@ -1,6 +1,5 @@
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import { formatDocsLink } from "../../../terminal/links.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -10,6 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../../routing/session-key.js";
+import { formatDocsLink } from "../../../terminal/links.js";
 import { detectBinary } from "../../onboard-helpers.js";
 import { addWildcardAllowFrom, promptAccountId } from "../helpers.js";
 import type {

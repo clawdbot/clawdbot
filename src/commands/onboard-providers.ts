@@ -14,8 +14,10 @@ import {
   getProviderOnboardingAdapter,
   listProviderOnboardingAdapters,
 } from "./onboarding/registry.js";
-import type { ProviderOnboardingDmPolicy } from "./onboarding/types.js";
-import type { SetupProvidersOptions } from "./onboarding/types.js";
+import type {
+  ProviderOnboardingDmPolicy,
+  SetupProvidersOptions,
+} from "./onboarding/types.js";
 
 async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
   const providerLines = listChatProviders().map((meta) =>

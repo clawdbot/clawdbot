@@ -1,15 +1,15 @@
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import { formatDocsLink } from "../../../terminal/links.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../../routing/session-key.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
 } from "../../../signal/accounts.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { formatDocsLink } from "../../../terminal/links.js";
 import { detectBinary } from "../../onboard-helpers.js";
 import { installSignalCli } from "../../signal-install.js";
 import { addWildcardAllowFrom, promptAccountId } from "../helpers.js";

@@ -1,5 +1,4 @@
 import type { ProviderChoice } from "../onboard-types.js";
-import type { ProviderOnboardingAdapter } from "./types.js";
 import { discordOnboardingAdapter } from "./providers/discord.js";
 import { imessageOnboardingAdapter } from "./providers/imessage.js";
 import { msteamsOnboardingAdapter } from "./providers/msteams.js";
@@ -7,6 +6,7 @@ import { signalOnboardingAdapter } from "./providers/signal.js";
 import { slackOnboardingAdapter } from "./providers/slack.js";
 import { telegramOnboardingAdapter } from "./providers/telegram.js";
 import { whatsappOnboardingAdapter } from "./providers/whatsapp.js";
+import type { ProviderOnboardingAdapter } from "./types.js";
 
 const PROVIDER_ONBOARDING_ADAPTERS = new Map<
   ProviderChoice,

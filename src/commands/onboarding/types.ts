@@ -1,8 +1,8 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { DmPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { ProviderChoice } from "../onboard-types.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { ProviderChoice } from "../onboard-types.js";
 
 export type SetupProvidersOptions = {
   allowDisable?: boolean;

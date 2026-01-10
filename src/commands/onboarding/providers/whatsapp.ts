@@ -4,18 +4,18 @@ import type { ClawdbotConfig } from "../../../config/config.js";
 import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
 import type { DmPolicy } from "../../../config/types.js";
 import { loginWeb } from "../../../provider-web.js";
-import { formatDocsLink } from "../../../terminal/links.js";
-import {
-  listWhatsAppAccountIds,
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAuthDir,
-} from "../../../web/accounts.js";
-import { normalizeE164 } from "../../../utils.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import { formatDocsLink } from "../../../terminal/links.js";
+import { normalizeE164 } from "../../../utils.js";
+import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAuthDir,
+} from "../../../web/accounts.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { promptAccountId } from "../helpers.js";
 import type { ProviderOnboardingAdapter } from "../types.js";
