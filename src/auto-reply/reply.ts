@@ -244,7 +244,9 @@ function resolveElevatedPermissions(params: {
 
   const normalizedProvider = normalizeProviderId(params.provider);
   const discordFallback =
-    params.provider === "discord" ? params.cfg.discord?.dm?.allowFrom : undefined;
+    params.provider === "discord"
+      ? params.cfg.discord?.dm?.allowFrom
+      : undefined;
   const pluginFallbackAllowFrom = normalizedProvider
     ? getProviderPlugin(normalizedProvider)?.elevated?.allowFromFallback?.({
         cfg: params.cfg,
