@@ -25,34 +25,6 @@ export function withWhatsAppPrefix(number: string): string {
   return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
 }
 
-function stripWhatsAppTargetPrefixes(value: string): string {
-  const trimmed = value.trim();
-  return trimmed
-    .replace(/^whatsapp:/i, "")
-    .replace(/^group:/i, "")
-    .trim();
-}
-
-export function isWhatsAppGroupJid(value: string): boolean {
-  const candidate = stripWhatsAppTargetPrefixes(value);
-  const lower = candidate.toLowerCase();
-  if (!lower.endsWith("@g.us")) return false;
-  const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-  if (!localPart || localPart.includes("@")) return false;
-  return /^[0-9]+(-[0-9]+)*$/.test(localPart);
-}
-
-export function normalizeWhatsAppTarget(value: string): string {
-  const candidate = stripWhatsAppTargetPrefixes(value);
-  if (!candidate) return "";
-  if (isWhatsAppGroupJid(candidate)) {
-    const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-    return `${localPart}@g.us`;
-  }
-  const normalized = normalizeE164(candidate);
-  return normalized.length > 1 ? normalized : "";
-}
-
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
