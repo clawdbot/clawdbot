@@ -478,5 +478,7 @@ export async function messageCommand(
     return;
   }
 
-  throw new Error(`Action ${action} is not supported for provider ${provider}.`);
+  throw new Error(
+    `Action ${action} is not supported for provider ${provider}.`,
+  );
 }

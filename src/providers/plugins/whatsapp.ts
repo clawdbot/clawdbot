@@ -1,3 +1,8 @@
+import {
+  createActionGate,
+  readStringParam,
+} from "../../agents/tools/common.js";
+import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../globals.js";
 import {
@@ -10,11 +15,6 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
-import {
-  createActionGate,
-  readStringParam,
-} from "../../agents/tools/common.js";
-import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
@@ -37,10 +37,7 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
-import type {
-  ProviderMessageActionName,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderMessageActionName, ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("whatsapp");
 

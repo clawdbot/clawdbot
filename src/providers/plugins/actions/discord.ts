@@ -1,11 +1,11 @@
-import { listEnabledDiscordAccounts } from "../../discord/accounts.js";
 import {
   createActionGate,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../agents/tools/common.js";
-import { handleDiscordAction } from "../../agents/tools/discord-actions.js";
+} from "../../../agents/tools/common.js";
+import { handleDiscordAction } from "../../../agents/tools/discord-actions.js";
+import { listEnabledDiscordAccounts } from "../../../discord/accounts.js";
 import type {
   ProviderMessageActionAdapter,
   ProviderMessageActionName,
@@ -46,7 +46,7 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
     if (gate("stickers")) actions.add("sticker");
     if (gate("memberInfo")) actions.add("member-info");
     if (gate("roleInfo")) actions.add("role-info");
-    if (gate("emojiList")) actions.add("emoji-list");
+    if (gate("reactions")) actions.add("emoji-list");
     if (gate("emojiUploads")) actions.add("emoji-upload");
     if (gate("stickerUploads")) actions.add("sticker-upload");
     if (gate("roles", false)) {
@@ -433,10 +433,7 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
-      return await handleDiscordAction(
-        { action: "channelList", guildId },
-        cfg,
-      );
+      return await handleDiscordAction({ action: "channelList", guildId }, cfg);
     }
 
     if (action === "voice-status") {
@@ -514,6 +511,8 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
       );
     }
 
-    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
+    throw new Error(
+      `Action ${String(action)} is not supported for provider ${providerId}.`,
+    );
   },
 };

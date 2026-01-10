@@ -1,7 +1,10 @@
-import type { ClawdbotConfig } from "../../config/config.js";
-import { listEnabledTelegramAccounts } from "../../telegram/accounts.js";
-import { createActionGate, readStringParam } from "../../agents/tools/common.js";
-import { handleTelegramAction } from "../../agents/tools/telegram-actions.js";
+import {
+  createActionGate,
+  readStringParam,
+} from "../../../agents/tools/common.js";
+import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
+import type { ClawdbotConfig } from "../../../config/config.js";
+import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import type {
   ProviderMessageActionAdapter,
   ProviderMessageActionName,
@@ -101,6 +104,8 @@ export const telegramMessageActions: ProviderMessageActionAdapter = {
       );
     }
 
-    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
+    throw new Error(
+      `Action ${action} is not supported for provider ${providerId}.`,
+    );
   },
 };

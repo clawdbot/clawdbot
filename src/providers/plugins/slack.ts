@@ -1,13 +1,19 @@
 import {
+  createActionGate,
+  readNumberParam,
+  readStringParam,
+} from "../../agents/tools/common.js";
+import { handleSlackAction } from "../../agents/tools/slack-actions.js";
+import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import {
+  listEnabledSlackAccounts,
   listSlackAccountIds,
   type ResolvedSlackAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
-  listEnabledSlackAccounts,
 } from "../../slack/accounts.js";
 import { monitorSlackProvider } from "../../slack/index.js";
 import { probeSlack } from "../../slack/probe.js";
@@ -24,16 +30,7 @@ import {
   applyAccountNameToProviderSection,
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
-import {
-  createActionGate,
-  readNumberParam,
-  readStringParam,
-} from "../../agents/tools/common.js";
-import { handleSlackAction } from "../../agents/tools/slack-actions.js";
-import type {
-  ProviderMessageActionName,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderMessageActionName, ProviderPlugin } from "./types.js";
 
 const meta = getChatProviderMeta("slack");
 

@@ -4,10 +4,7 @@ import { sendMessageMSTeams, sendPollMSTeams } from "../../msteams/send.js";
 import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
-import type {
-  ProviderMessageActionName,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderMessageActionName, ProviderPlugin } from "./types.js";
 
 type ResolvedMSTeamsAccount = {
   accountId: string;

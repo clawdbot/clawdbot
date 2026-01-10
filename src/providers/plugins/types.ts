@@ -443,7 +443,9 @@ export type ProviderMessageActionContext = {
 };
 
 export type ProviderMessageActionAdapter = {
-  listActions?: (params: { cfg: ClawdbotConfig }) => ProviderMessageActionName[];
+  listActions?: (params: {
+    cfg: ClawdbotConfig;
+  }) => ProviderMessageActionName[];
   supportsAction?: (params: { action: ProviderMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
   handleAction?: (

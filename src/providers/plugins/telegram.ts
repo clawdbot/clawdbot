@@ -1,4 +1,5 @@
 import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { writeConfigFile } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
 import {
