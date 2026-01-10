@@ -1,15 +1,15 @@
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { sendMessageDiscord } from "../../discord/send.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
-import { sendMessageMSTeams } from "../../msteams/send.js";
 import { getProviderPlugin } from "../../providers/plugins/index.js";
 import type { ProviderOutboundAdapter } from "../../providers/plugins/types.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
-import { sendMessageWhatsApp } from "../../web/outbound.js";
+import type { sendMessageDiscord } from "../../discord/send.js";
+import type { sendMessageIMessage } from "../../imessage/send.js";
+import type { sendMessageMSTeams } from "../../msteams/send.js";
+import type { sendMessageSignal } from "../../signal/send.js";
+import type { sendMessageSlack } from "../../slack/send.js";
+import type { sendMessageTelegram } from "../../telegram/send.js";
+import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeOutboundPayloads } from "./payloads.js";
 import type { OutboundProvider } from "./targets.js";
@@ -56,7 +56,7 @@ function createProviderHandler(params: {
   provider: Exclude<OutboundProvider, "none">;
   to: string;
   accountId?: string;
-  deps: Required<OutboundSendDeps>;
+  deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): ProviderHandler {
   const plugin = getProviderPlugin(params.provider);
@@ -84,7 +84,7 @@ function createPluginHandler(params: {
   provider: Exclude<OutboundProvider, "none">;
   to: string;
   accountId?: string;
-  deps: Required<OutboundSendDeps>;
+  deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): ProviderHandler | null {
   const outbound = params.outbound;
@@ -130,20 +130,7 @@ export async function deliverOutboundPayloads(params: {
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, provider, to, payloads } = params;
   const accountId = params.accountId;
-  const defaultSendMSTeams = async (
-    to: string,
-    text: string,
-    opts?: { mediaUrl?: string },
-  ) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl });
-  const deps = {
-    sendWhatsApp: params.deps?.sendWhatsApp ?? sendMessageWhatsApp,
-    sendTelegram: params.deps?.sendTelegram ?? sendMessageTelegram,
-    sendDiscord: params.deps?.sendDiscord ?? sendMessageDiscord,
-    sendSlack: params.deps?.sendSlack ?? sendMessageSlack,
-    sendSignal: params.deps?.sendSignal ?? sendMessageSignal,
-    sendIMessage: params.deps?.sendIMessage ?? sendMessageIMessage,
-    sendMSTeams: params.deps?.sendMSTeams ?? defaultSendMSTeams,
-  };
+  const deps = params.deps;
   const results: OutboundDeliveryResult[] = [];
   const handler = createProviderHandler({
     cfg,
