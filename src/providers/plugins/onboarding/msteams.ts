@@ -4,11 +4,11 @@ import { resolveMSTeamsCredentials } from "../../../msteams/token.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { addWildcardAllowFrom } from "./helpers.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,
 } from "../onboarding-types.js";
+import { addWildcardAllowFrom } from "./helpers.js";
 
 const provider = "msteams" as const;
 

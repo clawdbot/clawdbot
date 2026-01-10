@@ -17,15 +17,15 @@ import {
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
-import { discordOnboardingAdapter } from "./onboarding/discord.js";
 import { discordMessageActions } from "./actions/discord.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
-import { formatPairingApproveHint } from "./helpers.js";
 import { resolveDiscordGroupRequireMention } from "./group-mentions.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { normalizeDiscordMessagingTarget } from "./normalize-target.js";
+import { discordOnboardingAdapter } from "./onboarding/discord.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,

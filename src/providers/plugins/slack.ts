@@ -19,14 +19,14 @@ import { monitorSlackProvider } from "../../slack/index.js";
 import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatProviderMeta } from "../registry.js";
-import { slackOnboardingAdapter } from "./onboarding/slack.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
-import { formatPairingApproveHint } from "./helpers.js";
 import { resolveSlackGroupRequireMention } from "./group-mentions.js";
+import { formatPairingApproveHint } from "./helpers.js";
 import { normalizeSlackMessagingTarget } from "./normalize-target.js";
+import { slackOnboardingAdapter } from "./onboarding/slack.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,

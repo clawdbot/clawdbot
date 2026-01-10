@@ -1,4 +1,7 @@
-import { getProviderPlugin, normalizeProviderId } from "../providers/plugins/index.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../providers/plugins/index.js";
 
 export type MessagingToolSend = {
   tool: string;

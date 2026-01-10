@@ -14,7 +14,6 @@ import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeE164 } from "../../utils.js";
 import { getChatProviderMeta } from "../registry.js";
-import { signalOnboardingAdapter } from "./onboarding/signal.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -22,6 +21,7 @@ import {
 import { formatPairingApproveHint } from "./helpers.js";
 import { resolveProviderMediaMaxBytes } from "./media-limits.js";
 import { normalizeSignalMessagingTarget } from "./normalize-target.js";
+import { signalOnboardingAdapter } from "./onboarding/signal.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
   applyAccountNameToProviderSection,

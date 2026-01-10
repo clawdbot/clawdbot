@@ -13,10 +13,8 @@ const PROVIDER_ONBOARDING_ADAPTERS = () =>
       .filter(
         (
           entry,
-        ): entry is readonly [
-          ProviderChoice,
-          ProviderOnboardingAdapter,
-        ] => Boolean(entry),
+        ): entry is readonly [ProviderChoice, ProviderOnboardingAdapter] =>
+          Boolean(entry),
       ),
   );
 

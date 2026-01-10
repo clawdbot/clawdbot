@@ -1,7 +1,7 @@
+import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { getProviderPlugin } from "../providers/plugins/index.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;

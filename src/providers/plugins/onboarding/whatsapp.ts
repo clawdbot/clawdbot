@@ -17,8 +17,8 @@ import {
   resolveWhatsAppAuthDir,
 } from "../../../web/accounts.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { promptAccountId } from "./helpers.js";
 import type { ProviderOnboardingAdapter } from "../onboarding-types.js";
+import { promptAccountId } from "./helpers.js";
 
 const provider = "whatsapp" as const;
 

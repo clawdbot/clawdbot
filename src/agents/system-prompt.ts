@@ -121,14 +121,12 @@ export function buildAgentSystemPrompt(params: {
   );
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
-    const summary =
-      coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
   for (const tool of extraTools.sort()) {
-    const summary =
-      coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
