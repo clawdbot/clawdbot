@@ -14,6 +14,7 @@ import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeE164 } from "../../utils.js";
 import { getChatProviderMeta } from "../registry.js";
+import { signalOnboardingAdapter } from "./onboarding/signal.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -36,6 +37,7 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
     ...meta,
     aliases: [],
   },
+  onboarding: signalOnboardingAdapter,
   pairing: {
     idLabel: "signalNumber",
     normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),

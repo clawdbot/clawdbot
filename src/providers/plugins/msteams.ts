@@ -3,6 +3,7 @@ import { createMSTeamsPollStoreFs } from "../../msteams/polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "../../msteams/send.js";
 import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { msteamsOnboardingAdapter } from "./onboarding/msteams.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import type { ProviderMessageActionName, ProviderPlugin } from "./types.js";
 
@@ -27,6 +28,7 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
     ...meta,
     aliases: ["teams"],
   },
+  onboarding: msteamsOnboardingAdapter,
   pairing: {
     idLabel: "msteamsUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(msteams|user):/i, ""),

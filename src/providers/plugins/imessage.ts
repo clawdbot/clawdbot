@@ -13,6 +13,7 @@ import {
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import { imessageOnboardingAdapter } from "./onboarding/imessage.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -36,6 +37,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
     aliases: ["imsg"],
     showConfigured: false,
   },
+  onboarding: imessageOnboardingAdapter,
   pairing: {
     idLabel: "imessageSenderId",
     notifyApproval: async ({ id }) => {

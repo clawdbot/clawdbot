@@ -21,6 +21,7 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { getChatProviderMeta } from "../registry.js";
+import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { telegramMessageActions } from "./actions/telegram.js";
 import {
   deleteAccountFromConfigSection,
@@ -46,6 +47,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
     aliases: [],
     quickstartAllowFrom: true,
   },
+  onboarding: telegramOnboardingAdapter,
   pairing: {
     idLabel: "telegramUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),

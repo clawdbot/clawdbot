@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type {
@@ -8,10 +8,17 @@ import type {
 import type { PollInput } from "../../polls.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ChatProviderId } from "../registry.js";
+import type { ProviderOnboardingAdapter } from "./onboarding-types.js";
 
 export type ProviderId = ChatProviderId | "msteams";
 
 export type ProviderOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
+
+export type ProviderAgentTool = AgentTool<any, unknown>;
+
+export type ProviderAgentToolFactory = (params: {
+  cfg?: ClawdbotConfig;
+}) => ProviderAgentTool[];
 
 export type ProviderSetupInput = {
   name?: string;
@@ -522,6 +529,8 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   meta: ProviderMeta;
   capabilities: ProviderCapabilities;
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  // CLI onboarding wizard hooks for this provider.
+  onboarding?: ProviderOnboardingAdapter;
   config: ProviderConfigAdapter<ResolvedAccount>;
   setup?: ProviderSetupAdapter;
   pairing?: ProviderPairingAdapter;
@@ -540,4 +549,6 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   messaging?: ProviderMessagingAdapter;
   actions?: ProviderMessageActionAdapter;
   heartbeat?: ProviderHeartbeatAdapter;
+  // Provider-owned agent tools (login flows, etc.).
+  agentTools?: ProviderAgentToolFactory | ProviderAgentTool[];
 };

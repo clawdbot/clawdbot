@@ -19,6 +19,7 @@ import { monitorSlackProvider } from "../../slack/index.js";
 import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatProviderMeta } from "../registry.js";
+import { slackOnboardingAdapter } from "./onboarding/slack.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -41,6 +42,7 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
     ...meta,
     aliases: [],
   },
+  onboarding: slackOnboardingAdapter,
   pairing: {
     idLabel: "slackUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(slack|user):/i, ""),

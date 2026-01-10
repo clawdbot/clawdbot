@@ -2,7 +2,10 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../../routing/session-key.js";
-import type { PromptAccountId, PromptAccountIdParams } from "./types.js";
+import type {
+  PromptAccountId,
+  PromptAccountIdParams,
+} from "../onboarding-types.js";
 
 export const promptAccountId: PromptAccountId = async (
   params: PromptAccountIdParams,

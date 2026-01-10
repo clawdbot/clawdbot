@@ -11,11 +11,11 @@ import {
 } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { addWildcardAllowFrom, promptAccountId } from "../helpers.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,
-} from "../types.js";
+} from "../onboarding-types.js";
 
 const provider = "discord" as const;
 

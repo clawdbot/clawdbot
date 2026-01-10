@@ -29,6 +29,8 @@ Each `ProviderPlugin` bundles:
 - `heartbeat`: optional readiness checks + heartbeat recipient resolution when providers own targeting.
 - `auth`: optional login hook used by `clawdbot providers login`.
 - `reload`: `configPrefixes` that map to hot restarts.
+- `onboarding`: optional CLI onboarding adapter (wizard UI hooks per provider).
+- `agentTools`: optional provider-owned agent tools (ex: QR login).
 
 ## Key Integration Notes
 - `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
@@ -68,6 +70,7 @@ Each `ProviderPlugin` bundles:
 - Message tool + CLI action dispatch now use `plugin.actions.listActions` + `plugin.actions.handleAction`; use `plugin.actions.supportsAction` for dispatch-only gating when you still want fallback send/poll.
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
 - Onboarding provider setup is delegated to adapter modules under `src/commands/onboarding/providers/*`, keeping `setupProviders` provider-agnostic.
+- Onboarding registry now reads `plugin.onboarding` from each provider (no standalone onboarding map).
 - Provider login flows (`clawdbot providers login`) route through `plugin.auth.login` when available.
 
 ## CLI Commands (inline references)

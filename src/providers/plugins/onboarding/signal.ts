@@ -12,11 +12,11 @@ import {
 import { formatDocsLink } from "../../../terminal/links.js";
 import { detectBinary } from "../../onboard-helpers.js";
 import { installSignalCli } from "../../signal-install.js";
-import { addWildcardAllowFrom, promptAccountId } from "../helpers.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 import type {
   ProviderOnboardingAdapter,
   ProviderOnboardingDmPolicy,
-} from "../types.js";
+} from "../onboarding-types.js";
 
 const provider = "signal" as const;
 

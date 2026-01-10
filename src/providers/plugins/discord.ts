@@ -17,6 +17,7 @@ import {
   normalizeAccountId,
 } from "../../routing/session-key.js";
 import { getChatProviderMeta } from "../registry.js";
+import { discordOnboardingAdapter } from "./onboarding/discord.js";
 import { discordMessageActions } from "./actions/discord.js";
 import {
   deleteAccountFromConfigSection,
@@ -41,6 +42,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
     ...meta,
     aliases: [],
   },
+  onboarding: discordOnboardingAdapter,
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),

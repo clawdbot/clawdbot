@@ -19,6 +19,7 @@ import {
 import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import { loginWeb } from "../../web/login.js";
+import { whatsappOnboardingAdapter } from "./onboarding/whatsapp.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -58,6 +59,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     forceAccountBinding: true,
     preferSessionLookupForAnnounceTarget: true,
   },
+  onboarding: whatsappOnboardingAdapter,
   pairing: {
     idLabel: "whatsappSenderId",
   },
