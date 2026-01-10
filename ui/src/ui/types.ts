@@ -1,12 +1,42 @@
 export type ProvidersStatusSnapshot = {
   ts: number;
-  whatsapp: WhatsAppStatus;
-  telegram: TelegramStatus;
-  discord?: DiscordStatus | null;
-  slack?: SlackStatus | null;
-  signal?: SignalStatus | null;
-  imessage?: IMessageStatus | null;
-  msteams?: MSTeamsStatus | null;
+  providerOrder: string[];
+  providerLabels: Record<string, string>;
+  providers: Record<string, unknown>;
+  providerAccounts: Record<string, ProviderAccountSnapshot[]>;
+  providerDefaultAccountId: Record<string, string>;
+};
+
+export type ProviderAccountSnapshot = {
+  accountId: string;
+  name?: string | null;
+  enabled?: boolean | null;
+  configured?: boolean | null;
+  linked?: boolean | null;
+  running?: boolean | null;
+  connected?: boolean | null;
+  reconnectAttempts?: number | null;
+  lastConnectedAt?: number | null;
+  lastError?: string | null;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+  lastProbeAt?: number | null;
+  mode?: string | null;
+  dmPolicy?: string | null;
+  allowFrom?: string[] | null;
+  tokenSource?: string | null;
+  botTokenSource?: string | null;
+  appTokenSource?: string | null;
+  baseUrl?: string | null;
+  allowUnmentionedGroups?: boolean | null;
+  cliPath?: string | null;
+  dbPath?: string | null;
+  port?: number | null;
+  probe?: unknown;
+  audit?: unknown;
+  application?: unknown;
 };
 
 export type WhatsAppSelf = {

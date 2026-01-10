@@ -60,10 +60,16 @@ export async function loadProviders(state: ConnectionsState, probe: boolean) {
     })) as ProvidersStatusSnapshot;
     state.providersSnapshot = res;
     state.providersLastSuccess = Date.now();
-    state.telegramTokenLocked = res.telegram.tokenSource === "env";
-    state.discordTokenLocked = res.discord?.tokenSource === "env";
-    state.slackTokenLocked = res.slack?.botTokenSource === "env";
-    state.slackAppTokenLocked = res.slack?.appTokenSource === "env";
+    const providers = res.providers as Record<string, unknown>;
+    const telegram = providers.telegram as { tokenSource?: string | null };
+    const discord = providers.discord as { tokenSource?: string | null } | null;
+    const slack = providers.slack as
+      | { botTokenSource?: string | null; appTokenSource?: string | null }
+      | null;
+    state.telegramTokenLocked = telegram?.tokenSource === "env";
+    state.discordTokenLocked = discord?.tokenSource === "env";
+    state.slackTokenLocked = slack?.botTokenSource === "env";
+    state.slackAppTokenLocked = slack?.appTokenSource === "env";
   } catch (err) {
     state.providersError = String(err);
   } finally {

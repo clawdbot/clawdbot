@@ -107,8 +107,8 @@ export class GatewayBrowserClient {
           }
         : undefined;
     const params = {
-      minProtocol: 2,
-      maxProtocol: 2,
+      minProtocol: 3,
+      maxProtocol: 3,
       client: {
         name: this.opts.clientName ?? "clawdbot-control-ui",
         version: this.opts.clientVersion ?? "dev",
