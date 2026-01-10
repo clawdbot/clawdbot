@@ -69,6 +69,19 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
     }
     return Array.from(actions);
   },
+  extractToolSend: ({ args }) => {
+    const action = typeof args.action === "string" ? args.action.trim() : "";
+    if (action === "sendMessage") {
+      const to = typeof args.to === "string" ? args.to : undefined;
+      return to ? { to } : null;
+    }
+    if (action === "threadReply") {
+      const channelId =
+        typeof args.channelId === "string" ? args.channelId.trim() : "";
+      return channelId ? { to: `channel:${channelId}` } : null;
+    }
+    return null;
+  },
   handleAction: async ({ action, params, cfg }) => {
     const resolveChannelId = () =>
       readStringParam(params, "channelId") ??

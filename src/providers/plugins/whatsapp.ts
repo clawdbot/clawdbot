@@ -18,6 +18,7 @@ import {
 } from "../../web/accounts.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
+import { loginWeb } from "../../web/login.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -34,6 +35,7 @@ import { monitorWebProvider } from "../web/index.js";
 import { formatPairingApproveHint } from "./helpers.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
+import { resolveWhatsAppHeartbeatRecipients } from "./whatsapp-heartbeat.js";
 import {
   applyAccountNameToProviderSection,
   migrateBaseNameToDefaultAccount,
@@ -326,6 +328,15 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         accountId: accountId ?? undefined,
       }),
   },
+  auth: {
+    login: async ({ cfg, accountId, runtime, verbose, providerInput }) => {
+      const resolvedAccountId =
+        accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+      const raw = providerInput?.trim().toLowerCase();
+      const provider = raw === "web" ? "web" : "whatsapp";
+      await loginWeb(Boolean(verbose), provider, undefined, runtime, resolvedAccountId);
+    },
+  },
   heartbeat: {
     checkReady: async ({ cfg, accountId, deps }) => {
       if (cfg.web?.enabled === false) {
@@ -346,6 +357,8 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       }
       return { ok: true, reason: "ok" };
     },
+    resolveRecipients: ({ cfg, opts }) =>
+      resolveWhatsAppHeartbeatRecipients(cfg, opts),
   },
   status: {
     defaultRuntime: {

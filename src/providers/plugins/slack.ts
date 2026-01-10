@@ -178,6 +178,15 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
       if (isActionEnabled("emojiList")) actions.add("emoji-list");
       return Array.from(actions);
     },
+    extractToolSend: ({ args }) => {
+      const action = typeof args.action === "string" ? args.action.trim() : "";
+      if (action !== "sendMessage") return null;
+      const to = typeof args.to === "string" ? args.to : undefined;
+      if (!to) return null;
+      const accountId =
+        typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+      return { to, accountId };
+    },
     handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
       const resolveChannelId = () =>
         readStringParam(params, "channelId") ??

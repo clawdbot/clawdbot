@@ -163,9 +163,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilitiesLower = new Set(
     runtimeCapabilities.map((cap) => cap.toLowerCase()),
   );
-  const telegramInlineButtonsEnabled =
-    runtimeProvider === "telegram" &&
-    runtimeCapabilitiesLower.has("inlinebuttons");
+  const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
   const skillsSection = skillsPrompt
     ? [
@@ -316,10 +314,10 @@ export function buildAgentSystemPrompt(params: {
           "### message tool",
           "- Use `message` for proactive sends + provider actions (polls, reactions, etc.).",
           `- If multiple providers are configured, pass \`provider\` (${MESSAGE_PROVIDER_OPTIONS}).`,
-          telegramInlineButtonsEnabled
-            ? "- Telegram: inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
-            : runtimeProvider === "telegram"
-              ? '- Telegram: inline buttons NOT enabled. If you need them, ask to add "inlineButtons" to telegram.capabilities or telegram.accounts.<id>.capabilities.'
+          inlineButtonsEnabled
+            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+            : runtimeProvider
+              ? `- Inline buttons not enabled for ${runtimeProvider}. If you need them, ask to add "inlineButtons" to ${runtimeProvider}.capabilities or ${runtimeProvider}.accounts.<id>.capabilities.`
               : "",
         ]
           .filter(Boolean)

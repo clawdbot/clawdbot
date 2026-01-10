@@ -325,12 +325,26 @@ export type ProviderGatewayAdapter<ResolvedAccount = unknown> = {
   ) => Promise<ProviderLogoutResult>;
 };
 
+export type ProviderAuthAdapter = {
+  login?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    runtime: RuntimeEnv;
+    verbose?: boolean;
+    providerInput?: string | null;
+  }) => Promise<void>;
+};
+
 export type ProviderHeartbeatAdapter = {
   checkReady?: (params: {
     cfg: ClawdbotConfig;
     accountId?: string | null;
     deps?: ProviderHeartbeatDeps;
   }) => Promise<{ ok: boolean; reason: string }>;
+  resolveRecipients?: (params: {
+    cfg: ClawdbotConfig;
+    opts?: { to?: string; all?: boolean };
+  }) => { recipients: string[]; source: string };
 };
 
 export type ProviderCapabilities = {
@@ -482,12 +496,20 @@ export type ProviderMessageActionContext = {
   dryRun?: boolean;
 };
 
+export type ProviderToolSend = {
+  to: string;
+  accountId?: string | null;
+};
+
 export type ProviderMessageActionAdapter = {
   listActions?: (params: {
     cfg: ClawdbotConfig;
   }) => ProviderMessageActionName[];
   supportsAction?: (params: { action: ProviderMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
+  extractToolSend?: (params: {
+    args: Record<string, unknown>;
+  }) => ProviderToolSend | null;
   handleAction?: (
     ctx: ProviderMessageActionContext,
   ) => Promise<AgentToolResult<unknown>>;
@@ -510,6 +532,7 @@ export type ProviderPlugin<ResolvedAccount = any> = {
   status?: ProviderStatusAdapter<ResolvedAccount>;
   gatewayMethods?: string[];
   gateway?: ProviderGatewayAdapter<ResolvedAccount>;
+  auth?: ProviderAuthAdapter;
   elevated?: ProviderElevatedAdapter;
   commands?: ProviderCommandAdapter;
   streaming?: ProviderStreamingAdapter;

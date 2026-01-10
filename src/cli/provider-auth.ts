@@ -1,6 +1,5 @@
 import { loadConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
-import { loginWeb } from "../provider-web.js";
 import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import {
   getProviderPlugin,
@@ -14,28 +13,31 @@ type ProviderAuthOptions = {
   verbose?: boolean;
 };
 
-function normalizeLoginProvider(raw?: string): "whatsapp" | "web" {
-  const value = String(raw ?? "whatsapp")
-    .trim()
-    .toLowerCase();
-  if (value === "whatsapp" || value === "web") return value;
-  throw new Error(`Unsupported provider: ${value}`);
-}
-
 export async function runProviderLogin(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const provider = normalizeLoginProvider(opts.provider);
+  const providerInput = opts.provider ?? "whatsapp";
+  const providerId = normalizeProviderId(providerInput);
+  if (!providerId) {
+    throw new Error(`Unsupported provider: ${providerInput}`);
+  }
+  const plugin = getProviderPlugin(providerId);
+  if (!plugin?.auth?.login) {
+    throw new Error(`Provider ${providerId} does not support login`);
+  }
   // Auth-only flow: do not mutate provider config here.
   setVerbose(Boolean(opts.verbose));
-  await loginWeb(
-    Boolean(opts.verbose),
-    provider,
-    undefined,
+  const cfg = loadConfig();
+  const accountId =
+    opts.account?.trim() || resolveProviderDefaultAccountId({ plugin, cfg });
+  await plugin.auth.login({
+    cfg,
+    accountId,
     runtime,
-    opts.account,
-  );
+    verbose: Boolean(opts.verbose),
+    providerInput,
+  });
 }
 
 export async function runProviderLogout(
