@@ -1,10 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type {
   OutboundDeliveryResult,
   OutboundSendDeps,
 } from "../../infra/outbound/deliver.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import type { PollInput } from "../../polls.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ChatProviderId } from "../registry.js";
