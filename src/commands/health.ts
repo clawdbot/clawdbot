@@ -1,9 +1,9 @@
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   getProviderPlugin,
   listProviderPlugins,
@@ -55,7 +55,9 @@ const isAccountEnabled = (account: unknown): boolean => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 
 const formatProbeLine = (probe: unknown): string | null => {
   const record = asRecord(probe);
@@ -98,9 +100,7 @@ export const formatHealthProviderLines = (summary: HealthSummary): string[] => {
     if (!providerSummary) continue;
     const plugin = getProviderPlugin(providerId as never);
     const label =
-      summary.providerLabels?.[providerId] ??
-      plugin?.meta.label ??
-      providerId;
+      summary.providerLabels?.[providerId] ?? plugin?.meta.label ?? providerId;
     const linked =
       typeof providerSummary.linked === "boolean"
         ? providerSummary.linked
@@ -112,7 +112,9 @@ export const formatHealthProviderLines = (summary: HealthSummary): string[] => {
             ? providerSummary.authAgeMs
             : null;
         const authLabel =
-          authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+          authAgeMs != null
+            ? ` (auth age ${Math.round(authAgeMs / 60000)}m)`
+            : "";
         lines.push(`${label}: linked${authLabel}`);
       } else {
         lines.push(`${label}: not linked`);

@@ -50,14 +50,19 @@ describe("getHealthSnapshot", () => {
     };
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
-  const snap = (await getHealthSnapshot({ timeoutMs: 10 })) satisfies HealthSummary;
-  expect(snap.ok).toBe(true);
-  const telegram = snap.providers.telegram as { configured?: boolean; probe?: unknown };
-  expect(telegram.configured).toBe(false);
-  expect(telegram.probe).toBeUndefined();
-  expect(snap.sessions.count).toBe(2);
-  expect(snap.sessions.recent[0]?.key).toBe("foo");
-});
+    const snap = (await getHealthSnapshot({
+      timeoutMs: 10,
+    })) satisfies HealthSummary;
+    expect(snap.ok).toBe(true);
+    const telegram = snap.providers.telegram as {
+      configured?: boolean;
+      probe?: unknown;
+    };
+    expect(telegram.configured).toBe(false);
+    expect(telegram.probe).toBeUndefined();
+    expect(snap.sessions.count).toBe(2);
+    expect(snap.sessions.recent[0]?.key).toBe("foo");
+  });
 
   it("probes telegram getMe + webhook info when configured", async () => {
     testConfig = { telegram: { botToken: "t-1" } };
@@ -103,7 +108,11 @@ describe("getHealthSnapshot", () => {
     const snap = await getHealthSnapshot({ timeoutMs: 25 });
     const telegram = snap.providers.telegram as {
       configured?: boolean;
-      probe?: { ok?: boolean; bot?: { username?: string }; webhook?: { url?: string } };
+      probe?: {
+        ok?: boolean;
+        bot?: { username?: string };
+        webhook?: { url?: string };
+      };
     };
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(true);
@@ -158,7 +167,10 @@ describe("getHealthSnapshot", () => {
     );
 
     const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.providers.telegram as { configured?: boolean; probe?: { ok?: boolean } };
+    const telegram = snap.providers.telegram as {
+      configured?: boolean;
+      probe?: { ok?: boolean };
+    };
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(true);
     expect(calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);

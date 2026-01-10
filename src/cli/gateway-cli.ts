@@ -4,8 +4,11 @@ import path from "node:path";
 
 import type { Command } from "commander";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { formatHealthProviderLines, type HealthSummary } from "../commands/health.js";
 import { gatewayStatusCommand } from "../commands/gateway-status.js";
+import {
+  formatHealthProviderLines,
+  type HealthSummary,
+} from "../commands/health.js";
 import { handleReset } from "../commands/onboard-helpers.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -949,7 +952,9 @@ export function registerGatewayCli(program: Command) {
             }`,
           );
           if (obj.providers && typeof obj.providers === "object") {
-            for (const line of formatHealthProviderLines(obj as HealthSummary)) {
+            for (const line of formatHealthProviderLines(
+              obj as HealthSummary,
+            )) {
               defaultRuntime.log(line);
             }
           }
