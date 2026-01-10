@@ -1,5 +1,9 @@
 import { writeConfigFile } from "../../config/config.js";
-import { normalizeProviderId } from "../../providers/plugins/index.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -75,25 +79,13 @@ export async function providersAddCommand(
     if (wantsNames) {
       for (const provider of selection) {
         const accountId = accountIds[provider] ?? DEFAULT_ACCOUNT_ID;
-        const existingName =
-          provider === "whatsapp"
-            ? nextConfig.whatsapp?.accounts?.[accountId]?.name
-            : provider === "telegram"
-              ? (nextConfig.telegram?.accounts?.[accountId]?.name ??
-                nextConfig.telegram?.name)
-              : provider === "discord"
-                ? (nextConfig.discord?.accounts?.[accountId]?.name ??
-                  nextConfig.discord?.name)
-                : provider === "slack"
-                  ? (nextConfig.slack?.accounts?.[accountId]?.name ??
-                    nextConfig.slack?.name)
-                  : provider === "signal"
-                    ? (nextConfig.signal?.accounts?.[accountId]?.name ??
-                      nextConfig.signal?.name)
-                    : provider === "imessage"
-                      ? (nextConfig.imessage?.accounts?.[accountId]?.name ??
-                        nextConfig.imessage?.name)
-                      : undefined;
+        const plugin = getProviderPlugin(provider as ProviderId);
+        const account = plugin?.config.resolveAccount(
+          nextConfig,
+          accountId,
+        ) as { name?: string } | undefined;
+        const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
+        const existingName = snapshot?.name ?? account?.name;
         const name = await prompter.text({
           message: `${provider} account name (${accountId})`,
           initialValue: existingName,
@@ -121,72 +113,41 @@ export async function providersAddCommand(
     return;
   }
 
+  const plugin = getProviderPlugin(provider);
+  if (!plugin?.setup?.applyAccountConfig) {
+    runtime.error(`Provider ${provider} does not support add.`);
+    runtime.exit(1);
+    return;
+  }
   const accountId =
-    provider === "msteams"
-      ? DEFAULT_ACCOUNT_ID
-      : normalizeAccountId(opts.account);
+    plugin.setup.resolveAccountId?.({ cfg, accountId: opts.account }) ??
+    normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
-
-  if (provider === "telegram") {
-    if (useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      runtime.error(
-        "TELEGRAM_BOT_TOKEN can only be used for the default account.",
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!useEnv && !opts.token && !opts.tokenFile) {
-      runtime.error(
-        "Telegram requires --token or --token-file (or --use-env).",
-      );
-      runtime.exit(1);
-      return;
-    }
-  }
-  if (provider === "discord") {
-    if (useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      runtime.error(
-        "DISCORD_BOT_TOKEN can only be used for the default account.",
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!useEnv && !opts.token) {
-      runtime.error("Discord requires --token (or --use-env).");
-      runtime.exit(1);
-      return;
-    }
-  }
-  if (provider === "slack") {
-    if (useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      runtime.error(
-        "Slack env tokens can only be used for the default account.",
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!useEnv && (!opts.botToken || !opts.appToken)) {
-      runtime.error(
-        "Slack requires --bot-token and --app-token (or --use-env).",
-      );
-      runtime.exit(1);
-      return;
-    }
-  }
-  if (provider === "signal") {
-    if (
-      !opts.signalNumber &&
-      !opts.httpUrl &&
-      !opts.httpHost &&
-      !opts.httpPort &&
-      !opts.cliPath
-    ) {
-      runtime.error(
-        "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.",
-      );
-      runtime.exit(1);
-      return;
-    }
+  const validationError = plugin.setup.validateInput?.({
+    cfg,
+    accountId,
+    input: {
+      name: opts.name,
+      token: opts.token,
+      tokenFile: opts.tokenFile,
+      botToken: opts.botToken,
+      appToken: opts.appToken,
+      signalNumber: opts.signalNumber,
+      cliPath: opts.cliPath,
+      dbPath: opts.dbPath,
+      service: opts.service,
+      region: opts.region,
+      authDir: opts.authDir,
+      httpUrl: opts.httpUrl,
+      httpHost: opts.httpHost,
+      httpPort: opts.httpPort,
+      useEnv,
+    },
+  });
+  if (validationError) {
+    runtime.error(validationError);
+    runtime.exit(1);
+    return;
   }
 
   const nextConfig = applyProviderAccountConfig({
