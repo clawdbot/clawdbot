@@ -235,7 +235,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (lastProvider && lastProvider !== INTERNAL_MESSAGE_PROVIDER) {
           return lastProvider;
         }
-        return wantsDelivery ? DEFAULT_CHAT_PROVIDER : INTERNAL_MESSAGE_PROVIDER;
+        return wantsDelivery
+          ? DEFAULT_CHAT_PROVIDER
+          : INTERNAL_MESSAGE_PROVIDER;
       }
 
       if (isGatewayMessageProvider(requestedProvider)) return requestedProvider;
@@ -250,22 +252,17 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.to === "string" && request.to.trim()
         ? request.to.trim()
         : undefined;
-    const deliveryTargetMode =
-      explicitTo
-        ? "explicit"
-        : isDeliverableMessageProvider(resolvedProvider)
-          ? "implicit"
-          : undefined;
+    const deliveryTargetMode = explicitTo
+      ? "explicit"
+      : isDeliverableMessageProvider(resolvedProvider)
+        ? "implicit"
+        : undefined;
     let resolvedTo =
       explicitTo ||
       (isDeliverableMessageProvider(resolvedProvider)
         ? lastTo || undefined
         : undefined);
-    if (
-      !resolvedTo &&
-      isDeliverableMessageProvider(resolvedProvider) &&
-      resolvedProvider !== INTERNAL_MESSAGE_PROVIDER
-    ) {
+    if (!resolvedTo && isDeliverableMessageProvider(resolvedProvider)) {
       const cfg = cfgForAgent ?? loadConfig();
       const fallback = resolveOutboundTarget({
         provider: resolvedProvider,
