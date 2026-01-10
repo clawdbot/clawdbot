@@ -2,10 +2,6 @@ import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import { normalizeTargetForProvider } from "../../agents/pi-embedded-messaging.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ReplyToMode } from "../../config/types.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
@@ -80,18 +76,6 @@ export function filterMessagingToolDuplicates(params: {
   );
 }
 
-function normalizeTargetForProvider(
-  provider: string,
-  raw?: string,
-): string | undefined {
-  if (!raw) return undefined;
-  const providerId = normalizeProviderId(provider);
-  const plugin = providerId ? getProviderPlugin(providerId) : undefined;
-  const normalized =
-    plugin?.messaging?.normalizeTarget?.(raw) ??
-    (raw.trim().toLowerCase() || undefined);
-  return normalized || undefined;
-}
 function normalizeAccountId(value?: string): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed.toLowerCase() : undefined;
