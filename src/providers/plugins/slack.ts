@@ -381,6 +381,7 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: null,
+    textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {

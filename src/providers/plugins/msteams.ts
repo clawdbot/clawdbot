@@ -101,6 +101,7 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: chunkMarkdownText,
+    textChunkLimit: 4000,
     pollMaxOptions: 12,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();

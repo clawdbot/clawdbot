@@ -214,6 +214,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
   outbound: {
     deliveryMode: "gateway",
     chunker: chunkText,
+    textChunkLimit: 4000,
     pollMaxOptions: 12,
     resolveTarget: ({ to, allowFrom, mode }) => {
       const trimmed = to?.trim() ?? "";

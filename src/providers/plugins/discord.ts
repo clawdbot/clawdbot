@@ -173,6 +173,7 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: null,
+    textChunkLimit: 2000,
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();

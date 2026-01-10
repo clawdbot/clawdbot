@@ -174,6 +174,7 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: chunkText,
+    textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {

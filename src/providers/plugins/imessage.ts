@@ -142,6 +142,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: chunkText,
+    textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {

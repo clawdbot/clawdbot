@@ -222,6 +222,7 @@ export type ProviderPollContext = {
 export type ProviderOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number) => string[]) | null;
+  textChunkLimit?: number;
   pollMaxOptions?: number;
   resolveTarget?: (params: {
     cfg?: ClawdbotConfig;

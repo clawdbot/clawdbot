@@ -184,6 +184,7 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: chunkMarkdownText,
+    textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {
