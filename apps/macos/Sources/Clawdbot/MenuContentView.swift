@@ -284,6 +284,11 @@ struct MenuContent: View {
                     }
                 }
                 Button {
+                    DebugActions.restartOnboarding()
+                } label: {
+                    Label("Restart Onboarding", systemImage: "arrow.counterclockwise")
+                }
+                Button {
                     DebugActions.restartApp()
                 } label: {
                     Label("Restart App", systemImage: "arrow.triangle.2.circlepath")

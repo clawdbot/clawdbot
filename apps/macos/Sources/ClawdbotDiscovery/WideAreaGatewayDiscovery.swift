@@ -18,6 +18,7 @@ enum WideAreaGatewayDiscovery {
     private static let maxCandidates = 40
     private static let digPath = "/usr/bin/dig"
     private static let defaultTimeoutSeconds: TimeInterval = 0.2
+    private static let nameserverProbeConcurrency = 6
 
     struct DiscoveryContext: Sendable {
         var tailscaleStatus: @Sendable () -> String?
@@ -153,25 +154,65 @@ enum WideAreaGatewayDiscovery {
     private static func findNameserver(
         candidates: inout [String],
         remaining: () -> TimeInterval,
-        dig: @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
+        dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
     {
         let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let probeName = "_clawdbot-bridge._tcp.\(domainTrimmed)"
 
-        while !candidates.isEmpty {
-            if remaining() <= 0 { break }
-            let ip = candidates.removeFirst()
-            if let stdout = dig(
-                ["+short", "+time=1", "+tries=1", "@\(ip)", probeName, "PTR"],
-                min(defaultTimeoutSeconds, remaining())),
-                stdout.split(whereSeparator: \.isNewline).isEmpty == false
-            {
-                return ip
+        let ips = candidates
+        candidates.removeAll(keepingCapacity: true)
+        if ips.isEmpty { return nil }
+
+        final class ProbeState: @unchecked Sendable {
+            let lock = NSLock()
+            var nextIndex = 0
+            var found: String?
+        }
+
+        let state = ProbeState()
+        let deadline = Date().addingTimeInterval(max(0, remaining()))
+        let workerCount = min(self.nameserverProbeConcurrency, ips.count)
+        let group = DispatchGroup()
+
+        for _ in 0..<workerCount {
+            group.enter()
+            DispatchQueue.global(qos: .utility).async {
+                defer { group.leave() }
+
+                while Date() < deadline {
+                    state.lock.lock()
+                    if state.found != nil {
+                        state.lock.unlock()
+                        return
+                    }
+                    let i = state.nextIndex
+                    state.nextIndex += 1
+                    state.lock.unlock()
+
+                    if i >= ips.count { return }
+                    let ip = ips[i]
+                    let budget = deadline.timeIntervalSinceNow
+                    if budget <= 0 { return }
+
+                    if let stdout = dig(
+                        ["+short", "+time=1", "+tries=1", "@\(ip)", probeName, "PTR"],
+                        min(defaultTimeoutSeconds, budget)),
+                        stdout.split(whereSeparator: \.isNewline).isEmpty == false
+                    {
+                        state.lock.lock()
+                        if state.found == nil {
+                            state.found = ip
+                        }
+                        state.lock.unlock()
+                        return
+                    }
+                }
             }
         }
 
-        return nil
+        _ = group.wait(timeout: .now() + max(0.0, remaining()))
+        return state.found
     }
 
     private static func runDig(args: [String], timeout: TimeInterval) -> String? {

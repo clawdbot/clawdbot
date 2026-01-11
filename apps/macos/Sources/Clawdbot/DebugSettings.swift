@@ -486,6 +486,7 @@ struct DebugSettings: View {
 
                 HStack(spacing: 8) {
                     Button("Restart app") { DebugActions.restartApp() }
+                    Button("Restart onboarding") { DebugActions.restartOnboarding() }
                     Button("Reveal app in Finder") { self.revealApp() }
                     Spacer(minLength: 0)
                 }

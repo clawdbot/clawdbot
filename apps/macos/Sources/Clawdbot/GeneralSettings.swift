@@ -30,10 +30,15 @@ struct GeneralSettings: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
                 if !self.state.onboardingSeen {
-                    Text("Complete onboarding to finish setup")
-                        .font(.callout.weight(.semibold))
-                        .foregroundColor(.accentColor)
-                        .padding(.bottom, 2)
+                    Button {
+                        OnboardingController.shared.show()
+                    } label: {
+                        Text("Complete onboarding to finish setup")
+                            .font(.callout.weight(.semibold))
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 2)
                 }
 
                 VStack(alignment: .leading, spacing: 12) {

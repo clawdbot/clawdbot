@@ -48,6 +48,11 @@ final class OnboardingController {
         self.window?.close()
         self.window = nil
     }
+
+    func restart() {
+        self.close()
+        self.show()
+    }
 }
 
 struct OnboardingView: View {

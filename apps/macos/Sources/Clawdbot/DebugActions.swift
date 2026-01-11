@@ -5,6 +5,7 @@ import SwiftUI
 enum DebugActions {
     private static let verboseDefaultsKey = "clawdbot.debug.verboseMain"
     private static let sessionMenuLimit = 12
+    private static let onboardingSeenKey = "clawdbot.onboardingSeen"
 
     @MainActor
     static func openAgentEventsWindow() {
@@ -181,6 +182,14 @@ enum DebugActions {
         task.arguments = ["-c", "sleep 0.2; open -n \"$1\"", "_", url.path]
         try? task.run()
         NSApp.terminate(nil)
+    }
+
+    @MainActor
+    static func restartOnboarding() {
+        UserDefaults.standard.set(false, forKey: self.onboardingSeenKey)
+        UserDefaults.standard.set(0, forKey: onboardingVersionKey)
+        AppStateStore.shared.onboardingSeen = false
+        OnboardingController.shared.restart()
     }
 
     @MainActor

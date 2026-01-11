@@ -213,40 +213,51 @@ public final class GatewayDiscoveryModel {
 
     private func scheduleWideAreaFallback() {
         let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        if ProcessInfo.processInfo.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
         self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            if Task.isCancelled { return }
-            let hasResults = await MainActor.run {
-                !(self.gatewaysByDomain[domain]?.isEmpty ?? true)
-            }
-            if hasResults { return }
-
-            let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: 3.0)
-            if beacons.isEmpty { return }
-
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.wideAreaFallbackGateways = beacons.map { beacon in
-                    let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
-                    let isLocal = Self.isLocalGateway(
-                        lanHost: beacon.lanHost,
-                        tailnetDns: beacon.tailnetDns,
-                        displayName: beacon.displayName,
-                        serviceName: beacon.instanceName,
-                        local: self.localIdentity)
-                    return DiscoveredGateway(
-                        displayName: beacon.displayName,
-                        lanHost: beacon.lanHost,
-                        tailnetDns: beacon.tailnetDns,
-                        sshPort: beacon.sshPort ?? 22,
-                        gatewayPort: beacon.gatewayPort,
-                        cliPath: beacon.cliPath,
-                        stableID: stableID,
-                        debugID: "\(beacon.instanceName)@\(beacon.host):\(beacon.port)",
-                        isLocal: isLocal)
+            var attempt = 0
+            let startedAt = Date()
+            while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
+                let hasResults = await MainActor.run {
+                    !(self.gatewaysByDomain[domain]?.isEmpty ?? true)
                 }
-                self.recomputeGateways()
+                if hasResults { return }
+
+                // Wide-area discovery can be racy (Tailscale not yet up, DNS zone not
+                // published yet). Retry with a short backoff while onboarding is open.
+                let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
+                if !beacons.isEmpty {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.wideAreaFallbackGateways = beacons.map { beacon in
+                            let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
+                            let isLocal = Self.isLocalGateway(
+                                lanHost: beacon.lanHost,
+                                tailnetDns: beacon.tailnetDns,
+                                displayName: beacon.displayName,
+                                serviceName: beacon.instanceName,
+                                local: self.localIdentity)
+                            return DiscoveredGateway(
+                                displayName: beacon.displayName,
+                                lanHost: beacon.lanHost,
+                                tailnetDns: beacon.tailnetDns,
+                                sshPort: beacon.sshPort ?? 22,
+                                gatewayPort: beacon.gatewayPort,
+                                cliPath: beacon.cliPath,
+                                stableID: stableID,
+                                debugID: "\(beacon.instanceName)@\(beacon.host):\(beacon.port)",
+                                isLocal: isLocal)
+                        }
+                        self.recomputeGateways()
+                    }
+                    return
+                }
+
+                attempt += 1
+                let backoff = min(8.0, 0.6 + (Double(attempt) * 0.7))
+                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
             }
         }
     }
