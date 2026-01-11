@@ -1,3 +1,6 @@
+import { exec } from "child_process";
+import { promisify } from "util";
+const execAsync = promisify(exec);
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -592,6 +595,44 @@ export async function handleCommands(params: {
         text: `⚙️ Restarting clawdbot via ${restartMethod.method}; give me a few seconds to come back online.`,
       },
     };
+  }
+
+
+  // Custom clawd-* commands that run shell scripts
+  const clawdScriptCommands: Record<string, string> = {
+    "/clawd-update": "~/clawd-scripts/clawd_update.sh",
+    "/clawd-restart": "~/clawd-scripts/clawd_restart.sh",
+    "/clawd-revert": "~/clawd-scripts/clawd_revert.sh",
+    "/clawd-push": "~/clawd-scripts/clawd_push.sh",
+    "/clawd-git-status": "~/clawd-scripts/clawd_git_status.sh",
+  };
+
+  const clawdScriptPath = clawdScriptCommands[command.commandBodyNormalized];
+  if (allowTextCommands && clawdScriptPath) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring ${command.commandBodyNormalized} from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    try {
+      const expandedPath = clawdScriptPath.replace("~", process.env.HOME || "/home/azureuser");
+      const { stdout, stderr } = await execAsync(expandedPath, { timeout: 300000 });
+      const output = (stdout + (stderr ? `\n${stderr}` : "")).trim();
+      const cleanOutput = output.replace(/\x1b\[[0-9;]*m/g, "").slice(0, 4000);
+      return {
+        shouldContinue: false,
+        reply: { text: cleanOutput || "✅ Command completed (no output)." },
+      };
+    } catch (err: unknown) {
+      const error = err as { stdout?: string; stderr?: string; message?: string };
+      const errorOutput = (error.stdout || "") + (error.stderr || "") || error.message || "Unknown error";
+      const cleanError = errorOutput.replace(/\x1b\[[0-9;]*m/g, "").slice(0, 4000);
+      return {
+        shouldContinue: false,
+        reply: { text: `❌ Command failed:\n${cleanError}` },
+      };
+    }
   }
 
   const helpRequested = command.commandBodyNormalized === "/help";

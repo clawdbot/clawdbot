@@ -244,6 +244,36 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/queue",
       acceptsArgs: true,
     }),
+    defineChatCommand({
+      key: "clawd-update",
+      description: "Update ClawdBot from upstream and restart.",
+      textAlias: "/clawd-update",
+      scope: "text",
+    }),
+    defineChatCommand({
+      key: "clawd-restart",
+      description: "Rebuild and restart ClawdBot.",
+      textAlias: "/clawd-restart",
+      scope: "text",
+    }),
+    defineChatCommand({
+      key: "clawd-revert",
+      description: "Revert ClawdBot to previous version.",
+      textAlias: "/clawd-revert",
+      scope: "text",
+    }),
+    defineChatCommand({
+      key: "clawd-push",
+      description: "Push current changes to fork.",
+      textAlias: "/clawd-push",
+      scope: "text",
+    }),
+    defineChatCommand({
+      key: "clawd-git-status",
+      description: "Show git status of ClawdBot.",
+      textAlias: "/clawd-git-status",
+      scope: "text",
+    }),
   ];
 
   registerAlias(commands, "status", "/usage");
