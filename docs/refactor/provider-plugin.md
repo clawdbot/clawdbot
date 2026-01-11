@@ -16,6 +16,7 @@ Goal: make providers (iMessage, Discord, etc.) pluggable with minimal wiring and
 - Shape: `src/providers/plugins/types.ts` defines the plugin contract.
 - Gateway: `src/gateway/server-providers.ts` drives start/stop + runtime snapshots via plugins.
 - Outbound: `src/infra/outbound/deliver.ts` routes through plugin outbound when present.
+- Outbound delivery loads provider plugins on-demand via `src/providers/plugins/load.ts` (avoid importing the heavy plugins registry on hot paths).
 - Reload: `src/gateway/config-reload.ts` uses plugin `reload.configPrefixes` lazily (avoid init cycles).
 - CLI: `src/commands/providers/*` uses plugin list for add/remove/status/list.
 - Protocol: `src/gateway/protocol/schema.ts` (v3) makes provider-shaped responses container-generic (maps keyed by provider id).
@@ -38,6 +39,8 @@ Each `ProviderPlugin` bundles:
 ## Key Integration Notes
 - `listProviderPlugins()` is the runtime source of truth for provider UX and wiring.
 - Avoid importing `src/providers/plugins/index.ts` from shared modules (reply flow, command auth, sandbox explain). It’s intentionally “heavy” (providers may pull web login / monitor code). Use `getProviderDock()` + `normalizeProviderId()` for cheap metadata, and only `getProviderPlugin()` at execution boundaries (ex: `src/auto-reply/reply/route-reply.ts`).
+- WhatsApp plugin keeps Baileys-heavy login bits behind lazy imports; cheap auth file checks live in `src/web/auth-store.ts` (so outbound routing doesn’t pay Baileys import cost).
+- `routeReply` delegates sending to plugin `outbound` adapters via a lazy import of `src/infra/outbound/deliver.ts` (so adding a provider is “just implement plugin.outbound”, no router switches).
 - Avoid static imports of provider monitors inside plugin modules. Monitors typically import the reply pipeline, which can create ESM cycles (and break Vite/Vitest SSR with TDZ errors). Prefer lazy imports inside `gateway.startAccount`.
 - Debug cycle leaks quickly with: `npx -y madge --circular src/providers/plugins/index.ts`.
 - Gateway protocol schema keeps provider selection as an open-ended string (no provider enum / static list) to avoid init cycles and so new plugins don’t require protocol changes.
@@ -67,7 +70,7 @@ Each `ProviderPlugin` bundles:
 - Agent binding defaults use `meta.forceAccountBinding` to avoid hardcoded provider checks.
 - Onboarding quickstart allowlist uses `meta.quickstartAllowFrom` to avoid hardcoded provider lists.
 - `resolveProviderDefaultAccountId()` is the shared helper for picking default accounts from `accountIds` + plugin config.
-- `routeReply` now uses plugin outbound senders; `ProviderOutboundContext` includes `replyToId` + `threadId` for threading support.
+- `routeReply` uses plugin outbound senders; `ProviderOutboundContext` supports `replyToId` + `threadId` and outbound delivery supports `abortSignal` for cooperative cancellation.
 - Outbound target resolution (`resolveOutboundTarget`) now delegates to `plugin.outbound.resolveTarget` (mode-aware, uses config allowlists when present).
 - Outbound delivery results accept `meta` for provider-specific fields to avoid core type churn in new plugins.
 - Agent gateway routing sets `deliveryTargetMode` and uses `resolveOutboundTarget` for implicit fallback targets when `to` is missing.
