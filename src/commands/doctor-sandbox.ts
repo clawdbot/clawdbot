@@ -288,9 +288,12 @@ export function noteSandboxScopeWarnings(cfg: ClawdbotConfig) {
     if (overrides.length === 0) continue;
 
     warnings.push(
-      `- agents.list (id "${agentId}") sandbox ${overrides.join(
-        "/",
-      )} overrides ignored (scope resolves to "shared").`,
+      [
+        `- agents.list (id "${agentId}") sandbox ${overrides.join(
+          "/",
+        )} overrides ignored.`,
+        `  scope resolves to "shared".`,
+      ].join("\n"),
     );
   }
 
