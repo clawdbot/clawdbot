@@ -235,15 +235,16 @@ function summarizeTokenConfig(params: {
   if (hasBotOrAppTokenFields) {
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      return (
-        Boolean(String(rec.botToken ?? "").trim()) &&
-        Boolean(String(rec.appToken ?? "").trim())
-      );
+      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
+      const app = typeof rec.appToken === "string" ? rec.appToken.trim() : "";
+      return Boolean(bot) && Boolean(app);
     });
     const partial = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const hasBot = Boolean(String(rec.botToken ?? "").trim());
-      const hasApp = Boolean(String(rec.appToken ?? "").trim());
+      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
+      const app = typeof rec.appToken === "string" ? rec.appToken.trim() : "";
+      const hasBot = Boolean(bot);
+      const hasApp = Boolean(app);
       return (hasBot && !hasApp) || (!hasBot && hasApp);
     });
 
@@ -287,7 +288,7 @@ function summarizeTokenConfig(params: {
 
   const ready = enabled.filter((a) => {
     const rec = asRecord(a.account);
-    return Boolean(String(rec.token ?? "").trim());
+    return typeof rec.token === "string" ? Boolean(rec.token.trim()) : false;
   });
   if (ready.length === 0) {
     return { state: "setup", detail: "no token" };
