@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { startWebLoginWithQr, waitForWebLogin } from "../../../web/login-qr.js";
 import type { ProviderAgentTool } from "../types.js";
 
 export function createWhatsAppLoginTool(): ProviderAgentTool {
@@ -19,6 +18,9 @@ export function createWhatsAppLoginTool(): ProviderAgentTool {
       force: Type.Optional(Type.Boolean()),
     }),
     execute: async (_toolCallId, args) => {
+      const { startWebLoginWithQr, waitForWebLogin } = await import(
+        "../../../web/login-qr.js"
+      );
       const action = (args as { action?: string })?.action ?? "start";
       if (action === "wait") {
         const result = await waitForWebLogin({

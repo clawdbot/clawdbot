@@ -17,16 +17,14 @@ import {
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
-import { loginWeb } from "../../web/login.js";
-import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
   logWebSelfId,
   readWebSelfId,
   webAuthExists,
-} from "../../web/session.js";
+} from "../../web/auth-store.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
@@ -337,6 +335,7 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
     login: async ({ cfg, accountId, runtime, verbose }) => {
       const resolvedAccountId =
         accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+      const { loginWeb } = await import("../../web/login.js");
       await loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
     },
   },
@@ -451,14 +450,20 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
       );
     },
     loginWithQrStart: async ({ accountId, force, timeoutMs, verbose }) =>
-      await startWebLoginWithQr({
-        accountId,
-        force,
-        timeoutMs,
-        verbose,
-      }),
+      await (async () => {
+        const { startWebLoginWithQr } = await import("../../web/login-qr.js");
+        return await startWebLoginWithQr({
+          accountId,
+          force,
+          timeoutMs,
+          verbose,
+        });
+      })(),
     loginWithQrWait: async ({ accountId, timeoutMs }) =>
-      await waitForWebLogin({ accountId, timeoutMs }),
+      await (async () => {
+        const { waitForWebLogin } = await import("../../web/login-qr.js");
+        return await waitForWebLogin({ accountId, timeoutMs });
+      })(),
     logoutAccount: async ({ account, runtime }) => {
       const cleared = await logoutWeb({
         authDir: account.authDir,

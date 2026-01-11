@@ -23,7 +23,7 @@ vi.mock("../config/sessions.js", () => ({
   loadSessionStore: () => testStore,
 }));
 
-vi.mock("../web/session.js", () => ({
+vi.mock("../web/auth-store.js", () => ({
   webAuthExists: vi.fn(async () => true),
   getWebAuthAgeMs: vi.fn(() => 1234),
   readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
