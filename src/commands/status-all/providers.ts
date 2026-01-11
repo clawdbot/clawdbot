@@ -108,9 +108,10 @@ const buildAccountSnapshot = (params: {
   enabled: boolean;
   configured: boolean;
 }): ProviderAccountSnapshot => {
-  const described = params.plugin.config.describeAccount
-    ? params.plugin.config.describeAccount(params.account, params.cfg)
-    : undefined;
+  const described = params.plugin.config.describeAccount?.(
+    params.account,
+    params.cfg,
+  );
   return {
     enabled: params.enabled,
     configured: params.configured,

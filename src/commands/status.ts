@@ -815,18 +815,18 @@ export async function statusCommand(
   const dashboard = (() => {
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) return "disabled";
-	    const links = resolveControlUiLinks({
-	      port: resolveGatewayPort(cfg),
-	      bind: cfg.gateway?.bind,
-	      basePath: cfg.gateway?.controlUi?.basePath,
-	    });
-	    return links.httpUrl;
-	  })();
+    const links = resolveControlUiLinks({
+      port: resolveGatewayPort(cfg),
+      bind: cfg.gateway?.bind,
+      basePath: cfg.gateway?.controlUi?.basePath,
+    });
+    return links.httpUrl;
+  })();
 
-	  const gatewayValue = (() => {
-	    const target = remoteUrlMissing
-	      ? `fallback ${gatewayConnection.url}`
-	      : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
+  const gatewayValue = (() => {
+    const target = remoteUrlMissing
+      ? `fallback ${gatewayConnection.url}`
+      : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
     const reach = remoteUrlMissing
       ? warn("misconfigured (remote.url missing)")
       : gatewayReachable
