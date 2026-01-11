@@ -1,3 +1,5 @@
+import type { VoiceCallConfig } from "../voice-call/config.js";
+
 export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
@@ -1492,6 +1494,7 @@ export type ClawdbotConfig = {
   commands?: CommandsConfig;
   session?: SessionConfig;
   web?: WebConfig;
+  voiceCall?: VoiceCallConfig;
   whatsapp?: WhatsAppConfig;
   telegram?: TelegramConfig;
   discord?: DiscordConfig;

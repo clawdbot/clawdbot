@@ -21,6 +21,7 @@ import type {
 } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
+import { voicecallHandlers } from "./server-methods/voicecall.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
@@ -29,6 +30,7 @@ const handlers: GatewayRequestHandlers = {
   ...connectHandlers,
   ...logsHandlers,
   ...voicewakeHandlers,
+  ...voicecallHandlers,
   ...healthHandlers,
   ...providersHandlers,
   ...chatHandlers,

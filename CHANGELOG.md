@@ -45,6 +45,7 @@
 ## 2026.1.10
 
 ### New Features and Changes
+- Voice Call: add call modes (`notify` vs `conversation`) with configurable auto-hangup delay; enforce `maxDurationSeconds` safety timer; `mode` parameter in `initiate_call` tool action.
 - Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
 - Agents: add human-delay pacing between block replies (modes: off/natural/custom, per-agent configurable). (#446) — thanks @tony-freedomology.
 - Onboarding/Models: add catalog-backed default model picker to onboarding + configure. (#611) — thanks @jonasjancarik.

@@ -105,6 +105,10 @@ import {
 } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  getVoiceCallRuntime,
+  stopVoiceCallRuntime,
+} from "../voice-call/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
 import {
@@ -248,6 +252,11 @@ const METHODS = [
   "update.run",
   "voicewake.get",
   "voicewake.set",
+  "voicecall.initiate",
+  "voicecall.continue",
+  "voicecall.speak",
+  "voicecall.end",
+  "voicecall.status",
   "sessions.list",
   "sessions.patch",
   "sessions.reset",
@@ -1871,6 +1880,16 @@ export async function startGatewayServer(
     logProviders.info("skipping provider start (CLAWDBOT_SKIP_PROVIDERS=1)");
   }
 
+  // Start voice-call webhook server if enabled (must be running before inbound calls arrive)
+  if (cfgAtStart.voiceCall?.enabled) {
+    try {
+      await getVoiceCallRuntime();
+      log.info("[voice-call] webhook server started");
+    } catch (err) {
+      log.error(`[voice-call] startup failed: ${String(err)}`);
+    }
+  }
+
   const scheduleRestartSentinelWake = async () => {
     const sentinel = await consumeRestartSentinel();
     if (!sentinel) return;
@@ -2166,6 +2185,7 @@ export async function startGatewayServer(
       await stopIMessageProvider();
       await stopMSTeamsProvider();
       await stopGmailWatcher();
+      await stopVoiceCallRuntime().catch(() => {});
       cron.stop();
       heartbeatRunner.stop();
       for (const timer of nodePresenceTimers.values()) {
