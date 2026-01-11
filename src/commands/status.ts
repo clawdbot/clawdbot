@@ -578,7 +578,11 @@ export async function statusCommand(
       progress.tick();
 
       progress.setLabel("Summarizing providers…");
-      const providers = await buildProvidersTable(cfg);
+      const providers = await buildProvidersTable(cfg, {
+        // Show token previews in regular status; keep `status --all` redacted.
+        // Set `CLAWDBOT_SHOW_SECRETS=0` to force redaction.
+        showSecrets: process.env.CLAWDBOT_SHOW_SECRETS?.trim() !== "0",
+      });
       progress.tick();
 
       progress.setLabel("Reading sessions…");

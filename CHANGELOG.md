@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.10-4
+
+### Fixes
+- CLI/Status: show token previews (first/last chars) in `clawdbot status` provider details; keep `status --all` redacted (hash+length).
+
 ## 2026.1.10-3
 
 ### Fixes

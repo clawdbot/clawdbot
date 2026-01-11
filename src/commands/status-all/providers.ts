@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
@@ -66,7 +67,28 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
-export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
+function sha256HexPrefix(value: string, len = 8): string {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, len);
+}
+
+function formatTokenHint(
+  token: string,
+  opts: { showSecrets: boolean },
+): string {
+  const t = token.trim();
+  if (!t) return "empty";
+  if (!opts.showSecrets)
+    return `sha256:${sha256HexPrefix(t)} · len ${t.length}`;
+  const head = t.slice(0, 4);
+  const tail = t.slice(-4);
+  if (t.length <= 10) return `${t} · len ${t.length}`;
+  return `${head}…${tail} · len ${t.length}`;
+}
+
+export async function buildProvidersTable(
+  cfg: ClawdbotConfig,
+  opts?: { showSecrets?: boolean },
+): Promise<{
   rows: ProviderRow[];
   details: Array<{
     title: string;
@@ -74,6 +96,7 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
     rows: Array<Record<string, string>>;
   }>;
 }> {
+  const showSecrets = opts?.showSecrets === true;
   const rows: ProviderRow[] = [];
   const details: Array<{
     title: string;
@@ -138,6 +161,10 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
   const tgEnabledAccounts = tgAccounts.filter((a) => a.enabled);
   const tgTokenAccounts = tgEnabledAccounts.filter((a) => a.token?.trim());
   const tgSources = summarizeSources(tgTokenAccounts.map((a) => a.tokenSource));
+  const tgSampleToken = tgTokenAccounts[0]?.token?.trim() || "";
+  const tgTokenHint = tgSampleToken
+    ? formatTokenHint(tgSampleToken, { showSecrets })
+    : "";
   const tgMissingFiles: string[] = [];
   const tgGlobalTokenFileExists = existsSyncMaybe(cfg.telegram?.tokenFile);
   if (
@@ -170,7 +197,7 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
       ? tgMisconfigured
         ? `token file missing (${tgMissingFiles[0]})`
         : tgTokenAccounts.length > 0
-          ? `bot token ${tgSources.label} · accounts ${tgTokenAccounts.length}/${tgEnabledAccounts.length || 1}`
+          ? `bot token ${tgSources.label}${tgTokenHint ? ` (${tgTokenHint})` : ""} · accounts ${tgTokenAccounts.length}/${tgEnabledAccounts.length || 1}`
           : "no bot token (TELEGRAM_BOT_TOKEN / telegram.botToken)"
       : "disabled",
   });
@@ -183,13 +210,17 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
   const dcEnabledAccounts = dcAccounts.filter((a) => a.enabled);
   const dcTokenAccounts = dcEnabledAccounts.filter((a) => a.token?.trim());
   const dcSources = summarizeSources(dcTokenAccounts.map((a) => a.tokenSource));
+  const dcSampleToken = dcTokenAccounts[0]?.token?.trim() || "";
+  const dcTokenHint = dcSampleToken
+    ? formatTokenHint(dcSampleToken, { showSecrets })
+    : "";
   rows.push({
     provider: "Discord",
     enabled: dcEnabled,
     state: !dcEnabled ? "off" : dcTokenAccounts.length > 0 ? "ok" : "setup",
     detail: dcEnabled
       ? dcTokenAccounts.length > 0
-        ? `bot token ${dcSources.label} · accounts ${dcTokenAccounts.length}/${dcEnabledAccounts.length || 1}`
+        ? `bot token ${dcSources.label}${dcTokenHint ? ` (${dcTokenHint})` : ""} · accounts ${dcTokenAccounts.length}/${dcEnabledAccounts.length || 1}`
         : "no bot token (DISCORD_BOT_TOKEN / discord.token)"
       : "disabled",
   });
@@ -217,6 +248,15 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
   const slAppSources = summarizeSources(
     slReady.map((a) => a.appTokenSource ?? "none"),
   );
+  const slSample = slReady[0] ?? null;
+  const slBotHint =
+    slSample?.botToken?.trim() && slSample.botTokenSource !== "none"
+      ? formatTokenHint(slSample.botToken, { showSecrets })
+      : "";
+  const slAppHint =
+    slSample?.appToken?.trim() && slSample.appTokenSource !== "none"
+      ? formatTokenHint(slSample.appToken, { showSecrets })
+      : "";
   rows.push({
     provider: "Slack",
     enabled: slEnabled,
@@ -231,7 +271,7 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
       ? slPartial.length > 0
         ? `partial tokens (need bot+app) · accounts ${slPartial.length}`
         : slReady.length > 0
-          ? `tokens ok (bot ${slBotSources.label}, app ${slAppSources.label}) · accounts ${slReady.length}/${slEnabledAccounts.length || 1}`
+          ? `tokens ok (bot ${slBotSources.label}${slBotHint ? ` ${slBotHint}` : ""}, app ${slAppSources.label}${slAppHint ? ` ${slAppHint}` : ""}) · accounts ${slReady.length}/${slEnabledAccounts.length || 1}`
           : slHasAnyToken
             ? "tokens incomplete (need bot+app)"
             : "no tokens (SLACK_BOT_TOKEN + SLACK_APP_TOKEN)"
@@ -298,6 +338,9 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
     !msTenantId ? "tenantId" : null,
   ].filter(Boolean) as string[];
   const msAnyPresent = Boolean(msAppId || msAppPassword || msTenantId);
+  const msPasswordHint = msAppPassword
+    ? formatTokenHint(msAppPassword, { showSecrets })
+    : "";
   rows.push({
     provider: "MS Teams",
     enabled: msEnabled,
@@ -310,7 +353,7 @@ export async function buildProvidersTable(cfg: ClawdbotConfig): Promise<{
           : "setup",
     detail: msEnabled
       ? msCreds
-        ? "credentials set"
+        ? `credentials set${msPasswordHint ? ` (password ${msPasswordHint})` : ""}`
         : msAnyPresent
           ? `credentials incomplete (missing ${msMissing.join(", ")})`
           : "no credentials (MSTEAMS_APP_ID / _PASSWORD / _TENANT_ID)"

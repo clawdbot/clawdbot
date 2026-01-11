@@ -138,7 +138,7 @@ export async function statusAllCommand(
       progress.setLabel("Scanning agents…");
       const agentStatus = await getAgentLocalStatuses(cfg);
       progress.setLabel("Summarizing providers…");
-      const providers = await buildProvidersTable(cfg);
+      const providers = await buildProvidersTable(cfg, { showSecrets: false });
 
       const connectionDetailsForReport = (() => {
         if (!remoteUrlMissing) return connection.message;
