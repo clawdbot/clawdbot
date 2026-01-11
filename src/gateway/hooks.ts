@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { ClawdbotConfig } from "../config/config.js";
+import {
+  listProviderPlugins,
+  type ProviderId,
+} from "../providers/plugins/index.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 import {
   type HookMappingResolved,
@@ -147,16 +151,10 @@ export type HookAgentPayload = {
 
 const HOOK_PROVIDER_VALUES = [
   "last",
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "msteams",
-] as const;
+  ...listProviderPlugins().map((plugin) => plugin.id),
+];
 
-export type HookMessageProvider = (typeof HOOK_PROVIDER_VALUES)[number];
+export type HookMessageProvider = ProviderId | "last";
 
 const hookProviderSet = new Set<string>(HOOK_PROVIDER_VALUES);
 export const HOOK_PROVIDER_ERROR = `provider must be ${HOOK_PROVIDER_VALUES.join("|")}`;

@@ -12,6 +12,7 @@ import {
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionTranscriptPath,
@@ -26,6 +27,9 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { isAudioFileName } from "../../media/mime.js";
+import { getProviderDock } from "../../providers/dock.js";
+import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
+import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   estimateUsageCost,
@@ -70,47 +74,32 @@ const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
 /**
- * Build Slack-specific threading context for tool auto-injection.
- * Returns undefined values for non-Slack providers.
+ * Build provider-specific threading context for tool auto-injection.
  */
-function buildSlackThreadingContext(params: {
+function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
-  config: { slack?: { replyToMode?: "off" | "first" | "all" } } | undefined;
+  config: ClawdbotConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
-}): {
-  currentChannelId: string | undefined;
-  currentThreadTs: string | undefined;
-  replyToMode: "off" | "first" | "all" | undefined;
-  hasRepliedRef: { value: boolean } | undefined;
-} {
+}): ProviderThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const isSlack = sessionCtx.Provider?.toLowerCase() === "slack";
-  if (!isSlack) {
-    return {
-      currentChannelId: undefined,
-      currentThreadTs: undefined,
-      replyToMode: undefined,
-      hasRepliedRef: undefined,
-    };
-  }
-
-  // If we're already inside a thread, never jump replies out of it (even in
-  // replyToMode="off"/"first"). This keeps tool calls consistent with the
-  // auto-reply path.
-  const configuredReplyToMode = config?.slack?.replyToMode ?? "off";
-  const effectiveReplyToMode = sessionCtx.ThreadLabel
-    ? ("all" as const)
-    : configuredReplyToMode;
-
-  return {
-    // Extract channel from "channel:C123" format
-    currentChannelId: sessionCtx.To?.startsWith("channel:")
-      ? sessionCtx.To.slice("channel:".length)
-      : undefined,
-    currentThreadTs: sessionCtx.ReplyToId,
-    replyToMode: effectiveReplyToMode,
-    hasRepliedRef,
-  };
+  if (!config) return {};
+  const provider = normalizeProviderId(sessionCtx.Provider);
+  if (!provider) return {};
+  const dock = getProviderDock(provider);
+  if (!dock?.threading?.buildToolContext) return {};
+  return (
+    dock.threading.buildToolContext({
+      cfg: config,
+      accountId: sessionCtx.AccountId,
+      context: {
+        Provider: sessionCtx.Provider,
+        To: sessionCtx.To,
+        ReplyToId: sessionCtx.ReplyToId,
+        ThreadLabel: sessionCtx.ThreadLabel,
+      },
+      hasRepliedRef,
+    }) ?? {}
+  );
 }
 
 const isBunFetchSocketError = (message?: string) =>
@@ -282,6 +271,7 @@ export async function runReplyAgent(params: {
   const replyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,
+    sessionCtx.AccountId,
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(
     replyToMode,
@@ -437,8 +427,8 @@ export async function runReplyAgent(params: {
             messageProvider:
               sessionCtx.Provider?.trim().toLowerCase() || undefined,
             agentAccountId: sessionCtx.AccountId,
-            // Slack threading context for tool auto-injection
-            ...buildSlackThreadingContext({
+            // Provider threading context for tool auto-injection
+            ...buildThreadingToolContext({
               sessionCtx,
               config: followupRun.run.config,
               hasRepliedRef: opts?.hasRepliedRef,

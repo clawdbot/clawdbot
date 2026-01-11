@@ -1,8 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { handleDiscordAction } from "../agents/tools/discord-actions.js";
-import { handleSlackAction } from "../agents/tools/slack-actions.js";
-import { handleTelegramAction } from "../agents/tools/telegram-actions.js";
-import { handleWhatsAppAction } from "../agents/tools/whatsapp-actions.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
@@ -24,7 +20,13 @@ import {
   sendPoll,
 } from "../infra/outbound/message.js";
 import { resolveMessageProviderSelection } from "../infra/outbound/provider-selection.js";
+import { dispatchProviderMessageAction } from "../providers/plugins/message-actions.js";
+import type { ProviderMessageActionName } from "../providers/plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 
 type MessageAction =
   | "send"
@@ -277,6 +279,8 @@ export async function messageCommand(
     provider: opts.provider,
   });
   const provider = providerSelection.provider;
+  const accountId = optionalString(opts.account);
+  const actionParams = opts as Record<string, unknown>;
   const outboundDeps: OutboundSendDeps = {
     sendWhatsApp: deps.sendMessageWhatsApp,
     sendTelegram: deps.sendMessageTelegram,
@@ -304,7 +308,7 @@ export async function messageCommand(
       dryRun: opts.dryRun,
       media: optionalString(opts.media),
       gifPlayback: opts.gifPlayback,
-      account: optionalString(opts.account),
+      account: accountId,
     };
 
     if (opts.dryRun) {
@@ -312,72 +316,20 @@ export async function messageCommand(
       return;
     }
 
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "sendMessage",
-          to,
-          content: message,
-          mediaUrl: optionalString(opts.media),
-          replyTo: optionalString(opts.replyTo),
-        },
-        cfg,
-      );
-      const payload = extractToolPayload(result);
-      if (opts.json) {
-        runtime.log(JSON.stringify(payload, null, 2));
-      } else {
-        runtime.log(success(`Sent via ${provider}.`));
-      }
-      return;
-    }
-
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "sendMessage",
-          to,
-          content: message,
-          mediaUrl: optionalString(opts.media),
-          threadTs:
-            optionalString(opts.threadId) ?? optionalString(opts.replyTo),
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      const payload = extractToolPayload(result);
-      if (opts.json) {
-        runtime.log(JSON.stringify(payload, null, 2));
-      } else {
-        runtime.log(success(`Sent via ${provider}.`));
-      }
-      return;
-    }
-
-    if (provider === "telegram") {
-      const buttonsJson = optionalString(opts.buttonsJson);
-      let buttons: unknown;
-      if (buttonsJson) {
-        try {
-          buttons = JSON.parse(buttonsJson);
-        } catch {
-          throw new Error("buttons-json must be valid JSON");
-        }
-      }
-      const result = await handleTelegramAction(
-        {
-          action: "sendMessage",
-          to,
-          content: message,
-          mediaUrl: optionalString(opts.media),
-          replyToMessageId: optionalString(opts.replyTo),
-          messageThreadId: optionalString(opts.threadId),
-          accountId: optionalString(opts.account),
-          buttons,
-        },
-        cfg,
-      );
-      const payload = extractToolPayload(result);
+    const handled = await dispatchProviderMessageAction({
+      provider,
+      action: action as ProviderMessageActionName,
+      cfg,
+      params: actionParams,
+      accountId,
+      gateway: {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+      dryRun: opts.dryRun,
+    });
+    if (handled) {
+      const payload = extractToolPayload(handled);
       if (opts.json) {
         runtime.log(JSON.stringify(payload, null, 2));
       } else {
@@ -400,10 +352,13 @@ export async function messageCommand(
           provider,
           mediaUrl: optionalString(opts.media),
           gifPlayback: opts.gifPlayback,
-          accountId: optionalString(opts.account),
+          accountId,
           dryRun: opts.dryRun,
           deps: outboundDeps,
-          gateway: { clientName: "cli", mode: "cli" },
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
         }),
     );
     logSendResult(result, sendOpts, runtime);
@@ -434,26 +389,29 @@ export async function messageCommand(
         durationHours,
         provider,
         dryRun: true,
-        gateway: { clientName: "cli", mode: "cli" },
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
       });
       logPollDryRun(result, runtime);
       return;
     }
 
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "poll",
-          to,
-          question,
-          answers: options,
-          allowMultiselect,
-          durationHours: durationHours ?? undefined,
-          content: optionalString(opts.message),
-        },
-        cfg,
-      );
-      const payload = extractToolPayload(result);
+    const handled = await dispatchProviderMessageAction({
+      provider,
+      action: action as ProviderMessageActionName,
+      cfg,
+      params: actionParams,
+      accountId,
+      gateway: {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+      dryRun: opts.dryRun,
+    });
+    if (handled) {
+      const payload = extractToolPayload(handled);
       if (opts.json) {
         runtime.log(JSON.stringify(payload, null, 2));
       } else {
@@ -478,7 +436,10 @@ export async function messageCommand(
           durationHours,
           provider,
           dryRun: opts.dryRun,
-          gateway: { clientName: "cli", mode: "cli" },
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
         }),
     );
 
@@ -522,612 +483,24 @@ export async function messageCommand(
     return;
   }
 
-  if (action === "react") {
-    const messageId = requireString(opts.messageId, "message-id");
-    const emoji = optionalString(opts.emoji) ?? "";
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "react",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          emoji,
-          remove: opts.remove,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "react",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          emoji,
-          remove: opts.remove,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "telegram") {
-      const result = await handleTelegramAction(
-        {
-          action: "react",
-          chatId: requireString(opts.to, "to"),
-          messageId,
-          emoji,
-          remove: opts.remove,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "whatsapp") {
-      const result = await handleWhatsAppAction(
-        {
-          action: "react",
-          chatJid: requireString(opts.to, "to"),
-          messageId,
-          emoji,
-          remove: opts.remove,
-          participant: optionalString(opts.participant),
-          accountId: optionalString(opts.account),
-          fromMe: opts.fromMe,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`React is not supported for provider ${provider}.`);
-  }
-
-  if (action === "reactions") {
-    const messageId = requireString(opts.messageId, "message-id");
-    const limit = parseIntOption(opts.limit, "limit");
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "reactions",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          limit,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "reactions",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          limit,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Reactions are not supported for provider ${provider}.`);
-  }
-
-  if (action === "read") {
-    const limit = parseIntOption(opts.limit, "limit");
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "readMessages",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          limit,
-          before: optionalString(opts.before),
-          after: optionalString(opts.after),
-          around: optionalString(opts.around),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "readMessages",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          limit,
-          before: optionalString(opts.before),
-          after: optionalString(opts.after),
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Read is not supported for provider ${provider}.`);
-  }
-
-  if (action === "edit") {
-    const messageId = requireString(opts.messageId, "message-id");
-    const message = requireString(opts.message, "message");
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "editMessage",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          content: message,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "editMessage",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          content: message,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Edit is not supported for provider ${provider}.`);
-  }
-
-  if (action === "delete") {
-    const messageId = requireString(opts.messageId, "message-id");
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "deleteMessage",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "deleteMessage",
-          channelId: requireString(opts.channelId ?? opts.to, "to"),
-          messageId,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Delete is not supported for provider ${provider}.`);
-  }
-
-  if (action === "pin" || action === "unpin" || action === "list-pins") {
-    const channelId = requireString(opts.channelId ?? opts.to, "to");
-    const messageId =
-      action === "list-pins"
-        ? undefined
-        : requireString(opts.messageId, "message-id");
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action:
-            action === "pin"
-              ? "pinMessage"
-              : action === "unpin"
-                ? "unpinMessage"
-                : "listPins",
-          channelId,
-          messageId,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action:
-            action === "pin"
-              ? "pinMessage"
-              : action === "unpin"
-                ? "unpinMessage"
-                : "listPins",
-          channelId,
-          messageId,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Pins are not supported for provider ${provider}.`);
-  }
-
-  if (action === "permissions") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Permissions are only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "permissions",
-        channelId: requireString(opts.channelId ?? opts.to, "to"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+  const handled = await dispatchProviderMessageAction({
+    provider,
+    action: action as ProviderMessageActionName,
+    cfg,
+    params: actionParams,
+    accountId,
+    gateway: {
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    },
+    dryRun: opts.dryRun,
+  });
+  if (handled) {
+    runtime.log(JSON.stringify(extractToolPayload(handled), null, 2));
     return;
   }
 
-  if (action === "thread-create") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Thread create is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "threadCreate",
-        channelId: requireString(opts.channelId ?? opts.to, "to"),
-        name: requireString(opts.threadName, "thread-name"),
-        messageId: optionalString(opts.messageId),
-        autoArchiveMinutes: parseIntOption(
-          opts.autoArchiveMin,
-          "auto-archive-min",
-        ),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "thread-list") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Thread list is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "threadList",
-        guildId: requireString(opts.guildId, "guild-id"),
-        channelId: optionalString(opts.channelId),
-        includeArchived: opts.includeArchived,
-        before: optionalString(opts.before),
-        limit: parseIntOption(opts.limit, "limit"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "thread-reply") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Thread reply is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "threadReply",
-        channelId: requireString(opts.channelId ?? opts.to, "to"),
-        content: requireString(opts.message, "message"),
-        mediaUrl: optionalString(opts.media),
-        replyTo: optionalString(opts.replyTo),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "search") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Search is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "searchMessages",
-        guildId: requireString(opts.guildId, "guild-id"),
-        content: requireString(opts.query, "query"),
-        channelId: optionalString(opts.channelId),
-        channelIds: toStringArray(opts.channelIds),
-        authorId: optionalString(opts.authorId),
-        authorIds: toStringArray(opts.authorIds),
-        limit: parseIntOption(opts.limit, "limit"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "sticker") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Sticker send is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const stickerIds = toStringArray(opts.stickerId);
-    if (stickerIds.length === 0) {
-      throw new Error("sticker-id required");
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "sticker",
-        to: requireString(opts.to, "to"),
-        stickerIds,
-        content: optionalString(opts.message),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "member-info") {
-    const userId = requireString(opts.userId, "user-id");
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "memberInfo",
-          guildId: requireString(opts.guildId, "guild-id"),
-          userId,
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        {
-          action: "memberInfo",
-          userId,
-          accountId: optionalString(opts.account),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Member info is not supported for provider ${provider}.`);
-  }
-
-  if (action === "role-info") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Role info is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      { action: "roleInfo", guildId: requireString(opts.guildId, "guild-id") },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "emoji-list") {
-    if (provider === "discord") {
-      const result = await handleDiscordAction(
-        {
-          action: "emojiList",
-          guildId: requireString(opts.guildId, "guild-id"),
-        },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    if (provider === "slack") {
-      const result = await handleSlackAction(
-        { action: "emojiList", accountId: optionalString(opts.account) },
-        cfg,
-      );
-      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-      return;
-    }
-    throw new Error(`Emoji list is not supported for provider ${provider}.`);
-  }
-
-  if (action === "emoji-upload") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Emoji upload is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "emojiUpload",
-        guildId: requireString(opts.guildId, "guild-id"),
-        name: requireString(opts.emojiName, "emoji-name"),
-        mediaUrl: requireString(opts.media, "media"),
-        roleIds: toStringArray(opts.roleIds),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "sticker-upload") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Sticker upload is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "stickerUpload",
-        guildId: requireString(opts.guildId, "guild-id"),
-        name: requireString(opts.stickerName, "sticker-name"),
-        description: requireString(opts.stickerDesc, "sticker-desc"),
-        tags: requireString(opts.stickerTags, "sticker-tags"),
-        mediaUrl: requireString(opts.media, "media"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "role-add" || action === "role-remove") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Role changes are only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: action === "role-add" ? "roleAdd" : "roleRemove",
-        guildId: requireString(opts.guildId, "guild-id"),
-        userId: requireString(opts.userId, "user-id"),
-        roleId: requireString(opts.roleId, "role-id"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "channel-info") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Channel info is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "channelInfo",
-        channelId: requireString(opts.channelId, "channel-id"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "channel-list") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Channel list is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "channelList",
-        guildId: requireString(opts.guildId, "guild-id"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "voice-status") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Voice status is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "voiceStatus",
-        guildId: requireString(opts.guildId, "guild-id"),
-        userId: requireString(opts.userId, "user-id"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "event-list") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Event list is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      { action: "eventList", guildId: requireString(opts.guildId, "guild-id") },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "event-create") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Event create is only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: "eventCreate",
-        guildId: requireString(opts.guildId, "guild-id"),
-        name: requireString(opts.eventName, "event-name"),
-        startTime: requireString(opts.startTime, "start-time"),
-        endTime: optionalString(opts.endTime),
-        description: optionalString(opts.desc),
-        channelId: optionalString(opts.channelId),
-        location: optionalString(opts.location),
-        entityType: optionalString(opts.eventType),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  if (action === "timeout" || action === "kick" || action === "ban") {
-    if (provider !== "discord") {
-      throw new Error(
-        `Moderation actions are only supported for Discord (provider=${provider}).`,
-      );
-    }
-    const result = await handleDiscordAction(
-      {
-        action: action as "timeout" | "kick" | "ban",
-        guildId: requireString(opts.guildId, "guild-id"),
-        userId: requireString(opts.userId, "user-id"),
-        durationMinutes: parseIntOption(opts.durationMin, "duration-min"),
-        until: optionalString(opts.until),
-        reason: optionalString(opts.reason),
-        deleteMessageDays: parseIntOption(opts.deleteDays, "delete-days"),
-      },
-      cfg,
-    );
-    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
-    return;
-  }
-
-  throw new Error(`Unknown action: ${opts.action ?? "unknown"}`);
+  throw new Error(
+    `Action ${action} is not supported for provider ${provider}.`,
+  );
 }

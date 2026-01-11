@@ -1,4 +1,8 @@
 import { callGateway } from "../../gateway/call.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
@@ -10,9 +14,13 @@ export async function resolveAnnounceTarget(params: {
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
   const fallback = parsed ?? parsedDisplay ?? null;
 
-  // Most providers can derive (provider,to) from the session key directly.
-  // WhatsApp is special: we may need lastAccountId from the session store.
-  if (fallback && fallback.provider !== "whatsapp") return fallback;
+  if (fallback) {
+    const normalized = normalizeProviderId(fallback.provider);
+    const plugin = normalized ? getProviderPlugin(normalized) : null;
+    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+      return fallback;
+    }
+  }
 
   try {
     const list = (await callGateway({

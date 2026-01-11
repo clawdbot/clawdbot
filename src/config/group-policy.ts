@@ -21,21 +21,22 @@ function resolveProviderGroups(
   provider: GroupPolicyProvider,
   accountId?: string | null,
 ): ProviderGroups | undefined {
-  if (provider === "whatsapp") return cfg.whatsapp?.groups;
   const normalizedAccountId = normalizeAccountId(accountId);
-  if (provider === "telegram") {
-    return (
-      cfg.telegram?.accounts?.[normalizedAccountId]?.groups ??
-      cfg.telegram?.groups
-    );
-  }
-  if (provider === "imessage") {
-    return (
-      cfg.imessage?.accounts?.[normalizedAccountId]?.groups ??
-      cfg.imessage?.groups
-    );
-  }
-  return undefined;
+  const providerConfig = (cfg as Record<string, unknown>)[provider] as
+    | {
+        accounts?: Record<string, { groups?: ProviderGroups }>;
+        groups?: ProviderGroups;
+      }
+    | undefined;
+  if (!providerConfig) return undefined;
+  const accountGroups =
+    providerConfig.accounts?.[normalizedAccountId]?.groups ??
+    providerConfig.accounts?.[
+      Object.keys(providerConfig.accounts ?? {}).find(
+        (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
+      ) ?? ""
+    ]?.groups;
+  return accountGroups ?? providerConfig.groups;
 }
 
 export function resolveProviderGroupPolicy(params: {

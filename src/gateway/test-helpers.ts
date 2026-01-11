@@ -8,6 +8,10 @@ import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 
@@ -534,7 +538,8 @@ export async function connectReq(
     minProtocol?: number;
     maxProtocol?: number;
     client?: {
-      name: string;
+      id: string;
+      displayName?: string;
       version: string;
       platform: string;
       mode: string;
@@ -553,10 +558,10 @@ export async function connectReq(
         minProtocol: opts?.minProtocol ?? PROTOCOL_VERSION,
         maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,
         client: opts?.client ?? {
-          name: "test",
+          id: GATEWAY_CLIENT_NAMES.TEST,
           version: "1.0.0",
           platform: "test",
-          mode: "test",
+          mode: GATEWAY_CLIENT_MODES.TEST,
         },
         caps: [],
         auth:

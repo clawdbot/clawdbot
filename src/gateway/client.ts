@@ -3,6 +3,12 @@ import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../utils/message-provider.js";
+import {
   type ConnectParams,
   type EventFrame,
   type HelloOk,
@@ -24,10 +30,11 @@ export type GatewayClientOptions = {
   token?: string;
   password?: string;
   instanceId?: string;
-  clientName?: string;
+  clientName?: GatewayClientName;
+  clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
-  mode?: string;
+  mode?: GatewayClientMode;
   minProtocol?: number;
   maxProtocol?: number;
   onEvent?: (evt: EventFrame) => void;
@@ -109,10 +116,11 @@ export class GatewayClient {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
       client: {
-        name: this.opts.clientName ?? "gateway-client",
+        id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        displayName: this.opts.clientDisplayName,
         version: this.opts.clientVersion ?? "dev",
         platform: this.opts.platform ?? process.platform,
-        mode: this.opts.mode ?? "backend",
+        mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
         instanceId: this.opts.instanceId,
       },
       caps: [],
@@ -135,7 +143,7 @@ export class GatewayClient {
           err instanceof Error ? err : new Error(String(err)),
         );
         const msg = `gateway connect failed: ${String(err)}`;
-        if (this.opts.mode === "probe") logDebug(msg);
+        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) logDebug(msg);
         else logError(msg);
         this.ws?.close(1008, "connect failed");
       });

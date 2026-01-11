@@ -503,7 +503,19 @@ struct GeneralSettings: View {
             }
 
             if let snap = snapshot {
-                Text("Linked auth age: \(healthAgeString(snap.web.authAgeMs))")
+                let linkId = snap.providerOrder?.first(where: {
+                    if let summary = snap.providers[$0] { return summary.linked != nil }
+                    return false
+                }) ?? snap.providers.keys.first(where: {
+                    if let summary = snap.providers[$0] { return summary.linked != nil }
+                    return false
+                })
+                let linkLabel =
+                    linkId.flatMap { snap.providerLabels?[$0] } ??
+                    linkId?.capitalized ??
+                    "Link provider"
+                let linkAge = linkId.flatMap { snap.providers[$0]?.authAgeMs }
+                Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")

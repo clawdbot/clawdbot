@@ -8,6 +8,10 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
+import {
   agentCommand,
   connectOk,
   getFreePort,
@@ -30,7 +34,7 @@ function expectProviders(call: Record<string, unknown>, provider: string) {
 }
 
 describe("gateway server agent", () => {
-  test("agent falls back to allowFrom when lastTo is stale", async () => {
+  test("agent marks implicit delivery when lastTo is stale", async () => {
     testState.allowFrom = ["+436769770569"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -66,7 +70,8 @@ describe("gateway server agent", () => {
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expectProviders(call, "whatsapp");
-    expect(call.to).toBe("+436769770569");
+    expect(call.to).toBe("+1555");
+    expect(call.deliveryTargetMode).toBe("implicit");
     expect(call.sessionId).toBe("sess-main-stale");
 
     ws.close();
@@ -785,10 +790,10 @@ describe("gateway server agent", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "webchat",
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 
@@ -833,10 +838,10 @@ describe("gateway server agent", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "webchat",
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 
@@ -893,10 +898,10 @@ describe("gateway server agent", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "webchat",
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
         version: "1.0.0",
         platform: "test",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 

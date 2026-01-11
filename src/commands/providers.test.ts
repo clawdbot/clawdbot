@@ -309,8 +309,10 @@ describe("providers command", () => {
 
   it("formats gateway provider status lines in registry order", () => {
     const lines = formatGatewayProvidersStatusLines({
-      telegramAccounts: [{ accountId: "default", configured: true }],
-      whatsappAccounts: [{ accountId: "default", linked: true }],
+      providerAccounts: {
+        telegram: [{ accountId: "default", configured: true }],
+        whatsapp: [{ accountId: "default", linked: true }],
+      },
     });
 
     const telegramIndex = lines.findIndex((line) =>
@@ -326,14 +328,16 @@ describe("providers command", () => {
 
   it("surfaces Discord privileged intent issues in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      discordAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          application: { intents: { messageContent: "disabled" } },
-        },
-      ],
+      providerAccounts: {
+        discord: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            application: { intents: { messageContent: "disabled" } },
+          },
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/Message Content Intent is disabled/i);
@@ -342,23 +346,25 @@ describe("providers command", () => {
 
   it("surfaces Discord permission audit issues in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      discordAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          audit: {
-            unresolvedChannels: 1,
-            channels: [
-              {
-                channelId: "111",
-                ok: false,
-                missing: ["ViewChannel", "SendMessages"],
-              },
-            ],
+      providerAccounts: {
+        discord: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            audit: {
+              unresolvedChannels: 1,
+              channels: [
+                {
+                  channelId: "111",
+                  ok: false,
+                  missing: ["ViewChannel", "SendMessages"],
+                },
+              ],
+            },
           },
-        },
-      ],
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/permission audit/i);
@@ -367,14 +373,16 @@ describe("providers command", () => {
 
   it("surfaces Telegram privacy-mode hints when allowUnmentionedGroups is enabled", () => {
     const lines = formatGatewayProvidersStatusLines({
-      telegramAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          allowUnmentionedGroups: true,
-        },
-      ],
+      providerAccounts: {
+        telegram: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            allowUnmentionedGroups: true,
+          },
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/Telegram Bot API privacy mode/i);
@@ -382,25 +390,27 @@ describe("providers command", () => {
 
   it("surfaces Telegram group membership audit issues in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      telegramAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          audit: {
-            hasWildcardUnmentionedGroups: true,
-            unresolvedGroups: 1,
-            groups: [
-              {
-                chatId: "-1001",
-                ok: false,
-                status: "left",
-                error: "not in group",
-              },
-            ],
+      providerAccounts: {
+        telegram: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            audit: {
+              hasWildcardUnmentionedGroups: true,
+              unresolvedGroups: 1,
+              groups: [
+                {
+                  chatId: "-1001",
+                  ok: false,
+                  status: "left",
+                  error: "not in group",
+                },
+              ],
+            },
           },
-        },
-      ],
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/membership probing is not possible/i);
@@ -409,40 +419,44 @@ describe("providers command", () => {
 
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
     const unlinked = formatGatewayProvidersStatusLines({
-      whatsappAccounts: [
-        { accountId: "default", enabled: true, linked: false },
-      ],
+      providerAccounts: {
+        whatsapp: [{ accountId: "default", enabled: true, linked: false }],
+      },
     });
     expect(unlinked.join("\n")).toMatch(/WhatsApp/i);
     expect(unlinked.join("\n")).toMatch(/Not linked/i);
 
     const disconnected = formatGatewayProvidersStatusLines({
-      whatsappAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          linked: true,
-          running: true,
-          connected: false,
-          reconnectAttempts: 5,
-          lastError: "connection closed",
-        },
-      ],
+      providerAccounts: {
+        whatsapp: [
+          {
+            accountId: "default",
+            enabled: true,
+            linked: true,
+            running: true,
+            connected: false,
+            reconnectAttempts: 5,
+            lastError: "connection closed",
+          },
+        ],
+      },
     });
     expect(disconnected.join("\n")).toMatch(/disconnected/i);
   });
 
   it("surfaces Signal runtime errors in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      signalAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          running: false,
-          lastError: "signal-cli unreachable",
-        },
-      ],
+      providerAccounts: {
+        signal: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: false,
+            lastError: "signal-cli unreachable",
+          },
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/signal/i);
@@ -451,15 +465,17 @@ describe("providers command", () => {
 
   it("surfaces iMessage runtime errors in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      imessageAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          running: false,
-          lastError: "imsg permission denied",
-        },
-      ],
+      providerAccounts: {
+        imessage: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: false,
+            lastError: "imsg permission denied",
+          },
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/imessage/i);

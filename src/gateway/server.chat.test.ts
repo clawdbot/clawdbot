@@ -4,6 +4,10 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
+import {
   agentCommand,
   connectOk,
   installGatewayTestHooks,
@@ -31,10 +35,10 @@ describe("gateway server chat", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        name: "clawdbot-control-ui",
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
         version: "dev",
         platform: "web",
-        mode: "webchat",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
 

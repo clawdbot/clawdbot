@@ -89,7 +89,8 @@ ws.send(
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client: {
-        name: \"docker-net-e2e\",
+        id: \"test\",
+        displayName: \"docker-net-e2e\",
         version: \"dev\",
         platform: process.platform,
         mode: \"test\",
@@ -112,4 +113,3 @@ console.log(\"ok\");
 NODE"
 
 echo "OK"
-

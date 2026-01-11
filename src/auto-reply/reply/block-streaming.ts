@@ -1,29 +1,17 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
+import { getProviderDock } from "../../providers/dock.js";
+import { normalizeProviderId, PROVIDER_IDS } from "../../providers/registry.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
-const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
-const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;
-const PROVIDER_COALESCE_DEFAULTS: Partial<
-  Record<TextChunkProvider, { minChars: number; idleMs: number }>
-> = {
-  signal: { minChars: 1500, idleMs: 1000 },
-  slack: { minChars: 1500, idleMs: 1000 },
-  discord: { minChars: 1500, idleMs: 1000 },
-};
-
 const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "webchat",
-  "msteams",
+  ...PROVIDER_IDS,
+  INTERNAL_MESSAGE_PROVIDER,
 ]);
 
 function normalizeChunkProvider(
@@ -34,6 +22,29 @@ function normalizeChunkProvider(
   return BLOCK_CHUNK_PROVIDERS.has(cleaned as TextChunkProvider)
     ? (cleaned as TextChunkProvider)
     : undefined;
+}
+
+type ProviderBlockStreamingConfig = {
+  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  accounts?: Record<
+    string,
+    { blockStreamingCoalesce?: BlockStreamingCoalesceConfig }
+  >;
+};
+
+function resolveProviderBlockStreamingCoalesce(params: {
+  cfg: ClawdbotConfig | undefined;
+  providerKey?: TextChunkProvider;
+  accountId?: string | null;
+}): BlockStreamingCoalesceConfig | undefined {
+  const { cfg, providerKey, accountId } = params;
+  if (!cfg || !providerKey) return undefined;
+  const providerCfg = (cfg as Record<string, unknown>)[providerKey];
+  if (!providerCfg || typeof providerCfg !== "object") return undefined;
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const typed = providerCfg as ProviderBlockStreamingConfig;
+  const accountCfg = typed.accounts?.[normalizedAccountId];
+  return accountCfg?.blockStreamingCoalesce ?? typed.blockStreamingCoalesce;
 }
 
 export type BlockStreamingCoalescing = {
@@ -53,7 +64,13 @@ export function resolveBlockStreamingChunking(
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
   const providerKey = normalizeChunkProvider(provider);
-  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
+  const providerId = providerKey ? normalizeProviderId(providerKey) : null;
+  const providerChunkLimit = providerId
+    ? getProviderDock(providerId)?.outbound?.textChunkLimit
+    : undefined;
+  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
+    fallbackLimit: providerChunkLimit,
+  });
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
   const maxRequested = Math.max(
     1,
@@ -74,39 +91,6 @@ export function resolveBlockStreamingChunking(
   return { minChars, maxChars, breakPreference };
 }
 
-export function resolveTelegramDraftStreamingChunking(
-  cfg: ClawdbotConfig | undefined,
-  accountId?: string | null,
-): {
-  minChars: number;
-  maxChars: number;
-  breakPreference: "paragraph" | "newline" | "sentence";
-} {
-  const providerKey: TextChunkProvider = "telegram";
-  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const draftCfg =
-    cfg?.telegram?.accounts?.[normalizedAccountId]?.draftChunk ??
-    cfg?.telegram?.draftChunk;
-
-  const maxRequested = Math.max(
-    1,
-    Math.floor(draftCfg?.maxChars ?? DEFAULT_TELEGRAM_DRAFT_STREAM_MAX),
-  );
-  const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
-  const minRequested = Math.max(
-    1,
-    Math.floor(draftCfg?.minChars ?? DEFAULT_TELEGRAM_DRAFT_STREAM_MIN),
-  );
-  const minChars = Math.min(minRequested, maxChars);
-  const breakPreference =
-    draftCfg?.breakPreference === "newline" ||
-    draftCfg?.breakPreference === "sentence"
-      ? draftCfg.breakPreference
-      : "paragraph";
-  return { minChars, maxChars, breakPreference };
-}
-
 export function resolveBlockStreamingCoalescing(
   cfg: ClawdbotConfig | undefined,
   provider?: string,
@@ -118,54 +102,21 @@ export function resolveBlockStreamingCoalescing(
   },
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
-  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const providerDefaults = providerKey
-    ? PROVIDER_COALESCE_DEFAULTS[providerKey]
+  const providerId = providerKey ? normalizeProviderId(providerKey) : null;
+  const providerChunkLimit = providerId
+    ? getProviderDock(providerId)?.outbound?.textChunkLimit
     : undefined;
-  const providerCfg = (() => {
-    if (!cfg || !providerKey) return undefined;
-    if (providerKey === "whatsapp") {
-      return (
-        cfg.whatsapp?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
-        cfg.whatsapp?.blockStreamingCoalesce
-      );
-    }
-    if (providerKey === "telegram") {
-      return (
-        cfg.telegram?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
-        cfg.telegram?.blockStreamingCoalesce
-      );
-    }
-    if (providerKey === "discord") {
-      return (
-        cfg.discord?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
-        cfg.discord?.blockStreamingCoalesce
-      );
-    }
-    if (providerKey === "slack") {
-      return (
-        cfg.slack?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
-        cfg.slack?.blockStreamingCoalesce
-      );
-    }
-    if (providerKey === "signal") {
-      return (
-        cfg.signal?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
-        cfg.signal?.blockStreamingCoalesce
-      );
-    }
-    if (providerKey === "imessage") {
-      return (
-        cfg.imessage?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
-        cfg.imessage?.blockStreamingCoalesce
-      );
-    }
-    if (providerKey === "msteams") {
-      return cfg.msteams?.blockStreamingCoalesce;
-    }
-    return undefined;
-  })();
+  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
+    fallbackLimit: providerChunkLimit,
+  });
+  const providerDefaults = providerId
+    ? getProviderDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
+    : undefined;
+  const providerCfg = resolveProviderBlockStreamingCoalesce({
+    cfg,
+    providerKey,
+    accountId,
+  });
   const coalesceCfg =
     providerCfg ?? cfg?.agents?.defaults?.blockStreamingCoalesce;
   const minRequested = Math.max(

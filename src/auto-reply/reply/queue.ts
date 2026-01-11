@@ -568,14 +568,7 @@ export function scheduleFollowupDrain(
     }
   })();
 }
-function defaultQueueModeForProvider(provider?: string): QueueMode {
-  const normalized = provider?.trim().toLowerCase();
-  if (normalized === "discord") return "collect";
-  if (normalized === "webchat") return "collect";
-  if (normalized === "whatsapp") return "collect";
-  if (normalized === "telegram") return "collect";
-  if (normalized === "imessage") return "collect";
-  if (normalized === "signal") return "collect";
+function defaultQueueModeForProvider(_provider?: string): QueueMode {
   return "collect";
 }
 export function resolveQueueSettings(params: {

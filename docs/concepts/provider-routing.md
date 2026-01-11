@@ -1,5 +1,5 @@
 ---
-summary: "Routing rules per provider (WhatsApp, Telegram, Discord, web) and shared context"
+summary: "Routing rules per provider (WhatsApp, Telegram, Discord, Slack) and shared context"
 read_when:
   - Changing provider routing or inbox behavior
 ---

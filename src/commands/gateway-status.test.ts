@@ -28,7 +28,15 @@ const probeGateway = vi.fn(async ({ url }: { url: string }) => {
       error: null,
       close: null,
       health: { ok: true },
-      status: { web: { linked: false }, sessions: { count: 0 } },
+      status: {
+        linkProvider: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          linked: false,
+          authAgeMs: null,
+        },
+        sessions: { count: 0 },
+      },
       presence: [
         { mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" },
       ],
@@ -52,7 +60,15 @@ const probeGateway = vi.fn(async ({ url }: { url: string }) => {
     error: null,
     close: null,
     health: { ok: true },
-    status: { web: { linked: true }, sessions: { count: 2 } },
+    status: {
+      linkProvider: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        linked: true,
+        authAgeMs: 5_000,
+      },
+      sessions: { count: 2 },
+    },
     presence: [
       { mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" },
     ],

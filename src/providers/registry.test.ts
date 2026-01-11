@@ -10,6 +10,7 @@ describe("provider registry", () => {
   it("normalizes aliases", () => {
     expect(normalizeChatProviderId("imsg")).toBe("imessage");
     expect(normalizeChatProviderId("teams")).toBe("msteams");
+    expect(normalizeChatProviderId("web")).toBeNull();
   });
 
   it("keeps Telegram first in the default order", () => {

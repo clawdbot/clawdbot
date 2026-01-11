@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { resolveTelegramDraftStreamingChunking } from "./block-streaming.js";
+import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramDraftStreamingChunking", () => {
   it("uses smaller defaults than block streaming", () => {

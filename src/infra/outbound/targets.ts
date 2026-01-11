@@ -1,14 +1,18 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  getProviderPlugin,
+  normalizeProviderId,
+} from "../../providers/plugins/index.js";
+import type {
+  ProviderId,
+  ProviderOutboundTargetMode,
+} from "../../providers/plugins/types.js";
 import type {
   DeliverableMessageProvider,
   GatewayMessageProvider,
 } from "../../utils/message-provider.js";
-import { normalizeE164 } from "../../utils.js";
-import {
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "../../whatsapp/normalize.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 
 export type OutboundProvider = DeliverableMessageProvider | "none";
 
@@ -24,117 +28,60 @@ export type OutboundTargetResolution =
   | { ok: true; to: string }
   | { ok: false; error: Error };
 
-export function normalizeOutboundTarget(params: {
-  provider: GatewayMessageProvider;
-  to?: string;
-  allowFrom?: string[];
-}): OutboundTargetResolution {
-  const trimmed = params.to?.trim() || "";
-  if (params.provider === "whatsapp") {
-    if (trimmed) {
-      const normalized = normalizeWhatsAppTarget(trimmed);
-      if (!normalized) {
-        return {
-          ok: false,
-          error: new Error(
-            "Delivering to WhatsApp requires --to <E.164|group JID> or whatsapp.allowFrom[0]",
-          ),
-        };
-      }
-      return { ok: true, to: normalized };
-    }
-    const fallback = params.allowFrom?.[0]?.trim();
-    if (fallback) {
-      const normalized = normalizeWhatsAppTarget(fallback);
-      if (normalized) {
-        return { ok: true, to: normalized };
-      }
-    }
-    return {
-      ok: false,
-      error: new Error(
-        "Delivering to WhatsApp requires --to <E.164|group JID> or whatsapp.allowFrom[0]",
-      ),
-    };
-  }
-  if (params.provider === "telegram") {
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error("Delivering to Telegram requires --to <chatId>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  }
-  if (params.provider === "discord") {
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error(
-          "Delivering to Discord requires --to <channelId|user:ID|channel:ID>",
-        ),
-      };
-    }
-    return { ok: true, to: trimmed };
-  }
-  if (params.provider === "slack") {
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error(
-          "Delivering to Slack requires --to <channelId|user:ID|channel:ID>",
-        ),
-      };
-    }
-    return { ok: true, to: trimmed };
-  }
-  if (params.provider === "signal") {
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error(
-          "Delivering to Signal requires --to <E.164|group:ID|signal:group:ID|signal:+E.164>",
-        ),
-      };
-    }
-    return { ok: true, to: trimmed };
-  }
-  if (params.provider === "imessage") {
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error(
-          "Delivering to iMessage requires --to <handle|chat_id:ID>",
-        ),
-      };
-    }
-    return { ok: true, to: trimmed };
-  }
-  if (params.provider === "msteams") {
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error(
-          "Delivering to MS Teams requires --to <conversationId|user:ID|conversation:ID>",
-        ),
-      };
-    }
-    return { ok: true, to: trimmed };
-  }
-  return {
-    ok: false,
-    error: new Error(
-      "Delivering to WebChat is not supported via `clawdbot agent`; use WhatsApp/Telegram or run with --deliver=false.",
-    ),
-  };
-}
-
+// Provider docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
   provider: GatewayMessageProvider;
   to?: string;
   allowFrom?: string[];
+  cfg?: ClawdbotConfig;
+  accountId?: string | null;
+  mode?: ProviderOutboundTargetMode;
 }): OutboundTargetResolution {
-  return normalizeOutboundTarget(params);
+  if (params.provider === INTERNAL_MESSAGE_PROVIDER) {
+    return {
+      ok: false,
+      error: new Error(
+        "Delivering to WebChat is not supported via `clawdbot agent`; use WhatsApp/Telegram or run with --deliver=false.",
+      ),
+    };
+  }
+
+  const plugin = getProviderPlugin(params.provider as ProviderId);
+  if (!plugin) {
+    return {
+      ok: false,
+      error: new Error(`Unsupported provider: ${params.provider}`),
+    };
+  }
+
+  const allowFrom =
+    params.allowFrom ??
+    (params.cfg && plugin.config.resolveAllowFrom
+      ? plugin.config.resolveAllowFrom({
+          cfg: params.cfg,
+          accountId: params.accountId ?? undefined,
+        })
+      : undefined);
+
+  const resolveTarget = plugin.outbound?.resolveTarget;
+  if (resolveTarget) {
+    return resolveTarget({
+      cfg: params.cfg,
+      to: params.to,
+      allowFrom,
+      accountId: params.accountId ?? undefined,
+      mode: params.mode ?? "explicit",
+    });
+  }
+
+  const trimmed = params.to?.trim();
+  if (trimmed) {
+    return { ok: true, to: trimmed };
+  }
+  return {
+    ok: false,
+    error: new Error(`Delivering to ${plugin.meta.label} requires --to`),
+  };
 }
 
 export function resolveHeartbeatDeliveryTarget(params: {
@@ -143,18 +90,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
 }): OutboundTarget {
   const { cfg, entry } = params;
   const rawTarget = cfg.agents?.defaults?.heartbeat?.target;
-  const target: HeartbeatTarget =
-    rawTarget === "whatsapp" ||
-    rawTarget === "telegram" ||
-    rawTarget === "discord" ||
-    rawTarget === "slack" ||
-    rawTarget === "signal" ||
-    rawTarget === "imessage" ||
-    rawTarget === "msteams" ||
-    rawTarget === "none" ||
-    rawTarget === "last"
-      ? rawTarget
-      : "last";
+  let target: HeartbeatTarget = "last";
+  if (rawTarget === "none" || rawTarget === "last") {
+    target = rawTarget;
+  } else if (typeof rawTarget === "string") {
+    const normalized = normalizeProviderId(rawTarget);
+    if (normalized) target = normalized;
+  }
+
   if (target === "none") {
     return { provider: "none", reason: "target-none" };
   }
@@ -166,31 +109,11 @@ export function resolveHeartbeatDeliveryTarget(params: {
       : undefined;
 
   const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== "webchat"
-      ? entry.lastProvider
+    entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
+      ? normalizeProviderId(entry.lastProvider)
       : undefined;
   const lastTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
-
-  const provider:
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams"
-    | undefined =
-    target === "last"
-      ? lastProvider
-      : target === "whatsapp" ||
-          target === "telegram" ||
-          target === "discord" ||
-          target === "slack" ||
-          target === "signal" ||
-          target === "imessage" ||
-          target === "msteams"
-        ? target
-        : undefined;
+  const provider = target === "last" ? lastProvider : target;
 
   const to =
     explicitTo ||
@@ -201,28 +124,35 @@ export function resolveHeartbeatDeliveryTarget(params: {
     return { provider: "none", reason: "no-target" };
   }
 
-  if (provider !== "whatsapp") {
-    const resolved = normalizeOutboundTarget({ provider, to });
-    return resolved.ok
-      ? { provider, to: resolved.to }
-      : { provider: "none", reason: "no-target" };
-  }
-
-  const rawAllow = cfg.whatsapp?.allowFrom ?? [];
-  const resolved = normalizeOutboundTarget({
-    provider: "whatsapp",
+  const accountId =
+    provider === lastProvider ? entry?.lastAccountId : undefined;
+  const resolved = resolveOutboundTarget({
+    provider,
     to,
-    allowFrom: rawAllow,
+    cfg,
+    accountId,
+    mode: "heartbeat",
   });
   if (!resolved.ok) {
     return { provider: "none", reason: "no-target" };
   }
-  if (rawAllow.includes("*")) return { provider, to: resolved.to };
-  if (isWhatsAppGroupJid(resolved.to)) return { provider, to: resolved.to };
-  const allowFrom = rawAllow
-    .map((val) => normalizeE164(val))
-    .filter((val) => val.length > 1);
-  if (allowFrom.length === 0) return { provider, to: resolved.to };
-  if (allowFrom.includes(resolved.to)) return { provider, to: resolved.to };
-  return { provider, to: allowFrom[0], reason: "allowFrom-fallback" };
+
+  let reason: string | undefined;
+  const plugin = getProviderPlugin(provider as ProviderId);
+  if (plugin?.config.resolveAllowFrom) {
+    const explicit = resolveOutboundTarget({
+      provider,
+      to,
+      cfg,
+      accountId,
+      mode: "explicit",
+    });
+    if (explicit.ok && explicit.to !== resolved.to) {
+      reason = "allowFrom-fallback";
+    }
+  }
+
+  return reason
+    ? { provider, to: resolved.to, reason }
+    : { provider, to: resolved.to };
 }

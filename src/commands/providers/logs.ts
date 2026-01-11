@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
+import { listProviderPlugins } from "../../providers/plugins/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 
@@ -15,13 +16,8 @@ type LogLine = ReturnType<typeof parseLogLine>;
 
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
-const PROVIDERS = new Set([
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
+const PROVIDERS = new Set<string>([
+  ...listProviderPlugins().map((plugin) => plugin.id),
   "all",
 ]);
 

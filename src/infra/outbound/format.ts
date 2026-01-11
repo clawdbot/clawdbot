@@ -1,3 +1,5 @@
+import { getProviderPlugin } from "../../providers/plugins/index.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
 export type OutboundDeliveryJson = {
@@ -11,6 +13,7 @@ export type OutboundDeliveryJson = {
   conversationId?: string;
   timestamp?: number;
   toJid?: string;
+  meta?: Record<string, unknown>;
 };
 
 type OutboundDeliveryMeta = {
@@ -20,10 +23,11 @@ type OutboundDeliveryMeta = {
   conversationId?: string;
   timestamp?: number;
   toJid?: string;
+  meta?: Record<string, unknown>;
 };
 
 const resolveProviderLabel = (provider: string) =>
-  provider === "imessage" ? "iMessage" : provider;
+  getProviderPlugin(provider as ProviderId)?.meta.label ?? provider;
 
 export function formatOutboundDeliverySummary(
   provider: string,
@@ -78,6 +82,9 @@ export function buildOutboundDeliveryJson(params: {
   }
   if (result && "toJid" in result && result.toJid !== undefined) {
     payload.toJid = result.toJid;
+  }
+  if (result && "meta" in result && result.meta !== undefined) {
+    payload.meta = result.meta;
   }
 
   return payload;

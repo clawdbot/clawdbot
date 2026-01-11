@@ -804,16 +804,9 @@ const ToolPolicySchema = z
   })
   .optional();
 
+// Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 const ElevatedAllowFromSchema = z
-  .object({
-    whatsapp: z.array(z.string()).optional(),
-    telegram: z.array(z.union([z.string(), z.number()])).optional(),
-    discord: z.array(z.union([z.string(), z.number()])).optional(),
-    slack: z.array(z.union([z.string(), z.number()])).optional(),
-    signal: z.array(z.union([z.string(), z.number()])).optional(),
-    imessage: z.array(z.union([z.string(), z.number()])).optional(),
-    webchat: z.array(z.union([z.string(), z.number()])).optional(),
-  })
+  .record(z.string(), z.array(z.union([z.string(), z.number()])))
   .optional();
 
 const AgentSandboxSchema = z

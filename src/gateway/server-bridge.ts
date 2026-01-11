@@ -34,6 +34,7 @@ import {
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
 import { clearCommandLane } from "../process/command-queue.js";
+import { normalizeProviderId } from "../providers/plugins/index.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -1100,14 +1101,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
 
         const channelRaw =
           typeof link?.channel === "string" ? link.channel.trim() : "";
-        const channel = channelRaw.toLowerCase();
-        const provider =
-          channel === "whatsapp" ||
-          channel === "telegram" ||
-          channel === "signal" ||
-          channel === "imessage"
-            ? channel
-            : undefined;
+        const provider = normalizeProviderId(channelRaw) ?? undefined;
         const to =
           typeof link?.to === "string" && link.to.trim()
             ? link.to.trim()

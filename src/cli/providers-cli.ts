@@ -169,9 +169,9 @@ export function registerProvidersCli(program: Command) {
 
   providers
     .command("logout")
-    .description("Log out of a provider session (WhatsApp Web only)")
+    .description("Log out of a provider session (if supported)")
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
-    .option("--account <id>", "WhatsApp account id (accountId)")
+    .option("--account <id>", "Account id (accountId)")
     .action(async (opts) => {
       try {
         await runProviderLogout(

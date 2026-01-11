@@ -1,34 +1,11 @@
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import {
-  listDiscordAccountIds,
-  resolveDiscordAccount,
-} from "../discord/accounts.js";
-import {
-  listIMessageAccountIds,
-  resolveIMessageAccount,
-} from "../imessage/accounts.js";
-import { resolveMSTeamsCredentials } from "../msteams/token.js";
+import { listProviderPlugins } from "../providers/plugins/index.js";
+import type {
+  ProviderAccountSnapshot,
+  ProviderPlugin,
+} from "../providers/plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import {
-  listSignalAccountIds,
-  resolveSignalAccount,
-} from "../signal/accounts.js";
-import { listSlackAccountIds, resolveSlackAccount } from "../slack/accounts.js";
-import {
-  listTelegramAccountIds,
-  resolveTelegramAccount,
-} from "../telegram/accounts.js";
 import { theme } from "../terminal/theme.js";
-import { normalizeE164 } from "../utils.js";
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAccount,
-} from "../web/accounts.js";
-import {
-  getWebAuthAgeMs,
-  readWebSelfId,
-  webAuthExists,
-} from "../web/session.js";
 
 export type ProviderSummaryOptions = {
   colorize?: boolean;
@@ -40,6 +17,120 @@ const DEFAULT_OPTIONS: Required<ProviderSummaryOptions> = {
   includeAllowFrom: false,
 };
 
+type ProviderAccountEntry = {
+  accountId: string;
+  account: unknown;
+  enabled: boolean;
+  configured: boolean;
+  snapshot: ProviderAccountSnapshot;
+};
+
+const formatAccountLabel = (params: { accountId: string; name?: string }) => {
+  const base = params.accountId || DEFAULT_ACCOUNT_ID;
+  if (params.name?.trim()) return `${base} (${params.name.trim()})`;
+  return base;
+};
+
+const accountLine = (label: string, details: string[]) =>
+  `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
+
+const resolveAccountEnabled = (
+  plugin: ProviderPlugin,
+  account: unknown,
+  cfg: ClawdbotConfig,
+): boolean => {
+  if (plugin.config.isEnabled) {
+    return plugin.config.isEnabled(account, cfg);
+  }
+  if (!account || typeof account !== "object") return true;
+  const enabled = (account as { enabled?: boolean }).enabled;
+  return enabled !== false;
+};
+
+const resolveAccountConfigured = async (
+  plugin: ProviderPlugin,
+  account: unknown,
+  cfg: ClawdbotConfig,
+): Promise<boolean> => {
+  if (plugin.config.isConfigured) {
+    return await plugin.config.isConfigured(account, cfg);
+  }
+  return true;
+};
+
+const buildAccountSnapshot = (params: {
+  plugin: ProviderPlugin;
+  account: unknown;
+  cfg: ClawdbotConfig;
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+}): ProviderAccountSnapshot => {
+  const described = params.plugin.config.describeAccount
+    ? params.plugin.config.describeAccount(params.account, params.cfg)
+    : undefined;
+  return {
+    enabled: params.enabled,
+    configured: params.configured,
+    ...described,
+    accountId: params.accountId,
+  };
+};
+
+const formatAllowFrom = (params: {
+  plugin: ProviderPlugin;
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  allowFrom: Array<string | number>;
+}) => {
+  if (params.plugin.config.formatAllowFrom) {
+    return params.plugin.config.formatAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+    });
+  }
+  return params.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+};
+
+const buildAccountDetails = (params: {
+  entry: ProviderAccountEntry;
+  plugin: ProviderPlugin;
+  cfg: ClawdbotConfig;
+  includeAllowFrom: boolean;
+}): string[] => {
+  const details: string[] = [];
+  const snapshot = params.entry.snapshot;
+  if (snapshot.enabled === false) details.push("disabled");
+  if (snapshot.dmPolicy) details.push(`dm:${snapshot.dmPolicy}`);
+  if (snapshot.tokenSource && snapshot.tokenSource !== "none") {
+    details.push(`token:${snapshot.tokenSource}`);
+  }
+  if (snapshot.botTokenSource && snapshot.botTokenSource !== "none") {
+    details.push(`bot:${snapshot.botTokenSource}`);
+  }
+  if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
+    details.push(`app:${snapshot.appTokenSource}`);
+  }
+  if (snapshot.baseUrl) details.push(snapshot.baseUrl);
+  if (snapshot.port != null) details.push(`port:${snapshot.port}`);
+  if (snapshot.cliPath) details.push(`cli:${snapshot.cliPath}`);
+  if (snapshot.dbPath) details.push(`db:${snapshot.dbPath}`);
+
+  if (params.includeAllowFrom && snapshot.allowFrom?.length) {
+    const formatted = formatAllowFrom({
+      plugin: params.plugin,
+      cfg: params.cfg,
+      accountId: snapshot.accountId,
+      allowFrom: snapshot.allowFrom,
+    }).slice(0, 2);
+    if (formatted.length > 0) {
+      details.push(`allow:${formatted.join(",")}`);
+    }
+  }
+  return details;
+};
+
 export async function buildProviderSummary(
   cfg?: ClawdbotConfig,
   options?: ProviderSummaryOptions,
@@ -49,272 +140,110 @@ export async function buildProviderSummary(
   const resolved = { ...DEFAULT_OPTIONS, ...options };
   const tint = (value: string, color?: (input: string) => string) =>
     resolved.colorize && color ? color(value) : value;
-  const formatAccountLabel = (params: { accountId: string; name?: string }) => {
-    const base = params.accountId || DEFAULT_ACCOUNT_ID;
-    if (params.name?.trim()) return `${base} (${params.name.trim()})`;
-    return base;
-  };
-  const accountLine = (label: string, details: string[]) =>
-    `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
-  const webEnabled = effective.web?.enabled !== false;
-  if (!webEnabled) {
-    lines.push(tint("WhatsApp: disabled", theme.muted));
-  } else {
-    const webLinked = await webAuthExists();
-    const authAgeMs = getWebAuthAgeMs();
-    const authAge = authAgeMs === null ? "" : ` auth ${formatAge(authAgeMs)}`;
-    const { e164 } = readWebSelfId();
-    lines.push(
-      webLinked
-        ? tint(
-            `WhatsApp: linked${e164 ? ` ${e164}` : ""}${authAge}`,
-            theme.success,
-          )
-        : tint("WhatsApp: not linked", theme.error),
-    );
-    if (webLinked) {
-      for (const accountId of listWhatsAppAccountIds(effective)) {
-        const account = resolveWhatsAppAccount({ cfg: effective, accountId });
-        const details: string[] = [];
-        if (!account.enabled) details.push("disabled");
-        if (account.selfChatMode) details.push("self-chat");
-        const dmPolicy =
-          account.dmPolicy ?? effective.whatsapp?.dmPolicy ?? "pairing";
-        details.push(`dm:${dmPolicy}`);
-        const allowFrom = (
-          account.allowFrom ??
-          effective.whatsapp?.allowFrom ??
-          []
-        )
-          .map(normalizeE164)
-          .filter(Boolean)
-          .slice(0, 2);
-        if (allowFrom.length > 0) {
-          details.push(`allow:${allowFrom.join(",")}`);
-        }
+  for (const plugin of listProviderPlugins()) {
+    const accountIds = plugin.config.listAccountIds(effective);
+    const defaultAccountId =
+      plugin.config.defaultAccountId?.(effective) ??
+      accountIds[0] ??
+      DEFAULT_ACCOUNT_ID;
+    const resolvedAccountIds =
+      accountIds.length > 0 ? accountIds : [defaultAccountId];
+    const entries: ProviderAccountEntry[] = [];
+
+    for (const accountId of resolvedAccountIds) {
+      const account = plugin.config.resolveAccount(effective, accountId);
+      const enabled = resolveAccountEnabled(plugin, account, effective);
+      const configured = await resolveAccountConfigured(
+        plugin,
+        account,
+        effective,
+      );
+      const snapshot = buildAccountSnapshot({
+        plugin,
+        account,
+        cfg: effective,
+        accountId,
+        enabled,
+        configured,
+      });
+      entries.push({ accountId, account, enabled, configured, snapshot });
+    }
+
+    const configuredEntries = entries.filter((entry) => entry.configured);
+    const anyEnabled = entries.some((entry) => entry.enabled);
+    const fallbackEntry =
+      entries.find((entry) => entry.accountId === defaultAccountId) ??
+      entries[0];
+    const summary = plugin.status?.buildProviderSummary
+      ? await plugin.status.buildProviderSummary({
+          account: fallbackEntry?.account ?? {},
+          cfg: effective,
+          defaultAccountId,
+          snapshot:
+            fallbackEntry?.snapshot ??
+            ({ accountId: defaultAccountId } as ProviderAccountSnapshot),
+        })
+      : undefined;
+
+    const summaryRecord = summary as Record<string, unknown> | undefined;
+    const linked =
+      summaryRecord && typeof summaryRecord.linked === "boolean"
+        ? summaryRecord.linked
+        : null;
+    const configured =
+      summaryRecord && typeof summaryRecord.configured === "boolean"
+        ? summaryRecord.configured
+        : configuredEntries.length > 0;
+
+    const status = !anyEnabled
+      ? "disabled"
+      : linked !== null
+        ? linked
+          ? "linked"
+          : "not linked"
+        : configured
+          ? "configured"
+          : "not configured";
+
+    const statusColor =
+      status === "linked" || status === "configured"
+        ? theme.success
+        : status === "not linked"
+          ? theme.error
+          : theme.muted;
+    const baseLabel = plugin.meta.label ?? plugin.id;
+    let line = `${baseLabel}: ${status}`;
+
+    const authAgeMs =
+      summaryRecord && typeof summaryRecord.authAgeMs === "number"
+        ? summaryRecord.authAgeMs
+        : null;
+    const self = summaryRecord?.self as { e164?: string | null } | undefined;
+    if (self?.e164) line += ` ${self.e164}`;
+    if (authAgeMs != null && authAgeMs >= 0) {
+      line += ` auth ${formatAge(authAgeMs)}`;
+    }
+
+    lines.push(tint(line, statusColor));
+
+    if (configuredEntries.length > 0) {
+      for (const entry of configuredEntries) {
+        const details = buildAccountDetails({
+          entry,
+          plugin,
+          cfg: effective,
+          includeAllowFrom: resolved.includeAllowFrom,
+        });
         lines.push(
           accountLine(
             formatAccountLabel({
-              accountId: account.accountId,
-              name: account.name,
+              accountId: entry.accountId,
+              name: entry.snapshot.name,
             }),
             details,
           ),
         );
-      }
-    }
-  }
-
-  const telegramEnabled = effective.telegram?.enabled !== false;
-  if (!telegramEnabled) {
-    lines.push(tint("Telegram: disabled", theme.muted));
-  } else {
-    const accounts = listTelegramAccountIds(effective).map((accountId) =>
-      resolveTelegramAccount({ cfg: effective, accountId }),
-    );
-    const configuredAccounts = accounts.filter((account) =>
-      Boolean(account.token?.trim()),
-    );
-    const telegramConfigured = configuredAccounts.length > 0;
-    lines.push(
-      telegramConfigured
-        ? tint("Telegram: configured", theme.success)
-        : tint("Telegram: not configured", theme.muted),
-    );
-    if (telegramConfigured) {
-      for (const account of configuredAccounts) {
-        const details: string[] = [];
-        if (!account.enabled) details.push("disabled");
-        if (account.tokenSource && account.tokenSource !== "none") {
-          details.push(`token:${account.tokenSource}`);
-        }
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: account.accountId,
-              name: account.name,
-            }),
-            details,
-          ),
-        );
-      }
-    }
-  }
-
-  const discordEnabled = effective.discord?.enabled !== false;
-  if (!discordEnabled) {
-    lines.push(tint("Discord: disabled", theme.muted));
-  } else {
-    const accounts = listDiscordAccountIds(effective).map((accountId) =>
-      resolveDiscordAccount({ cfg: effective, accountId }),
-    );
-    const configuredAccounts = accounts.filter((account) =>
-      Boolean(account.token?.trim()),
-    );
-    const discordConfigured = configuredAccounts.length > 0;
-    lines.push(
-      discordConfigured
-        ? tint("Discord: configured", theme.success)
-        : tint("Discord: not configured", theme.muted),
-    );
-    if (discordConfigured) {
-      for (const account of configuredAccounts) {
-        const details: string[] = [];
-        if (!account.enabled) details.push("disabled");
-        if (account.tokenSource && account.tokenSource !== "none") {
-          details.push(`token:${account.tokenSource}`);
-        }
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: account.accountId,
-              name: account.name,
-            }),
-            details,
-          ),
-        );
-      }
-    }
-  }
-
-  const slackEnabled = effective.slack?.enabled !== false;
-  if (!slackEnabled) {
-    lines.push(tint("Slack: disabled", theme.muted));
-  } else {
-    const accounts = listSlackAccountIds(effective).map((accountId) =>
-      resolveSlackAccount({ cfg: effective, accountId }),
-    );
-    const configuredAccounts = accounts.filter(
-      (account) =>
-        Boolean(account.botToken?.trim()) && Boolean(account.appToken?.trim()),
-    );
-    const slackConfigured = configuredAccounts.length > 0;
-    lines.push(
-      slackConfigured
-        ? tint("Slack: configured", theme.success)
-        : tint("Slack: not configured", theme.muted),
-    );
-    if (slackConfigured) {
-      for (const account of configuredAccounts) {
-        const details: string[] = [];
-        if (!account.enabled) details.push("disabled");
-        if (account.botTokenSource && account.botTokenSource !== "none") {
-          details.push(`bot:${account.botTokenSource}`);
-        }
-        if (account.appTokenSource && account.appTokenSource !== "none") {
-          details.push(`app:${account.appTokenSource}`);
-        }
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: account.accountId,
-              name: account.name,
-            }),
-            details,
-          ),
-        );
-      }
-    }
-  }
-
-  const signalEnabled = effective.signal?.enabled !== false;
-  if (!signalEnabled) {
-    lines.push(tint("Signal: disabled", theme.muted));
-  } else {
-    const accounts = listSignalAccountIds(effective).map((accountId) =>
-      resolveSignalAccount({ cfg: effective, accountId }),
-    );
-    const configuredAccounts = accounts.filter((account) => account.configured);
-    const signalConfigured = configuredAccounts.length > 0;
-    lines.push(
-      signalConfigured
-        ? tint("Signal: configured", theme.success)
-        : tint("Signal: not configured", theme.muted),
-    );
-    if (signalConfigured) {
-      for (const account of configuredAccounts) {
-        const details: string[] = [];
-        if (!account.enabled) details.push("disabled");
-        if (account.baseUrl) details.push(account.baseUrl);
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: account.accountId,
-              name: account.name,
-            }),
-            details,
-          ),
-        );
-      }
-    }
-  }
-
-  const imessageEnabled = effective.imessage?.enabled !== false;
-  if (!imessageEnabled) {
-    lines.push(tint("iMessage: disabled", theme.muted));
-  } else {
-    const accounts = listIMessageAccountIds(effective).map((accountId) =>
-      resolveIMessageAccount({ cfg: effective, accountId }),
-    );
-    const configuredAccounts = accounts.filter((account) =>
-      Boolean(
-        account.config.cliPath ||
-          account.config.dbPath ||
-          account.config.allowFrom ||
-          account.config.service ||
-          account.config.region,
-      ),
-    );
-    const imessageConfigured = configuredAccounts.length > 0;
-    lines.push(
-      imessageConfigured
-        ? tint("iMessage: configured", theme.success)
-        : tint("iMessage: not configured", theme.muted),
-    );
-    if (imessageConfigured) {
-      for (const account of configuredAccounts) {
-        const details: string[] = [];
-        if (!account.enabled) details.push("disabled");
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: account.accountId,
-              name: account.name,
-            }),
-            details,
-          ),
-        );
-      }
-    }
-  }
-
-  if (resolved.includeAllowFrom) {
-    const allowFrom = effective.whatsapp?.allowFrom?.length
-      ? effective.whatsapp.allowFrom.map(normalizeE164).filter(Boolean)
-      : [];
-    if (allowFrom.length) {
-      lines.push(tint(`AllowFrom: ${allowFrom.join(", ")}`, theme.muted));
-    }
-  }
-
-  const msEnabled = effective.msteams?.enabled !== false;
-  if (!msEnabled) {
-    lines.push(tint("MS Teams: disabled", theme.muted));
-  } else {
-    const configured = Boolean(resolveMSTeamsCredentials(effective.msteams));
-    lines.push(
-      configured
-        ? tint("MS Teams: configured", theme.success)
-        : tint("MS Teams: not configured", theme.muted),
-    );
-    if (configured && resolved.includeAllowFrom) {
-      const allowFrom = (effective.msteams?.allowFrom ?? [])
-        .map((val) => val.trim())
-        .filter(Boolean)
-        .slice(0, 2);
-      if (allowFrom.length > 0) {
-        lines.push(accountLine("default", [`allow:${allowFrom.join(",")}`]));
       }
     }
   }

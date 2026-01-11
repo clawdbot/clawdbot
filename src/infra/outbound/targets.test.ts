@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type { ClawdbotConfig } from "../../config/config.js";
 
 import { resolveOutboundTarget } from "./targets.js";
 
 describe("resolveOutboundTarget", () => {
+  it("falls back to whatsapp allowFrom via config", () => {
+    const cfg: ClawdbotConfig = { whatsapp: { allowFrom: ["+1555"] } };
+    const res = resolveOutboundTarget({
+      provider: "whatsapp",
+      to: "",
+      cfg,
+      mode: "explicit",
+    });
+    expect(res).toEqual({ ok: true, to: "+1555" });
+  });
+
   it.each([
     {
       name: "normalizes whatsapp target when provided",

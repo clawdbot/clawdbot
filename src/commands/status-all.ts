@@ -425,6 +425,7 @@ export async function statusAllCommand(
       });
 
       const providerRows = providers.rows.map((row) => ({
+        providerId: row.id,
         Provider: row.provider,
         Enabled: row.enabled ? ok("ON") : muted("OFF"),
         State:
@@ -447,27 +448,8 @@ export async function statusAllCommand(
         }
         return map;
       })();
-      const providerKeyForLabel = (label: string) => {
-        switch (label) {
-          case "WhatsApp":
-            return "whatsapp";
-          case "Telegram":
-            return "telegram";
-          case "Discord":
-            return "discord";
-          case "Slack":
-            return "slack";
-          case "Signal":
-            return "signal";
-          case "iMessage":
-            return "imessage";
-          default:
-            return label.toLowerCase();
-        }
-      };
       const providerRowsWithIssues = providerRows.map((row) => {
-        const providerKey = providerKeyForLabel(row.Provider);
-        const issues = providerIssuesByProvider.get(providerKey) ?? [];
+        const issues = providerIssuesByProvider.get(row.providerId) ?? [];
         if (issues.length === 0) return row;
         const issue = issues[0];
         const suffix = ` · ${warn(`gateway: ${String(issue.message).slice(0, 90)}`)}`;

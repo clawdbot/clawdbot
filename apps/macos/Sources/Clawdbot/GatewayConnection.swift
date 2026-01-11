@@ -13,6 +13,7 @@ enum GatewayAgentProvider: String, Codable, CaseIterable, Sendable {
     case slack
     case signal
     case imessage
+    case msteams
     case webchat
 
     init(raw: String?) {
@@ -61,8 +62,7 @@ actor GatewayConnection {
         case talkMode = "talk.mode"
         case webLoginStart = "web.login.start"
         case webLoginWait = "web.login.wait"
-        case webLogout = "web.logout"
-        case telegramLogout = "telegram.logout"
+        case providersLogout = "providers.logout"
         case modelsList = "models.list"
         case chatHistory = "chat.history"
         case chatSend = "chat.send"

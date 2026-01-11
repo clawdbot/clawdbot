@@ -14,17 +14,11 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
 import {
-  listDiscordAccountIds,
-  resolveDefaultDiscordAccountId,
-  resolveDiscordAccount,
-} from "../discord/accounts.js";
-import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-} from "../imessage/accounts.js";
-import { resolveMSTeamsCredentials } from "../msteams/token.js";
+  getProviderPlugin,
+  listProviderPlugins,
+} from "../providers/plugins/index.js";
 import {
   type ChatProviderId,
   getChatProviderMeta,
@@ -37,28 +31,7 @@ import {
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "../signal/accounts.js";
-import {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-} from "../slack/accounts.js";
-import {
-  listTelegramAccountIds,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
-} from "../telegram/accounts.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  listWhatsAppAccountIds,
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAuthDir,
-} from "../web/accounts.js";
-import { webAuthExists } from "../web/session.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
@@ -486,97 +459,46 @@ async function buildProviderStatusIndex(
 ): Promise<Map<string, ProviderAccountStatus>> {
   const map = new Map<string, ProviderAccountStatus>();
 
-  for (const accountId of listWhatsAppAccountIds(cfg)) {
-    const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
-    const linked = await webAuthExists(authDir);
-    const enabled =
-      cfg.whatsapp?.accounts?.[accountId]?.enabled ?? cfg.web?.enabled ?? true;
-    const hasConfig = Boolean(cfg.whatsapp);
-    map.set(providerAccountKey("whatsapp", accountId), {
-      provider: "whatsapp",
-      accountId,
-      name: cfg.whatsapp?.accounts?.[accountId]?.name,
-      state: linked ? "linked" : "not linked",
-      enabled,
-      configured: linked || hasConfig,
-    });
-  }
-
-  for (const accountId of listTelegramAccountIds(cfg)) {
-    const account = resolveTelegramAccount({ cfg, accountId });
-    const configured = Boolean(account.token);
-    map.set(providerAccountKey("telegram", accountId), {
-      provider: "telegram",
-      accountId,
-      name: account.name,
-      state: configured ? "configured" : "not configured",
-      enabled: account.enabled,
-      configured,
-    });
-  }
-
-  for (const accountId of listDiscordAccountIds(cfg)) {
-    const account = resolveDiscordAccount({ cfg, accountId });
-    const configured = Boolean(account.token);
-    map.set(providerAccountKey("discord", accountId), {
-      provider: "discord",
-      accountId,
-      name: account.name,
-      state: configured ? "configured" : "not configured",
-      enabled: account.enabled,
-      configured,
-    });
-  }
-
-  for (const accountId of listSlackAccountIds(cfg)) {
-    const account = resolveSlackAccount({ cfg, accountId });
-    const configured = Boolean(account.botToken && account.appToken);
-    map.set(providerAccountKey("slack", accountId), {
-      provider: "slack",
-      accountId,
-      name: account.name,
-      state: configured ? "configured" : "not configured",
-      enabled: account.enabled,
-      configured,
-    });
-  }
-
-  for (const accountId of listSignalAccountIds(cfg)) {
-    const account = resolveSignalAccount({ cfg, accountId });
-    map.set(providerAccountKey("signal", accountId), {
-      provider: "signal",
-      accountId,
-      name: account.name,
-      state: account.configured ? "configured" : "not configured",
-      enabled: account.enabled,
-      configured: account.configured,
-    });
-  }
-
-  for (const accountId of listIMessageAccountIds(cfg)) {
-    const account = resolveIMessageAccount({ cfg, accountId });
-    map.set(providerAccountKey("imessage", accountId), {
-      provider: "imessage",
-      accountId,
-      name: account.name,
-      state: account.enabled ? "enabled" : "disabled",
-      enabled: account.enabled,
-      configured: Boolean(cfg.imessage),
-    });
-  }
-
-  {
-    const accountId = DEFAULT_ACCOUNT_ID;
-    const hasCreds = Boolean(resolveMSTeamsCredentials(cfg.msteams));
-    const hasConfig = Boolean(cfg.msteams);
-    const enabled = cfg.msteams?.enabled !== false;
-    map.set(providerAccountKey("msteams", accountId), {
-      provider: "msteams",
-      accountId,
-      state: hasCreds ? "configured" : "not configured",
-      enabled,
-      configured: hasCreds || hasConfig,
-    });
+  for (const plugin of listProviderPlugins()) {
+    const accountIds = plugin.config.listAccountIds(cfg);
+    for (const accountId of accountIds) {
+      const account = plugin.config.resolveAccount(cfg, accountId);
+      const snapshot = plugin.config.describeAccount?.(account, cfg);
+      const enabled = plugin.config.isEnabled
+        ? plugin.config.isEnabled(account, cfg)
+        : typeof snapshot?.enabled === "boolean"
+          ? snapshot.enabled
+          : (account as { enabled?: boolean }).enabled;
+      const configured = plugin.config.isConfigured
+        ? await plugin.config.isConfigured(account, cfg)
+        : snapshot?.configured;
+      const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
+      const resolvedConfigured =
+        typeof configured === "boolean" ? configured : true;
+      const state =
+        plugin.status?.resolveAccountState?.({
+          account,
+          cfg,
+          configured: resolvedConfigured,
+          enabled: resolvedEnabled,
+        }) ??
+        (typeof snapshot?.linked === "boolean"
+          ? snapshot.linked
+            ? "linked"
+            : "not linked"
+          : resolvedConfigured
+            ? "configured"
+            : "not configured");
+      const name = snapshot?.name ?? (account as { name?: string }).name;
+      map.set(providerAccountKey(plugin.id, accountId), {
+        provider: plugin.id,
+        accountId,
+        name,
+        state,
+        enabled,
+        configured,
+      });
+    }
   }
 
   return map;
@@ -586,33 +508,20 @@ function resolveDefaultAccountId(
   cfg: ClawdbotConfig,
   provider: ChatProviderId,
 ): string {
-  switch (provider) {
-    case "whatsapp":
-      return resolveDefaultWhatsAppAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-    case "telegram":
-      return resolveDefaultTelegramAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-    case "discord":
-      return resolveDefaultDiscordAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-    case "slack":
-      return resolveDefaultSlackAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-    case "signal":
-      return resolveDefaultSignalAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-    case "imessage":
-      return resolveDefaultIMessageAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-    case "msteams":
-      return DEFAULT_ACCOUNT_ID;
-  }
+  const plugin = getProviderPlugin(provider);
+  if (!plugin) return DEFAULT_ACCOUNT_ID;
+  return resolveProviderDefaultAccountId({ plugin, cfg });
 }
 
 function shouldShowProviderEntry(
   entry: ProviderAccountStatus,
   cfg: ClawdbotConfig,
 ): boolean {
-  if (entry.provider === "whatsapp") {
-    return entry.state === "linked" || Boolean(cfg.whatsapp);
-  }
-  if (entry.provider === "imessage") {
-    return Boolean(cfg.imessage);
+  const plugin = getProviderPlugin(entry.provider);
+  if (!plugin) return Boolean(entry.configured);
+  if (plugin.meta.showConfigured === false) {
+    const providerConfig = (cfg as Record<string, unknown>)[plugin.id];
+    return Boolean(entry.configured) || Boolean(providerConfig);
   }
   return Boolean(entry.configured);
 }
@@ -777,9 +686,11 @@ function buildProviderBindings(params: {
     const accountId = params.accountIds?.[provider]?.trim();
     if (accountId) {
       match.accountId = accountId;
-    } else if (provider === "whatsapp") {
-      const defaultId = resolveDefaultWhatsAppAccountId(params.config);
-      match.accountId = defaultId || DEFAULT_ACCOUNT_ID;
+    } else {
+      const plugin = getProviderPlugin(provider);
+      if (plugin?.meta.forceAccountBinding) {
+        match.accountId = resolveDefaultAccountId(params.config, provider);
+      }
     }
     bindings.push({ agentId, match });
   }
@@ -809,9 +720,11 @@ function parseBindingSpecs(params: {
       errors.push(`Invalid binding "${trimmed}" (empty account id).`);
       continue;
     }
-    if (!accountId && provider === "whatsapp") {
-      accountId = resolveDefaultWhatsAppAccountId(params.config);
-      if (!accountId) accountId = DEFAULT_ACCOUNT_ID;
+    if (!accountId) {
+      const plugin = getProviderPlugin(provider);
+      if (plugin?.meta.forceAccountBinding) {
+        accountId = resolveDefaultAccountId(params.config, provider);
+      }
     }
     const match: AgentBinding["match"] = { provider };
     if (accountId) match.accountId = accountId;

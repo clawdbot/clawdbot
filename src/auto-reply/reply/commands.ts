@@ -54,9 +54,9 @@ import {
   triggerClawdbotRestart,
 } from "../../infra/restart.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { ProviderId } from "../../providers/plugins/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeE164 } from "../../utils.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   normalizeCommandBody,
@@ -108,10 +108,10 @@ function resolveSessionEntryForKey(
 export type CommandContext = {
   surface: string;
   provider: string;
-  isWhatsAppProvider: boolean;
+  providerId?: ProviderId;
   ownerList: string[];
   isAuthorizedSender: boolean;
-  senderE164?: string;
+  senderId?: string;
   abortKey?: string;
   rawBodyNormalized: string;
   commandBodyNormalized: string;
@@ -155,7 +155,7 @@ export async function buildStatusReply(params: {
   } = params;
   if (!command.isAuthorizedSender) {
     logVerbose(
-      `Ignoring /status from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      `Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`,
     );
     return undefined;
   }
@@ -359,10 +359,10 @@ export function buildCommandContext(params: {
   return {
     surface,
     provider,
-    isWhatsAppProvider: auth.isWhatsAppProvider,
+    providerId: auth.providerId,
     ownerList: auth.ownerList,
     isAuthorizedSender: auth.isAuthorizedSender,
-    senderE164: auth.senderE164,
+    senderId: auth.senderId,
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,
@@ -448,7 +448,7 @@ export async function handleCommands(params: {
     command.commandBodyNormalized === "/new";
   if (resetRequested && !command.isAuthorizedSender) {
     logVerbose(
-      `Ignoring /reset from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      `Ignoring /reset from unauthorized sender: ${command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
@@ -472,22 +472,9 @@ export async function handleCommands(params: {
         reply: { text: "⚙️ Group activation only applies to group chats." },
       };
     }
-    const activationOwnerList = command.ownerList;
-    const activationSenderE164 = command.senderE164
-      ? normalizeE164(command.senderE164)
-      : "";
-    const isActivationOwner =
-      !command.isWhatsAppProvider || activationOwnerList.length === 0
-        ? command.isAuthorizedSender
-        : Boolean(activationSenderE164) &&
-          activationOwnerList.includes(activationSenderE164);
-
-    if (
-      !command.isAuthorizedSender ||
-      (command.isWhatsAppProvider && !isActivationOwner)
-    ) {
+    if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /activation from unauthorized sender in group: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /activation from unauthorized sender in group: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -515,7 +502,7 @@ export async function handleCommands(params: {
   if (allowTextCommands && sendPolicyCommand.hasCommand) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /send from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /send from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -552,7 +539,7 @@ export async function handleCommands(params: {
   if (allowTextCommands && command.commandBodyNormalized === "/restart") {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /restart from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /restart from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -598,7 +585,7 @@ export async function handleCommands(params: {
   if (allowTextCommands && helpRequested) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /help from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /help from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -609,7 +596,7 @@ export async function handleCommands(params: {
   if (allowTextCommands && commandsRequested) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /commands from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /commands from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -673,7 +660,7 @@ export async function handleCommands(params: {
   if (configCommand) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /config from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /config from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -805,7 +792,7 @@ export async function handleCommands(params: {
   if (debugCommand) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /debug from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /debug from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -832,13 +819,11 @@ export async function handleCommands(params: {
           reply: { text: "⚙️ Debug overrides: (none)" },
         };
       }
-      const effectiveConfig = cfg ?? {};
       const json = JSON.stringify(overrides, null, 2);
-      const effectiveJson = JSON.stringify(effectiveConfig, null, 2);
       return {
         shouldContinue: false,
         reply: {
-          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\`\n⚙️ Effective config (with overrides):\n\`\`\`json\n${effectiveJson}\n\`\`\``,
+          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\``,
         },
       };
     }
@@ -895,7 +880,7 @@ export async function handleCommands(params: {
   if (allowTextCommands && stopRequested) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /stop from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /stop from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -927,7 +912,7 @@ export async function handleCommands(params: {
   if (compactRequested) {
     if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /compact from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /compact from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }

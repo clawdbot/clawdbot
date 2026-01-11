@@ -13,17 +13,17 @@ describe("system-presence", () => {
 
     upsertPresence(instanceIdUpper, {
       host: "clawdbot",
-      mode: "app",
+      mode: "ui",
       instanceId: instanceIdUpper,
       reason: "connect",
     });
 
     updateSystemPresence({
-      text: "Node: Peter-Mac-Studio (10.0.0.1) · app 2.0.0 · last input 5s ago · mode app · reason beacon",
+      text: "Node: Peter-Mac-Studio (10.0.0.1) · ui 2.0.0 · last input 5s ago · mode ui · reason beacon",
       instanceId: instanceIdLower,
       host: "Peter-Mac-Studio",
       ip: "10.0.0.1",
-      mode: "app",
+      mode: "ui",
       version: "2.0.0",
       lastInputSeconds: 5,
       reason: "beacon",

@@ -117,7 +117,12 @@ describe("resolveTextChunkLimit", () => {
     expect(resolveTextChunkLimit(undefined, "slack")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "signal")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "imessage")).toBe(4000);
-    expect(resolveTextChunkLimit(undefined, "discord")).toBe(2000);
+    expect(resolveTextChunkLimit(undefined, "discord")).toBe(4000);
+    expect(
+      resolveTextChunkLimit(undefined, "discord", undefined, {
+        fallbackLimit: 2000,
+      }),
+    ).toBe(2000);
   });
 
   it("supports provider overrides", () => {

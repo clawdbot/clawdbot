@@ -10,13 +10,8 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { sendMessageDiscord } from "../../discord/send.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
-import { sendMessageMSTeams } from "../../msteams/send.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
-import { sendMessageWhatsApp } from "../../web/outbound.js";
+import { normalizeProviderId } from "../../providers/registry.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -93,118 +88,39 @@ export async function routeReply(
     return { ok: true };
   }
 
-  const sendOne = async (params: {
-    text: string;
-    mediaUrl?: string;
-  }): Promise<RouteReplyResult> => {
-    if (abortSignal?.aborted) {
-      return { ok: false, error: "Reply routing aborted" };
-    }
-    const { text, mediaUrl } = params;
-    switch (channel) {
-      case "telegram": {
-        const replyToMessageId = replyToId
-          ? Number.parseInt(replyToId, 10)
-          : undefined;
-        const resolvedReplyToMessageId = Number.isFinite(replyToMessageId)
-          ? replyToMessageId
-          : undefined;
-        const result = await sendMessageTelegram(to, text, {
-          mediaUrl,
-          messageThreadId: threadId,
-          replyToMessageId: resolvedReplyToMessageId,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
+  if (channel === INTERNAL_MESSAGE_PROVIDER) {
+    return {
+      ok: false,
+      error: "Webchat routing not supported for queued replies",
+    };
+  }
 
-      case "slack": {
-        const result = await sendMessageSlack(to, text, {
-          mediaUrl,
-          threadTs: replyToId,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "discord": {
-        const result = await sendMessageDiscord(to, text, {
-          mediaUrl,
-          replyTo: replyToId,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "signal": {
-        const result = await sendMessageSignal(to, text, {
-          mediaUrl,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "imessage": {
-        const result = await sendMessageIMessage(to, text, {
-          mediaUrl,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "whatsapp": {
-        const result = await sendMessageWhatsApp(to, text, {
-          verbose: false,
-          mediaUrl,
-          accountId,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      case "webchat": {
-        return {
-          ok: false,
-          error: `Webchat routing not supported for queued replies`,
-        };
-      }
-
-      case "msteams": {
-        const result = await sendMessageMSTeams({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-
-      default: {
-        const _exhaustive: never = channel;
-        return { ok: false, error: `Unknown channel: ${String(_exhaustive)}` };
-      }
-    }
-  };
+  const provider = normalizeProviderId(channel) ?? null;
+  if (!provider) {
+    return { ok: false, error: `Unknown channel: ${String(channel)}` };
+  }
+  if (abortSignal?.aborted) {
+    return { ok: false, error: "Reply routing aborted" };
+  }
 
   try {
-    if (abortSignal?.aborted) {
-      return { ok: false, error: "Reply routing aborted" };
-    }
-    if (mediaUrls.length === 0) {
-      return await sendOne({ text });
-    }
-
-    let last: RouteReplyResult | undefined;
-    for (let i = 0; i < mediaUrls.length; i++) {
-      if (abortSignal?.aborted) {
-        return { ok: false, error: "Reply routing aborted" };
-      }
-      const mediaUrl = mediaUrls[i];
-      const caption = i === 0 ? text : "";
-      last = await sendOne({ text: caption, mediaUrl });
-      if (!last.ok) return last;
-    }
-
-    return last ?? { ok: true };
+    // Provider docking: this is an execution boundary (we're about to send).
+    // Keep the module cheap to import by loading outbound plumbing lazily.
+    const { deliverOutboundPayloads } = await import(
+      "../../infra/outbound/deliver.js"
+    );
+    const results = await deliverOutboundPayloads({
+      cfg,
+      provider,
+      to,
+      accountId: accountId ?? undefined,
+      payloads: [normalized],
+      replyToId: replyToId ?? null,
+      threadId: threadId ?? null,
+      abortSignal,
+    });
+    const last = results.at(-1);
+    return { ok: true, messageId: last?.messageId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -222,22 +138,10 @@ export async function routeReply(
  */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
-): channel is
-  | "telegram"
-  | "slack"
-  | "discord"
-  | "signal"
-  | "imessage"
-  | "whatsapp"
-  | "msteams" {
-  if (!channel) return false;
-  return [
-    "telegram",
-    "slack",
-    "discord",
-    "signal",
-    "imessage",
-    "whatsapp",
-    "msteams",
-  ].includes(channel);
+): channel is Exclude<
+  OriginatingChannelType,
+  typeof INTERNAL_MESSAGE_PROVIDER
+> {
+  if (!channel || channel === INTERNAL_MESSAGE_PROVIDER) return false;
+  return normalizeProviderId(channel) !== null;
 }

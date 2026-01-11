@@ -51,6 +51,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { toLocationContext } from "../providers/location.js";
+import { resolveWhatsAppHeartbeatRecipients } from "../providers/plugins/whatsapp-heartbeat.js";
 import {
   buildAgentSessionKey,
   resolveAgentRoute,
@@ -495,71 +496,11 @@ export async function runWebHeartbeatOnce(opts: {
   }
 }
 
-function getSessionRecipients(cfg: ReturnType<typeof loadConfig>) {
-  const sessionCfg = cfg.session;
-  const scope = sessionCfg?.scope ?? "per-sender";
-  if (scope === "global") return [];
-  const storePath = resolveStorePath(cfg.session?.store);
-  const store = loadSessionStore(storePath);
-  const isGroupKey = (key: string) =>
-    key.startsWith("group:") ||
-    key.includes(":group:") ||
-    key.includes(":channel:") ||
-    key.includes("@g.us");
-  const isCronKey = (key: string) => key.startsWith("cron:");
-
-  const recipients = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .filter(([key]) => !isGroupKey(key) && !isCronKey(key))
-    .map(([_, entry]) => ({
-      to:
-        entry?.lastProvider === "whatsapp" && entry?.lastTo
-          ? normalizeE164(entry.lastTo)
-          : "",
-      updatedAt: entry?.updatedAt ?? 0,
-    }))
-    .filter(({ to }) => to.length > 1)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-
-  // Dedupe while preserving recency ordering.
-  const seen = new Set<string>();
-  return recipients.filter((r) => {
-    if (seen.has(r.to)) return false;
-    seen.add(r.to);
-    return true;
-  });
-}
-
 export function resolveHeartbeatRecipients(
   cfg: ReturnType<typeof loadConfig>,
   opts: { to?: string; all?: boolean } = {},
 ) {
-  if (opts.to) return { recipients: [normalizeE164(opts.to)], source: "flag" };
-
-  const sessionRecipients = getSessionRecipients(cfg);
-  const allowFrom =
-    Array.isArray(cfg.whatsapp?.allowFrom) && cfg.whatsapp.allowFrom.length > 0
-      ? cfg.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
-      : [];
-
-  const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
-
-  if (opts.all) {
-    const all = unique([...sessionRecipients.map((s) => s.to), ...allowFrom]);
-    return { recipients: all, source: "all" as const };
-  }
-
-  if (sessionRecipients.length === 1) {
-    return { recipients: [sessionRecipients[0].to], source: "session-single" };
-  }
-  if (sessionRecipients.length > 1) {
-    return {
-      recipients: sessionRecipients.map((s) => s.to),
-      source: "session-ambiguous" as const,
-    };
-  }
-
-  return { recipients: allowFrom, source: "allowFrom" as const };
+  return resolveWhatsAppHeartbeatRecipients(cfg, opts);
 }
 
 function getSessionSnapshot(

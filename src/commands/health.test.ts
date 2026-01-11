@@ -21,15 +21,20 @@ describe("healthCommand", () => {
 
   it("outputs JSON from gateway", async () => {
     const snapshot: HealthSummary = {
+      ok: true,
       ts: Date.now(),
       durationMs: 5,
-      web: {
-        linked: true,
-        authAgeMs: 5000,
-        connect: { ok: true, elapsedMs: 10 },
+      providers: {
+        whatsapp: { linked: true, authAgeMs: 5000 },
+        telegram: { configured: true, probe: { ok: true, elapsedMs: 1 } },
+        discord: { configured: false },
       },
-      telegram: { configured: true, probe: { ok: true, elapsedMs: 1 } },
-      discord: { configured: false },
+      providerOrder: ["whatsapp", "telegram", "discord"],
+      providerLabels: {
+        whatsapp: "WhatsApp",
+        telegram: "Telegram",
+        discord: "Discord",
+      },
       heartbeatSeconds: 60,
       sessions: {
         path: "/tmp/sessions.json",
@@ -44,18 +49,27 @@ describe("healthCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
     const logged = runtime.log.mock.calls[0]?.[0] as string;
     const parsed = JSON.parse(logged) as HealthSummary;
-    expect(parsed.web.linked).toBe(true);
-    expect(parsed.telegram.configured).toBe(true);
+    expect(parsed.providers.whatsapp?.linked).toBe(true);
+    expect(parsed.providers.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
   });
 
   it("prints text summary when not json", async () => {
     callGatewayMock.mockResolvedValueOnce({
+      ok: true,
       ts: Date.now(),
       durationMs: 5,
-      web: { linked: false, authAgeMs: null },
-      telegram: { configured: false },
-      discord: { configured: false },
+      providers: {
+        whatsapp: { linked: false, authAgeMs: null },
+        telegram: { configured: false },
+        discord: { configured: false },
+      },
+      providerOrder: ["whatsapp", "telegram", "discord"],
+      providerLabels: {
+        whatsapp: "WhatsApp",
+        telegram: "Telegram",
+        discord: "Discord",
+      },
       heartbeatSeconds: 60,
       sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
     } satisfies HealthSummary);

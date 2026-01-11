@@ -32,79 +32,72 @@ const hoisted = vi.hoisted(() => {
 
   const providerManager = {
     getRuntimeSnapshot: vi.fn(() => ({
-      whatsapp: {
-        running: false,
-        connected: false,
-        reconnectAttempts: 0,
-        lastConnectedAt: null,
-        lastDisconnect: null,
-        lastMessageAt: null,
-        lastEventAt: null,
-        lastError: null,
+      providers: {
+        whatsapp: {
+          running: false,
+          connected: false,
+          reconnectAttempts: 0,
+          lastConnectedAt: null,
+          lastDisconnect: null,
+          lastMessageAt: null,
+          lastEventAt: null,
+          lastError: null,
+        },
+        telegram: {
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+          mode: null,
+        },
+        discord: {
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+        },
+        slack: {
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+        },
+        signal: {
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+          baseUrl: null,
+        },
+        imessage: {
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+          cliPath: null,
+          dbPath: null,
+        },
+        msteams: {
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+        },
       },
-      whatsappAccounts: {},
-      telegram: {
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-        mode: null,
-      },
-      telegramAccounts: {},
-      discord: {
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
-      discordAccounts: {},
-      slack: {
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
-      slackAccounts: {},
-      signal: {
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-        baseUrl: null,
-      },
-      signalAccounts: {},
-      imessage: {
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-        cliPath: null,
-        dbPath: null,
-      },
-      imessageAccounts: {},
-      msteams: {
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
+      providerAccounts: {
+        whatsapp: {},
+        telegram: {},
+        discord: {},
+        slack: {},
+        signal: {},
+        imessage: {},
+        msteams: {},
       },
     })),
     startProviders: vi.fn(async () => {}),
-    startWhatsAppProvider: vi.fn(async () => {}),
-    stopWhatsAppProvider: vi.fn(async () => {}),
-    startTelegramProvider: vi.fn(async () => {}),
-    stopTelegramProvider: vi.fn(async () => {}),
-    startDiscordProvider: vi.fn(async () => {}),
-    stopDiscordProvider: vi.fn(async () => {}),
-    startSlackProvider: vi.fn(async () => {}),
-    stopSlackProvider: vi.fn(async () => {}),
-    startSignalProvider: vi.fn(async () => {}),
-    stopSignalProvider: vi.fn(async () => {}),
-    startIMessageProvider: vi.fn(async () => {}),
-    stopIMessageProvider: vi.fn(async () => {}),
-    startMSTeamsProvider: vi.fn(async () => {}),
-    stopMSTeamsProvider: vi.fn(async () => {}),
-    markWhatsAppLoggedOut: vi.fn(),
+    startProvider: vi.fn(async () => {}),
+    stopProvider: vi.fn(async () => {}),
+    markProviderLoggedOut: vi.fn(),
   };
 
   const createProviderManager = vi.fn(() => providerManager);
@@ -265,33 +258,35 @@ describe("gateway hot reload", () => {
     expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
     expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
 
-    expect(hoisted.providerManager.stopWhatsAppProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledTimes(5);
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledTimes(5);
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "whatsapp",
     );
-    expect(hoisted.providerManager.startWhatsAppProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "whatsapp",
     );
-    expect(hoisted.providerManager.stopTelegramProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "telegram",
     );
-    expect(hoisted.providerManager.startTelegramProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "telegram",
     );
-    expect(hoisted.providerManager.stopDiscordProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "discord",
     );
-    expect(hoisted.providerManager.startDiscordProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "discord",
     );
-    expect(hoisted.providerManager.stopSignalProvider).toHaveBeenCalledTimes(1);
-    expect(hoisted.providerManager.startSignalProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith("signal");
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "signal",
     );
-    expect(hoisted.providerManager.stopIMessageProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.stopProvider).toHaveBeenCalledWith(
+      "imessage",
     );
-    expect(hoisted.providerManager.startIMessageProvider).toHaveBeenCalledTimes(
-      1,
+    expect(hoisted.providerManager.startProvider).toHaveBeenCalledWith(
+      "imessage",
     );
 
     await server.close();

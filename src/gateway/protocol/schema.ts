@@ -1,11 +1,19 @@
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./client-info.js";
 
 const NonEmptyString = Type.String({ minLength: 1 });
 const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
+
+const GatewayClientIdSchema = Type.Union(
+  Object.values(GATEWAY_CLIENT_IDS).map((value) => Type.Literal(value)),
+);
+const GatewayClientModeSchema = Type.Union(
+  Object.values(GATEWAY_CLIENT_MODES).map((value) => Type.Literal(value)),
+);
 
 export const PresenceEntrySchema = Type.Object(
   {
@@ -69,12 +77,13 @@ export const ConnectParamsSchema = Type.Object(
     maxProtocol: Type.Integer({ minimum: 1 }),
     client: Type.Object(
       {
-        name: NonEmptyString,
+        id: GatewayClientIdSchema,
+        displayName: Type.Optional(NonEmptyString),
         version: NonEmptyString,
         platform: NonEmptyString,
         deviceFamily: Type.Optional(NonEmptyString),
         modelIdentifier: Type.Optional(NonEmptyString),
-        mode: NonEmptyString,
+        mode: GatewayClientModeSchema,
         instanceId: Type.Optional(NonEmptyString),
       },
       { additionalProperties: false },
@@ -587,6 +596,68 @@ export const ProvidersStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+// Provider docking: providers.status is intentionally schema-light so new
+// providers can ship without protocol updates.
+export const ProviderAccountSnapshotSchema = Type.Object(
+  {
+    accountId: NonEmptyString,
+    name: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    configured: Type.Optional(Type.Boolean()),
+    linked: Type.Optional(Type.Boolean()),
+    running: Type.Optional(Type.Boolean()),
+    connected: Type.Optional(Type.Boolean()),
+    reconnectAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastConnectedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastError: Type.Optional(Type.String()),
+    lastStartAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    mode: Type.Optional(Type.String()),
+    dmPolicy: Type.Optional(Type.String()),
+    allowFrom: Type.Optional(Type.Array(Type.String())),
+    tokenSource: Type.Optional(Type.String()),
+    botTokenSource: Type.Optional(Type.String()),
+    appTokenSource: Type.Optional(Type.String()),
+    baseUrl: Type.Optional(Type.String()),
+    allowUnmentionedGroups: Type.Optional(Type.Boolean()),
+    cliPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    dbPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    port: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    ),
+    probe: Type.Optional(Type.Unknown()),
+    audit: Type.Optional(Type.Unknown()),
+    application: Type.Optional(Type.Unknown()),
+  },
+  { additionalProperties: true },
+);
+
+export const ProvidersStatusResultSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    providerOrder: Type.Array(NonEmptyString),
+    providerLabels: Type.Record(NonEmptyString, NonEmptyString),
+    providers: Type.Record(NonEmptyString, Type.Unknown()),
+    providerAccounts: Type.Record(
+      NonEmptyString,
+      Type.Array(ProviderAccountSnapshotSchema),
+    ),
+    providerDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ProvidersLogoutParamsSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const WebLoginStartParamsSchema = Type.Object(
   {
     force: Type.Optional(Type.Boolean()),
@@ -718,15 +789,7 @@ export const CronPayloadSchema = Type.Union([
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
       deliver: Type.Optional(Type.Boolean()),
       provider: Type.Optional(
-        Type.Union([
-          Type.Literal("last"),
-          Type.Literal("whatsapp"),
-          Type.Literal("telegram"),
-          Type.Literal("discord"),
-          Type.Literal("slack"),
-          Type.Literal("signal"),
-          Type.Literal("imessage"),
-        ]),
+        Type.Union([Type.Literal("last"), NonEmptyString]),
       ),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
@@ -975,6 +1038,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
   ProvidersStatusParams: ProvidersStatusParamsSchema,
+  ProvidersStatusResult: ProvidersStatusResultSchema,
+  ProvidersLogoutParams: ProvidersLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
   AgentSummary: AgentSummarySchema,
@@ -1006,7 +1071,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ShutdownEvent: ShutdownEventSchema,
 };
 
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 
 export type ConnectParams = Static<typeof ConnectParamsSchema>;
 export type HelloOk = Static<typeof HelloOkSchema>;
@@ -1052,6 +1117,8 @@ export type WizardStartResult = Static<typeof WizardStartResultSchema>;
 export type WizardStatusResult = Static<typeof WizardStatusResultSchema>;
 export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
 export type ProvidersStatusParams = Static<typeof ProvidersStatusParamsSchema>;
+export type ProvidersStatusResult = Static<typeof ProvidersStatusResultSchema>;
+export type ProvidersLogoutParams = Static<typeof ProvidersLogoutParamsSchema>;
 export type WebLoginStartParams = Static<typeof WebLoginStartParamsSchema>;
 export type WebLoginWaitParams = Static<typeof WebLoginWaitParamsSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;

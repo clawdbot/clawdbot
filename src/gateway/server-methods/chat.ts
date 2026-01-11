@@ -7,6 +7,7 @@ import { mergeSessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -328,7 +329,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           thinking: p.thinking,
           deliver: p.deliver,
           timeout: Math.ceil(timeoutMs / 1000).toString(),
-          messageProvider: "webchat",
+          messageProvider: INTERNAL_MESSAGE_PROVIDER,
           abortSignal: abortController.signal,
         },
         defaultRuntime,

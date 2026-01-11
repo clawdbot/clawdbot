@@ -1,6 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { PROVIDER_IDS } from "../providers/registry.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+
+const MESSAGE_PROVIDER_OPTIONS = PROVIDER_IDS.join("|");
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
@@ -10,6 +13,7 @@ export function buildAgentSystemPrompt(params: {
   ownerNumbers?: string[];
   reasoningTagHint?: boolean;
   toolNames?: string[];
+  toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
   userTime?: string;
@@ -42,7 +46,7 @@ export function buildAgentSystemPrompt(params: {
     };
   };
 }) {
-  const toolSummaries: Record<string, string> = {
+  const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
     edit: "Make precise edits to files",
@@ -51,7 +55,7 @@ export function buildAgentSystemPrompt(params: {
     ls: "List directory contents",
     bash: "Run shell commands",
     process: "Manage background bash sessions",
-    whatsapp_login: "Generate and wait for WhatsApp QR login",
+    // Provider docking: add provider login tools here when a provider needs interactive linking.
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
@@ -78,7 +82,6 @@ export function buildAgentSystemPrompt(params: {
     "ls",
     "bash",
     "process",
-    "whatsapp_login",
     "browser",
     "canvas",
     "nodes",
@@ -107,17 +110,25 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
+  const externalToolSummaries = new Map<string, string>();
+  for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
+    const normalized = key.trim().toLowerCase();
+    if (!normalized || !value?.trim()) continue;
+    externalToolSummaries.set(normalized, value.trim());
+  }
   const extraTools = Array.from(
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
   );
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
-    const summary = toolSummaries[tool];
+    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
   for (const tool of extraTools.sort()) {
-    toolLines.push(`- ${resolveToolName(tool)}`);
+    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const name = resolveToolName(tool);
+    toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
 
   const hasGateway = availableTools.has("gateway");
@@ -160,9 +171,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilitiesLower = new Set(
     runtimeCapabilities.map((cap) => cap.toLowerCase()),
   );
-  const telegramInlineButtonsEnabled =
-    runtimeProvider === "telegram" &&
-    runtimeCapabilitiesLower.has("inlinebuttons");
+  const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
   const skillsSection = skillsPrompt
     ? [
@@ -188,7 +197,6 @@ export function buildAgentSystemPrompt(params: {
           "- ls: list directory contents",
           `- ${bashToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background bash sessions`,
-          "- whatsapp_login: generate a WhatsApp QR code and wait for linking",
           "- browser: control clawd's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
@@ -312,11 +320,11 @@ export function buildAgentSystemPrompt(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + provider actions (polls, reactions, etc.).",
-          "- If multiple providers are configured, pass `provider` (whatsapp|telegram|discord|slack|signal|imessage|msteams).",
-          telegramInlineButtonsEnabled
-            ? "- Telegram: inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
-            : runtimeProvider === "telegram"
-              ? '- Telegram: inline buttons NOT enabled. If you need them, ask to add "inlineButtons" to telegram.capabilities or telegram.accounts.<id>.capabilities.'
+          `- If multiple providers are configured, pass \`provider\` (${MESSAGE_PROVIDER_OPTIONS}).`,
+          inlineButtonsEnabled
+            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+            : runtimeProvider
+              ? `- Inline buttons not enabled for ${runtimeProvider}. If you need them, ask to add "inlineButtons" to ${runtimeProvider}.capabilities or ${runtimeProvider}.accounts.<id>.capabilities.`
               : "",
         ]
           .filter(Boolean)

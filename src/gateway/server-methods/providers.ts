@@ -1,66 +1,80 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  loadConfig,
-  readConfigFileSnapshot,
-  writeConfigFile,
-} from "../../config/config.js";
-import type { TelegramGroupConfig } from "../../config/types.js";
-import {
-  listDiscordAccountIds,
-  resolveDefaultDiscordAccountId,
-  resolveDiscordAccount,
-} from "../../discord/accounts.js";
-import {
-  auditDiscordChannelPermissions,
-  collectDiscordAuditChannelIds,
-} from "../../discord/audit.js";
-import { type DiscordProbe, probeDiscord } from "../../discord/probe.js";
-import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-} from "../../imessage/accounts.js";
-import { type IMessageProbe, probeIMessage } from "../../imessage/probe.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getProviderActivity } from "../../infra/provider-activity.js";
+import { resolveProviderDefaultAccountId } from "../../providers/plugins/helpers.js";
 import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "../../signal/accounts.js";
-import { probeSignal, type SignalProbe } from "../../signal/probe.js";
-import {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-} from "../../slack/accounts.js";
-import { probeSlack, type SlackProbe } from "../../slack/probe.js";
-import {
-  listTelegramAccountIds,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
-} from "../../telegram/accounts.js";
-import {
-  auditTelegramGroupMembership,
-  collectTelegramUnmentionedGroupIds,
-} from "../../telegram/audit.js";
-import { probeTelegram, type TelegramProbe } from "../../telegram/probe.js";
-import {
-  listEnabledWhatsAppAccounts,
-  resolveDefaultWhatsAppAccountId,
-} from "../../web/accounts.js";
-import {
-  getWebAuthAgeMs,
-  readWebSelfId,
-  webAuthExists,
-} from "../../web/session.js";
+  getProviderPlugin,
+  listProviderPlugins,
+  normalizeProviderId,
+  type ProviderId,
+} from "../../providers/plugins/index.js";
+import { buildProviderAccountSnapshot } from "../../providers/plugins/status.js";
+import type {
+  ProviderAccountSnapshot,
+  ProviderPlugin,
+} from "../../providers/plugins/types.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateProvidersLogoutParams,
   validateProvidersStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+
+type ProviderLogoutPayload = {
+  provider: ProviderId;
+  accountId: string;
+  cleared: boolean;
+  [key: string]: unknown;
+};
+
+export async function logoutProviderAccount(params: {
+  providerId: ProviderId;
+  accountId?: string | null;
+  cfg: ClawdbotConfig;
+  context: GatewayRequestContext;
+  plugin: ProviderPlugin;
+}): Promise<ProviderLogoutPayload> {
+  const resolvedAccountId =
+    params.accountId?.trim() ||
+    params.plugin.config.defaultAccountId?.(params.cfg) ||
+    params.plugin.config.listAccountIds(params.cfg)[0] ||
+    DEFAULT_ACCOUNT_ID;
+  const account = params.plugin.config.resolveAccount(
+    params.cfg,
+    resolvedAccountId,
+  );
+  await params.context.stopProvider(params.providerId, resolvedAccountId);
+  const result = await params.plugin.gateway?.logoutAccount?.({
+    cfg: params.cfg,
+    accountId: resolvedAccountId,
+    account,
+    runtime: defaultRuntime,
+  });
+  if (!result) {
+    throw new Error(`Provider ${params.providerId} does not support logout`);
+  }
+  const cleared = Boolean(result.cleared);
+  const loggedOut =
+    typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
+  if (loggedOut) {
+    params.context.markProviderLoggedOut(
+      params.providerId,
+      true,
+      resolvedAccountId,
+    );
+  }
+  return {
+    provider: params.providerId,
+    accountId: resolvedAccountId,
+    ...result,
+    cleared,
+  };
+}
 
 export const providersHandlers: GatewayRequestHandlers = {
   "providers.status": async ({ params, respond, context }) => {
@@ -81,457 +95,222 @@ export const providersHandlers: GatewayRequestHandlers = {
       typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
     const cfg = loadConfig();
     const runtime = context.getRuntimeSnapshot();
+    const plugins = listProviderPlugins();
+    const pluginMap = new Map<ProviderId, ProviderPlugin>(
+      plugins.map((plugin) => [plugin.id, plugin]),
+    );
 
-    const defaultTelegramAccountId = resolveDefaultTelegramAccountId(cfg);
-    const defaultDiscordAccountId = resolveDefaultDiscordAccountId(cfg);
-    const defaultSlackAccountId = resolveDefaultSlackAccountId(cfg);
-    const defaultSignalAccountId = resolveDefaultSignalAccountId(cfg);
-    const defaultIMessageAccountId = resolveDefaultIMessageAccountId(cfg);
+    const resolveRuntimeSnapshot = (
+      providerId: ProviderId,
+      accountId: string,
+      defaultAccountId: string,
+    ): ProviderAccountSnapshot | undefined => {
+      const accounts = runtime.providerAccounts[providerId];
+      const defaultRuntime = runtime.providers[providerId];
+      const raw =
+        accounts?.[accountId] ??
+        (accountId === defaultAccountId ? defaultRuntime : undefined);
+      if (!raw) return undefined;
+      return raw;
+    };
 
-    const telegramAccounts = await Promise.all(
-      listTelegramAccountIds(cfg).map(async (accountId) => {
-        const account = resolveTelegramAccount({ cfg, accountId });
-        const rt =
-          runtime.telegramAccounts?.[account.accountId] ??
-          (account.accountId === defaultTelegramAccountId
-            ? runtime.telegram
-            : undefined);
-        const configured = Boolean(account.token);
-        let telegramProbe: TelegramProbe | undefined;
+    const isAccountEnabled = (plugin: ProviderPlugin, account: unknown) =>
+      plugin.config.isEnabled
+        ? plugin.config.isEnabled(account, cfg)
+        : !account ||
+          typeof account !== "object" ||
+          (account as { enabled?: boolean }).enabled !== false;
+
+    const buildProviderAccounts = async (providerId: ProviderId) => {
+      const plugin = pluginMap.get(providerId);
+      if (!plugin) {
+        return {
+          accounts: [] as ProviderAccountSnapshot[],
+          defaultAccountId: DEFAULT_ACCOUNT_ID,
+          defaultAccount: undefined as ProviderAccountSnapshot | undefined,
+          resolvedAccounts: {} as Record<string, unknown>,
+        };
+      }
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const defaultAccountId = resolveProviderDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const accounts: ProviderAccountSnapshot[] = [];
+      const resolvedAccounts: Record<string, unknown> = {};
+      for (const accountId of accountIds) {
+        const account = plugin.config.resolveAccount(cfg, accountId);
+        const enabled = isAccountEnabled(plugin, account);
+        resolvedAccounts[accountId] = account;
+        let probeResult: unknown;
         let lastProbeAt: number | null = null;
-        const groups =
-          cfg.telegram?.accounts?.[account.accountId]?.groups ??
-          cfg.telegram?.groups;
-        const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
-          collectTelegramUnmentionedGroupIds(
-            groups as Record<string, TelegramGroupConfig> | undefined,
-          );
-        let audit:
-          | Awaited<ReturnType<typeof auditTelegramGroupMembership>>
-          | undefined;
-        if (probe && configured && account.enabled) {
-          telegramProbe = await probeTelegram(
-            account.token,
-            timeoutMs,
-            account.config.proxy,
-          );
-          lastProbeAt = Date.now();
-          const botId =
-            telegramProbe.ok && telegramProbe.bot?.id != null
-              ? telegramProbe.bot.id
-              : null;
-          if (botId && (groupIds.length > 0 || unresolvedGroups > 0)) {
-            const auditRes = await auditTelegramGroupMembership({
-              token: account.token,
-              botId,
-              groupIds,
-              proxyUrl: account.config.proxy,
+        if (probe && enabled && plugin.status?.probeAccount) {
+          let configured = true;
+          if (plugin.config.isConfigured) {
+            configured = await plugin.config.isConfigured(account, cfg);
+          }
+          if (configured) {
+            probeResult = await plugin.status.probeAccount({
+              account,
               timeoutMs,
+              cfg,
             });
-            audit = {
-              ...auditRes,
-              unresolvedGroups,
-              hasWildcardUnmentionedGroups,
-            };
-          } else if (unresolvedGroups > 0 || hasWildcardUnmentionedGroups) {
-            audit = {
-              ok: unresolvedGroups === 0 && !hasWildcardUnmentionedGroups,
-              checkedGroups: 0,
-              unresolvedGroups,
-              hasWildcardUnmentionedGroups,
-              groups: [],
-              elapsedMs: 0,
-            };
+            lastProbeAt = Date.now();
           }
         }
-        const allowUnmentionedGroups =
-          Boolean(
-            groups?.["*"] &&
-              (groups["*"] as { requireMention?: boolean }).requireMention ===
-                false,
-          ) ||
-          Object.entries(groups ?? {}).some(
-            ([key, value]) =>
-              key !== "*" &&
-              Boolean(value) &&
-              typeof value === "object" &&
-              (value as { requireMention?: boolean }).requireMention === false,
-          );
-        return {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          tokenSource: account.tokenSource,
-          running: rt?.running ?? false,
-          mode: rt?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
-          lastStartAt: rt?.lastStartAt ?? null,
-          lastStopAt: rt?.lastStopAt ?? null,
-          lastError: rt?.lastError ?? null,
-          probe: telegramProbe,
-          lastProbeAt,
-          audit,
-          allowUnmentionedGroups,
-          lastInboundAt: getProviderActivity({
-            provider: "telegram",
-            accountId: account.accountId,
-          }).inboundAt,
-          lastOutboundAt: getProviderActivity({
-            provider: "telegram",
-            accountId: account.accountId,
-          }).outboundAt,
-        };
-      }),
-    );
-    const defaultTelegramAccount =
-      telegramAccounts.find(
-        (account) => account.accountId === defaultTelegramAccountId,
-      ) ?? telegramAccounts[0];
-
-    const discordAccounts = await Promise.all(
-      listDiscordAccountIds(cfg).map(async (accountId) => {
-        const account = resolveDiscordAccount({ cfg, accountId });
-        const rt =
-          runtime.discordAccounts?.[account.accountId] ??
-          (account.accountId === defaultDiscordAccountId
-            ? runtime.discord
-            : undefined);
-        const configured = Boolean(account.token);
-        let discordProbe: DiscordProbe | undefined;
-        let lastProbeAt: number | null = null;
-        const { channelIds: auditChannelIds, unresolvedChannels } =
-          collectDiscordAuditChannelIds({ cfg, accountId: account.accountId });
-        let audit:
-          | Awaited<ReturnType<typeof auditDiscordChannelPermissions>>
-          | undefined;
-        if (probe && configured && account.enabled) {
-          discordProbe = await probeDiscord(account.token, timeoutMs, {
-            includeApplication: true,
-          });
-          lastProbeAt = Date.now();
-          if (auditChannelIds.length > 0 || unresolvedChannels > 0) {
-            const auditRes = await auditDiscordChannelPermissions({
-              token: account.token,
-              accountId: account.accountId,
-              channelIds: auditChannelIds,
+        let auditResult: unknown;
+        if (probe && enabled && plugin.status?.auditAccount) {
+          let configured = true;
+          if (plugin.config.isConfigured) {
+            configured = await plugin.config.isConfigured(account, cfg);
+          }
+          if (configured) {
+            auditResult = await plugin.status.auditAccount({
+              account,
               timeoutMs,
+              cfg,
+              probe: probeResult,
             });
-            audit = { ...auditRes, unresolvedChannels };
           }
         }
-        return {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          tokenSource: account.tokenSource,
-          bot: rt?.bot ?? null,
-          application: rt?.application ?? null,
-          running: rt?.running ?? false,
-          lastStartAt: rt?.lastStartAt ?? null,
-          lastStopAt: rt?.lastStopAt ?? null,
-          lastError: rt?.lastError ?? null,
-          probe: discordProbe,
-          lastProbeAt,
-          audit,
-          lastInboundAt: getProviderActivity({
-            provider: "discord",
-            accountId: account.accountId,
-          }).inboundAt,
-          lastOutboundAt: getProviderActivity({
-            provider: "discord",
-            accountId: account.accountId,
-          }).outboundAt,
-        };
-      }),
-    );
-    const defaultDiscordAccount =
-      discordAccounts.find(
-        (account) => account.accountId === defaultDiscordAccountId,
-      ) ?? discordAccounts[0];
-
-    const slackAccounts = await Promise.all(
-      listSlackAccountIds(cfg).map(async (accountId) => {
-        const account = resolveSlackAccount({ cfg, accountId });
-        const rt =
-          runtime.slackAccounts?.[account.accountId] ??
-          (account.accountId === defaultSlackAccountId
-            ? runtime.slack
-            : undefined);
-        const configured = Boolean(account.botToken && account.appToken);
-        let slackProbe: SlackProbe | undefined;
-        let lastProbeAt: number | null = null;
-        if (probe && configured && account.enabled && account.botToken) {
-          slackProbe = await probeSlack(account.botToken, timeoutMs);
-          lastProbeAt = Date.now();
-        }
-        return {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          botTokenSource: account.botTokenSource,
-          appTokenSource: account.appTokenSource,
-          running: rt?.running ?? false,
-          lastStartAt: rt?.lastStartAt ?? null,
-          lastStopAt: rt?.lastStopAt ?? null,
-          lastError: rt?.lastError ?? null,
-          probe: slackProbe,
-          lastProbeAt,
-        };
-      }),
-    );
-    const defaultSlackAccount =
-      slackAccounts.find(
-        (account) => account.accountId === defaultSlackAccountId,
-      ) ?? slackAccounts[0];
-
-    const signalAccounts = await Promise.all(
-      listSignalAccountIds(cfg).map(async (accountId) => {
-        const account = resolveSignalAccount({ cfg, accountId });
-        const rt =
-          runtime.signalAccounts?.[account.accountId] ??
-          (account.accountId === defaultSignalAccountId
-            ? runtime.signal
-            : undefined);
-        const configured = account.configured;
-        let signalProbe: SignalProbe | undefined;
-        let lastProbeAt: number | null = null;
-        if (probe && configured && account.enabled) {
-          signalProbe = await probeSignal(account.baseUrl, timeoutMs);
-          lastProbeAt = Date.now();
-        }
-        return {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          baseUrl: account.baseUrl,
-          running: rt?.running ?? false,
-          lastStartAt: rt?.lastStartAt ?? null,
-          lastStopAt: rt?.lastStopAt ?? null,
-          lastError: rt?.lastError ?? null,
-          probe: signalProbe,
-          lastProbeAt,
-        };
-      }),
-    );
-    const defaultSignalAccount =
-      signalAccounts.find(
-        (account) => account.accountId === defaultSignalAccountId,
-      ) ?? signalAccounts[0];
-
-    const imessageBaseConfigured = Boolean(cfg.imessage);
-    let imessageProbe: IMessageProbe | undefined;
-    let imessageLastProbeAt: number | null = null;
-    if (probe && imessageBaseConfigured) {
-      imessageProbe = await probeIMessage(timeoutMs);
-      imessageLastProbeAt = Date.now();
-    }
-    const imessageAccounts = listIMessageAccountIds(cfg).map((accountId) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      const rt =
-        runtime.imessageAccounts?.[account.accountId] ??
-        (account.accountId === defaultIMessageAccountId
-          ? runtime.imessage
-          : undefined);
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: imessageBaseConfigured,
-        running: rt?.running ?? false,
-        lastStartAt: rt?.lastStartAt ?? null,
-        lastStopAt: rt?.lastStopAt ?? null,
-        lastError: rt?.lastError ?? null,
-        cliPath: rt?.cliPath ?? account.config.cliPath ?? null,
-        dbPath: rt?.dbPath ?? account.config.dbPath ?? null,
-        probe: imessageProbe,
-        lastProbeAt: imessageLastProbeAt,
-      };
-    });
-    const defaultIMessageAccount =
-      imessageAccounts.find(
-        (account) => account.accountId === defaultIMessageAccountId,
-      ) ?? imessageAccounts[0];
-    const defaultWhatsAppAccountId = resolveDefaultWhatsAppAccountId(cfg);
-    const enabledWhatsAppAccounts = listEnabledWhatsAppAccounts(cfg);
-    const defaultWhatsAppAccount =
-      enabledWhatsAppAccounts.find(
-        (account) => account.accountId === defaultWhatsAppAccountId,
-      ) ?? enabledWhatsAppAccounts[0];
-    const linked = defaultWhatsAppAccount
-      ? await webAuthExists(defaultWhatsAppAccount.authDir)
-      : false;
-    const authAgeMs = defaultWhatsAppAccount
-      ? getWebAuthAgeMs(defaultWhatsAppAccount.authDir)
-      : null;
-    const self = defaultWhatsAppAccount
-      ? readWebSelfId(defaultWhatsAppAccount.authDir)
-      : { e164: null, jid: null };
-
-    const defaultWhatsAppStatus = {
-      running: false,
-      connected: false,
-      reconnectAttempts: 0,
-      lastConnectedAt: null,
-      lastDisconnect: null,
-      lastMessageAt: null,
-      lastEventAt: null,
-      lastError: null,
-    } as const;
-    const whatsappAccounts = await Promise.all(
-      enabledWhatsAppAccounts.map(async (account) => {
-        const rt =
-          runtime.whatsappAccounts?.[account.accountId] ??
-          defaultWhatsAppStatus;
-        return {
-          accountId: account.accountId,
-          enabled: account.enabled,
-          linked: await webAuthExists(account.authDir),
-          authAgeMs: getWebAuthAgeMs(account.authDir),
-          self: readWebSelfId(account.authDir),
-          running: rt.running,
-          connected: rt.connected,
-          lastConnectedAt: rt.lastConnectedAt ?? null,
-          lastDisconnect: rt.lastDisconnect ?? null,
-          reconnectAttempts: rt.reconnectAttempts,
-          lastMessageAt: rt.lastMessageAt ?? null,
-          lastEventAt: rt.lastEventAt ?? null,
-          lastError: rt.lastError ?? null,
-          lastInboundAt: getProviderActivity({
-            provider: "whatsapp",
-            accountId: account.accountId,
-          }).inboundAt,
-          lastOutboundAt: getProviderActivity({
-            provider: "whatsapp",
-            accountId: account.accountId,
-          }).outboundAt,
-        };
-      }),
-    );
-
-    respond(
-      true,
-      {
-        ts: Date.now(),
-        whatsapp: {
-          configured: linked,
-          linked,
-          authAgeMs,
-          self,
-          running: runtime.whatsapp.running,
-          connected: runtime.whatsapp.connected,
-          lastConnectedAt: runtime.whatsapp.lastConnectedAt ?? null,
-          lastDisconnect: runtime.whatsapp.lastDisconnect ?? null,
-          reconnectAttempts: runtime.whatsapp.reconnectAttempts,
-          lastMessageAt: runtime.whatsapp.lastMessageAt ?? null,
-          lastEventAt: runtime.whatsapp.lastEventAt ?? null,
-          lastError: runtime.whatsapp.lastError ?? null,
-        },
-        whatsappAccounts,
-        whatsappDefaultAccountId: defaultWhatsAppAccountId,
-        telegram: {
-          configured: defaultTelegramAccount?.configured ?? false,
-          tokenSource: defaultTelegramAccount?.tokenSource ?? "none",
-          running: defaultTelegramAccount?.running ?? false,
-          mode: defaultTelegramAccount?.mode ?? null,
-          lastStartAt: defaultTelegramAccount?.lastStartAt ?? null,
-          lastStopAt: defaultTelegramAccount?.lastStopAt ?? null,
-          lastError: defaultTelegramAccount?.lastError ?? null,
-          probe: defaultTelegramAccount?.probe,
-          lastProbeAt: defaultTelegramAccount?.lastProbeAt ?? null,
-        },
-        telegramAccounts,
-        telegramDefaultAccountId: defaultTelegramAccountId,
-        discord: {
-          configured: defaultDiscordAccount?.configured ?? false,
-          tokenSource: defaultDiscordAccount?.tokenSource ?? "none",
-          running: defaultDiscordAccount?.running ?? false,
-          lastStartAt: defaultDiscordAccount?.lastStartAt ?? null,
-          lastStopAt: defaultDiscordAccount?.lastStopAt ?? null,
-          lastError: defaultDiscordAccount?.lastError ?? null,
-          probe: defaultDiscordAccount?.probe,
-          lastProbeAt: defaultDiscordAccount?.lastProbeAt ?? null,
-        },
-        discordAccounts,
-        discordDefaultAccountId: defaultDiscordAccountId,
-        slack: {
-          configured: defaultSlackAccount?.configured ?? false,
-          botTokenSource: defaultSlackAccount?.botTokenSource ?? "none",
-          appTokenSource: defaultSlackAccount?.appTokenSource ?? "none",
-          running: defaultSlackAccount?.running ?? false,
-          lastStartAt: defaultSlackAccount?.lastStartAt ?? null,
-          lastStopAt: defaultSlackAccount?.lastStopAt ?? null,
-          lastError: defaultSlackAccount?.lastError ?? null,
-          probe: defaultSlackAccount?.probe,
-          lastProbeAt: defaultSlackAccount?.lastProbeAt ?? null,
-        },
-        slackAccounts,
-        slackDefaultAccountId: defaultSlackAccountId,
-        signal: {
-          configured: defaultSignalAccount?.configured ?? false,
-          baseUrl: defaultSignalAccount?.baseUrl ?? null,
-          running: defaultSignalAccount?.running ?? false,
-          lastStartAt: defaultSignalAccount?.lastStartAt ?? null,
-          lastStopAt: defaultSignalAccount?.lastStopAt ?? null,
-          lastError: defaultSignalAccount?.lastError ?? null,
-          probe: defaultSignalAccount?.probe,
-          lastProbeAt: defaultSignalAccount?.lastProbeAt ?? null,
-        },
-        signalAccounts,
-        signalDefaultAccountId: defaultSignalAccountId,
-        imessage: {
-          configured: defaultIMessageAccount?.configured ?? false,
-          running: defaultIMessageAccount?.running ?? false,
-          lastStartAt: defaultIMessageAccount?.lastStartAt ?? null,
-          lastStopAt: defaultIMessageAccount?.lastStopAt ?? null,
-          lastError: defaultIMessageAccount?.lastError ?? null,
-          cliPath: defaultIMessageAccount?.cliPath ?? null,
-          dbPath: defaultIMessageAccount?.dbPath ?? null,
-          probe: defaultIMessageAccount?.probe,
-          lastProbeAt: defaultIMessageAccount?.lastProbeAt ?? null,
-        },
-        imessageAccounts,
-        imessageDefaultAccountId: defaultIMessageAccountId,
-      },
-      undefined,
-    );
-  },
-  "telegram.logout": async ({ respond, context }) => {
-    try {
-      await context.stopTelegramProvider();
-      const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.valid) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "config invalid; fix it before logging out",
-          ),
+        const runtimeSnapshot = resolveRuntimeSnapshot(
+          providerId,
+          accountId,
+          defaultAccountId,
         );
-        return;
+        const snapshot = await buildProviderAccountSnapshot({
+          plugin,
+          cfg,
+          accountId,
+          runtime: runtimeSnapshot,
+          probe: probeResult,
+          audit: auditResult,
+        });
+        if (lastProbeAt) snapshot.lastProbeAt = lastProbeAt;
+        const activity = getProviderActivity({
+          provider: providerId as never,
+          accountId,
+        });
+        if (snapshot.lastInboundAt == null) {
+          snapshot.lastInboundAt = activity.inboundAt;
+        }
+        if (snapshot.lastOutboundAt == null) {
+          snapshot.lastOutboundAt = activity.outboundAt;
+        }
+        accounts.push(snapshot);
       }
-      const cfg = snapshot.config ?? {};
-      const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
-      const hadToken = Boolean(cfg.telegram?.botToken);
-      const nextTelegram = cfg.telegram ? { ...cfg.telegram } : undefined;
-      if (nextTelegram) {
-        delete nextTelegram.botToken;
-      }
-      const nextCfg = { ...cfg } as ClawdbotConfig;
-      if (nextTelegram && Object.keys(nextTelegram).length > 0) {
-        nextCfg.telegram = nextTelegram;
-      } else {
-        delete nextCfg.telegram;
-      }
-      await writeConfigFile(nextCfg);
+      const defaultAccount =
+        accounts.find((entry) => entry.accountId === defaultAccountId) ??
+        accounts[0];
+      return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
+    };
+
+    const payload: Record<string, unknown> = {
+      ts: Date.now(),
+      providerOrder: plugins.map((plugin) => plugin.id),
+      providerLabels: Object.fromEntries(
+        plugins.map((plugin) => [plugin.id, plugin.meta.label]),
+      ),
+      providers: {} as Record<string, unknown>,
+      providerAccounts: {} as Record<string, unknown>,
+      providerDefaultAccountId: {} as Record<string, unknown>,
+    };
+    const providersMap = payload.providers as Record<string, unknown>;
+    const accountsMap = payload.providerAccounts as Record<string, unknown>;
+    const defaultAccountIdMap = payload.providerDefaultAccountId as Record<
+      string,
+      unknown
+    >;
+    for (const plugin of plugins) {
+      const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
+        await buildProviderAccounts(plugin.id);
+      const fallbackAccount =
+        resolvedAccounts[defaultAccountId] ??
+        plugin.config.resolveAccount(cfg, defaultAccountId);
+      const summary = plugin.status?.buildProviderSummary
+        ? await plugin.status.buildProviderSummary({
+            account: fallbackAccount,
+            cfg,
+            defaultAccountId,
+            snapshot:
+              defaultAccount ??
+              ({
+                accountId: defaultAccountId,
+              } as ProviderAccountSnapshot),
+          })
+        : {
+            configured: defaultAccount?.configured ?? false,
+          };
+      providersMap[plugin.id] = summary;
+      accountsMap[plugin.id] = accounts;
+      defaultAccountIdMap[plugin.id] = defaultAccountId;
+    }
+
+    respond(true, payload, undefined);
+  },
+  "providers.logout": async ({ params, respond, context }) => {
+    if (!validateProvidersLogoutParams(params)) {
       respond(
-        true,
-        { cleared: hadToken, envToken: Boolean(envToken) },
+        false,
         undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid providers.logout params: ${formatValidationErrors(validateProvidersLogoutParams.errors)}`,
+        ),
       );
+      return;
+    }
+    const rawProvider = (params as { provider?: unknown }).provider;
+    const providerId =
+      typeof rawProvider === "string" ? normalizeProviderId(rawProvider) : null;
+    if (!providerId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid providers.logout provider",
+        ),
+      );
+      return;
+    }
+    const plugin = getProviderPlugin(providerId);
+    if (!plugin?.gateway?.logoutAccount) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `provider ${providerId} does not support logout`,
+        ),
+      );
+      return;
+    }
+    const accountIdRaw = (params as { accountId?: unknown }).accountId;
+    const accountId =
+      typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "config invalid; fix it before logging out",
+        ),
+      );
+      return;
+    }
+    try {
+      const payload = await logoutProviderAccount({
+        providerId,
+        accountId,
+        cfg: snapshot.config ?? {},
+        context,
+        plugin,
+      });
+      respond(true, payload, undefined);
     } catch (err) {
       respond(
         false,
