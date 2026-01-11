@@ -217,6 +217,19 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
       cliPath: null,
       dbPath: null,
     },
+    collectStatusIssues: (accounts) =>
+      accounts.flatMap((account) => {
+        const lastError =
+          typeof account.lastError === "string" ? account.lastError.trim() : "";
+        if (!lastError) return [];
+        return [
+          {
+            provider: "imessage",
+            accountId: account.accountId,
+            message: `Provider error: ${lastError}`,
+          },
+        ];
+      }),
     buildProviderSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       running: snapshot.running ?? false,

@@ -247,6 +247,19 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
       lastStopAt: null,
       lastError: null,
     },
+    collectStatusIssues: (accounts) =>
+      accounts.flatMap((account) => {
+        const lastError =
+          typeof account.lastError === "string" ? account.lastError.trim() : "";
+        if (!lastError) return [];
+        return [
+          {
+            provider: "signal",
+            accountId: account.accountId,
+            message: `Provider error: ${lastError}`,
+          },
+        ];
+      }),
     buildProviderSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       baseUrl: snapshot.baseUrl ?? null,

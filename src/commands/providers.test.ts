@@ -446,15 +446,17 @@ describe("providers command", () => {
 
   it("surfaces Signal runtime errors in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      signalAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          running: false,
-          lastError: "signal-cli unreachable",
-        },
-      ],
+      providerAccounts: {
+        signal: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: false,
+            lastError: "signal-cli unreachable",
+          },
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/signal/i);
@@ -463,15 +465,17 @@ describe("providers command", () => {
 
   it("surfaces iMessage runtime errors in providers status output", () => {
     const lines = formatGatewayProvidersStatusLines({
-      imessageAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          running: false,
-          lastError: "imsg permission denied",
-        },
-      ],
+      providerAccounts: {
+        imessage: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: false,
+            lastError: "imsg permission denied",
+          },
+        ],
+      },
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/imessage/i);
