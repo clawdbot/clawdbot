@@ -185,9 +185,8 @@ function resolveLinkFields(summary: unknown): {
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
   const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
   const self = asRecord(rec.self);
-  const selfE164 = typeof self.e164 === "string" && self.e164.trim()
-    ? self.e164.trim()
-    : null;
+  const selfE164 =
+    typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
   return { linked, authAgeMs, selfE164 };
 }
 
@@ -236,8 +235,10 @@ function summarizeTokenConfig(params: {
   if (hasBotOrAppTokenFields) {
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      return Boolean(String(rec.botToken ?? "").trim()) &&
-        Boolean(String(rec.appToken ?? "").trim());
+      return (
+        Boolean(String(rec.botToken ?? "").trim()) &&
+        Boolean(String(rec.appToken ?? "").trim())
+      );
     });
     const partial = enabled.filter((a) => {
       const rec = asRecord(a.account);
@@ -397,7 +398,10 @@ export async function buildProvidersTable(
     const detail = (() => {
       if (!anyEnabled) {
         if (!defaultEntry) return "disabled";
-        return plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled";
+        return (
+          plugin.config.disabledReason?.(defaultEntry.account, cfg) ??
+          "disabled"
+        );
       }
       if (missingPaths.length > 0) return `missing file (${missingPaths[0]})`;
       if (issues.length > 0) return issues[0]?.message ?? "misconfigured";
@@ -419,7 +423,8 @@ export async function buildProvidersTable(
 
       if (configuredAccounts.length > 0) {
         const head = "configured";
-        if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) return head;
+        if (accounts.length <= 1 && !plugin.meta.forceAccountBinding)
+          return head;
         return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
       }
 
