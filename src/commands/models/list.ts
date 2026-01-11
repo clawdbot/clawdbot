@@ -424,10 +424,9 @@ function toModelRow(params: {
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
   const available =
-    availableKeys?.has(modelKey(model.provider, model.id)) ||
-    (cfg && authStore
+    cfg && authStore
       ? hasAuthForProvider(model.provider, cfg, authStore)
-      : false);
+      : (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

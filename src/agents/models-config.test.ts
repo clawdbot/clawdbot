@@ -34,6 +34,48 @@ const MODELS_CONFIG: ClawdbotConfig = {
 };
 
 describe("models config", () => {
+  it("auto-injects github-copilot provider when token is present", async () => {
+    await withTempHome(async () => {
+      const previous = process.env.COPILOT_GITHUB_TOKEN;
+      process.env.COPILOT_GITHUB_TOKEN = "gh-token";
+
+      try {
+        vi.resetModules();
+
+        vi.doMock("../providers/github-copilot-token.js", () => ({
+          DEFAULT_COPILOT_API_BASE_URL:
+            "https://api.individual.githubcopilot.com",
+          resolveCopilotApiToken: vi.fn().mockResolvedValue({
+            token: "copilot",
+            expiresAt: Date.now() + 60 * 60 * 1000,
+            source: "mock",
+            baseUrl: "https://api.copilot.example",
+          }),
+        }));
+
+        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
+
+        await ensureClawdbotModelsJson({ models: { providers: {} } });
+
+        const agentDir = resolveClawdbotAgentDir();
+        const raw = await fs.readFile(
+          path.join(agentDir, "models.json"),
+          "utf8",
+        );
+        const parsed = JSON.parse(raw) as {
+          providers: Record<string, { baseUrl?: string; models?: unknown[] }>;
+        };
+
+        expect(parsed.providers["github-copilot"]?.baseUrl).toBe(
+          "https://api.copilot.example",
+        );
+        expect(parsed.providers["github-copilot"]?.models?.length ?? 0).toBe(0);
+      } finally {
+        process.env.COPILOT_GITHUB_TOKEN = previous;
+      }
+    });
+  });
   let previousHome: string | undefined;
 
   beforeEach(() => {

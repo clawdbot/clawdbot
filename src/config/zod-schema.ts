@@ -8,6 +8,7 @@ const ModelApiSchema = z.union([
   z.literal("openai-responses"),
   z.literal("anthropic-messages"),
   z.literal("google-generative-ai"),
+  z.literal("github-copilot"),
 ]);
 
 const ModelCompatSchema = z

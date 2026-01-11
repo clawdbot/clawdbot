@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import {
@@ -15,6 +17,22 @@ import {
   splitSdkTools,
 } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
+
+vi.mock("./model-auth.js", () => ({
+  getApiKeyForModel: vi.fn(),
+  ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
+  resolveAuthProfileOrder: vi.fn(() => []),
+}));
+
+vi.mock("../providers/github-copilot-token.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../providers/github-copilot-token.js")
+  >("../providers/github-copilot-token.js");
+  return {
+    ...actual,
+    resolveCopilotApiToken: vi.fn(),
+  };
+});
 
 describe("buildEmbeddedSandboxInfo", () => {
   it("returns undefined when sandbox is missing", () => {
@@ -280,6 +298,49 @@ describe("applyGoogleTurnOrderingFix", () => {
 });
 
 describe("runEmbeddedPiAgent", () => {
+  it("exchanges github token for copilot token", async () => {
+    const { getApiKeyForModel } = await import("./model-auth.js");
+    const { resolveCopilotApiToken } = await import(
+      "../providers/github-copilot-token.js"
+    );
+
+    vi.mocked(getApiKeyForModel).mockResolvedValue({
+      apiKey: "gh-token",
+      source: "test",
+    });
+    vi.mocked(resolveCopilotApiToken).mockResolvedValue({
+      token: "copilot-token",
+      expiresAt: Date.now() + 60_000,
+      source: "test",
+    });
+
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-agent-copilot-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-workspace-copilot-"),
+    );
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:dev:test",
+        sessionFile,
+        workspaceDir,
+        prompt: "hi",
+        provider: "github-copilot",
+        model: "gpt-4o",
+        timeoutMs: 1,
+        agentDir,
+      }),
+    ).rejects.toThrow();
+
+    expect(resolveCopilotApiToken).toHaveBeenCalledWith({
+      githubToken: "gh-token",
+    });
+  });
+
   it("writes models.json into the provided agentDir", async () => {
     const agentDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-agent-"),

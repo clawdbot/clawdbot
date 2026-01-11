@@ -97,6 +97,11 @@ export function buildAuthChoiceOptions(params: {
     value: "antigravity",
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
   });
+  options.push({
+    value: "github-copilot",
+    label: "GitHub Copilot (GitHub device login)",
+    hint: "Uses GitHub device flow",
+  });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "zai-api-key", label: "Z.AI (GLM) API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });

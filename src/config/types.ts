@@ -1286,7 +1286,8 @@ export type ModelApi =
   | "openai-completions"
   | "openai-responses"
   | "anthropic-messages"
-  | "google-generative-ai";
+  | "google-generative-ai"
+  | "github-copilot";
 
 export type ModelCompatConfig = {
   supportsStore?: boolean;
