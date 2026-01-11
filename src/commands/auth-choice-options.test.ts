@@ -7,6 +7,17 @@ import {
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 
 describe("buildAuthChoiceOptions", () => {
+  it("includes GitHub Copilot", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: false,
+      platform: "linux",
+    });
+
+    expect(options.find((opt) => opt.value === "github-copilot")).toBeDefined();
+  });
   it("includes Claude CLI option on macOS even when missing", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({

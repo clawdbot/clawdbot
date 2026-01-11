@@ -819,7 +819,18 @@ export async function compactEmbeddedPiSession(params: {
           model,
           cfg: params.config,
         });
-        authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+
+        if (model.provider === "github-copilot") {
+          const { resolveCopilotApiToken } = await import(
+            "../providers/github-copilot-token.js"
+          );
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken: apiKeyInfo.apiKey,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        } else {
+          authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+        }
       } catch (err) {
         return {
           ok: false,
@@ -1179,7 +1190,19 @@ export async function runEmbeddedPiAgent(params: {
 
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
-        authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+
+        if (model.provider === "github-copilot") {
+          const { resolveCopilotApiToken } = await import(
+            "../providers/github-copilot-token.js"
+          );
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken: apiKeyInfo.apiKey,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        } else {
+          authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+        }
+
         lastProfileId = apiKeyInfo.profileId;
       };
 

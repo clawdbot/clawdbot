@@ -19,6 +19,7 @@ export type AuthChoice =
   | "minimax"
   | "minimax-api"
   | "opencode-zen"
+  | "github-copilot"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
