@@ -3,19 +3,27 @@ summary: "Windows (WSL2) support + companion app status"
 read_when:
   - Installing Clawdbot on Windows
   - Looking for Windows companion app status
+  - Planning platform coverage or contributions
 ---
 # Windows (WSL2)
 
-Clawdbot on Windows is recommended **via WSL2** (Ubuntu recommended). The
+Clawdbot core is supported on Windows **via WSL2** (Ubuntu recommended). The
 CLI + Gateway run inside Linux, which keeps the runtime consistent. Native
 Windows installs are untested and more problematic.
 
-Native Windows companion apps are planned.
-
-## Install (WSL2)
+## Install
 - [Getting Started](/start/getting-started) (use inside WSL)
 - [Install & updates](/install/updating)
 - Official WSL2 guide (Microsoft): https://learn.microsoft.com/windows/wsl/install
+
+### Single-click installer (Windows 10)
+Download `install.bat` and run it as Administrator:
+- https://github.com/clawdbot/clawdbot/raw/main/install.bat
+
+Notes:
+- You may be prompted to reboot to finish enabling WSL.
+- Ubuntu first-run is interactive (set username/password).
+- When it finishes, open Ubuntu and run `clawdbot onboard`.
 
 ## Gateway
 - [Gateway runbook](/gateway)
@@ -38,6 +46,12 @@ clawdbot daemon install
 Or:
 
 ```
+clawdbot daemon install
+```
+
+Or:
+
+```
 clawdbot configure
 ```
 
@@ -49,7 +63,7 @@ Repair/migrate:
 clawdbot doctor
 ```
 
-## Step-by-step WSL2 install
+## How to install this correctly
 
 ### 1) Install WSL2 + Ubuntu
 
@@ -95,7 +109,8 @@ Follow the Linux Getting Started flow inside WSL:
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:install
+pnpm ui:build
 pnpm build
 pnpm clawdbot onboard
 ```
@@ -104,5 +119,5 @@ Full guide: [Getting Started](/start/getting-started)
 
 ## Windows companion app
 
-We do not have a Windows companion app yet. Contributions are welcome if you want
+We do not have a Windows companion app yet. It is planned, and we would love
 contributions to make it happen.
