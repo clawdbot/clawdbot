@@ -3,7 +3,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
-import { loadProviderPlugin } from "../../providers/plugins/load.js";
+import { loadProviderOutboundAdapter } from "../../providers/plugins/outbound/load.js";
 import type { ProviderOutboundAdapter } from "../../providers/plugins/types.js";
 import type { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
@@ -72,12 +72,12 @@ async function createProviderHandler(params: {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): Promise<ProviderHandler> {
-  const plugin = await loadProviderPlugin(params.provider);
-  if (!plugin?.outbound?.sendText || !plugin?.outbound?.sendMedia) {
+  const outbound = await loadProviderOutboundAdapter(params.provider);
+  if (!outbound?.sendText || !outbound?.sendMedia) {
     throw new Error(`Outbound not configured for provider: ${params.provider}`);
   }
   const handler = createPluginHandler({
-    outbound: plugin.outbound,
+    outbound,
     cfg: params.cfg,
     provider: params.provider,
     to: params.to,
