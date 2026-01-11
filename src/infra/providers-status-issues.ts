@@ -21,4 +21,3 @@ export function collectProvidersStatusIssues(
   }
   return issues;
 }
-
