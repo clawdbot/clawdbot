@@ -939,24 +939,6 @@ export async function statusCommand(
     }
     return map;
   })();
-  const providerKeyForLabel = (label: string) => {
-    switch (label) {
-      case "WhatsApp":
-        return "whatsapp";
-      case "Telegram":
-        return "telegram";
-      case "Discord":
-        return "discord";
-      case "Slack":
-        return "slack";
-      case "Signal":
-        return "signal";
-      case "iMessage":
-        return "imessage";
-      default:
-        return label.toLowerCase();
-    }
-  };
   runtime.log(
     renderTable({
       width: tableWidth,
@@ -967,8 +949,7 @@ export async function statusCommand(
         { key: "Detail", header: "Detail", flex: true, minWidth: 24 },
       ],
       rows: providers.rows.map((row) => {
-        const providerKey = providerKeyForLabel(row.provider);
-        const issues = providerIssuesByProvider.get(providerKey) ?? [];
+        const issues = providerIssuesByProvider.get(row.id) ?? [];
         const effectiveState =
           row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
         const issueSuffix =

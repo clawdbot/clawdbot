@@ -6,11 +6,13 @@ import { resolveProviderDefaultAccountId } from "../../providers/plugins/helpers
 import { listProviderPlugins } from "../../providers/plugins/index.js";
 import type {
   ProviderAccountSnapshot,
+  ProviderId,
   ProviderPlugin,
 } from "../../providers/plugins/types.js";
 import { formatAge } from "./format.js";
 
 export type ProviderRow = {
+  id: ProviderId;
   provider: string;
   enabled: boolean;
   state: "ok" | "setup" | "warn" | "off";
@@ -437,6 +439,7 @@ export async function buildProvidersTable(
     })();
 
     rows.push({
+      id: plugin.id,
       provider: label,
       enabled: anyEnabled,
       state,
