@@ -226,6 +226,7 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
           {
             provider: "imessage",
             accountId: account.accountId,
+            kind: "runtime",
             message: `Provider error: ${lastError}`,
           },
         ];
