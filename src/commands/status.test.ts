@@ -59,6 +59,66 @@ vi.mock("../providers/plugins/index.js", () => ({
           buildProviderSummary: async () => ({ linked: true, authAgeMs: 5000 }),
         },
       },
+      {
+        id: "signal",
+        meta: {
+          id: "signal",
+          label: "Signal",
+          selectionLabel: "Signal",
+          docsPath: "/platforms/signal",
+          blurb: "mock",
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+        status: {
+          collectStatusIssues: (accounts: Array<Record<string, unknown>>) =>
+            accounts
+              .filter(
+                (account) =>
+                  typeof account.lastError === "string" && account.lastError,
+              )
+              .map((account) => ({
+                provider: "signal",
+                accountId:
+                  typeof account.accountId === "string"
+                    ? account.accountId
+                    : "default",
+                message: `Provider error: ${String(account.lastError)}`,
+              })),
+        },
+      },
+      {
+        id: "imessage",
+        meta: {
+          id: "imessage",
+          label: "iMessage",
+          selectionLabel: "iMessage",
+          docsPath: "/platforms/mac",
+          blurb: "mock",
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+        status: {
+          collectStatusIssues: (accounts: Array<Record<string, unknown>>) =>
+            accounts
+              .filter(
+                (account) =>
+                  typeof account.lastError === "string" && account.lastError,
+              )
+              .map((account) => ({
+                provider: "imessage",
+                accountId:
+                  typeof account.accountId === "string"
+                    ? account.accountId
+                    : "default",
+                message: `Provider error: ${String(account.lastError)}`,
+              })),
+        },
+      },
     ] as unknown,
 }));
 vi.mock("../web/session.js", () => ({
@@ -218,24 +278,26 @@ describe("statusCommand", () => {
       configSnapshot: null,
     });
     mocks.callGateway.mockResolvedValueOnce({
-      signalAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          running: false,
-          lastError: "signal-cli unreachable",
-        },
-      ],
-      imessageAccounts: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          running: false,
-          lastError: "imessage permission denied",
-        },
-      ],
+      providerAccounts: {
+        signal: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: false,
+            lastError: "signal-cli unreachable",
+          },
+        ],
+        imessage: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: false,
+            lastError: "imessage permission denied",
+          },
+        ],
+      },
     });
 
     (runtime.log as vi.Mock).mockClear();
