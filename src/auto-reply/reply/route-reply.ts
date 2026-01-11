@@ -10,16 +10,8 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { sendMessageDiscord } from "../../discord/send.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
-import { sendMessageMSTeams } from "../../msteams/send.js";
-import { resolveProviderMediaMaxBytes } from "../../providers/plugins/media-limits.js";
 import { normalizeProviderId } from "../../providers/registry.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
-import { sendMessageWhatsApp } from "../../web/outbound.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -111,129 +103,24 @@ export async function routeReply(
     return { ok: false, error: "Reply routing aborted" };
   }
 
-  const sendOne = async (params: {
-    text: string;
-    mediaUrl?: string;
-  }): Promise<RouteReplyResult> => {
-    if (abortSignal?.aborted) {
-      return { ok: false, error: "Reply routing aborted" };
-    }
-    const { text, mediaUrl } = params;
-
-    const replyToMessageId = replyToId
-      ? Number.parseInt(replyToId, 10)
-      : undefined;
-    const resolvedReplyToMessageId = Number.isFinite(replyToMessageId)
-      ? replyToMessageId
-      : undefined;
-
-    // Provider docking: keep reply routing lightweight; do NOT import
-    // `src/providers/plugins/index.ts` here (plugins are intentionally heavy and
-    // pull in login/monitors). Route via direct outbound senders instead.
-    switch (provider) {
-      case "telegram": {
-        const result = await sendMessageTelegram(to, text, {
-          verbose: false,
-          mediaUrl,
-          messageThreadId: threadId ?? undefined,
-          replyToMessageId: resolvedReplyToMessageId,
-          accountId: accountId ?? undefined,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      case "slack": {
-        const result = await sendMessageSlack(to, text, {
-          mediaUrl,
-          threadTs: replyToId ?? undefined,
-          accountId: accountId ?? undefined,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      case "discord": {
-        const result = await sendMessageDiscord(to, text, {
-          verbose: false,
-          mediaUrl,
-          replyTo: replyToId ?? undefined,
-          accountId: accountId ?? undefined,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      case "whatsapp": {
-        const result = await sendMessageWhatsApp(to, text, {
-          verbose: false,
-          mediaUrl,
-          accountId: accountId ?? undefined,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      case "signal": {
-        const maxBytes = resolveProviderMediaMaxBytes({
-          cfg,
-          resolveProviderLimitMb: ({ cfg, accountId }) =>
-            cfg.signal?.accounts?.[accountId]?.mediaMaxMb ??
-            cfg.signal?.mediaMaxMb,
-          accountId,
-        });
-        const result = await sendMessageSignal(to, text, {
-          mediaUrl,
-          maxBytes,
-          accountId: accountId ?? undefined,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      case "imessage": {
-        const maxBytes = resolveProviderMediaMaxBytes({
-          cfg,
-          resolveProviderLimitMb: ({ cfg, accountId }) =>
-            cfg.imessage?.accounts?.[accountId]?.mediaMaxMb ??
-            cfg.imessage?.mediaMaxMb,
-          accountId,
-        });
-        const result = await sendMessageIMessage(to, text, {
-          mediaUrl,
-          maxBytes,
-          accountId: accountId ?? undefined,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      case "msteams": {
-        const result = await sendMessageMSTeams({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-        });
-        return { ok: true, messageId: result.messageId };
-      }
-      default: {
-        return {
-          ok: false,
-          error: `Reply routing not supported for ${provider}`,
-        };
-      }
-    }
-  };
-
   try {
-    if (abortSignal?.aborted) {
-      return { ok: false, error: "Reply routing aborted" };
-    }
-    if (mediaUrls.length === 0) {
-      return await sendOne({ text });
-    }
-
-    let last: RouteReplyResult | undefined;
-    for (let i = 0; i < mediaUrls.length; i++) {
-      if (abortSignal?.aborted) {
-        return { ok: false, error: "Reply routing aborted" };
-      }
-      const mediaUrl = mediaUrls[i];
-      const caption = i === 0 ? text : "";
-      last = await sendOne({ text: caption, mediaUrl });
-      if (!last.ok) return last;
-    }
-
-    return last ?? { ok: true };
+    // Provider docking: this is an execution boundary (we're about to send).
+    // Keep the module cheap to import by loading outbound plumbing lazily.
+    const { deliverOutboundPayloads } = await import(
+      "../../infra/outbound/deliver.js"
+    );
+    const results = await deliverOutboundPayloads({
+      cfg,
+      provider,
+      to,
+      accountId: accountId ?? undefined,
+      payloads: [normalized],
+      replyToId: replyToId ?? null,
+      threadId: threadId ?? null,
+      abortSignal,
+    });
+    const last = results.at(-1);
+    return { ok: true, messageId: last?.messageId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
