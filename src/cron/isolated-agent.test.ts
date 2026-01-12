@@ -803,7 +803,7 @@ describe("runCronIsolatedAgentTurn", () => {
         sendMessageIMessage: vi.fn(),
       };
       // Long content after HEARTBEAT_OK should still be delivered.
-      const longContent = `Important alert: ${"a".repeat(50)}`;
+      const longContent = `Important alert: ${"a".repeat(350)}`;
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: `HEARTBEAT_OK ${longContent}` }],
         meta: {

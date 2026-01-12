@@ -22,6 +22,7 @@ vi.mock("./model-auth.js", () => ({
   getApiKeyForModel: vi.fn(),
   ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
   resolveAuthProfileOrder: vi.fn(() => []),
+  resolveEnvApiKey: vi.fn(() => null),
 }));
 
 vi.mock("../providers/github-copilot-token.js", async () => {

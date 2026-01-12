@@ -52,7 +52,7 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("keeps heartbeat replies when remaining content exceeds threshold", () => {
-    const long = "A".repeat(31);
+    const long = "A".repeat(350);
     expect(
       stripHeartbeatToken(`${long} ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" }),
     ).toEqual({

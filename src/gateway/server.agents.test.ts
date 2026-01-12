@@ -39,6 +39,7 @@ describe("gateway server agents", () => {
     expect(res.payload?.agents.map((agent) => agent.id)).toEqual([
       "work",
       "home",
+      "main",
     ]);
     const work = res.payload?.agents.find((agent) => agent.id === "work");
     const home = res.payload?.agents.find((agent) => agent.id === "home");
