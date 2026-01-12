@@ -51,7 +51,9 @@ describe("applyAuthChoice", () => {
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
-    const text = vi.fn().mockResolvedValue("sk-minimax-test");
+    const text = vi
+      .fn()
+      .mockResolvedValue('export MINIMAX_API_KEY="sk-minimax-test"');
     const select: WizardPrompter["select"] = vi.fn(
       async (params) => params.options[0]?.value as never,
     );

@@ -70,6 +70,34 @@ import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
+function normalizeApiKeyInput(raw: string): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+
+  // Handle shell-style assignments: export KEY="value" or KEY=value
+  const assignmentMatch = trimmed.match(
+    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
+  );
+  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : trimmed;
+
+  const unquoted =
+    valuePart.length >= 2 &&
+    ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
+      (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
+      (valuePart.startsWith("`") && valuePart.endsWith("`")))
+      ? valuePart.slice(1, -1)
+      : valuePart;
+
+  const withoutSemicolon = unquoted.endsWith(";")
+    ? unquoted.slice(0, -1)
+    : unquoted;
+
+  return withoutSemicolon.trim();
+}
+
+const validateApiKeyInput = (value: unknown) =>
+  normalizeApiKeyInput(String(value ?? "")).length > 0 ? undefined : "Required";
+
 function formatApiKeyPreview(
   raw: string,
   opts: { head?: number; tail?: number } = {},
@@ -381,9 +409,9 @@ export async function applyAuthChoice(params: {
 
     const key = await params.prompter.text({
       message: "Enter OpenAI API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+      validate: validateApiKeyInput,
     });
-    const trimmed = String(key).trim();
+    const trimmed = normalizeApiKeyInput(String(key));
     const result = upsertSharedEnvVar({
       key: "OPENAI_API_KEY",
       value: trimmed,
@@ -440,9 +468,12 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter OpenRouter API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setOpenrouterApiKey(String(key).trim(), params.agentDir);
+      await setOpenrouterApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
       hasCredential = true;
     }
 
@@ -480,9 +511,12 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter Moonshot API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setMoonshotApiKey(String(key).trim(), params.agentDir);
+      await setMoonshotApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",
@@ -723,9 +757,12 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter Gemini API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setGeminiApiKey(String(key).trim(), params.agentDir);
+      await setGeminiApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",
@@ -761,9 +798,9 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter Z.AI API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setZaiApiKey(String(key).trim(), params.agentDir);
+      await setZaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "zai:default",
@@ -814,9 +851,12 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter Anthropic API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setAnthropicApiKey(String(key).trim(), params.agentDir);
+      await setAnthropicApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",
@@ -847,9 +887,12 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter MiniMax API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setMinimaxApiKey(String(key).trim(), params.agentDir);
+      await setMinimaxApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "minimax:default",
@@ -896,9 +939,12 @@ export async function applyAuthChoice(params: {
     if (!hasCredential) {
       const key = await params.prompter.text({
         message: "Enter OpenCode Zen API key",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateApiKeyInput,
       });
-      await setOpencodeZenApiKey(String(key).trim(), params.agentDir);
+      await setOpencodeZenApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "opencode:default",
