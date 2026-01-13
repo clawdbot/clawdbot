@@ -1142,7 +1142,7 @@ export function createDiscordMessageHandler(params: {
         parentSessionKey,
         useSuffix: false,
       });
-      const ctxPayload = {
+      let ctxPayload = {
         Body: combinedBody,
         RawBody: baseText,
         CommandBody: baseText,
@@ -1215,6 +1215,32 @@ export function createDiscordMessageHandler(params: {
             deliverTarget = `channel:${createdId}`;
             // When autoThread is enabled, *always* reply in the created thread.
             replyTarget = deliverTarget;
+
+            // Use a thread-scoped session key so concurrent autoThread conversations don't mix.
+            const threadBaseSessionKey = buildAgentSessionKey({
+              agentId: route.agentId,
+              provider: route.provider,
+              peer: { kind: "channel", id: createdId },
+            });
+            const autoParentSessionKey = buildAgentSessionKey({
+              agentId: route.agentId,
+              provider: route.provider,
+              peer: { kind: "channel", id: message.channelId },
+            });
+            const autoThreadKeys = resolveThreadSessionKeys({
+              baseSessionKey: threadBaseSessionKey,
+              threadId: createdId,
+              parentSessionKey: autoParentSessionKey,
+              useSuffix: false,
+            });
+            ctxPayload = {
+              ...ctxPayload,
+              From: `group:${createdId}`,
+              To: deliverTarget,
+              OriginatingTo: deliverTarget,
+              SessionKey: autoThreadKeys.sessionKey,
+              ParentSessionKey: autoThreadKeys.parentSessionKey,
+            };
           }
         } catch (err) {
           logVerbose(
