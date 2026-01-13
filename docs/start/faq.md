@@ -1013,6 +1013,23 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 - **Sanity‑check model/auth status**
   - Use `clawdbot models status` to see configured models and whether providers are authenticated.
 
+### Fix checklist for `No credentials found for profile "anthropic:claude-cli"`
+
+This means the run is pinned to the **Claude CLI** profile, but the Gateway
+can’t find that profile in its auth store.
+
+- **Sync the Claude CLI token on the gateway host**
+  - Run `clawdbot models status` (it loads + syncs Claude CLI credentials).
+  - If it still says missing: run `claude setup-token` (or `clawdbot models auth setup-token --provider anthropic`) and retry.
+- **If you want to use an API key instead**
+  - Put `ANTHROPIC_API_KEY` in `~/.clawdbot/.env` on the **gateway host**.
+  - Clear any pinned order that forces `anthropic:claude-cli`:
+    ```bash
+    clawdbot models auth order clear --provider anthropic
+    ```
+- **Confirm you’re running commands on the gateway host**
+  - In remote mode, auth profiles live on the gateway machine, not your laptop.
+
 ### Why did it also try Google Gemini and fail?
 
 If your model config includes Google Gemini as a fallback (or you switched to a Gemini shorthand), Clawdbot will try it during model fallback. If you haven’t configured Google credentials, you’ll see `No API key found for provider "google"`.
@@ -1428,8 +1445,10 @@ By default `discord.groupPolicy` is **allowlist**, so guild channels must be exp
 Fix checklist:
 1) Set `discord.groupPolicy: "open"` **or** add the guild/channel allowlist.
 2) Use **numeric channel IDs** in `discord.guilds.<guildId>.channels`.
-3) Ensure the bot has **Message Content Intent** and channel permissions.
-4) Run `clawdbot providers status --probe` for audit hints.
+3) Put `requireMention: false` **under** `discord.guilds` (global or per‑channel).
+   Top‑level `discord.requireMention` is not a supported key.
+4) Ensure the bot has **Message Content Intent** and channel permissions.
+5) Run `clawdbot providers status --probe` for audit hints.
 
 Docs: [Discord](/providers/discord), [Providers troubleshooting](/providers/troubleshooting).
 

@@ -176,6 +176,7 @@ Notes:
   - Your guild/channel allowlist denies the channel/user.
 - **`requireMention: false` but still no replies**:
   - `discord.groupPolicy` defaults to **allowlist**; you must either set it to `"open"` or explicitly list the channel under `discord.guilds.<id>.channels`.
+  - `requireMention` must live under `discord.guilds` (or a specific channel). `discord.requireMention` at the top level is ignored.
 - **Permission audits** (`providers status --probe`) only check numeric channel IDs. If you use slugs/names as `discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `discord.dm.enabled=false`, `discord.dm.policy="disabled"`, or you haven’t been approved yet (`discord.dm.policy="pairing"`).
 
