@@ -4,6 +4,7 @@ import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
+import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 
 export type SignalSendOpts = {
   baseUrl?: string;
@@ -12,6 +13,8 @@ export type SignalSendOpts = {
   mediaUrl?: string;
   maxBytes?: number;
   timeoutMs?: number;
+  textMode?: "markdown" | "plain";
+  textStyles?: SignalTextStyleRange[];
 };
 
 export type SignalSendResult = {
@@ -75,6 +78,9 @@ export async function sendMessageSignal(
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
   const target = parseTarget(to);
   let message = text ?? "";
+  let messageFromPlaceholder = false;
+  let textStyles: SignalTextStyleRange[] = [];
+  const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
     if (typeof opts.maxBytes === "number") return opts.maxBytes;
     if (typeof accountInfo.config.mediaMaxMb === "number") {
@@ -94,6 +100,17 @@ export async function sendMessageSignal(
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      messageFromPlaceholder = true;
+    }
+  }
+
+  if (message.trim() && !messageFromPlaceholder) {
+    if (textMode === "plain") {
+      textStyles = opts.textStyles ?? [];
+    } else {
+      const formatted = markdownToSignalText(message);
+      message = formatted.text;
+      textStyles = formatted.styles;
     }
   }
 
@@ -102,6 +119,11 @@ export async function sendMessageSignal(
   }
 
   const params: Record<string, unknown> = { message };
+  if (textStyles.length > 0) {
+    params["text-style"] = textStyles.map(
+      (style) => `${style.start}:${style.length}:${style.style}`,
+    );
+  }
   if (account) params.account = account;
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;

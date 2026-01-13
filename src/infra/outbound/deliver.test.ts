@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { chunkMarkdownText } from "../../auto-reply/chunk.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { chunkSignalText, markdownToSignalText } from "../../signal/format.js";
 import {
   deliverOutboundPayloads,
   normalizeOutboundPayloads,
@@ -110,6 +112,42 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(results.map((r) => r.messageId)).toEqual(["w1", "w2"]);
+  });
+
+  it("chunks Signal markdown using the markdown chunker", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValue({ messageId: "s1", timestamp: 123 });
+    const cfg: ClawdbotConfig = {
+      channels: { signal: { textChunkLimit: 20 } },
+    };
+    const text = `Intro\\n\\n\`\`\`\`md\\n${"y".repeat(60)}\\n\`\`\`\\n\\nOutro`;
+    const markdownChunks = chunkMarkdownText(text, 20);
+    const expectedChunks = markdownChunks.flatMap((chunk) =>
+      chunkSignalText(markdownToSignalText(chunk), 20),
+    );
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text }],
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(expectedChunks.length);
+    expectedChunks.forEach((chunk, index) => {
+      expect(sendSignal).toHaveBeenNthCalledWith(
+        index + 1,
+        "+1555",
+        chunk.text,
+        expect.objectContaining({
+          accountId: undefined,
+          textMode: "plain",
+          textStyles: chunk.styles,
+        }),
+      );
+    });
   });
 
   it("uses iMessage media maxBytes from agent fallback", async () => {

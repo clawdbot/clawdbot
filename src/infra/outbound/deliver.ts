@@ -1,11 +1,13 @@
-import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { chunkMarkdownText, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
-import type { sendMessageSignal } from "../../signal/send.js";
+import { chunkSignalText, markdownToSignalText } from "../../signal/format.js";
+import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
@@ -157,6 +159,7 @@ export async function deliverOutboundPayloads(params: {
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
+  const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -173,6 +176,16 @@ export async function deliverOutboundPayloads(params: {
         fallbackLimit: handler.textChunkLimit,
       })
     : undefined;
+  const isSignalChannel = channel === "signal";
+  const signalMaxBytes = isSignalChannel
+    ? resolveChannelMediaMaxBytes({
+        cfg,
+        resolveChannelLimitMb: ({ cfg, accountId }) =>
+          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
+          cfg.channels?.signal?.mediaMaxMb,
+        accountId,
+      })
+    : undefined;
 
   const sendTextChunks = async (text: string) => {
     throwIfAborted(abortSignal);
@@ -186,13 +199,63 @@ export async function deliverOutboundPayloads(params: {
     }
   };
 
+  const sendSignalText = async (
+    text: string,
+    styles: ReturnType<typeof markdownToSignalText>["styles"],
+  ) => {
+    throwIfAborted(abortSignal);
+    return {
+      channel: "signal" as const,
+      ...(await sendSignal(to, text, {
+        maxBytes: signalMaxBytes,
+        accountId: accountId ?? undefined,
+        textMode: "plain",
+        textStyles: styles,
+      })),
+    };
+  };
+
+  const sendSignalTextChunks = async (text: string) => {
+    const markdownChunks =
+      textLimit === undefined ? [text] : chunkMarkdownText(text, textLimit);
+    for (const markdownChunk of markdownChunks) {
+      throwIfAborted(abortSignal);
+      const formatted = markdownToSignalText(markdownChunk);
+      const formattedChunks =
+        textLimit === undefined ? [formatted] : chunkSignalText(formatted, textLimit);
+      for (const chunk of formattedChunks) {
+        throwIfAborted(abortSignal);
+        results.push(await sendSignalText(chunk.text, chunk.styles));
+      }
+    }
+  };
+
+  const sendSignalMedia = async (caption: string, mediaUrl: string) => {
+    throwIfAborted(abortSignal);
+    const formatted = markdownToSignalText(caption);
+    return {
+      channel: "signal" as const,
+      ...(await sendSignal(to, formatted.text, {
+        mediaUrl,
+        maxBytes: signalMaxBytes,
+        accountId: accountId ?? undefined,
+        textMode: "plain",
+        textStyles: formatted.styles,
+      })),
+    };
+  };
+
   const normalizedPayloads = normalizeOutboundPayloads(payloads);
   for (const payload of normalizedPayloads) {
     try {
       throwIfAborted(abortSignal);
       params.onPayload?.(payload);
       if (payload.mediaUrls.length === 0) {
-        await sendTextChunks(payload.text);
+        if (isSignalChannel) {
+          await sendSignalTextChunks(payload.text);
+        } else {
+          await sendTextChunks(payload.text);
+        }
         continue;
       }
 
@@ -201,7 +264,11 @@ export async function deliverOutboundPayloads(params: {
         throwIfAborted(abortSignal);
         const caption = first ? payload.text : "";
         first = false;
-        results.push(await handler.sendMedia(caption, url));
+        if (isSignalChannel) {
+          results.push(await sendSignalMedia(caption, url));
+        } else {
+          results.push(await handler.sendMedia(caption, url));
+        }
       }
     } catch (err) {
       if (!params.bestEffort) throw err;
