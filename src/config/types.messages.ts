@@ -39,6 +39,56 @@ export type AudioConfig = {
   };
 };
 
+export type VoiceNotesTranscriptionConfig = {
+  /** Enable voice note transcription. Default: false */
+  enabled?: boolean;
+  /** Transcription provider. Default: "groq". OpenAI support planned. */
+  provider?: "groq";
+  /** Model to use. Default: "whisper-large-v3-turbo" */
+  model?: string;
+  /** ISO 639-1 language code (e.g., "en"). Auto-detect if omitted. */
+  language?: string;
+  /** Request timeout in seconds. Default: 60 */
+  timeoutSeconds?: number;
+  /** Enable for DMs. Default: true */
+  dmEnabled?: boolean;
+  /** Enable for groups. Default: false */
+  groupEnabled?: boolean;
+  /** Group JIDs or names to allow (when groupEnabled is true). */
+  groupAllowFrom?: string[];
+  /** Persist transcripts as sidecar files. Default: true */
+  persist?: boolean;
+};
+
+export type VoiceNotesConfig = {
+  transcription?: VoiceNotesTranscriptionConfig;
+};
+
+export type VideoUnderstandingConfig = {
+  /** Enable video understanding. Default: false */
+  enabled?: boolean;
+  /** Video understanding provider. Default: "gemini". */
+  provider?: "gemini";
+  /** Model to use. Default: "gemini-3-flash-preview" */
+  model?: string;
+  /** Custom prompt for video description. */
+  prompt?: string;
+  /** Request timeout in seconds. Default: 120 */
+  timeoutSeconds?: number;
+  /** Enable for DMs. Default: true */
+  dmEnabled?: boolean;
+  /** Enable for groups. Default: false */
+  groupEnabled?: boolean;
+  /** Group JIDs or names to allow (when groupEnabled is true). */
+  groupAllowFrom?: string[];
+  /** Persist descriptions as sidecar files. Default: true */
+  persist?: boolean;
+};
+
+export type VideoConfig = {
+  understanding?: VideoUnderstandingConfig;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;

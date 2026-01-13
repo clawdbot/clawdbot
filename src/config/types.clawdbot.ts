@@ -17,6 +17,8 @@ import type {
   BroadcastConfig,
   CommandsConfig,
   MessagesConfig,
+  VideoConfig,
+  VoiceNotesConfig,
 } from "./types.messages.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { PluginsConfig } from "./types.plugins.js";
@@ -62,6 +64,8 @@ export type ClawdbotConfig = {
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;
+  voiceNotes?: VoiceNotesConfig;
+  video?: VideoConfig;
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   session?: SessionConfig;

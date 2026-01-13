@@ -1,11 +1,14 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { formatLocationText } from "../../channels/location.js";
+import { loadConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../../logging.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { isVoiceNote, transcribeVoiceNote } from "../../transcription/index.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
+import { describeVideo, isVideo } from "../../video-understanding/index.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -35,6 +38,8 @@ export async function monitorWebInbox(options: {
     authDir: options.authDir,
   });
   await waitForWaConnection(sock);
+
+  const cfg = await loadConfig();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -193,6 +198,68 @@ export async function monitorWebInbox(options: {
         }
       } catch (err) {
         logVerbose(`Inbound media download failed: ${String(err)}`);
+      }
+
+      // Voice note transcription
+      if (mediaPath && mediaType && isVoiceNote(mediaType)) {
+        try {
+          const result = await transcribeVoiceNote({
+            cfg,
+            mediaPath,
+            mediaType,
+            chatType: group ? "group" : "direct",
+            chatId: remoteJid,
+            groupSubject,
+          });
+          if (result?.text) {
+            // Preserve user caption if present (body is not a media placeholder)
+            const isPlaceholder = body.startsWith("<media:");
+            if (isPlaceholder) {
+              body = `[Voice Note]\n${result.text}`;
+            } else {
+              // User sent a voice note with a caption
+              body = `[Voice Note]\nCaption: ${body}\n\nTranscript: ${result.text}`;
+            }
+            if (shouldLogVerbose()) {
+              logVerbose(
+                `Voice note transcribed (${result.provider}): ${result.text.slice(0, 100)}...`,
+              );
+            }
+          }
+        } catch (err) {
+          logVerbose(`Voice note transcription failed: ${String(err)}`);
+        }
+      }
+
+      // Video understanding
+      if (mediaPath && mediaType && isVideo(mediaType)) {
+        try {
+          const result = await describeVideo({
+            cfg,
+            mediaPath,
+            mediaType,
+            chatType: group ? "group" : "direct",
+            chatId: remoteJid,
+            groupSubject,
+          });
+          if (result?.text) {
+            // Preserve user caption if present (body is not a media placeholder)
+            const isPlaceholder = body.startsWith("<media:");
+            if (isPlaceholder) {
+              body = result.text;
+            } else {
+              // User sent a video with a caption - include both
+              body = `${result.text}\n\nUser's caption: ${body}`;
+            }
+            if (shouldLogVerbose()) {
+              logVerbose(
+                `Video described (${result.provider}): ${result.text.slice(0, 100)}...`,
+              );
+            }
+          }
+        } catch (err) {
+          logVerbose(`Video understanding failed: ${String(err)}`);
+        }
       }
 
       const chatJid = remoteJid;
