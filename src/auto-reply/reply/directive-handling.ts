@@ -350,6 +350,7 @@ const MODEL_PICK_PROVIDER_PREFERENCE = [
   "openai",
   "openai-codex",
   "minimax",
+  "synthetic",
   "google",
   "zai",
   "openrouter",

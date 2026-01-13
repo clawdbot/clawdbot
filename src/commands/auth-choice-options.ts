@@ -20,7 +20,8 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "opencode-zen"
-  | "minimax";
+  | "minimax"
+  | "synthetic";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -52,6 +53,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "MiniMax",
     hint: "M2.1 (recommended)",
     choices: ["minimax-api", "minimax-api-lightning"],
+  },
+  {
+    value: "synthetic",
+    label: "Synthetic",
+    hint: "Anthropic-compatible (multi-model)",
+    choices: ["synthetic-api-key"],
   },
   {
     value: "google",
@@ -167,6 +174,7 @@ export function buildAuthChoiceOptions(params: {
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
+  options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
   options.push({
     value: "antigravity",
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",

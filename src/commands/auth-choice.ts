@@ -43,14 +43,18 @@ import {
   applyMinimaxHostedConfig,
   applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
+  applySyntheticConfig,
+  applySyntheticProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyZaiConfig,
   MINIMAX_HOSTED_MODEL_REF,
+  SYNTHETIC_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
   setOpencodeZenApiKey,
+  setSyntheticApiKey,
   setZaiApiKey,
   writeOAuthCredentials,
   ZAI_DEFAULT_MODEL_REF,
@@ -641,6 +645,28 @@ export async function applyAuthChoice(params: {
       agentModelOverride = ZAI_DEFAULT_MODEL_REF;
       await noteAgentModel(ZAI_DEFAULT_MODEL_REF);
     }
+  } else if (params.authChoice === "synthetic-api-key") {
+    const key = await params.prompter.text({
+      message: "Enter Synthetic API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setSyntheticApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "synthetic:default",
+      provider: "synthetic",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applySyntheticConfig(nextConfig);
+      await params.prompter.note(
+        `Default model set to ${SYNTHETIC_DEFAULT_MODEL_REF}`,
+        "Model configured",
+      );
+    } else {
+      nextConfig = applySyntheticProviderConfig(nextConfig);
+      agentModelOverride = SYNTHETIC_DEFAULT_MODEL_REF;
+      await noteAgentModel(SYNTHETIC_DEFAULT_MODEL_REF);
+    }
   } else if (params.authChoice === "apiKey") {
     const key = await params.prompter.text({
       message: "Enter Anthropic API key",
@@ -805,6 +831,8 @@ export function resolvePreferredProviderForAuthChoice(
       return "google";
     case "antigravity":
       return "google-antigravity";
+    case "synthetic-api-key":
+      return "synthetic";
     case "minimax-cloud":
     case "minimax-api":
       return "minimax";

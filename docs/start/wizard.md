@@ -82,6 +82,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **API key**: stores the key for you.
    - **MiniMax M2.1**: config is auto-written.
    - More detail: [MiniMax](/providers/minimax)
+   - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
+   - More detail: [Synthetic](/providers/synthetic)
    - **Moonshot (Kimi K2)**: config is auto-written.
    - More detail: [Moonshot AI](/providers/moonshot)
    - **Skip**: no auth configured yet.
@@ -208,6 +210,17 @@ clawdbot onboard --non-interactive \
   --mode local \
   --auth-choice moonshot-api-key \
   --moonshot-api-key "$MOONSHOT_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Synthetic example:
+
+```bash
+clawdbot onboard --non-interactive \
+  --mode local \
+  --auth-choice synthetic-api-key \
+  --synthetic-api-key "$SYNTHETIC_API_KEY" \
   --gateway-port 18789 \
   --gateway-bind loopback
 ```

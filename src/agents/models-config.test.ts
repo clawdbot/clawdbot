@@ -348,11 +348,13 @@ describe("models config", () => {
       const previousGithub = process.env.GITHUB_TOKEN;
       const previousMinimax = process.env.MINIMAX_API_KEY;
       const previousMoonshot = process.env.MOONSHOT_API_KEY;
+      const previousSynthetic = process.env.SYNTHETIC_API_KEY;
       delete process.env.COPILOT_GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
       delete process.env.MINIMAX_API_KEY;
       delete process.env.MOONSHOT_API_KEY;
+      delete process.env.SYNTHETIC_API_KEY;
 
       try {
         vi.resetModules();
@@ -381,6 +383,9 @@ describe("models config", () => {
         else process.env.MINIMAX_API_KEY = previousMinimax;
         if (previousMoonshot === undefined) delete process.env.MOONSHOT_API_KEY;
         else process.env.MOONSHOT_API_KEY = previousMoonshot;
+        if (previousSynthetic === undefined)
+          delete process.env.SYNTHETIC_API_KEY;
+        else process.env.SYNTHETIC_API_KEY = previousSynthetic;
       }
     });
   });
@@ -447,6 +452,42 @@ describe("models config", () => {
       } finally {
         if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = prevKey;
+      }
+    });
+  });
+
+  it("adds synthetic provider when SYNTHETIC_API_KEY is set", async () => {
+    await withTempHome(async () => {
+      vi.resetModules();
+      const prevKey = process.env.SYNTHETIC_API_KEY;
+      process.env.SYNTHETIC_API_KEY = "sk-synthetic-test";
+      try {
+        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
+
+        await ensureClawdbotModelsJson({});
+
+        const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<
+            string,
+            {
+              baseUrl?: string;
+              apiKey?: string;
+              models?: Array<{ id: string }>;
+            }
+          >;
+        };
+        expect(parsed.providers.synthetic?.baseUrl).toBe(
+          "https://api.synthetic.new/anthropic",
+        );
+        expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
+        const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
+        expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
+      } finally {
+        if (prevKey === undefined) delete process.env.SYNTHETIC_API_KEY;
+        else process.env.SYNTHETIC_API_KEY = prevKey;
       }
     });
   });

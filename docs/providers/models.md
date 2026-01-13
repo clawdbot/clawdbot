@@ -26,6 +26,7 @@ model as `provider/model`.
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
 - [Moonshot AI (Kimi)](/providers/moonshot)
+- [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)

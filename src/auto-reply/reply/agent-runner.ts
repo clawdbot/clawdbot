@@ -713,8 +713,9 @@ export async function runReplyAgent(params: {
                 blockStreamingEnabled && opts?.onBlockReply
                   ? async (payload) => {
                       const { text, skip } = normalizeStreamingText(payload);
-                      const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                      if (skip && !hasMedia) return;
+                      const hasMediaInput =
+                        (payload.mediaUrls?.length ?? 0) > 0;
+                      if (skip && !hasMediaInput) return;
                       const taggedPayload = applyReplyTagsToPayload(
                         {
                           text,

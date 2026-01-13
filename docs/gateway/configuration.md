@@ -1819,6 +1819,48 @@ Notes:
 - Model ref: `moonshot/kimi-k2-0905-preview`.
 - Use `https://api.moonshot.cn/v1` if you need the China endpoint.
 
+### Synthetic (Anthropic-compatible)
+
+Use Synthetic's Anthropic-compatible endpoint:
+
+```json5
+{
+  env: { SYNTHETIC_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" },
+      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" } }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      synthetic: {
+        baseUrl: "https://api.synthetic.new/anthropic",
+        apiKey: "${SYNTHETIC_API_KEY}",
+        api: "anthropic-messages",
+        models: [
+          {
+            id: "hf:MiniMaxAI/MiniMax-M2.1",
+            name: "MiniMax M2.1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 192000,
+            maxTokens: 65536
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Set `SYNTHETIC_API_KEY` or use `clawdbot onboard --auth-choice synthetic-api-key`.
+- Model ref: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`.
+- Base URL should omit `/v1` because the Anthropic client appends it.
+
 ### Local models (LM Studio) — recommended setup
 
 See [/gateway/local-models](/gateway/local-models) for the current local guidance. TL;DR: run MiniMax M2.1 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.

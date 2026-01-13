@@ -264,7 +264,7 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: setup-token|claude-cli|token|openai-codex|openai-api-key|openrouter-api-key|moonshot-api-key|codex-cli|antigravity|gemini-api-key|zai-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip",
+      "Auth: setup-token|claude-cli|token|openai-codex|openai-api-key|openrouter-api-key|moonshot-api-key|synthetic-api-key|codex-cli|antigravity|gemini-api-key|zai-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip",
     )
     .option(
       "--token-provider <id>",
@@ -289,6 +289,7 @@ export function buildProgram() {
     .option("--gemini-api-key <key>", "Gemini API key")
     .option("--zai-api-key <key>", "Z.AI API key")
     .option("--minimax-api-key <key>", "MiniMax API key")
+    .option("--synthetic-api-key <key>", "Synthetic API key")
     .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|lan|tailnet|auto")
@@ -334,6 +335,7 @@ export function buildProgram() {
               | "openai-api-key"
               | "openrouter-api-key"
               | "moonshot-api-key"
+              | "synthetic-api-key"
               | "codex-cli"
               | "antigravity"
               | "gemini-api-key"
@@ -357,6 +359,7 @@ export function buildProgram() {
             geminiApiKey: opts.geminiApiKey as string | undefined,
             zaiApiKey: opts.zaiApiKey as string | undefined,
             minimaxApiKey: opts.minimaxApiKey as string | undefined,
+            syntheticApiKey: opts.syntheticApiKey as string | undefined,
             opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
             gatewayPort:
               typeof opts.gatewayPort === "string"
