@@ -226,9 +226,11 @@ export default function (api) {
 
 ## Skills
 
-Plugins can ship a skill in the repo (`skills/<name>/SKILL.md`).
-Enable it with `plugins.entries.<id>.enabled` (or other config gates) and ensure
-it’s present in your workspace/managed skills locations.
+Plugins can ship a skill in the repo (`skills/<name>/SKILL.md`). Installed
+plugin extensions are scanned for skills automatically
+(`~/.clawdbot/extensions/*/skills` and `<workspace>/.clawdbot/extensions/*/skills`),
+and you can still override with managed/workspace skills if you need to
+customize the instructions.
 
 ## Distribution (npm)
 

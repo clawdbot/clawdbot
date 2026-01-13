@@ -522,6 +522,14 @@ function loadSkillEntries(
     opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.join(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const pluginDirs = [
+    path.join(CONFIG_DIR, "extensions"),
+    path.join(workspaceDir, ".clawdbot", "extensions"),
+    ...(opts?.config?.plugins?.load?.paths ?? []),
+  ]
+    .map((dir) => (typeof dir === "string" ? dir.trim() : ""))
+    .filter(Boolean)
+    .map((dir) => resolveUserPath(dir));
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
@@ -533,6 +541,12 @@ function loadSkillEntries(
         source: "clawdbot-bundled",
       })
     : [];
+  const pluginSkills = Array.from(new Set(pluginDirs)).flatMap((dir) =>
+    loadSkills({
+      dir,
+      source: "clawdbot-plugins",
+    }),
+  );
   const extraSkills = extraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadSkills({
@@ -550,7 +564,8 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < workspace
+  // Precedence: plugins < extra < bundled < managed < workspace
+  for (const skill of pluginSkills) merged.set(skill.name, skill);
   for (const skill of extraSkills) merged.set(skill.name, skill);
   for (const skill of bundledSkills) merged.set(skill.name, skill);
   for (const skill of managedSkills) merged.set(skill.name, skill);

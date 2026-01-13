@@ -10,18 +10,21 @@ Clawdbot uses **[AgentSkills](https://agentskills.io)-compatible** skill folders
 
 ## Locations and precedence
 
-Skills are loaded from **three** places:
+Skills are loaded from **four** places:
 
 1) **Bundled skills**: shipped with the install (npm package or Clawdbot.app)
 2) **Managed/local skills**: `~/.clawdbot/skills`
 3) **Workspace skills**: `<workspace>/skills`
+4) **Plugin skills**: `~/.clawdbot/extensions/*/skills` and
+   `<workspace>/.clawdbot/extensions/*/skills`
 
 If a skill name conflicts, precedence is:
 
-`<workspace>/skills` (highest) → `~/.clawdbot/skills` → bundled skills (lowest)
+`<workspace>/skills` (highest) → `~/.clawdbot/skills` → bundled skills →
+`skills.load.extraDirs` → plugin skills (lowest)
 
-Additionally, you can configure extra skill folders (lowest precedence) via
-`skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`.
+Additionally, you can configure extra skill folders (below bundled skills,
+above plugins) via `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`.
 
 ## Per-agent vs shared skills
 
