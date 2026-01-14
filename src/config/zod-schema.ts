@@ -129,6 +129,23 @@ const HumanDelaySchema = z.object({
   maxMs: z.number().int().nonnegative().optional(),
 });
 
+const WebSearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxUses: z.number().int().positive().optional(),
+    allowedDomains: z.array(z.string()).optional(),
+    blockedDomains: z.array(z.string()).optional(),
+    userLocation: z
+      .object({
+        city: z.string().optional(),
+        region: z.string().optional(),
+        country: z.string().optional(),
+        timezone: z.string().optional(),
+      })
+      .optional(),
+  })
+  .optional();
+
 const CliBackendSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).optional(),
@@ -1403,6 +1420,7 @@ const AgentDefaultsSchema = z
       ])
       .optional(),
     heartbeat: HeartbeatSchema,
+    webSearch: WebSearchSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({

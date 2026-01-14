@@ -37,6 +37,24 @@ export type HumanDelayConfig = {
   maxMs?: number;
 };
 
+export type WebSearchConfig = {
+  /** Enable native web search for supported providers. */
+  enabled?: boolean;
+  /** Max searches per request (Anthropic). */
+  maxUses?: number;
+  /** Restrict search to these domains. */
+  allowedDomains?: string[];
+  /** Exclude these domains from search. */
+  blockedDomains?: string[];
+  /** Approximate user location for localized results. */
+  userLocation?: {
+    city?: string;
+    region?: string;
+    country?: string;
+    timezone?: string;
+  };
+};
+
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   channel?: string;
@@ -1702,6 +1720,8 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
   };
+  /** Native web search for supported providers (Anthropic, OpenAI, xAI, Google). */
+  webSearch?: WebSearchConfig;
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */

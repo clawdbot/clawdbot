@@ -35,6 +35,7 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { isCacheEnabled, resolveCacheTtlMs } from "../config/cache-utils.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import type { WebSearchConfig } from "../config/types.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -203,6 +204,18 @@ export function resolveExtraParams(params: {
 }
 
 /**
+ * Resolve webSearch config from agent defaults.
+ * @internal
+ */
+function resolveWebSearch(
+  cfg: ClawdbotConfig | undefined,
+): WebSearchConfig | undefined {
+  const ws = cfg?.agents?.defaults?.webSearch;
+  if (!ws?.enabled) return undefined;
+  return ws;
+}
+
+/**
  * Create a wrapped streamFn that injects extra params (like temperature) from config.
  *
  * @internal
@@ -210,17 +223,20 @@ export function resolveExtraParams(params: {
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
+  webSearch: WebSearchConfig | undefined,
 ): StreamFn | undefined {
-  if (!extraParams || Object.keys(extraParams).length === 0) {
-    return undefined; // No wrapper needed
-  }
+  const streamParams: Partial<SimpleStreamOptions> & {
+    webSearch?: WebSearchConfig;
+  } = {};
 
-  const streamParams: Partial<SimpleStreamOptions> = {};
-  if (typeof extraParams.temperature === "number") {
+  if (typeof extraParams?.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.maxTokens === "number") {
+  if (typeof extraParams?.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  if (webSearch) {
+    streamParams.webSearch = webSearch;
   }
 
   if (Object.keys(streamParams).length === 0) {
@@ -242,7 +258,7 @@ function createStreamFnWithExtraParams(
 }
 
 /**
- * Apply extra params (like temperature) to an agent's streamFn.
+ * Apply extra params (like temperature, webSearch) to an agent's streamFn.
  *
  * @internal Exported for testing
  */
@@ -259,9 +275,11 @@ export function applyExtraParamsToAgent(
     modelId,
     thinkLevel,
   });
+  const webSearch = resolveWebSearch(cfg);
   const wrappedStreamFn = createStreamFnWithExtraParams(
     agent.streamFn,
     extraParams,
+    webSearch,
   );
 
   if (wrappedStreamFn) {
