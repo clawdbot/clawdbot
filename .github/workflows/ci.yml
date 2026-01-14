@@ -74,9 +74,9 @@ jobs:
           - runtime: node
             task: protocol
             command: pnpm protocol:check
-          - runtime: bun
+          - runtime: node
             task: lint
-            command: bunx biome check src
+            command: pnpm oxfmt --check src test && pnpm lint
           - runtime: bun
             task: test
             command: bunx vitest run
