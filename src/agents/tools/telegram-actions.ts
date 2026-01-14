@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
+import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { resolveProviderCapabilities } from "../../config/provider-capabilities.js";
 import {
   reactMessageTelegram,
   sendMessageTelegram,
@@ -26,9 +25,9 @@ function hasInlineButtonsCapability(params: {
   accountId?: string | undefined;
 }): boolean {
   const caps =
-    resolveProviderCapabilities({
+    resolveChannelCapabilities({
       cfg: params.cfg,
-      provider: "telegram",
+      channel: "telegram",
       accountId: params.accountId,
     }) ?? [];
   return caps.some((cap) => cap.toLowerCase() === "inlinebuttons");
@@ -84,7 +83,7 @@ export async function handleTelegramAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const isActionEnabled = createActionGate(cfg.telegram?.actions);
+  const isActionEnabled = createActionGate(cfg.channels?.telegram?.actions);
 
   if (action === "react") {
     if (!isActionEnabled("reactions")) {
@@ -103,7 +102,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or telegram.botToken.",
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
     await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
@@ -130,7 +129,7 @@ export async function handleTelegramAction(
       !hasInlineButtonsCapability({ cfg, accountId: accountId ?? undefined })
     ) {
       throw new Error(
-        'Telegram inline buttons requested but not enabled. Add "inlineButtons" to telegram.capabilities (or telegram.accounts.<id>.capabilities).',
+        'Telegram inline buttons requested but not enabled. Add "inlineButtons" to channels.telegram.capabilities (or channels.telegram.accounts.<id>.capabilities).',
       );
     }
     // Optional threading parameters for forum topics and reply chains
@@ -143,7 +142,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or telegram.botToken.",
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
     const result = await sendMessageTelegram(to, content, {

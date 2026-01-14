@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ConnectionsSettings: View {
-    enum ConnectionProvider: String, CaseIterable, Identifiable, Hashable {
+    enum ConnectionChannel: String, CaseIterable, Identifiable, Hashable {
         case whatsapp
         case telegram
         case discord
@@ -53,7 +53,7 @@ struct ConnectionsSettings: View {
     }
 
     @Bindable var store: ConnectionsStore
-    @State var selectedProvider: ConnectionProvider?
+    @State var selectedChannel: ConnectionChannel?
     @State var showTelegramToken = false
     @State var showDiscordToken = false
 

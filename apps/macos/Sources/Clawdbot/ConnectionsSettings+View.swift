@@ -11,7 +11,7 @@ extension ConnectionsSettings {
             self.store.start()
             self.ensureSelection()
         }
-        .onChange(of: self.orderedProviders) { _, _ in
+        .onChange(of: self.orderedChannels) { _, _ in
             self.ensureSelection()
         }
         .onDisappear { self.store.stop() }
@@ -20,17 +20,17 @@ extension ConnectionsSettings {
     private var sidebar: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 8) {
-                if !self.enabledProviders.isEmpty {
+                if !self.enabledChannels.isEmpty {
                     self.sidebarSectionHeader("Configured")
-                    ForEach(self.enabledProviders) { provider in
-                        self.sidebarRow(provider)
+                    ForEach(self.enabledChannels) { channel in
+                        self.sidebarRow(channel)
                     }
                 }
 
-                if !self.availableProviders.isEmpty {
+                if !self.availableChannels.isEmpty {
                     self.sidebarSectionHeader("Available")
-                    ForEach(self.availableProviders) { provider in
-                        self.sidebarRow(provider)
+                    ForEach(self.availableChannels) { channel in
+                        self.sidebarRow(channel)
                     }
                 }
             }
@@ -46,8 +46,8 @@ extension ConnectionsSettings {
 
     private var detail: some View {
         Group {
-            if let provider = self.selectedProvider {
-                self.providerDetail(provider)
+            if let channel = self.selectedChannel {
+                self.channelDetail(channel)
             } else {
                 self.emptyDetail
             }
@@ -59,7 +59,7 @@ extension ConnectionsSettings {
         VStack(alignment: .leading, spacing: 8) {
             Text("Connections")
                 .font(.title3.weight(.semibold))
-            Text("Select a provider to view status and settings.")
+            Text("Select a channel to view status and settings.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -67,12 +67,12 @@ extension ConnectionsSettings {
         .padding(.vertical, 18)
     }
 
-    private func providerDetail(_ provider: ConnectionProvider) -> some View {
+    private func channelDetail(_ channel: ConnectionChannel) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
-                self.detailHeader(for: provider)
+                self.detailHeader(for: channel)
                 Divider()
-                self.providerSection(provider)
+                self.channelSection(channel)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,18 +81,18 @@ extension ConnectionsSettings {
         }
     }
 
-    private func sidebarRow(_ provider: ConnectionProvider) -> some View {
-        let isSelected = self.selectedProvider == provider
+    private func sidebarRow(_ channel: ConnectionChannel) -> some View {
+        let isSelected = self.selectedChannel == channel
         return Button {
-            self.selectedProvider = provider
+            self.selectedChannel = channel
         } label: {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(self.providerTint(provider))
+                    .fill(self.channelTint(channel))
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(provider.title)
-                    Text(self.providerSummary(provider))
+                    Text(channel.title)
+                    Text(self.channelSummary(channel))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -119,23 +119,23 @@ extension ConnectionsSettings {
             .padding(.top, 2)
     }
 
-    private func detailHeader(for provider: ConnectionProvider) -> some View {
+    private func detailHeader(for channel: ConnectionChannel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Label(provider.detailTitle, systemImage: provider.systemImage)
+                Label(channel.detailTitle, systemImage: channel.systemImage)
                     .font(.title3.weight(.semibold))
                 self.statusBadge(
-                    self.providerSummary(provider),
-                    color: self.providerTint(provider))
+                    self.channelSummary(channel),
+                    color: self.channelTint(channel))
                 Spacer()
-                self.providerHeaderActions(provider)
+                self.channelHeaderActions(channel)
             }
 
             HStack(spacing: 10) {
-                Text("Last check \(self.providerLastCheckText(provider))")
+                Text("Last check \(self.channelLastCheckText(channel))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if self.providerHasError(provider) {
+                if self.channelHasError(channel) {
                     Text("Error")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
@@ -146,7 +146,7 @@ extension ConnectionsSettings {
                 }
             }
 
-            if let details = self.providerDetails(provider) {
+            if let details = self.channelDetails(channel) {
                 Text(details)
                     .font(.caption)
                     .foregroundStyle(.secondary)

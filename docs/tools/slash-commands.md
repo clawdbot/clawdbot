@@ -7,6 +7,7 @@ read_when:
 # Slash commands
 
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
+The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
 There are two related systems:
 
@@ -26,6 +27,8 @@ They run immediately, are stripped before the model sees the message, and the re
   commands: {
     native: "auto",
     text: true,
+    bash: false,
+    bashForegroundMs: 2000,
     config: false,
     debug: false,
     restart: false,
@@ -38,8 +41,10 @@ They run immediately, are stripped before the model sees the message, and the re
   - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/MS Teams), text commands still work even if you set this to `false`.
 - `commands.native` (default `"auto"`) registers native commands.
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
-  - Set `discord.commands.native`, `telegram.commands.native`, or `slack.commands.native` to override per provider (bool or `"auto"`).
+  - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).
   - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
+- `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
@@ -57,18 +62,25 @@ Text + native (when enabled):
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
 - `/restart`
+- `/dock-telegram` (switch replies to Telegram)
+- `/dock-discord` (switch replies to Discord)
+- `/dock-slack` (switch replies to Slack)
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new`
-- `/think <level>` (aliases: `/thinking`, `/t`)
+- `/think <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only; aliases: `/thinking`, `/t`)
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
+- `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
 
 Text-only:
 - `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
+- `! <command>` (host-only; one at a time; use `!poll` + `!stop` for long-running jobs)
+- `!poll` (check output / status; accepts optional `sessionId`; `/bash poll` also works)
+- `!stop` (stop the running bash job; accepts optional `sessionId`; `/bash stop` also works)
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
@@ -116,7 +128,7 @@ Examples:
 ```
 /debug show
 /debug set messages.responsePrefix="[clawdbot]"
-/debug set whatsapp.allowFrom=["+1555","+4477"]
+/debug set channels.whatsapp.allowFrom=["+1555","+4477"]
 /debug unset messages.responsePrefix
 /debug reset
 ```
@@ -148,7 +160,7 @@ Notes:
 - **Text commands** run in the normal chat session (DMs share `main`, groups have their own session).
 - **Native commands** use isolated sessions:
   - Discord: `agent:<agentId>:discord:slash:<userId>`
-  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `slack.slashCommand.sessionPrefix`)
+  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
 - **`/stop`** targets the active chat session so it can abort the current run.
-- **Slack:** `slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).
+- **Slack:** `channels.slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).

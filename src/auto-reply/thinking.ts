@@ -1,8 +1,29 @@
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 export type VerboseLevel = "off" | "on";
 export type ElevatedLevel = "off" | "on";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "on";
+
+export const XHIGH_MODEL_REFS = [
+  "openai/gpt-5.2",
+  "openai-codex/gpt-5.2-codex",
+  "openai-codex/gpt-5.1-codex",
+] as const;
+
+const XHIGH_MODEL_SET = new Set(
+  XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()),
+);
+const XHIGH_MODEL_IDS = new Set(
+  XHIGH_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
+    (entry): entry is string => Boolean(entry),
+  ),
+);
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(
@@ -32,8 +53,47 @@ export function normalizeThinkLevel(
     ].includes(key)
   )
     return "high";
+  if (["xhigh", "x-high", "x_high"].includes(key)) return "xhigh";
   if (["think"].includes(key)) return "minimal";
   return undefined;
+}
+
+export function supportsXHighThinking(
+  provider?: string | null,
+  model?: string | null,
+): boolean {
+  const modelKey = model?.trim().toLowerCase();
+  if (!modelKey) return false;
+  const providerKey = provider?.trim().toLowerCase();
+  if (providerKey) {
+    return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
+  }
+  return XHIGH_MODEL_IDS.has(modelKey);
+}
+
+export function listThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+): ThinkLevel[] {
+  const levels: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
+  if (supportsXHighThinking(provider, model)) levels.push("xhigh");
+  return levels;
+}
+
+export function formatThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+  separator = ", ",
+): string {
+  return listThinkingLevels(provider, model).join(separator);
+}
+
+export function formatXHighModelHint(): string {
+  const refs = [...XHIGH_MODEL_REFS] as string[];
+  if (refs.length === 0) return "unknown model";
+  if (refs.length === 1) return refs[0];
+  if (refs.length === 2) return `${refs[0]} or ${refs[1]}`;
+  return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
 }
 
 // Normalize verbose flags used to toggle agent verbosity.

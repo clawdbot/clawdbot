@@ -55,17 +55,6 @@ Best current local stack. Load MiniMax M2.1 in LM Studio, enable the local serve
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
 - For WhatsApp, stick to Responses API so only final text is sent.
 
-## Model catalog (remote + local)
-
-| Tier | Model ID | Context | Who downloads | Notes |
-| --- | --- | --- | --- | --- |
-| Hosted | `anthropic/claude-opus-4-5` | 200k | Provider | Latest Claude; keep as high-quality fallback. |
-| Hosted | `anthropic/claude-sonnet-4-5` | 200k | Provider | Cheaper Claude; good default. |
-| Hosted | `openai/gpt-4.1` | 128k | Provider | Latest GPT-4; strong tools + reasoning. |
-| Hosted | `openai/gpt-4.1-mini` | 128k | Provider | Fast/cheap GPT-4 family; good fallback. |
-| Local | `lmstudio/minimax-m2.1-gs32` | ~196k (build-dependent) | You (LM Studio UI) | Recommended local heavy model; keep loaded. |
-| Local | Custom `vllm` / `litellm` model | server-defined | You (server) | Any OpenAI-compatible endpoint; align context settings. |
-
 Keep hosted models configured even when running local; use `models.mode: "merge"` so fallbacks stay available.
 
 ### Hybrid config: hosted primary, local fallback
@@ -76,12 +65,12 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
     defaults: {
       model: {
         primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["lmstudio/minimax-m2.1-gs32", "openai/gpt-4.1-mini"]
+        fallbacks: ["lmstudio/minimax-m2.1-gs32", "anthropic/claude-opus-4-5"]
       },
       models: {
         "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
         "lmstudio/minimax-m2.1-gs32": { alias: "MiniMax Local" },
-        "openai/gpt-4.1-mini": { alias: "GPT-4.1 mini" }
+        "anthropic/claude-opus-4-5": { alias: "Opus" }
       }
     }
   },
@@ -111,7 +100,7 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
 
 ### Local-first with hosted safety net
 
-Swap the primary and fallback order; keep the same providers block and `models.mode: "merge"` so you can fall back to Sonnet or GPT-4.1 when the local box is down.
+Swap the primary and fallback order; keep the same providers block and `models.mode: "merge"` so you can fall back to Sonnet or Opus when the local box is down.
 
 ### Regional hosting / data routing
 

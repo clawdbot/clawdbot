@@ -12,7 +12,7 @@ import {
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -59,8 +59,7 @@ export function buildGatewayConnectionDetails(
   const localPort = resolveGatewayPort(config);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
-  const preferTailnet =
-    bindMode === "tailnet" || (bindMode === "auto" && !!tailnetIPv4);
+  const preferTailnet = bindMode === "auto" && !!tailnetIPv4;
   const localUrl =
     preferTailnet && tailnetIPv4
       ? `ws://${tailnetIPv4}:${localPort}`

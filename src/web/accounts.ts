@@ -31,7 +31,7 @@ export type ResolvedWhatsAppAccount = {
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = cfg.whatsapp?.accounts;
+  const accounts = cfg.channels?.whatsapp?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
@@ -52,7 +52,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): WhatsAppAccountConfig | undefined {
-  const accounts = cfg.whatsapp?.accounts;
+  const accounts = cfg.channels?.whatsapp?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
   const entry = accounts[accountId] as WhatsAppAccountConfig | undefined;
   return entry;
@@ -115,23 +115,31 @@ export function resolveWhatsAppAccount(params: {
     enabled,
     messagePrefix:
       accountCfg?.messagePrefix ??
-      params.cfg.whatsapp?.messagePrefix ??
+      params.cfg.channels?.whatsapp?.messagePrefix ??
       params.cfg.messages?.messagePrefix,
     authDir,
     isLegacyAuthDir: isLegacy,
-    selfChatMode: accountCfg?.selfChatMode ?? params.cfg.whatsapp?.selfChatMode,
-    dmPolicy: accountCfg?.dmPolicy ?? params.cfg.whatsapp?.dmPolicy,
-    allowFrom: accountCfg?.allowFrom ?? params.cfg.whatsapp?.allowFrom,
+    selfChatMode:
+      accountCfg?.selfChatMode ?? params.cfg.channels?.whatsapp?.selfChatMode,
+    dmPolicy: accountCfg?.dmPolicy ?? params.cfg.channels?.whatsapp?.dmPolicy,
+    allowFrom:
+      accountCfg?.allowFrom ?? params.cfg.channels?.whatsapp?.allowFrom,
     groupAllowFrom:
-      accountCfg?.groupAllowFrom ?? params.cfg.whatsapp?.groupAllowFrom,
-    groupPolicy: accountCfg?.groupPolicy ?? params.cfg.whatsapp?.groupPolicy,
+      accountCfg?.groupAllowFrom ??
+      params.cfg.channels?.whatsapp?.groupAllowFrom,
+    groupPolicy:
+      accountCfg?.groupPolicy ?? params.cfg.channels?.whatsapp?.groupPolicy,
     textChunkLimit:
-      accountCfg?.textChunkLimit ?? params.cfg.whatsapp?.textChunkLimit,
-    mediaMaxMb: accountCfg?.mediaMaxMb ?? params.cfg.whatsapp?.mediaMaxMb,
+      accountCfg?.textChunkLimit ??
+      params.cfg.channels?.whatsapp?.textChunkLimit,
+    mediaMaxMb:
+      accountCfg?.mediaMaxMb ?? params.cfg.channels?.whatsapp?.mediaMaxMb,
     blockStreaming:
-      accountCfg?.blockStreaming ?? params.cfg.whatsapp?.blockStreaming,
-    ackReaction: accountCfg?.ackReaction ?? params.cfg.whatsapp?.ackReaction,
-    groups: accountCfg?.groups ?? params.cfg.whatsapp?.groups,
+      accountCfg?.blockStreaming ??
+      params.cfg.channels?.whatsapp?.blockStreaming,
+    ackReaction:
+      accountCfg?.ackReaction ?? params.cfg.channels?.whatsapp?.ackReaction,
+    groups: accountCfg?.groups ?? params.cfg.channels?.whatsapp?.groups,
   };
 }
 

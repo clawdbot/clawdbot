@@ -1,22 +1,17 @@
 /*
  Copyright 2025 Google LLC
-
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
  You may obtain a copy of the License at
-
       https://www.apache.org/licenses/LICENSE-2.0
-
  Unless required by applicable law or agreed to in writing, software
  distributed under the License is distributed on an "AS IS" BASIS,
  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  See the License for the specific language governing permissions and
  limitations under the License.
  */
-
 import { SurfaceUpdateSchemaMatcher } from "./surface_update_schema_matcher";
 import { SchemaMatcher } from "./schema_matcher";
-
 export function validateSchema(
   data: any,
   schemaName: string,
@@ -36,7 +31,6 @@ export function validateSchema(
       "A2UI Protocol message must have one of: surfaceUpdate, dataModelUpdate, beginRendering, deleteSurface.",
     );
   }
-
   if (matchers) {
     for (const matcher of matchers) {
       const result = matcher.validate(data);
@@ -45,10 +39,8 @@ export function validateSchema(
       }
     }
   }
-
   return errors;
 }
-
 function validateDeleteSurface(data: any, errors: string[]) {
   if (data.surfaceId === undefined) {
     errors.push("DeleteSurface must have a 'surfaceId' property.");
@@ -60,7 +52,6 @@ function validateDeleteSurface(data: any, errors: string[]) {
     }
   }
 }
-
 function validateSurfaceUpdate(data: any, errors: string[]) {
   if (data.surfaceId === undefined) {
     errors.push("SurfaceUpdate must have a 'surfaceId' property.");
@@ -69,7 +60,6 @@ function validateSurfaceUpdate(data: any, errors: string[]) {
     errors.push("SurfaceUpdate must have a 'components' array.");
     return;
   }
-
   const componentIds = new Set<string>();
   for (const c of data.components) {
     if (c.id) {
@@ -79,29 +69,24 @@ function validateSurfaceUpdate(data: any, errors: string[]) {
       componentIds.add(c.id);
     }
   }
-
   for (const component of data.components) {
     validateComponent(component, componentIds, errors);
   }
 }
-
 function validateDataModelUpdate(data: any, errors: string[]) {
   if (data.surfaceId === undefined) {
     errors.push("DataModelUpdate must have a 'surfaceId' property.");
   }
-
   const allowedTopLevel = ["surfaceId", "path", "contents"];
   for (const key in data) {
     if (!allowedTopLevel.includes(key)) {
       errors.push(`DataModelUpdate has unexpected property: ${key}`);
     }
   }
-
   if (!Array.isArray(data.contents)) {
     errors.push("DataModelUpdate must have a 'contents' array.");
     return;
   }
-
   const validateValueProperty = (
     item: any,
     itemErrors: string[],
@@ -127,7 +112,6 @@ function validateDataModelUpdate(data: any, errors: string[]) {
       );
       return;
     }
-
     if (foundValueProp === "valueMap") {
       if (!Array.isArray(item.valueMap)) {
         itemErrors.push(`${prefix} 'valueMap' must be an array.`);
@@ -162,7 +146,6 @@ function validateDataModelUpdate(data: any, errors: string[]) {
       });
     }
   };
-
   data.contents.forEach((item: any, index: number) => {
     if (!item.key) {
       errors.push(
@@ -190,7 +173,6 @@ function validateDataModelUpdate(data: any, errors: string[]) {
     }
   });
 }
-
 function validateBeginRendering(data: any, errors: string[]) {
   if (data.surfaceId === undefined) {
     errors.push("BeginRendering message must have a 'surfaceId' property.");
@@ -199,7 +181,6 @@ function validateBeginRendering(data: any, errors: string[]) {
     errors.push("BeginRendering message must have a 'root' property.");
   }
 }
-
 function validateBoundValue(
   prop: any,
   propName: string,
@@ -232,7 +213,6 @@ function validateBoundValue(
     );
   }
 }
-
 function validateComponent(
   component: any,
   allIds: Set<string>,
@@ -246,7 +226,6 @@ function validateComponent(
     errors.push(`Component '${component.id}' is missing 'component'.`);
     return;
   }
-
   const componentTypes = Object.keys(component.component);
   if (componentTypes.length !== 1) {
     errors.push(
@@ -254,10 +233,8 @@ function validateComponent(
     );
     return;
   }
-
   const componentType = componentTypes[0];
   const properties = component.component[componentType];
-
   const checkRequired = (props: string[]) => {
     for (const prop of props) {
       if (properties[prop] === undefined) {
@@ -267,7 +244,6 @@ function validateComponent(
       }
     }
   };
-
   const checkRefs = (ids: (string | undefined)[]) => {
     for (const id of ids) {
       if (id && !allIds.has(id)) {
@@ -277,7 +253,6 @@ function validateComponent(
       }
     }
   };
-
   switch (componentType) {
     case "Heading":
       checkRequired(["text"]);

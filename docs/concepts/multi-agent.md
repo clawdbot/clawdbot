@@ -1,5 +1,5 @@
 ---
-summary: "Multi-agent routing: isolated agents, provider accounts, and bindings"
+summary: "Multi-agent routing: isolated agents, channel accounts, and bindings"
 title: Multi-Agent Routing
 read_when: "You want multiple isolated agents (workspaces + auth) in one gateway process."
 status: active
@@ -7,7 +7,7 @@ status: active
 
 # Multi-Agent Routing
 
-Goal: multiple *isolated* agents (separate workspace + `agentDir` + sessions), plus multiple provider accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
+Goal: multiple *isolated* agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
 ## What is “one agent”?
 
@@ -64,7 +64,7 @@ clawdbot agents list --bindings
 
 With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
 
-- **Different phone numbers/accounts** (per provider `accountId`).
+- **Different phone numbers/accounts** (per channel `accountId`).
 - **Different personalities** (per-agent workspace files like `AGENTS.md` and `SOUL.md`).
 - **Separate auth + sessions** (no cross-talk unless explicitly enabled).
 
@@ -87,12 +87,14 @@ Example:
     ]
   },
   bindings: [
-    { agentId: "alex", match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
-    { agentId: "mia",  match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } }
+    { agentId: "alex", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
+    { agentId: "mia",  match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } }
   ],
-  whatsapp: {
-    dmPolicy: "allowlist",
-    allowFrom: ["+15551230001", "+15551230002"]
+  channels: {
+    whatsapp: {
+      dmPolicy: "allowlist",
+      allowFrom: ["+15551230001", "+15551230002"]
+    }
   }
 }
 ```
@@ -108,21 +110,21 @@ Bindings are **deterministic** and **most-specific wins**:
 1. `peer` match (exact DM/group/channel id)
 2. `guildId` (Discord)
 3. `teamId` (Slack)
-4. `accountId` match for a provider
-5. provider-level match (`accountId: "*"`)
+4. `accountId` match for a channel
+5. channel-level match (`accountId: "*"`)
 6. fallback to default agent (`agents.list[].default`, else first list entry, default: `main`)
 
 ## Multiple accounts / phone numbers
 
-Providers that support **multiple accounts** (e.g. WhatsApp) use `accountId` to identify
+Channels that support **multiple accounts** (e.g. WhatsApp) use `accountId` to identify
 each login. Each `accountId` can be routed to a different agent, so one server can host
 multiple phone numbers without mixing sessions.
 
 ## Concepts
 
 - `agentId`: one “brain” (workspace, per-agent auth, per-agent session store).
-- `accountId`: one provider account instance (e.g. WhatsApp account `"personal"` vs `"biz"`).
-- `binding`: routes inbound messages to an `agentId` by `(provider, accountId, peer)` and optionally guild/team ids.
+- `accountId`: one channel account instance (e.g. WhatsApp account `"personal"` vs `"biz"`).
+- `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)` and optionally guild/team ids.
 - Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent “main”; `session.mainKey`).
 
 ## Example: two WhatsApps → two agents
@@ -151,14 +153,14 @@ multiple phone numbers without mixing sessions.
 
   // Deterministic routing: first match wins (most-specific first).
   bindings: [
-    { agentId: "home", match: { provider: "whatsapp", accountId: "personal" } },
-    { agentId: "work", match: { provider: "whatsapp", accountId: "biz" } },
+    { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
+    { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
 
     // Optional per-peer override (example: send a specific group to work agent).
     {
       agentId: "work",
       match: {
-        provider: "whatsapp",
+        channel: "whatsapp",
         accountId: "personal",
         peer: { kind: "group", id: "1203630...@g.us" },
       },
@@ -173,15 +175,17 @@ multiple phone numbers without mixing sessions.
     },
   },
 
-  whatsapp: {
-    accounts: {
-      personal: {
-        // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
-        // authDir: "~/.clawdbot/credentials/whatsapp/personal",
-      },
-      biz: {
-        // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
-        // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+  channels: {
+    whatsapp: {
+      accounts: {
+        personal: {
+          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
+          // authDir: "~/.clawdbot/credentials/whatsapp/personal",
+        },
+        biz: {
+          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
+          // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+        },
       },
     },
   },
@@ -190,7 +194,7 @@ multiple phone numbers without mixing sessions.
 
 ## Example: WhatsApp daily chat + Telegram deep work
 
-Split by provider: route WhatsApp to a fast everyday agent and Telegram to an Opus agent.
+Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opus agent.
 
 ```json5
 {
@@ -211,17 +215,17 @@ Split by provider: route WhatsApp to a fast everyday agent and Telegram to an Op
     ]
   },
   bindings: [
-    { agentId: "chat", match: { provider: "whatsapp" } },
-    { agentId: "opus", match: { provider: "telegram" } }
+    { agentId: "chat", match: { channel: "whatsapp" } },
+    { agentId: "opus", match: { channel: "telegram" } }
   ]
 }
 ```
 
 Notes:
-- If you have multiple accounts for a provider, add `accountId` to the binding (for example `{ provider: "whatsapp", accountId: "personal" }`).
-- To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over provider-wide rules.
+- If you have multiple accounts for a channel, add `accountId` to the binding (for example `{ channel: "whatsapp", accountId: "personal" }`).
+- To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over channel-wide rules.
 
-## Example: same provider, one peer to Opus
+## Example: same channel, one peer to Opus
 
 Keep WhatsApp on the fast agent, but route one DM to Opus:
 
@@ -234,13 +238,13 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
     ]
   },
   bindings: [
-    { agentId: "opus", match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551234567" } } },
-    { agentId: "chat", match: { provider: "whatsapp" } }
+    { agentId: "opus", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551234567" } } },
+    { agentId: "chat", match: { channel: "whatsapp" } }
   ]
 }
 ```
 
-Peer bindings always win, so keep them above the provider-wide rule.
+Peer bindings always win, so keep them above the channel-wide rule.
 
 ## Per-Agent Sandbox and Tool Configuration
 

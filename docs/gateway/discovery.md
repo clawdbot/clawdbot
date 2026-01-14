@@ -16,7 +16,7 @@ The design goal is to keep all network discovery/advertising in the **Node Gatew
 
 ## Terms
 
-- **Gateway**: the single, long-running gateway process that owns state (sessions, pairing, node registry) and runs providers.
+- **Gateway**: the single, long-running gateway process that owns state (sessions, pairing, node registry) and runs channels.
 - **Gateway WS (loopback)**: the existing gateway WebSocket control endpoint on `127.0.0.1:18789`.
 - **Bridge (direct transport)**: a LAN/tailnet-facing endpoint owned by the gateway that allows authenticated clients/nodes to call a scoped subset of gateway methods. The bridge exists so the gateway can remain loopback-only.
 - **SSH transport (fallback)**: remote control by forwarding `127.0.0.1:18789` over SSH.

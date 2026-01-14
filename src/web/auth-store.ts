@@ -7,7 +7,7 @@ import { info, success } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import type { Provider } from "../utils.js";
+import type { WebChannel } from "../utils.js";
 import { jidToE164, resolveUserPath } from "../utils.js";
 
 export function resolveDefaultWebAuthDir(): string {
@@ -161,7 +161,7 @@ export function getWebAuthAgeMs(
 export function logWebSelfId(
   authDir: string = resolveDefaultWebAuthDir(),
   runtime: RuntimeEnv = defaultRuntime,
-  includeProviderPrefix = false,
+  includeChannelPrefix = false,
 ) {
   // Human-friendly log of the currently linked personal web session.
   const { e164, jid } = readWebSelfId(authDir);
@@ -169,19 +169,19 @@ export function logWebSelfId(
     e164 || jid
       ? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
       : "unknown";
-  const prefix = includeProviderPrefix ? "Web Provider: " : "";
+  const prefix = includeChannelPrefix ? "Web Channel: " : "";
   runtime.log(info(`${prefix}${details}`));
 }
 
-export async function pickProvider(
-  pref: Provider | "auto",
+export async function pickWebChannel(
+  pref: WebChannel | "auto",
   authDir: string = resolveDefaultWebAuthDir(),
-): Promise<Provider> {
-  const choice: Provider = pref === "auto" ? "web" : pref;
+): Promise<WebChannel> {
+  const choice: WebChannel = pref === "auto" ? "web" : pref;
   const hasWeb = await webAuthExists(authDir);
   if (!hasWeb) {
     throw new Error(
-      "No WhatsApp Web session found. Run `clawdbot providers login --verbose` to link.",
+      "No WhatsApp Web session found. Run `clawdbot channels login --channel whatsapp --verbose` to link.",
     );
   }
   return choice;

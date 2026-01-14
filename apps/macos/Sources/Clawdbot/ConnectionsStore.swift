@@ -2,7 +2,7 @@ import ClawdbotProtocol
 import Foundation
 import Observation
 
-struct ProvidersStatusSnapshot: Codable {
+struct ChannelsStatusSnapshot: Codable {
     struct WhatsAppSelf: Codable {
         let e164: String?
         let jid: String?
@@ -121,7 +121,7 @@ struct ProvidersStatusSnapshot: Codable {
         let lastProbeAt: Double?
     }
 
-    struct ProviderAccountSnapshot: Codable {
+    struct ChannelAccountSnapshot: Codable {
         let accountId: String
         let name: String?
         let enabled: Bool?
@@ -154,14 +154,14 @@ struct ProvidersStatusSnapshot: Codable {
     }
 
     let ts: Double
-    let providerOrder: [String]
-    let providerLabels: [String: String]
-    let providers: [String: AnyCodable]
-    let providerAccounts: [String: [ProviderAccountSnapshot]]
-    let providerDefaultAccountId: [String: String]
+    let channelOrder: [String]
+    let channelLabels: [String: String]
+    let channels: [String: AnyCodable]
+    let channelAccounts: [String: [ChannelAccountSnapshot]]
+    let channelDefaultAccountId: [String: String]
 
-    func decodeProvider<T: Decodable>(_ id: String, as type: T.Type) -> T? {
-        guard let value = self.providers[id] else { return nil }
+    func decodeChannel<T: Decodable>(_ id: String, as type: T.Type) -> T? {
+        guard let value = self.channels[id] else { return nil }
         do {
             let data = try JSONEncoder().encode(value)
             return try JSONDecoder().decode(type, from: data)
@@ -230,7 +230,7 @@ struct DiscordGuildForm: Identifiable {
 final class ConnectionsStore {
     static let shared = ConnectionsStore()
 
-    var snapshot: ProvidersStatusSnapshot?
+    var snapshot: ChannelsStatusSnapshot?
     var lastError: String?
     var lastSuccess: Date?
     var isRefreshing = false

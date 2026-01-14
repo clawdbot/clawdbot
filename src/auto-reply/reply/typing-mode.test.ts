@@ -96,6 +96,20 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
+  it("signals on message start for message mode", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalMessageStart();
+
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
   it("signals on reasoning for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
@@ -123,7 +137,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("does not start typing on tool start when inactive", async () => {
+  it("starts typing on tool start when inactive", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -133,8 +147,8 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalToolStart();
 
-    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).toHaveBeenCalled();
   });
 
   it("refreshes ttl on tool start when active", async () => {

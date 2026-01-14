@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway";
 import { parseList } from "../format";
-import type { ConfigSnapshot, ProvidersStatusSnapshot } from "../types";
+import type { ChannelsStatusSnapshot, ConfigSnapshot } from "../types";
 import {
   defaultDiscordActions,
   defaultSlackActions,
@@ -18,10 +18,10 @@ import {
 export type ConnectionsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  providersLoading: boolean;
-  providersSnapshot: ProvidersStatusSnapshot | null;
-  providersError: string | null;
-  providersLastSuccess: number | null;
+  channelsLoading: boolean;
+  channelsSnapshot: ChannelsStatusSnapshot | null;
+  channelsError: string | null;
+  channelsLastSuccess: number | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
@@ -48,22 +48,22 @@ export type ConnectionsState = {
   configSnapshot: ConfigSnapshot | null;
 };
 
-export async function loadProviders(state: ConnectionsState, probe: boolean) {
+export async function loadChannels(state: ConnectionsState, probe: boolean) {
   if (!state.client || !state.connected) return;
-  if (state.providersLoading) return;
-  state.providersLoading = true;
-  state.providersError = null;
+  if (state.channelsLoading) return;
+  state.channelsLoading = true;
+  state.channelsError = null;
   try {
-    const res = (await state.client.request("providers.status", {
+    const res = (await state.client.request("channels.status", {
       probe,
       timeoutMs: 8000,
-    })) as ProvidersStatusSnapshot;
-    state.providersSnapshot = res;
-    state.providersLastSuccess = Date.now();
-    const providers = res.providers as Record<string, unknown>;
-    const telegram = providers.telegram as { tokenSource?: string | null };
-    const discord = providers.discord as { tokenSource?: string | null } | null;
-    const slack = providers.slack as
+    })) as ChannelsStatusSnapshot;
+    state.channelsSnapshot = res;
+    state.channelsLastSuccess = Date.now();
+    const channels = res.channels as Record<string, unknown>;
+    const telegram = channels.telegram as { tokenSource?: string | null };
+    const discord = channels.discord as { tokenSource?: string | null } | null;
+    const slack = channels.slack as
       | { botTokenSource?: string | null; appTokenSource?: string | null }
       | null;
     state.telegramTokenLocked = telegram?.tokenSource === "env";
@@ -71,9 +71,9 @@ export async function loadProviders(state: ConnectionsState, probe: boolean) {
     state.slackTokenLocked = slack?.botTokenSource === "env";
     state.slackAppTokenLocked = slack?.appTokenSource === "env";
   } catch (err) {
-    state.providersError = String(err);
+    state.channelsError = String(err);
   } finally {
-    state.providersLoading = false;
+    state.channelsLoading = false;
   }
 }
 
@@ -119,7 +119,7 @@ export async function logoutWhatsApp(state: ConnectionsState) {
   if (!state.client || !state.connected || state.whatsappBusy) return;
   state.whatsappBusy = true;
   try {
-    await state.client.request("providers.logout", { provider: "whatsapp" });
+    await state.client.request("channels.logout", { channel: "whatsapp" });
     state.whatsappLoginMessage = "Logged out.";
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;

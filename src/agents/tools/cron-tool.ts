@@ -3,89 +3,42 @@ import {
   normalizeCronJobCreate,
   normalizeCronJobPatch,
 } from "../../cron/normalize.js";
+import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 // NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
-// instead of CronAddParamsSchema/CronJobPatchSchema because:
-//
-// 1. CronAddParamsSchema contains nested Type.Union (for schedule, payload, etc.)
-// 2. TypeBox compiles Type.Union to JSON Schema `anyOf`
-// 3. pi-ai's sanitizeSchemaForGoogle() strips `anyOf` from nested properties
-// 4. This leaves empty schemas `{}` which Claude rejects as invalid
-//
-// The actual validation happens at runtime via normalizeCronJobCreate/Patch
-// and the gateway's validateCronAddParams. This schema just needs to accept
-// any object so the AI can pass through the job definition.
-//
-// See: https://github.com/anthropics/anthropic-cookbook/blob/main/misc/tool_use_best_practices.md
-// Claude requires valid JSON Schema 2020-12 with explicit types.
+// instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
+// contain nested unions. Tool schemas need to stay provider-friendly, so we
+// accept "any object" here and validate at runtime.
 
-const CronToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("status"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("list"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    includeDisabled: Type.Optional(Type.Boolean()),
-  }),
-  Type.Object({
-    action: Type.Literal("add"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    job: Type.Object({}, { additionalProperties: true }),
-  }),
-  Type.Object({
-    action: Type.Literal("update"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.Optional(Type.String()),
-    id: Type.Optional(Type.String()),
-    patch: Type.Object({}, { additionalProperties: true }),
-  }),
-  Type.Object({
-    action: Type.Literal("remove"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.Optional(Type.String()),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("run"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.Optional(Type.String()),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("runs"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.Optional(Type.String()),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("wake"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    text: Type.String(),
-    mode: Type.Optional(
-      Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
-    ),
-  }),
-]);
+const CRON_ACTIONS = [
+  "status",
+  "list",
+  "add",
+  "update",
+  "remove",
+  "run",
+  "runs",
+  "wake",
+] as const;
+
+const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
+
+// Flattened schema: runtime validates per-action requirements.
+const CronToolSchema = Type.Object({
+  action: stringEnum(CRON_ACTIONS),
+  gatewayUrl: Type.Optional(Type.String()),
+  gatewayToken: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
+  includeDisabled: Type.Optional(Type.Boolean()),
+  job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  jobId: Type.Optional(Type.String()),
+  id: Type.Optional(Type.String()),
+  patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  text: Type.Optional(Type.String()),
+  mode: optionalStringEnum(CRON_WAKE_MODES),
+});
 
 export function createCronTool(): AnyAgentTool {
   return {

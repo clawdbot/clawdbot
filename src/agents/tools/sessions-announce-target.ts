@@ -1,8 +1,8 @@
-import { callGateway } from "../../gateway/call.js";
 import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
+import { callGateway } from "../../gateway/call.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
@@ -15,8 +15,8 @@ export async function resolveAnnounceTarget(params: {
   const fallback = parsed ?? parsedDisplay ?? null;
 
   if (fallback) {
-    const normalized = normalizeProviderId(fallback.provider);
-    const plugin = normalized ? getProviderPlugin(normalized) : null;
+    const normalized = normalizeChannelId(fallback.channel);
+    const plugin = normalized ? getChannelPlugin(normalized) : null;
     if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
       return fallback;
     }
@@ -35,14 +35,14 @@ export async function resolveAnnounceTarget(params: {
     const match =
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
-    const provider =
-      typeof match?.lastProvider === "string" ? match.lastProvider : undefined;
+    const channel =
+      typeof match?.lastChannel === "string" ? match.lastChannel : undefined;
     const to = typeof match?.lastTo === "string" ? match.lastTo : undefined;
     const accountId =
       typeof match?.lastAccountId === "string"
         ? match.lastAccountId
         : undefined;
-    if (provider && to) return { provider, to, accountId };
+    if (channel && to) return { channel, to, accountId };
   } catch {
     // ignore
   }

@@ -118,6 +118,86 @@
       "destination": "/cli/message"
     },
     {
+      "source": "/providers/discord",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/providers/discord/",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/providers/grammy",
+      "destination": "/channels/grammy"
+    },
+    {
+      "source": "/providers/grammy/",
+      "destination": "/channels/grammy"
+    },
+    {
+      "source": "/providers/imessage",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/providers/imessage/",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/providers/location",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/providers/location/",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/providers/msteams",
+      "destination": "/channels/msteams"
+    },
+    {
+      "source": "/providers/msteams/",
+      "destination": "/channels/msteams"
+    },
+    {
+      "source": "/providers/signal",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/providers/signal/",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/providers/slack",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/providers/slack/",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/providers/telegram",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/providers/telegram/",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/providers/troubleshooting",
+      "destination": "/channels/troubleshooting"
+    },
+    {
+      "source": "/providers/troubleshooting/",
+      "destination": "/channels/troubleshooting"
+    },
+    {
+      "source": "/providers/whatsapp",
+      "destination": "/channels/whatsapp"
+    },
+    {
+      "source": "/providers/whatsapp/",
+      "destination": "/channels/whatsapp"
+    },
+    {
       "source": "/sandbox",
       "destination": "/cli/sandbox"
     },
@@ -231,7 +311,7 @@
     },
     {
       "source": "/discord",
-      "destination": "/providers/discord"
+      "destination": "/channels/discord"
     },
     {
       "source": "/discovery",
@@ -267,7 +347,7 @@
     },
     {
       "source": "/grammy",
-      "destination": "/providers/grammy"
+      "destination": "/channels/grammy"
     },
     {
       "source": "/group-messages",
@@ -295,7 +375,7 @@
     },
     {
       "source": "/imessage",
-      "destination": "/providers/imessage"
+      "destination": "/channels/imessage"
     },
     {
       "source": "/ios",
@@ -307,7 +387,7 @@
     },
     {
       "source": "/location",
-      "destination": "/providers/location"
+      "destination": "/channels/location"
     },
     {
       "source": "/location-command",
@@ -451,7 +531,23 @@
     },
     {
       "source": "/provider-routing",
-      "destination": "/concepts/provider-routing"
+      "destination": "/concepts/channel-routing"
+    },
+    {
+      "source": "/concepts/provider-routing",
+      "destination": "/concepts/channel-routing"
+    },
+    {
+      "source": "/concepts/provider-routing/",
+      "destination": "/concepts/channel-routing"
+    },
+    {
+      "source": "/refactor/provider-plugin",
+      "destination": "/refactor/channel-plugin"
+    },
+    {
+      "source": "/refactor/provider-plugin/",
+      "destination": "/refactor/channel-plugin"
     },
     {
       "source": "/queue",
@@ -499,7 +595,7 @@
     },
     {
       "source": "/signal",
-      "destination": "/providers/signal"
+      "destination": "/channels/signal"
     },
     {
       "source": "/skills",
@@ -511,7 +607,7 @@
     },
     {
       "source": "/slack",
-      "destination": "/providers/slack"
+      "destination": "/channels/slack"
     },
     {
       "source": "/slash-commands",
@@ -531,7 +627,7 @@
     },
     {
       "source": "/telegram",
-      "destination": "/providers/telegram"
+      "destination": "/channels/telegram"
     },
     {
       "source": "/templates/AGENTS",
@@ -603,7 +699,7 @@
     },
     {
       "source": "/whatsapp",
-      "destination": "/providers/whatsapp"
+      "destination": "/channels/whatsapp"
     },
     {
       "source": "/windows",
@@ -680,7 +776,7 @@
           "concepts/sessions",
           "concepts/session-tool",
           "concepts/presence",
-          "concepts/provider-routing",
+          "concepts/channel-routing",
           "concepts/messages",
           "concepts/streaming",
           "concepts/groups",
@@ -737,8 +833,27 @@
         ]
       },
       {
+        "group": "Channels",
+        "pages": [
+          "channels/index",
+          "channels/whatsapp",
+          "channels/telegram",
+          "channels/grammy",
+          "channels/discord",
+          "channels/slack",
+          "channels/signal",
+          "channels/imessage",
+          "channels/msteams",
+          "broadcast-groups",
+          "channels/troubleshooting",
+          "channels/location"
+        ]
+      },
+      {
         "group": "Providers",
         "pages": [
+          "providers/index",
+          "providers/models",
           "providers/openai",
           "providers/anthropic",
           "providers/moonshot",
@@ -746,18 +861,7 @@
           "providers/openrouter",
           "providers/opencode",
           "providers/glm",
-          "providers/zai",
-          "providers/telegram",
-          "providers/grammy",
-          "providers/discord",
-          "providers/slack",
-          "providers/signal",
-          "providers/imessage",
-          "providers/whatsapp",
-          "broadcast-groups",
-          "providers/msteams",
-          "providers/troubleshooting",
-          "providers/location"
+          "providers/zai"
         ]
       },
       {

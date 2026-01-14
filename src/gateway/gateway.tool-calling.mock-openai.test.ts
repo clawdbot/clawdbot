@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
@@ -275,7 +275,7 @@ describe("gateway (mock openai): tool calling", () => {
       home: process.env.HOME,
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
       token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
+      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
       skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
@@ -325,7 +325,7 @@ describe("gateway (mock openai): tool calling", () => {
       path.join(os.tmpdir(), "clawdbot-gw-mock-home-"),
     );
     process.env.HOME = tempHome;
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
@@ -427,7 +427,7 @@ describe("gateway (mock openai): tool calling", () => {
       process.env.HOME = prev.home;
       process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
       process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
-      process.env.CLAWDBOT_SKIP_PROVIDERS = prev.skipProviders;
+      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
       process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;

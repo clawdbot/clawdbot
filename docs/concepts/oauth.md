@@ -56,13 +56,13 @@ How to verify:
 
 ```bash
 clawdbot models status
-clawdbot providers list
+clawdbot channels list
 ```
 
 Or JSON:
 
 ```bash
-clawdbot providers list --json
+clawdbot channels list --json
 ```
 
 ## OAuth exchange (how login works)
@@ -148,7 +148,7 @@ Example (session override):
 - `/model Opus@anthropic:work`
 
 How to see what profile IDs exist:
-- `clawdbot providers list --json` (shows `auth[]`)
+- `clawdbot channels list --json` (shows `auth[]`)
 
 Related docs:
 - [/concepts/model-failover](/concepts/model-failover) (rotation + cooldown rules)

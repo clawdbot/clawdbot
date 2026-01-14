@@ -32,7 +32,7 @@ describe("healthCommand (coverage)", () => {
       ok: true,
       ts: Date.now(),
       durationMs: 5,
-      providers: {
+      channels: {
         whatsapp: {
           linked: true,
           authAgeMs: 5 * 60_000,
@@ -50,8 +50,8 @@ describe("healthCommand (coverage)", () => {
           configured: false,
         },
       },
-      providerOrder: ["whatsapp", "telegram", "discord"],
-      providerLabels: {
+      channelOrder: ["whatsapp", "telegram", "discord"],
+      channelLabels: {
         whatsapp: "WhatsApp",
         telegram: "Telegram",
         discord: "Discord",

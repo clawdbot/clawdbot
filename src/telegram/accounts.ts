@@ -16,7 +16,7 @@ export type ResolvedTelegramAccount = {
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = cfg.telegram?.accounts;
+  const accounts = cfg.channels?.telegram?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
@@ -37,7 +37,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): TelegramAccountConfig | undefined {
-  const accounts = cfg.telegram?.accounts;
+  const accounts = cfg.channels?.telegram?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
   return accounts[accountId] as TelegramAccountConfig | undefined;
 }
@@ -46,7 +46,7 @@ function mergeTelegramAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): TelegramAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.telegram ??
+  const { accounts: _ignored, ...base } = (cfg.channels?.telegram ??
     {}) as TelegramAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
@@ -57,7 +57,7 @@ export function resolveTelegramAccount(params: {
   accountId?: string | null;
 }): ResolvedTelegramAccount {
   const hasExplicitAccountId = Boolean(params.accountId?.trim());
-  const baseEnabled = params.cfg.telegram?.enabled !== false;
+  const baseEnabled = params.cfg.channels?.telegram?.enabled !== false;
 
   const resolve = (accountId: string) => {
     const merged = mergeTelegramAccountConfig(params.cfg, accountId);

@@ -49,6 +49,14 @@ export class ChatLog extends Container {
     this.streamingAssistant.setText(text);
   }
 
+  getStreamingText(runId?: string) {
+    if (!this.streamingAssistant) return null;
+    if (runId && this.streamingRunId && runId !== this.streamingRunId) {
+      return null;
+    }
+    return this.streamingText;
+  }
+
   finalizeAssistant(text: string, runId?: string) {
     if (
       this.streamingAssistant &&

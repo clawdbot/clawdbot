@@ -27,7 +27,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Docker](/install/docker)
 - [Nix](/install/nix)
 - [Updating / rollback](/install/updating)
-- [Bun workflow](/install/bun)
+- [Bun workflow (experimental)](/install/bun)
 
 ## Core concepts
 
@@ -51,7 +51,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Presence](/concepts/presence)
 - [Discovery + transports](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)
-- [Provider routing](/concepts/provider-routing)
+- [Channel routing](/concepts/channel-routing)
 - [Groups](/concepts/groups)
 - [Group messages](/concepts/group-messages)
 - [Model failover](/concepts/model-failover)
@@ -59,16 +59,16 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 ## Providers + ingress
 
-- [Chat providers hub](/providers)
+- [Chat channels hub](/channels)
 - [Model providers hub](/providers/models)
-- [WhatsApp](/providers/whatsapp)
-- [Telegram](/providers/telegram)
-- [Telegram (grammY notes)](/providers/grammy)
-- [Slack](/providers/slack)
-- [Discord](/providers/discord)
-- [Signal](/providers/signal)
-- [iMessage](/providers/imessage)
-- [Location parsing](/providers/location)
+- [WhatsApp](/channels/whatsapp)
+- [Telegram](/channels/telegram)
+- [Telegram (grammY notes)](/channels/grammy)
+- [Slack](/channels/slack)
+- [Discord](/channels/discord)
+- [Signal](/channels/signal)
+- [iMessage](/channels/imessage)
+- [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
 - [Webhooks](/automation/webhook)
 - [Gmail Pub/Sub](/automation/gmail-pubsub)

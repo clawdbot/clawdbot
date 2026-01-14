@@ -50,6 +50,7 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:
+- **Tool profile**: `tools.profile` and `agents.list[].tools.profile` (base allowlist)
 - **Global/per-agent tool policy**: `tools.allow`/`tools.deny` and `agents.list[].tools.allow`/`agents.list[].tools.deny`
 - **Sandbox tool policy** (only applies when sandboxed): `tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` and `agents.list[].tools.sandbox.tools.*`
 
@@ -59,7 +60,7 @@ Rules of thumb:
 
 ### Tool groups (shorthands)
 
-For sandbox tool policy, you can use `group:*` entries that expand to multiple tools:
+Tool policies (global, agent, sandbox) support `group:*` entries that expand to multiple tools:
 
 ```json5
 {
@@ -78,6 +79,11 @@ Available groups:
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
+- `group:ui`: `browser`, `canvas`
+- `group:automation`: `cron`, `gateway`
+- `group:messaging`: `message`
+- `group:nodes`: `nodes`
+- `group:clawdbot`: all built-in Clawdbot tools (excludes provider plugins)
 
 ## Elevated: exec-only “run on host”
 

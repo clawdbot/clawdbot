@@ -93,7 +93,7 @@ export async function handleSlackAction(
   const accountId = readStringParam(params, "accountId");
   const accountOpts = accountId ? { accountId } : undefined;
   const account = resolveSlackAccount({ cfg, accountId });
-  const actionConfig = account.actions ?? cfg.slack?.actions;
+  const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
 
   if (reactionsActions.has(action)) {

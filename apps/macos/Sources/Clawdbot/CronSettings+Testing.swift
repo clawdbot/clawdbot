@@ -7,9 +7,11 @@ struct CronSettings_Previews: PreviewProvider {
         store.jobs = [
             CronJob(
                 id: "job-1",
+                agentId: "ops",
                 name: "Daily summary",
                 description: nil,
                 enabled: true,
+                deleteAfterRun: nil,
                 createdAtMs: 0,
                 updatedAtMs: 0,
                 schedule: .every(everyMs: 86_400_000, anchorMs: nil),
@@ -59,9 +61,11 @@ extension CronSettings {
 
         let job = CronJob(
             id: "job-1",
+            agentId: "ops",
             name: "Daily summary",
             description: "Summary job",
             enabled: true,
+            deleteAfterRun: nil,
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .cron(expr: "0 8 * * *", tz: "UTC"),

@@ -30,7 +30,7 @@ export type ResolvedSlackAccount = {
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = cfg.slack?.accounts;
+  const accounts = cfg.channels?.slack?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
@@ -51,7 +51,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): SlackAccountConfig | undefined {
-  const accounts = cfg.slack?.accounts;
+  const accounts = cfg.channels?.slack?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
   return accounts[accountId] as SlackAccountConfig | undefined;
 }
@@ -60,7 +60,7 @@ function mergeSlackAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): SlackAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.slack ??
+  const { accounts: _ignored, ...base } = (cfg.channels?.slack ??
     {}) as SlackAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
@@ -71,7 +71,7 @@ export function resolveSlackAccount(params: {
   accountId?: string | null;
 }): ResolvedSlackAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = params.cfg.slack?.enabled !== false;
+  const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;

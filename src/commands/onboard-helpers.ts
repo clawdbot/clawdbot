@@ -22,7 +22,7 @@ import { stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import type {
@@ -134,9 +134,14 @@ type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
+  /**
+   * Whether the URL must be wrapped in quotes when appended to argv.
+   * Needed for Windows `cmd /c start` where `&` splits commands.
+   */
+  quoteUrl?: boolean;
 };
 
-async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
+export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
   const hasDisplay = Boolean(
     process.env.DISPLAY || process.env.WAYLAND_DISPLAY,
@@ -151,7 +156,11 @@ async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   }
 
   if (platform === "win32") {
-    return { argv: ["cmd", "/c", "start", ""], command: "cmd" };
+    return {
+      argv: ["cmd", "/c", "start", ""],
+      command: "cmd",
+      quoteUrl: true,
+    };
   }
 
   if (platform === "darwin") {
@@ -223,9 +232,22 @@ function resolveSshTargetHint(): string {
 export async function openUrl(url: string): Promise<boolean> {
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) return false;
-  const command = [...resolved.argv, url];
+  const quoteUrl = resolved.quoteUrl === true;
+  const command = [...resolved.argv];
+  if (quoteUrl) {
+    if (command.at(-1) === "") {
+      // Preserve the empty title token for `start` when using verbatim args.
+      command[command.length - 1] = '""';
+    }
+    command.push(`"${url}"`);
+  } else {
+    command.push(url);
+  }
   try {
-    await runCommandWithTimeout(command, { timeoutMs: 5_000 });
+    await runCommandWithTimeout(command, {
+      timeoutMs: 5_000,
+      windowsVerbatimArguments: quoteUrl,
+    });
     return true;
   } catch {
     // ignore; we still print the URL for manual open
@@ -388,16 +410,21 @@ export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
 export function resolveControlUiLinks(params: {
   port: number;
-  bind?: "auto" | "lan" | "tailnet" | "loopback";
+  bind?: "auto" | "lan" | "loopback" | "custom";
+  customBindHost?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
   const port = params.port;
   const bind = params.bind ?? "loopback";
+  const customBindHost = params.customBindHost?.trim();
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const host =
-    bind === "tailnet" || (bind === "auto" && tailnetIPv4)
-      ? (tailnetIPv4 ?? "127.0.0.1")
-      : "127.0.0.1";
+  const host = (() => {
+    if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
+      return customBindHost;
+    }
+    if (bind === "auto" && tailnetIPv4) return tailnetIPv4 ?? "127.0.0.1";
+    return "127.0.0.1";
+  })();
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const wsPath = basePath ? basePath : "";
@@ -405,4 +432,13 @@ export function resolveControlUiLinks(params: {
     httpUrl: `http://${host}:${port}${uiPath}`,
     wsUrl: `ws://${host}:${port}${wsPath}`,
   };
+}
+
+function isValidIPv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    const n = Number.parseInt(part, 10);
+    return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
+  });
 }

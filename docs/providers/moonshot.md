@@ -10,12 +10,12 @@ Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
 provider and set the default model to `moonshot/kimi-k2-0905-preview`.
 
 Current Kimi K2 model IDs:
-<!-- moonshot-kimi-k2-ids:start -->
+{/* moonshot-kimi-k2-ids:start */}
 - `kimi-k2-0905-preview`
 - `kimi-k2-turbo-preview`
 - `kimi-k2-thinking`
 - `kimi-k2-thinking-turbo`
-<!-- moonshot-kimi-k2-ids:end -->
+{/* moonshot-kimi-k2-ids:end */}
 
 ```bash
 clawdbot onboard --auth-choice moonshot-api-key

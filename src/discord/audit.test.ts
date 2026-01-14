@@ -11,16 +11,18 @@ describe("discord audit", () => {
     const { fetchChannelPermissionsDiscord } = await import("./send.js");
 
     const cfg = {
-      discord: {
-        enabled: true,
-        token: "t",
-        groupPolicy: "allowlist",
-        guilds: {
-          "123": {
-            channels: {
-              "111": { allow: true },
-              general: { allow: true },
-              "222": { allow: false },
+      channels: {
+        discord: {
+          enabled: true,
+          token: "t",
+          groupPolicy: "allowlist",
+          guilds: {
+            "123": {
+              channels: {
+                "111": { allow: true },
+                general: { allow: true },
+                "222": { allow: false },
+              },
             },
           },
         },

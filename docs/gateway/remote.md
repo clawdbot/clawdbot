@@ -17,7 +17,7 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 
 ## Command flow (what runs where)
 
-One gateway daemon owns state + providers. Nodes are peripherals.
+One gateway daemon owns state + channels. Nodes are peripherals.
 
 Flow example (Telegram → node):
 - Telegram message arrives at the **Gateway**.

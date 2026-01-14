@@ -27,107 +27,22 @@ import { getApiKeyForModel, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { parseModelRef } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
-import { extractAssistantText } from "../pi-embedded-utils.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
 import type { AnyAgentTool } from "./common.js";
+import {
+  coerceImageAssistantText,
+  coerceImageModelConfig,
+  decodeDataUrl,
+  type ImageModelConfig,
+  resolveProviderVisionModelFromConfig,
+} from "./image-tool.helpers.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
-
-type ImageModelConfig = { primary?: string; fallbacks?: string[] };
-
-function decodeDataUrl(dataUrl: string): {
-  buffer: Buffer;
-  mimeType: string;
-  kind: "image";
-} {
-  const trimmed = dataUrl.trim();
-  const match = /^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(trimmed);
-  if (!match) throw new Error("Invalid data URL (expected base64 data: URL).");
-  const mimeType = (match[1] ?? "").trim().toLowerCase();
-  if (!mimeType.startsWith("image/")) {
-    throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
-  }
-  const b64 = (match[2] ?? "").trim();
-  const buffer = Buffer.from(b64, "base64");
-  if (buffer.length === 0) {
-    throw new Error("Invalid data URL: empty payload.");
-  }
-  return { buffer, mimeType, kind: "image" };
-}
 
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
 } as const;
-
-function coerceImageAssistantText(params: {
-  message: AssistantMessage;
-  provider: string;
-  model: string;
-}): string {
-  const stop = params.message.stopReason;
-  const errorMessage = params.message.errorMessage?.trim();
-  if (stop === "error" || stop === "aborted") {
-    throw new Error(
-      errorMessage
-        ? `Image model failed (${params.provider}/${params.model}): ${errorMessage}`
-        : `Image model failed (${params.provider}/${params.model})`,
-    );
-  }
-  if (errorMessage) {
-    throw new Error(
-      `Image model failed (${params.provider}/${params.model}): ${errorMessage}`,
-    );
-  }
-  const text = extractAssistantText(params.message);
-  if (text.trim()) return text.trim();
-  throw new Error(
-    `Image model returned no text (${params.provider}/${params.model}).`,
-  );
-}
-
-function coerceImageModelConfig(cfg?: ClawdbotConfig): ImageModelConfig {
-  const imageModel = cfg?.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[] }
-    | string
-    | undefined;
-  const primary =
-    typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
-  const fallbacks =
-    typeof imageModel === "object" ? (imageModel?.fallbacks ?? []) : [];
-  return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
-  };
-}
-
-function resolveProviderVisionModelFromConfig(params: {
-  cfg?: ClawdbotConfig;
-  provider: string;
-}): string | null {
-  const providerCfg = params.cfg?.models?.providers?.[
-    params.provider
-  ] as unknown as
-    | { models?: Array<{ id?: string; input?: string[] }> }
-    | undefined;
-  const models = providerCfg?.models ?? [];
-  const preferMinimaxVl =
-    params.provider === "minimax"
-      ? models.find(
-          (m) =>
-            (m?.id ?? "").trim() === "MiniMax-VL-01" &&
-            Array.isArray(m?.input) &&
-            m.input.includes("image"),
-        )
-      : null;
-  const picked =
-    preferMinimaxVl ??
-    models.find(
-      (m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"),
-    );
-  const id = (picked?.id ?? "").trim();
-  return id ? `${params.provider}/${id}` : null;
-}
 
 function resolveDefaultModelRef(cfg?: ClawdbotConfig): {
   provider: string;
@@ -446,6 +361,37 @@ export function createImageTool(options?: {
         ? imageRawInput.slice(1).trim()
         : imageRawInput;
       if (!imageRaw) throw new Error("image required");
+
+      // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
+      // agent/model contexts, images can be referenced as pseudo-URIs like
+      // `image:0` (e.g. "first image in the prompt"). We don't have access to a
+      // shared image registry here, so fail gracefully instead of attempting to
+      // `fs.readFile("image:0")` and producing a noisy ENOENT.
+      const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
+      const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
+      const isFileUrl = /^file:/i.test(imageRaw);
+      const isHttpUrl = /^https?:\/\//i.test(imageRaw);
+      const isDataUrl = /^data:/i.test(imageRaw);
+      if (
+        hasScheme &&
+        !looksLikeWindowsDrivePath &&
+        !isFileUrl &&
+        !isHttpUrl &&
+        !isDataUrl
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+            },
+          ],
+          details: {
+            error: "unsupported_image_reference",
+            image: imageRawInput,
+          },
+        };
+      }
       const promptRaw =
         typeof record.prompt === "string" && record.prompt.trim()
           ? record.prompt.trim()
@@ -459,12 +405,11 @@ export function createImageTool(options?: {
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
       const sandboxRoot = options?.sandboxRoot?.trim();
-      const isUrl = /^https?:\/\//i.test(imageRaw);
+      const isUrl = isHttpUrl;
       if (sandboxRoot && isUrl) {
         throw new Error("Sandboxed image tool does not allow remote URLs.");
       }
 
-      const isDataUrl = /^data:/i.test(imageRaw);
       const resolvedImage = (() => {
         if (sandboxRoot) return imageRaw;
         if (imageRaw.startsWith("~")) return resolveUserPath(imageRaw);

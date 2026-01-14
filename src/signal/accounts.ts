@@ -15,7 +15,7 @@ export type ResolvedSignalAccount = {
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = cfg.signal?.accounts;
+  const accounts = cfg.channels?.signal?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
@@ -36,7 +36,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): SignalAccountConfig | undefined {
-  const accounts = cfg.signal?.accounts;
+  const accounts = cfg.channels?.signal?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
   return accounts[accountId] as SignalAccountConfig | undefined;
 }
@@ -45,7 +45,7 @@ function mergeSignalAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): SignalAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.signal ??
+  const { accounts: _ignored, ...base } = (cfg.channels?.signal ??
     {}) as SignalAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
@@ -56,7 +56,7 @@ export function resolveSignalAccount(params: {
   accountId?: string | null;
 }): ResolvedSignalAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = params.cfg.signal?.enabled !== false;
+  const baseEnabled = params.cfg.channels?.signal?.enabled !== false;
   const merged = mergeSignalAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;

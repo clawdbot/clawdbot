@@ -45,18 +45,18 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 
 ## DM access model (pairing / allowlist / open / disabled)
 
-All current DM-capable providers support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed:
+All current DM-capable channels support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed:
 
-- `pairing` (default): unknown senders receive a short pairing code and the bot ignores their message until approved. Codes expire after 1 hour; repeated DMs won’t resend a code until a new request is created. Pending requests are capped at **3 per provider** by default.
+- `pairing` (default): unknown senders receive a short pairing code and the bot ignores their message until approved. Codes expire after 1 hour; repeated DMs won’t resend a code until a new request is created. Pending requests are capped at **3 per channel** by default.
 - `allowlist`: unknown senders are blocked (no pairing handshake).
-- `open`: allow anyone to DM (public). **Requires** the provider allowlist to include `"*"` (explicit opt-in).
+- `open`: allow anyone to DM (public). **Requires** the channel allowlist to include `"*"` (explicit opt-in).
 - `disabled`: ignore inbound DMs entirely.
 
 Approve via CLI:
 
 ```bash
-clawdbot pairing list <provider>
-clawdbot pairing approve <provider> <code>
+clawdbot pairing list <channel>
+clawdbot pairing approve <channel> <code>
 ```
 
 Details + files on disk: [Pairing](/start/pairing)
@@ -65,13 +65,13 @@ Details + files on disk: [Pairing](/start/pairing)
 
 Clawdbot has two separate “who can trigger me?” layers:
 
-- **DM allowlist** (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
-  - When `dmPolicy="pairing"`, approvals are written to `~/.clawdbot/credentials/<provider>-allowFrom.json` (merged with config allowlists).
-- **Group allowlist** (provider-specific): which groups/channels/guilds the bot will accept messages from at all.
+- **DM allowlist** (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+  - When `dmPolicy="pairing"`, approvals are written to `~/.clawdbot/credentials/<channel>-allowFrom.json` (merged with config allowlists).
+- **Group allowlist** (channel-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
-    - `whatsapp.groups`, `telegram.groups`, `imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
+    - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot *inside* a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
-    - `discord.guilds` / `slack.channels`: per-surface allowlists + mention defaults.
+    - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/concepts/groups)
@@ -145,11 +145,25 @@ Doctor can generate one for you: `clawdbot doctor --generate-gateway-token`.
 Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
 protect local WS access.
 
+### 0.6) Tailscale Serve identity headers
+
+When `gateway.auth.allowTailscale` is `true` (default for Serve), Clawdbot
+accepts Tailscale Serve identity headers (`tailscale-user-login`) as
+authentication. This only triggers for requests that hit loopback and include
+`x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by
+Tailscale.
+
+**Security rule:** do not forward these headers from your own reverse proxy. If
+you terminate TLS or proxy in front of the gateway, disable
+`gateway.auth.allowTailscale` and use token/password auth instead.
+
+See [Tailscale](/gateway/tailscale) and [Web overview](/web).
+
 ### 1) DMs: pairing by default
 
 ```json5
 {
-  whatsapp: { dmPolicy: "pairing" }
+  channels: { whatsapp: { dmPolicy: "pairing" } }
 }
 ```
 
@@ -157,9 +171,11 @@ protect local WS access.
 
 ```json
 {
-  "whatsapp": {
-    "groups": {
-      "*": { "requireMention": true }
+  "channels": {
+    "whatsapp": {
+      "groups": {
+        "*": { "requireMention": true }
+      }
     }
   },
   "agents": {

@@ -64,7 +64,7 @@ Onboarding requests TCC permissions needed for:
 
 ## 5) CLI (optional)
 
-The app can install the global `clawdbot` CLI via npm/pnpm/bun so terminal
+The app can install the global `clawdbot` CLI via npm/pnpm so terminal
 workflows and launchd tasks work out of the box.
 
 ## 6) Onboarding chat (dedicated session)

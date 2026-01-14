@@ -22,17 +22,17 @@ struct WizardCliOptions {
             case "--json":
                 opts.json = true
             case "--url":
-                opts.url = nextValue(args, index: &i)
+                opts.url = self.nextValue(args, index: &i)
             case "--token":
-                opts.token = nextValue(args, index: &i)
+                opts.token = self.nextValue(args, index: &i)
             case "--password":
-                opts.password = nextValue(args, index: &i)
+                opts.password = self.nextValue(args, index: &i)
             case "--mode":
                 if let value = nextValue(args, index: &i) {
                     opts.mode = value
                 }
             case "--workspace":
-                opts.workspace = nextValue(args, index: &i)
+                opts.workspace = self.nextValue(args, index: &i)
             default:
                 break
             }
@@ -118,7 +118,8 @@ private func printUsage() {
     clawdbot-mac-wizard
 
     Usage:
-      clawdbot-mac-wizard [--url <ws://host:port>] [--token <token>] [--password <password>] [--mode <local|remote>] [--workspace <path>] [--json]
+      clawdbot-mac-wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
+                          [--mode <local|remote>] [--workspace <path>] [--json]
 
     Options:
       --url <url>        Gateway WebSocket URL (overrides config)

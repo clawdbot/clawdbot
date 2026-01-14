@@ -146,21 +146,29 @@ export async function authorizeGatewayConnect(params: {
   const { auth, connectAuth, req } = params;
   const localDirect = isLocalDirectRequest(req);
 
-  if (auth.mode === "none") {
-    if (auth.allowTailscale && !localDirect) {
-      const tailscaleUser = getTailscaleUser(req);
-      if (!tailscaleUser) {
-        return { ok: false, reason: "tailscale_user_missing" };
-      }
-      if (!isTailscaleProxyRequest(req)) {
-        return { ok: false, reason: "tailscale_proxy_missing" };
-      }
+  if (auth.allowTailscale && !localDirect) {
+    const tailscaleUser = getTailscaleUser(req);
+    const tailscaleProxy = isTailscaleProxyRequest(req);
+
+    if (tailscaleUser && tailscaleProxy) {
       return {
         ok: true,
         method: "tailscale",
         user: tailscaleUser.login,
       };
     }
+
+    if (auth.mode === "none") {
+      if (!tailscaleUser) {
+        return { ok: false, reason: "tailscale_user_missing" };
+      }
+      if (!tailscaleProxy) {
+        return { ok: false, reason: "tailscale_proxy_missing" };
+      }
+    }
+  }
+
+  if (auth.mode === "none") {
     return { ok: true, method: "none" };
   }
 
@@ -189,21 +197,6 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_mismatch" };
     }
     return { ok: true, method: "password" };
-  }
-
-  if (auth.allowTailscale) {
-    const tailscaleUser = getTailscaleUser(req);
-    if (!tailscaleUser) {
-      return { ok: false, reason: "tailscale_user_missing" };
-    }
-    if (!isTailscaleProxyRequest(req)) {
-      return { ok: false, reason: "tailscale_proxy_missing" };
-    }
-    return {
-      ok: true,
-      method: "tailscale",
-      user: tailscaleUser.login,
-    };
   }
 
   return { ok: false, reason: "unauthorized" };

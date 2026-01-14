@@ -161,7 +161,7 @@ export function subtitleForTab(tab: Tab) {
     case "overview":
       return "Gateway status, entry points, and a fast health read.";
     case "connections":
-      return "Link providers and keep transport settings in sync.";
+      return "Link channels and keep transport settings in sync.";
     case "instances":
       return "Presence beacons from connected clients and nodes.";
     case "sessions":

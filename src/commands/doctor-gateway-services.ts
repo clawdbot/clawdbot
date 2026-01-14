@@ -100,6 +100,7 @@ export async function maybeMigrateLegacyGatewayService(
 
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({
+    env: process.env,
     profile: process.env.CLAWDBOT_PROFILE,
   });
   if (loaded) {

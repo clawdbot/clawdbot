@@ -1,21 +1,20 @@
 import chokidar from "chokidar";
-
+import {
+  type ChannelId,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
 import type {
   ClawdbotConfig,
   ConfigFileSnapshot,
   GatewayReloadMode,
 } from "../config/config.js";
-import {
-  listProviderPlugins,
-  type ProviderId,
-} from "../providers/plugins/index.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
 };
 
-export type ProviderKind = ProviderId;
+export type ChannelKind = ChannelId;
 
 export type GatewayReloadPlan = {
   changedPaths: string[];
@@ -27,7 +26,7 @@ export type GatewayReloadPlan = {
   restartBrowserControl: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
-  restartProviders: Set<ProviderKind>;
+  restartChannels: Set<ChannelKind>;
   noopPaths: string[];
 };
 
@@ -43,7 +42,7 @@ type ReloadAction =
   | "restart-browser-control"
   | "restart-cron"
   | "restart-heartbeat"
-  | `restart-provider:${ProviderId}`;
+  | `restart-channel:${ChannelId}`;
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
@@ -96,14 +95,14 @@ let cachedReloadRules: ReloadRule[] | null = null;
 
 function listReloadRules(): ReloadRule[] {
   if (cachedReloadRules) return cachedReloadRules;
-  // Provider docking: plugins contribute hot reload/no-op prefixes here.
-  const providerReloadRules: ReloadRule[] = listProviderPlugins().flatMap(
+  // Channel docking: plugins contribute hot reload/no-op prefixes here.
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap(
     (plugin) => [
       ...(plugin.reload?.configPrefixes ?? []).map(
         (prefix): ReloadRule => ({
           prefix,
           kind: "hot",
-          actions: [`restart-provider:${plugin.id}` as ReloadAction],
+          actions: [`restart-channel:${plugin.id}` as ReloadAction],
         }),
       ),
       ...(plugin.reload?.noopPrefixes ?? []).map(
@@ -116,7 +115,7 @@ function listReloadRules(): ReloadRule[] {
   );
   const rules = [
     ...BASE_RELOAD_RULES,
-    ...providerReloadRules,
+    ...channelReloadRules,
     ...BASE_RELOAD_RULES_TAIL,
   ];
   cachedReloadRules = rules;
@@ -203,14 +202,14 @@ export function buildGatewayReloadPlan(
     restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
-    restartProviders: new Set(),
+    restartChannels: new Set(),
     noopPaths: [],
   };
 
   const applyAction = (action: ReloadAction) => {
-    if (action.startsWith("restart-provider:")) {
-      const provider = action.slice("restart-provider:".length) as ProviderId;
-      plan.restartProviders.add(provider);
+    if (action.startsWith("restart-channel:")) {
+      const channel = action.slice("restart-channel:".length) as ChannelId;
+      plan.restartChannels.add(channel);
       return;
     }
     switch (action) {

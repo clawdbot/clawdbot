@@ -1,0 +1,474 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, test, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  agentCommand,
+  bridgeListConnected,
+  bridgeSendEvent,
+  bridgeStartCalls,
+  connectOk,
+  getFreePort,
+  installGatewayTestHooks,
+  onceMessage,
+  rpcReq,
+  startGatewayServer,
+  startServerWithClient,
+  testState,
+} from "./test-helpers.js";
+
+const _decodeWsData = (data: unknown): string => {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString("utf-8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
+      "utf-8",
+    );
+  }
+  return "";
+};
+
+async function waitFor(condition: () => boolean, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error("timeout waiting for condition");
+}
+
+installGatewayTestHooks();
+
+describe("gateway server node/bridge", () => {
+  test("node.list includes connected unpaired nodes with capabilities + commands", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    try {
+      const { server, ws } = await startServerWithClient();
+      try {
+        await connectOk(ws);
+
+        const reqRes = await rpcReq<{
+          status?: string;
+          request?: { requestId?: string };
+        }>(ws, "node.pair.request", {
+          nodeId: "p1",
+          displayName: "Paired",
+          platform: "iPadOS",
+          version: "dev",
+          deviceFamily: "iPad",
+          modelIdentifier: "iPad16,6",
+          caps: ["canvas"],
+          commands: ["canvas.eval"],
+          remoteIp: "10.0.0.10",
+        });
+        expect(reqRes.ok).toBe(true);
+        const requestId = reqRes.payload?.request?.requestId;
+        expect(typeof requestId).toBe("string");
+
+        const approveRes = await rpcReq(ws, "node.pair.approve", { requestId });
+        expect(approveRes.ok).toBe(true);
+
+        bridgeListConnected.mockReturnValueOnce([
+          {
+            nodeId: "p1",
+            displayName: "Paired Live",
+            platform: "iPadOS",
+            version: "dev-live",
+            remoteIp: "10.0.0.11",
+            deviceFamily: "iPad",
+            modelIdentifier: "iPad16,6",
+            caps: ["canvas", "camera"],
+            commands: ["canvas.snapshot", "canvas.eval"],
+          },
+          {
+            nodeId: "u1",
+            displayName: "Unpaired Live",
+            platform: "Android",
+            version: "dev",
+            remoteIp: "10.0.0.12",
+            deviceFamily: "Android",
+            modelIdentifier: "samsung SM-X926B",
+            caps: ["canvas"],
+            commands: ["canvas.eval"],
+          },
+        ]);
+
+        const listRes = await rpcReq<{
+          nodes?: Array<{
+            nodeId: string;
+            paired?: boolean;
+            connected?: boolean;
+            caps?: string[];
+            commands?: string[];
+            displayName?: string;
+            remoteIp?: string;
+          }>;
+        }>(ws, "node.list", {});
+        expect(listRes.ok).toBe(true);
+        const nodes = listRes.payload?.nodes ?? [];
+
+        const pairedNode = nodes.find((n) => n.nodeId === "p1");
+        expect(pairedNode).toMatchObject({
+          nodeId: "p1",
+          paired: true,
+          connected: true,
+          displayName: "Paired Live",
+          remoteIp: "10.0.0.11",
+        });
+        expect(pairedNode?.caps?.slice().sort()).toEqual(["camera", "canvas"]);
+        expect(pairedNode?.commands?.slice().sort()).toEqual([
+          "canvas.eval",
+          "canvas.snapshot",
+        ]);
+
+        const unpairedNode = nodes.find((n) => n.nodeId === "u1");
+        expect(unpairedNode).toMatchObject({
+          nodeId: "u1",
+          paired: false,
+          connected: true,
+          displayName: "Unpaired Live",
+        });
+        expect(unpairedNode?.caps).toEqual(["canvas"]);
+        expect(unpairedNode?.commands).toEqual(["canvas.eval"]);
+      } finally {
+        ws.close();
+        await server.close();
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
+    }
+  });
+
+  test("emits presence updates for bridge connect/disconnect", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    try {
+      const before = bridgeStartCalls.length;
+      const { server, ws } = await startServerWithClient();
+      try {
+        await connectOk(ws);
+        const bridgeCall = bridgeStartCalls[before];
+        expect(bridgeCall).toBeTruthy();
+
+        const waitPresenceReason = async (reason: string) => {
+          await onceMessage(
+            ws,
+            (o) => {
+              if (o.type !== "event" || o.event !== "presence") return false;
+              const payload = o.payload as { presence?: unknown } | null;
+              const list = payload?.presence;
+              if (!Array.isArray(list)) return false;
+              return list.some(
+                (p) =>
+                  typeof p === "object" &&
+                  p !== null &&
+                  (p as { instanceId?: unknown }).instanceId === "node-1" &&
+                  (p as { reason?: unknown }).reason === reason,
+              );
+            },
+            3000,
+          );
+        };
+
+        const presenceConnectedP = waitPresenceReason("node-connected");
+        await bridgeCall?.onAuthenticated?.({
+          nodeId: "node-1",
+          displayName: "Node",
+          platform: "ios",
+          version: "1.0",
+          remoteIp: "10.0.0.10",
+        });
+        await presenceConnectedP;
+
+        const presenceDisconnectedP = waitPresenceReason("node-disconnected");
+        await bridgeCall?.onDisconnected?.({
+          nodeId: "node-1",
+          displayName: "Node",
+          platform: "ios",
+          version: "1.0",
+          remoteIp: "10.0.0.10",
+        });
+        await presenceDisconnectedP;
+      } finally {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+        await server.close();
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    } finally {
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
+    }
+  });
+
+  test("bridge RPC chat.history returns session messages", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "hi" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const res = await bridgeCall?.onRequest?.("ios-node", {
+      id: "r1",
+      method: "chat.history",
+      paramsJSON: JSON.stringify({ sessionKey: "main" }),
+    });
+
+    expect(res?.ok).toBe(true);
+    const payload = JSON.parse(
+      String((res as { payloadJSON?: string }).payloadJSON ?? "{}"),
+    ) as {
+      sessionKey?: string;
+      sessionId?: string;
+      messages?: unknown[];
+    };
+    expect(payload.sessionKey).toBe("main");
+    expect(payload.sessionId).toBe("sess-main");
+    expect(Array.isArray(payload.messages)).toBe(true);
+    expect(payload.messages?.length).toBeGreaterThan(0);
+
+    await server.close();
+  });
+
+  test("bridge RPC sessions.list returns session rows", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const res = await bridgeCall?.onRequest?.("ios-node", {
+      id: "r1",
+      method: "sessions.list",
+      paramsJSON: JSON.stringify({
+        includeGlobal: true,
+        includeUnknown: false,
+        limit: 50,
+      }),
+    });
+
+    expect(res?.ok).toBe(true);
+    const payload = JSON.parse(
+      String((res as { payloadJSON?: string }).payloadJSON ?? "{}"),
+    ) as {
+      sessions?: unknown[];
+      count?: number;
+      path?: string;
+    };
+    expect(Array.isArray(payload.sessions)).toBe(true);
+    expect(typeof payload.count).toBe("number");
+    expect(typeof payload.path).toBe("string");
+
+    const resolveRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "r2",
+      method: "sessions.resolve",
+      paramsJSON: JSON.stringify({ key: "main" }),
+    });
+    expect(resolveRes?.ok).toBe(true);
+    const resolvedPayload = JSON.parse(
+      String((resolveRes as { payloadJSON?: string }).payloadJSON ?? "{}"),
+    ) as { key?: string };
+    expect(resolvedPayload.key).toBe("agent:main:main");
+
+    await server.close();
+  });
+
+  test("bridge chat events are pushed to subscribed nodes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onEvent).toBeDefined();
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    await bridgeCall?.onEvent?.("ios-node", {
+      event: "chat.subscribe",
+      payloadJSON: JSON.stringify({ sessionKey: "main" }),
+    });
+
+    bridgeSendEvent.mockClear();
+
+    const reqRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "s1",
+      method: "chat.send",
+      paramsJSON: JSON.stringify({
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-bridge-chat",
+        timeoutMs: 30_000,
+      }),
+    });
+    expect(reqRes?.ok).toBe(true);
+
+    emitAgentEvent({
+      runId: "sess-main",
+      seq: 1,
+      ts: Date.now(),
+      stream: "assistant",
+      data: { text: "hi from agent" },
+    });
+    emitAgentEvent({
+      runId: "sess-main",
+      seq: 2,
+      ts: Date.now(),
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    await new Promise((r) => setTimeout(r, 25));
+
+    expect(bridgeSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "ios-node",
+        event: "agent",
+      }),
+    );
+
+    expect(bridgeSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "ios-node",
+        event: "chat",
+      }),
+    );
+
+    await server.close();
+  });
+
+  test("bridge chat.send forwards image attachments to agentCommand", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
+
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
+    const reqRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "img-1",
+      method: "chat.send",
+      paramsJSON: JSON.stringify({
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: "idem-bridge-img",
+        attachments: [
+          {
+            type: "image",
+            fileName: "dot.png",
+            content: `data:image/png;base64,${pngB64}`,
+          },
+        ],
+      }),
+    });
+    expect(reqRes?.ok).toBe(true);
+
+    await waitFor(() => spy.mock.calls.length > callsBefore, 8000);
+    const call = spy.mock.calls.at(-1)?.[0] as
+      | { images?: Array<{ type: string; data: string; mimeType: string }> }
+      | undefined;
+    expect(call?.images).toEqual([
+      { type: "image", data: pngB64, mimeType: "image/png" },
+    ]);
+
+    await server.close();
+  });
+});

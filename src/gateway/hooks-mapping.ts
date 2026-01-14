@@ -6,7 +6,7 @@ import {
   type HookMappingConfig,
   type HooksConfig,
 } from "../config/config.js";
-import type { HookMessageProvider } from "./hooks.js";
+import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -19,7 +19,7 @@ export type HookMappingResolved = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  provider?: HookMessageProvider;
+  channel?: HookMessageChannel;
   to?: string;
   model?: string;
   thinking?: string;
@@ -52,7 +52,7 @@ export type HookAction =
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       deliver?: boolean;
-      provider?: HookMessageProvider;
+      channel?: HookMessageChannel;
       to?: string;
       model?: string;
       thinking?: string;
@@ -90,7 +90,7 @@ type HookTransformResult = Partial<{
   name: string;
   sessionKey: string;
   deliver: boolean;
-  provider: HookMessageProvider;
+  channel: HookMessageChannel;
   to: string;
   model: string;
   thinking: string;
@@ -179,7 +179,7 @@ function normalizeHookMapping(
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
-    provider: mapping.provider,
+    channel: mapping.channel,
     to: mapping.to,
     model: mapping.model,
     thinking: mapping.thinking,
@@ -225,7 +225,7 @@ function buildActionFromMapping(
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       deliver: mapping.deliver,
-      provider: mapping.provider,
+      channel: mapping.channel,
       to: renderOptional(mapping.to, ctx),
       model: renderOptional(mapping.model, ctx),
       thinking: renderOptional(mapping.thinking, ctx),
@@ -276,7 +276,7 @@ function mergeAction(
       typeof override.deliver === "boolean"
         ? override.deliver
         : baseAgent?.deliver,
-    provider: override.provider ?? baseAgent?.provider,
+    channel: override.channel ?? baseAgent?.channel,
     to: override.to ?? baseAgent?.to,
     model: override.model ?? baseAgent?.model,
     thinking: override.thinking ?? baseAgent?.thinking,

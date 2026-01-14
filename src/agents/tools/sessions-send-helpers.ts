@@ -1,8 +1,8 @@
-import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -10,7 +10,7 @@ const DEFAULT_PING_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 5;
 
 export type AnnounceTarget = {
-  provider: string;
+  channel: string;
   to: string;
   accountId?: string;
 };
@@ -24,29 +24,29 @@ export function resolveAnnounceTargetFromKey(
       ? rawParts.slice(2)
       : rawParts;
   if (parts.length < 3) return null;
-  const [providerRaw, kind, ...rest] = parts;
+  const [channelRaw, kind, ...rest] = parts;
   if (kind !== "group" && kind !== "channel") return null;
   const id = rest.join(":").trim();
   if (!id) return null;
-  if (!providerRaw) return null;
-  const normalizedProvider = normalizeProviderId(providerRaw);
-  const provider = normalizedProvider ?? providerRaw.toLowerCase();
-  const kindTarget = normalizedProvider
+  if (!channelRaw) return null;
+  const normalizedChannel = normalizeChannelId(channelRaw);
+  const channel = normalizedChannel ?? channelRaw.toLowerCase();
+  const kindTarget = normalizedChannel
     ? kind === "channel"
       ? `channel:${id}`
       : `group:${id}`
     : id;
-  const normalized = normalizedProvider
-    ? getProviderPlugin(normalizedProvider)?.messaging?.normalizeTarget?.(
+  const normalized = normalizedChannel
+    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(
         kindTarget,
       )
     : undefined;
-  return { provider, to: normalized ?? kindTarget };
+  return { channel, to: normalized ?? kindTarget };
 }
 
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   targetSessionKey: string;
 }) {
   const lines = [
@@ -54,8 +54,8 @@ export function buildAgentToAgentMessageContext(params: {
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterProvider
-      ? `Agent 1 (requester) provider: ${params.requesterProvider}.`
+    params.requesterChannel
+      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
   ].filter(Boolean);
@@ -64,9 +64,9 @@ export function buildAgentToAgentMessageContext(params: {
 
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   targetSessionKey: string;
-  targetProvider?: string;
+  targetChannel?: string;
   currentRole: "requester" | "target";
   turn: number;
   maxTurns: number;
@@ -82,12 +82,12 @@ export function buildAgentToAgentReplyContext(params: {
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterProvider
-      ? `Agent 1 (requester) provider: ${params.requesterProvider}.`
+    params.requesterChannel
+      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetProvider
-      ? `Agent 2 (target) provider: ${params.targetProvider}.`
+    params.targetChannel
+      ? `Agent 2 (target) channel: ${params.targetChannel}.`
       : undefined,
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
@@ -96,9 +96,9 @@ export function buildAgentToAgentReplyContext(params: {
 
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   targetSessionKey: string;
-  targetProvider?: string;
+  targetChannel?: string;
   originalMessage: string;
   roundOneReply?: string;
   latestReply?: string;
@@ -108,12 +108,12 @@ export function buildAgentToAgentAnnounceContext(params: {
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterProvider
-      ? `Agent 1 (requester) provider: ${params.requesterProvider}.`
+    params.requesterChannel
+      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetProvider
-      ? `Agent 2 (target) provider: ${params.targetProvider}.`
+    params.targetChannel
+      ? `Agent 2 (target) channel: ${params.targetChannel}.`
       : undefined,
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
@@ -123,7 +123,7 @@ export function buildAgentToAgentAnnounceContext(params: {
       ? `Latest reply: ${params.latestReply}`
       : "Latest reply: (not available).",
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
-    "Any other reply will be posted to the target provider.",
+    "Any other reply will be posted to the target channel.",
     "After this reply, the agent-to-agent conversation is over.",
   ].filter(Boolean);
   return lines.join("\n");

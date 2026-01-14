@@ -17,7 +17,7 @@ describeLive("minimax live", () => {
       api: "anthropic-messages",
       provider: "minimax",
       baseUrl: MINIMAX_BASE_URL,
-      reasoning: MINIMAX_MODEL === "MiniMax-M2",
+      reasoning: false,
       input: ["text"],
       // Pricing: placeholder values (per 1M tokens, multiplied by 1000 for display)
       cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },

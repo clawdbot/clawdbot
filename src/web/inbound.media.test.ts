@@ -24,8 +24,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: vi.fn().mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"], // Allow all in tests
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"], // Allow all in tests
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -36,9 +38,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: (...args: unknown[]) =>
+  readChannelAllowFromStore: (...args: unknown[]) =>
     readAllowFromStoreMock(...args),
-  upsertProviderPairingRequest: (...args: unknown[]) =>
+  upsertChannelPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
 

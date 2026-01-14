@@ -187,7 +187,7 @@ actor BridgeServer {
                 thinking: "low",
                 deliver: false,
                 to: nil,
-                provider: .last))
+                channel: .last))
 
         case "agent.request":
             guard let json = evt.payloadJSON, let data = json.data(using: .utf8) else {
@@ -205,7 +205,7 @@ actor BridgeServer {
                 ?? "node-\(nodeId)"
             let thinking = link.thinking?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             let to = link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            let provider = GatewayAgentProvider(raw: link.channel)
+            let channel = GatewayAgentChannel(raw: link.channel)
 
             _ = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
                 message: message,
@@ -213,7 +213,7 @@ actor BridgeServer {
                 thinking: thinking,
                 deliver: link.deliver,
                 to: to,
-                provider: provider))
+                channel: channel))
 
         default:
             break

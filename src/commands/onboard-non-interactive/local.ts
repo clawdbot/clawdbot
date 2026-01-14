@@ -1,0 +1,117 @@
+import type { ClawdbotConfig } from "../../config/config.js";
+import {
+  CONFIG_PATH_CLAWDBOT,
+  resolveGatewayPort,
+  writeConfigFile,
+} from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { sleep } from "../../utils.js";
+import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
+import { healthCommand } from "../health.js";
+import {
+  applyWizardMetadata,
+  DEFAULT_WORKSPACE,
+  ensureWorkspaceAndSessions,
+} from "../onboard-helpers.js";
+import type { OnboardOptions } from "../onboard-types.js";
+
+import { applyNonInteractiveAuthChoice } from "./local/auth-choice.js";
+import { installGatewayDaemonNonInteractive } from "./local/daemon-install.js";
+import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
+import { logNonInteractiveOnboardingJson } from "./local/output.js";
+import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
+import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
+
+export async function runNonInteractiveOnboardingLocal(params: {
+  opts: OnboardOptions;
+  runtime: RuntimeEnv;
+  baseConfig: ClawdbotConfig;
+}) {
+  const { opts, runtime, baseConfig } = params;
+  const mode = "local" as const;
+
+  const workspaceDir = resolveNonInteractiveWorkspaceDir({
+    opts,
+    baseConfig,
+    defaultWorkspaceDir: DEFAULT_WORKSPACE,
+  });
+
+  let nextConfig: ClawdbotConfig = {
+    ...baseConfig,
+    agents: {
+      ...baseConfig.agents,
+      defaults: {
+        ...baseConfig.agents?.defaults,
+        workspace: workspaceDir,
+      },
+    },
+    gateway: {
+      ...baseConfig.gateway,
+      mode: "local",
+    },
+  };
+
+  const authChoice = opts.authChoice ?? "skip";
+  const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+  });
+  if (!nextConfigAfterAuth) return;
+  nextConfig = nextConfigAfterAuth;
+
+  const gatewayBasePort = resolveGatewayPort(baseConfig);
+  const gatewayResult = applyNonInteractiveGatewayConfig({
+    nextConfig,
+    opts,
+    runtime,
+    defaultPort: gatewayBasePort,
+  });
+  if (!gatewayResult) return;
+  nextConfig = gatewayResult.nextConfig;
+
+  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+
+  nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
+  await writeConfigFile(nextConfig);
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+
+  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+  });
+
+  await installGatewayDaemonNonInteractive({
+    nextConfig,
+    opts,
+    runtime,
+    port: gatewayResult.port,
+    gatewayToken: gatewayResult.gatewayToken,
+  });
+
+  const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  if (!opts.skipHealth) {
+    await sleep(1000);
+    // Health check runs against the gateway; small delay avoids flakiness during install/start.
+    await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+  }
+
+  logNonInteractiveOnboardingJson({
+    opts,
+    runtime,
+    mode,
+    workspaceDir,
+    authChoice,
+    gateway: {
+      port: gatewayResult.port,
+      bind: gatewayResult.bind,
+      authMode: gatewayResult.authMode,
+      tailscaleMode: gatewayResult.tailscaleMode,
+    },
+    installDaemon: Boolean(opts.installDaemon),
+    daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
+    skipSkills: Boolean(opts.skipSkills),
+    skipHealth: Boolean(opts.skipHealth),
+  });
+}

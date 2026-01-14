@@ -15,7 +15,7 @@ export type OverviewProps = {
   sessionsCount: number | null;
   cronEnabled: boolean | null;
   cronNext: number | null;
-  lastProvidersRefresh: number | null;
+  lastChannelsRefresh: number | null;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -109,10 +109,10 @@ export function renderOverview(props: OverviewProps) {
             <div class="stat-value">${tick}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Last Providers Refresh</div>
+            <div class="stat-label">Last Channels Refresh</div>
             <div class="stat-value">
-              ${props.lastProvidersRefresh
-                ? formatAgo(props.lastProvidersRefresh)
+              ${props.lastChannelsRefresh
+                ? formatAgo(props.lastChannelsRefresh)
                 : "n/a"}
             </div>
           </div>

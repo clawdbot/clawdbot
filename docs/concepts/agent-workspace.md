@@ -109,8 +109,10 @@ See [Memory](/concepts/memory) for the workflow and automatic memory flush.
   - Canvas UI files for node displays (for example `canvas/index.html`).
 
 If any bootstrap file is missing, Clawdbot injects a "missing file" marker into
-the session and continues. `clawdbot setup` can recreate missing defaults
-without overwriting existing files.
+the session and continues. Large bootstrap files are truncated when injected;
+adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
+`clawdbot setup` can recreate missing defaults without overwriting existing
+files.
 
 ## What is NOT in the workspace
 
@@ -217,6 +219,6 @@ Suggested `.gitignore` starter:
 ## Advanced notes
 
 - Multi-agent routing can use different workspaces per agent. See
-  [Provider routing](/concepts/provider-routing) for routing configuration.
+  [Channel routing](/concepts/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox
   workspaces under `agents.defaults.sandbox.workspaceRoot`.

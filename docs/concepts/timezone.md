@@ -21,7 +21,7 @@ The timestamp in the envelope is **always UTC**, with minutes precision.
 
 ## Tool payloads (raw provider data)
 
-Tool calls (`discord.readMessages`, `slack.readMessages`, etc.) return **raw provider timestamps**.
+Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages`, etc.) return **raw provider timestamps**.
 These are typically UTC ISO strings (Discord) or UTC epoch strings (Slack). We do not rewrite them.
 
 ## User timezone for the system prompt

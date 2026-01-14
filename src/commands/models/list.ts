@@ -727,6 +727,7 @@ export async function modelsStatusCommand(
     "openrouter",
     "zai",
     "mistral",
+    "synthetic",
   ];
   for (const provider of envProbeProviders) {
     if (resolveEnvApiKey(provider)) providersFromEnv.add(provider);

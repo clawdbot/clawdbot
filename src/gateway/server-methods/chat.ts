@@ -7,7 +7,7 @@ import { mergeSessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -242,7 +242,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       cfg,
       entry,
       sessionKey: p.sessionKey,
-      provider: entry?.provider,
+      channel: entry?.channel,
       chatType: entry?.chatType,
     });
     if (sendPolicy === "deny") {
@@ -331,7 +331,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           thinking: p.thinking,
           deliver: p.deliver,
           timeout: Math.ceil(timeoutMs / 1000).toString(),
-          messageProvider: INTERNAL_MESSAGE_PROVIDER,
+          messageChannel: INTERNAL_MESSAGE_CHANNEL,
           abortSignal: abortController.signal,
         },
         defaultRuntime,

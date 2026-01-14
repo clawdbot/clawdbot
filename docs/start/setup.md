@@ -46,7 +46,7 @@ pnpm clawdbot setup
 4) Link surfaces (example: WhatsApp):
 
 ```bash
-clawdbot providers login
+clawdbot channels login
 ```
 
 5) Sanity check:
@@ -56,7 +56,7 @@ clawdbot health
 ```
 
 If onboarding is not available in your build:
-- Run `clawdbot setup`, then `clawdbot providers login`, then start the Gateway manually (`clawdbot gateway`).
+- Run `clawdbot setup`, then `clawdbot channels login`, then start the Gateway manually (`clawdbot gateway`).
 
 ## Bleeding edge workflow (Gateway in a terminal)
 
@@ -124,6 +124,6 @@ user service (no lingering needed). See [Gateway runbook](/gateway) for the syst
 
 - [Gateway runbook](/gateway) (flags, supervision, ports)
 - [Gateway configuration](/gateway/configuration) (config schema + examples)
-- [Discord](/providers/discord) and [Telegram](/providers/telegram) (reply tags + replyToMode settings)
+- [Discord](/channels/discord) and [Telegram](/channels/telegram) (reply tags + replyToMode settings)
 - [Clawdbot assistant setup](/start/clawd)
 - [macOS app](/platforms/macos) (gateway lifecycle)

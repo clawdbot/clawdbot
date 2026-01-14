@@ -9,7 +9,7 @@ When Clawdbot misbehaves, here's how to fix it.
 
 Start with the FAQ’s [First 60 seconds](/start/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
 
-Provider-specific shortcuts: [/providers/troubleshooting](/providers/troubleshooting)
+Provider-specific shortcuts: [/channels/troubleshooting](/channels/troubleshooting)
 
 ## Status & Diagnostics
 
@@ -21,7 +21,7 @@ Quick triage commands (in order):
 | `clawdbot status --all` | Full local diagnosis (read-only, pasteable, safe-ish) incl. log tail | When you need to share a debug report |
 | `clawdbot status --deep` | Runs gateway health checks (incl. provider probes; requires reachable gateway) | When “configured” doesn’t mean “working” |
 | `clawdbot gateway status` | Gateway discovery + reachability (local + remote targets) | When you suspect you’re probing the wrong gateway |
-| `clawdbot providers status --probe` | Asks the running gateway for provider status (and optionally probes) | When gateway is reachable but providers misbehave |
+| `clawdbot channels status --probe` | Asks the running gateway for channel status (and optionally probes) | When gateway is reachable but channels misbehave |
 | `clawdbot daemon status` | Supervisor state (launchd/systemd/schtasks), runtime PID/exit, last gateway error | When the daemon “looks loaded” but nothing runs |
 | `clawdbot logs --follow` | Live logs (best signal for runtime issues) | When you need the actual failure reason |
 
@@ -75,7 +75,7 @@ managers (pnpm/npm) because the daemon does not load your shell init. Runtime
 variables like `DISPLAY` should live in `~/.clawdbot/.env` (loaded early by the
 gateway).
 
-WhatsApp + Telegram providers require **Node**; Bun is unsupported. If your
+WhatsApp + Telegram channels require **Node**; Bun is unsupported. If your
 service was installed with Bun or a version-managed Node path, run `clawdbot doctor`
 to migrate to a system Node install.
 
@@ -174,9 +174,9 @@ Look for `AllowFrom: ...` in the output.
 
 **Check 2:** For group chats, is mention required?
 ```bash
-# The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
+# The message must match mentionPatterns or explicit mentions; defaults live in channel groups/guilds.
 # Multi-agent: `agents.list[].groupChat.mentionPatterns` overrides global patterns.
-grep -n "agents\\|groupChat\\|mentionPatterns\\|whatsapp\\.groups\\|telegram\\.groups\\|imessage\\.groups\\|discord\\.guilds" \
+grep -n "agents\\|groupChat\\|mentionPatterns\\|channels\\.whatsapp\\.groups\\|channels\\.telegram\\.groups\\|channels\\.imessage\\.groups\\|channels\\.discord\\.guilds" \
   "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}"
 ```
 
@@ -193,17 +193,17 @@ If `dmPolicy` is `pairing`, unknown senders should receive a code and their mess
 
 **Check 1:** Is a pending request already waiting?
 ```bash
-clawdbot pairing list <provider>
+clawdbot pairing list <channel>
 ```
 
-Pending DM pairing requests are capped at **3 per provider** by default. If the list is full, new requests won’t generate a code until one is approved or expires.
+Pending DM pairing requests are capped at **3 per channel** by default. If the list is full, new requests won’t generate a code until one is approved or expires.
 
 **Check 2:** Did the request get created but no reply was sent?
 ```bash
 clawdbot logs --follow | grep "pairing request"
 ```
 
-**Check 3:** Confirm `dmPolicy` isn’t `open`/`allowlist` for that provider.
+**Check 3:** Confirm `dmPolicy` isn’t `open`/`allowlist` for that channel.
 
 ### Image + Mention Not Working
 
@@ -250,7 +250,7 @@ Or use the `process` tool to background long commands.
 ```bash
 # Check local status (creds, sessions, queued events)
 clawdbot status
-# Probe the running gateway + providers (WA connect + Telegram + Discord APIs)
+# Probe the running gateway + channels (WA connect + Telegram + Discord APIs)
 clawdbot status --deep
 
 # View recent connection events
@@ -266,9 +266,9 @@ clawdbot gateway --verbose
 If you’re logged out / unlinked:
 
 ```bash
-clawdbot providers logout
+clawdbot channels logout
 trash "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}/credentials" # if logout can't cleanly remove everything
-clawdbot providers login --verbose       # re-scan QR
+clawdbot channels login --verbose       # re-scan QR
 ```
 
 ### Media Send Failing
@@ -356,7 +356,7 @@ Get verbose logging:
 #
 # Then run verbose commands to mirror debug output to stdout:
 clawdbot gateway --verbose
-clawdbot providers login --verbose
+clawdbot channels login --verbose
 ```
 
 ## Log Locations
@@ -401,7 +401,7 @@ clawdbot daemon stop
 # clawdbot daemon uninstall
 
 trash "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}"
-clawdbot providers login         # re-pair WhatsApp
+clawdbot channels login         # re-pair WhatsApp
 clawdbot daemon restart           # or: clawdbot gateway
 ```
 

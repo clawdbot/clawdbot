@@ -9,6 +9,13 @@ import {
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import {
   type ClawdbotConfig,
@@ -27,14 +34,14 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { probeGateway } from "../gateway/probe.js";
 import { listAgentsForGateway } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
+import { buildChannelSummary } from "../infra/channel-summary.js";
+import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
-import { buildProviderSummary } from "../infra/provider-summary.js";
 import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
-import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import {
@@ -43,22 +50,15 @@ import {
   type UpdateCheckResult,
 } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
-import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
-import type {
-  ProviderAccountSnapshot,
-  ProviderId,
-  ProviderPlugin,
-} from "../providers/plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
-import { formatHealthProviderLines, type HealthSummary } from "./health.js";
+import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
+import { buildChannelsTable } from "./status-all/channels.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
-import { buildProvidersTable } from "./status-all/providers.js";
 import { statusAllCommand } from "./status-all.js";
 
 export type SessionStatus = {
@@ -84,14 +84,14 @@ export type SessionStatus = {
 };
 
 export type StatusSummary = {
-  linkProvider?: {
-    id: ProviderId;
+  linkChannel?: {
+    id: ChannelId;
     label: string;
     linked: boolean;
     authAgeMs: number | null;
   };
   heartbeatSeconds: number;
-  providerSummary: string[];
+  channelSummary: string[];
   queuedSystemEvents: string[];
   sessions: {
     path: string;
@@ -101,20 +101,20 @@ export type StatusSummary = {
   };
 };
 
-type LinkProviderContext = {
+type LinkChannelContext = {
   linked: boolean;
   authAgeMs: number | null;
   account?: unknown;
   accountId?: string;
-  plugin: ProviderPlugin;
+  plugin: ChannelPlugin;
 };
 
-async function resolveLinkProviderContext(
+async function resolveLinkChannelContext(
   cfg: ClawdbotConfig,
-): Promise<LinkProviderContext | null> {
-  for (const plugin of listProviderPlugins()) {
+): Promise<LinkChannelContext | null> {
+  for (const plugin of listChannelPlugins()) {
     const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveProviderDefaultAccountId({
+    const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
       cfg,
       accountIds,
@@ -132,9 +132,9 @@ async function resolveLinkProviderContext(
           accountId: defaultAccountId,
           enabled,
           configured,
-        } as ProviderAccountSnapshot);
-    const summary = plugin.status?.buildProviderSummary
-      ? await plugin.status.buildProviderSummary({
+        } as ChannelAccountSnapshot);
+    const summary = plugin.status?.buildChannelSummary
+      ? await plugin.status.buildChannelSummary({
           account,
           cfg,
           defaultAccountId,
@@ -158,9 +158,9 @@ async function resolveLinkProviderContext(
 
 export async function getStatusSummary(): Promise<StatusSummary> {
   const cfg = loadConfig();
-  const linkContext = await resolveLinkProviderContext(cfg);
+  const linkContext = await resolveLinkChannelContext(cfg);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
-  const providerSummary = await buildProviderSummary(cfg, {
+  const channelSummary = await buildChannelSummary(cfg, {
     colorize: true,
     includeAllowFrom: true,
   });
@@ -228,16 +228,16 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const recent = sessions.slice(0, 5);
 
   return {
-    linkProvider: linkContext
+    linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
-          label: linkContext.plugin.meta.label ?? "Provider",
+          label: linkContext.plugin.meta.label ?? "Channel",
           linked: linkContext.linked,
           authAgeMs: linkContext.authAgeMs,
         }
       : undefined,
     heartbeatSeconds,
-    providerSummary,
+    channelSummary,
     queuedSystemEvents,
     sessions: {
       path: storePath,
@@ -336,7 +336,10 @@ async function getDaemonStatusSummary(): Promise<{
     const service = resolveGatewayService();
     const [loaded, runtime, command] = await Promise.all([
       service
-        .isLoaded({ profile: process.env.CLAWDBOT_PROFILE })
+        .isLoaded({
+          env: process.env,
+          profile: process.env.CLAWDBOT_PROFILE,
+        })
         .catch(() => false),
       service.readRuntime(process.env).catch(() => undefined),
       service.readCommand(process.env).catch(() => null),
@@ -672,10 +675,10 @@ export async function statusCommand(
         : null;
       progress.tick();
 
-      progress.setLabel("Querying provider status…");
-      const providersStatus = gatewayReachable
+      progress.setLabel("Querying channel status…");
+      const channelsStatus = gatewayReachable
         ? await callGateway<Record<string, unknown>>({
-            method: "providers.status",
+            method: "channels.status",
             params: {
               probe: false,
               timeoutMs: Math.min(8000, opts.timeoutMs ?? 10_000),
@@ -686,13 +689,13 @@ export async function statusCommand(
             ),
           }).catch(() => null)
         : null;
-      const providerIssues = providersStatus
-        ? collectProvidersStatusIssues(providersStatus)
+      const channelIssues = channelsStatus
+        ? collectChannelStatusIssues(channelsStatus)
         : [];
       progress.tick();
 
-      progress.setLabel("Summarizing providers…");
-      const providers = await buildProvidersTable(cfg, {
+      progress.setLabel("Summarizing channels…");
+      const channels = await buildChannelsTable(cfg, {
         // Show token previews in regular status; keep `status --all` redacted.
         // Set `CLAWDBOT_SHOW_SECRETS=0` to force redaction.
         showSecrets: process.env.CLAWDBOT_SHOW_SECRETS?.trim() !== "0",
@@ -719,9 +722,9 @@ export async function statusCommand(
         gatewayProbe,
         gatewayReachable,
         gatewaySelf,
-        providerIssues,
+        channelIssues,
         agentStatus,
-        providers,
+        channels,
         summary,
       };
     },
@@ -740,9 +743,9 @@ export async function statusCommand(
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
-    providerIssues,
+    channelIssues,
     agentStatus,
-    providers,
+    channels,
     summary,
   } = scan;
   const usage = opts.usage
@@ -818,6 +821,7 @@ export async function statusCommand(
     const links = resolveControlUiLinks({
       port: resolveGatewayPort(cfg),
       bind: cfg.gateway?.bind,
+      customBindHost: cfg.gateway?.customBindHost,
       basePath: cfg.gateway?.controlUi?.basePath,
     });
     return links.httpUrl;
@@ -928,11 +932,11 @@ export async function statusCommand(
   );
 
   runtime.log("");
-  runtime.log(theme.heading("Providers"));
-  const providerIssuesByProvider = (() => {
-    const map = new Map<string, typeof providerIssues>();
-    for (const issue of providerIssues) {
-      const key = issue.provider;
+  runtime.log(theme.heading("Channels"));
+  const channelIssuesByChannel = (() => {
+    const map = new Map<string, typeof channelIssues>();
+    for (const issue of channelIssues) {
+      const key = issue.channel;
       const list = map.get(key);
       if (list) list.push(issue);
       else map.set(key, [issue]);
@@ -943,13 +947,13 @@ export async function statusCommand(
     renderTable({
       width: tableWidth,
       columns: [
-        { key: "Provider", header: "Provider", minWidth: 10 },
+        { key: "Channel", header: "Channel", minWidth: 10 },
         { key: "Enabled", header: "Enabled", minWidth: 7 },
         { key: "State", header: "State", minWidth: 8 },
         { key: "Detail", header: "Detail", flex: true, minWidth: 24 },
       ],
-      rows: providers.rows.map((row) => {
-        const issues = providerIssuesByProvider.get(row.id) ?? [];
+      rows: channels.rows.map((row) => {
+        const issues = channelIssuesByChannel.get(row.id) ?? [];
         const effectiveState =
           row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
         const issueSuffix =
@@ -957,7 +961,7 @@ export async function statusCommand(
             ? ` · ${warn(`gateway: ${shortenText(issues[0]?.message ?? "issue", 84)}`)}`
             : "";
         return {
-          Provider: row.provider,
+          Channel: row.label,
           Enabled: row.enabled ? ok("ON") : muted("OFF"),
           State:
             effectiveState === "ok"
@@ -1028,15 +1032,15 @@ export async function statusCommand(
     runtime.log(theme.heading("Health"));
     const rows: Array<Record<string, string>> = [];
     rows.push({
-      Provider: "Gateway",
+      Item: "Gateway",
       Status: ok("reachable"),
       Detail: `${health.durationMs}ms`,
     });
 
-    for (const line of formatHealthProviderLines(health)) {
+    for (const line of formatHealthChannelLines(health)) {
       const colon = line.indexOf(":");
       if (colon === -1) continue;
-      const provider = line.slice(0, colon).trim();
+      const item = line.slice(0, colon).trim();
       const detail = line.slice(colon + 1).trim();
       const normalized = detail.toLowerCase();
       const status = (() => {
@@ -1048,14 +1052,14 @@ export async function statusCommand(
         if (normalized.startsWith("not linked")) return warn("UNLINKED");
         return warn("WARN");
       })();
-      rows.push({ Provider: provider, Status: status, Detail: detail });
+      rows.push({ Item: item, Status: status, Detail: detail });
     }
 
     runtime.log(
       renderTable({
         width: tableWidth,
         columns: [
-          { key: "Provider", header: "Provider", minWidth: 10 },
+          { key: "Item", header: "Item", minWidth: 10 },
           { key: "Status", header: "Status", minWidth: 8 },
           { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
         ],
@@ -1080,7 +1084,7 @@ export async function statusCommand(
   runtime.log("  Need to share?      clawdbot status --all");
   runtime.log("  Need to debug live? clawdbot logs --follow");
   if (gatewayReachable) {
-    runtime.log("  Need to test providers? clawdbot status --deep");
+    runtime.log("  Need to test channels? clawdbot status --deep");
   } else {
     runtime.log("  Fix reachability first: clawdbot gateway status");
   }

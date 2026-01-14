@@ -248,7 +248,7 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   if (legacyAckReaction) {
-    const hasWhatsAppAck = cfg.whatsapp?.ackReaction !== undefined;
+    const hasWhatsAppAck = cfg.channels?.whatsapp?.ackReaction !== undefined;
     if (!hasWhatsAppAck) {
       const legacyScope = cfg.messages?.ackReactionScope ?? "group-mentions";
       let direct = true;
@@ -268,13 +268,16 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
       }
       next = {
         ...next,
-        whatsapp: {
-          ...next.whatsapp,
-          ackReaction: { emoji: legacyAckReaction, direct, group },
+        channels: {
+          ...next.channels,
+          whatsapp: {
+            ...next.channels?.whatsapp,
+            ackReaction: { emoji: legacyAckReaction, direct, group },
+          },
         },
       };
       changes.push(
-        `Copied messages.ackReaction → whatsapp.ackReaction (scope: ${legacyScope}).`,
+        `Copied messages.ackReaction → channels.whatsapp.ackReaction (scope: ${legacyScope}).`,
       );
     }
   }

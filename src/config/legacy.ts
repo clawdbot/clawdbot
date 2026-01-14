@@ -122,125 +122,283 @@ const ensureAgentEntry = (
 
 const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
+    path: ["whatsapp"],
+    message:
+      "whatsapp config moved to channels.whatsapp (auto-migrated on load).",
+  },
+  {
+    path: ["telegram"],
+    message:
+      "telegram config moved to channels.telegram (auto-migrated on load).",
+  },
+  {
+    path: ["discord"],
+    message:
+      "discord config moved to channels.discord (auto-migrated on load).",
+  },
+  {
+    path: ["slack"],
+    message: "slack config moved to channels.slack (auto-migrated on load).",
+  },
+  {
+    path: ["signal"],
+    message: "signal config moved to channels.signal (auto-migrated on load).",
+  },
+  {
+    path: ["imessage"],
+    message:
+      "imessage config moved to channels.imessage (auto-migrated on load).",
+  },
+  {
+    path: ["msteams"],
+    message:
+      "msteams config moved to channels.msteams (auto-migrated on load).",
+  },
+  {
     path: ["routing", "allowFrom"],
     message:
-      "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdbot doctor` to migrate).",
+      "routing.allowFrom was removed; use channels.whatsapp.allowFrom instead (auto-migrated on load).",
   },
   {
     path: ["routing", "bindings"],
     message:
-      "routing.bindings was moved; use top-level bindings instead (run `clawdbot doctor` to migrate).",
+      "routing.bindings was moved; use top-level bindings instead (auto-migrated on load).",
   },
   {
     path: ["routing", "agents"],
     message:
-      "routing.agents was moved; use agents.list instead (run `clawdbot doctor` to migrate).",
+      "routing.agents was moved; use agents.list instead (auto-migrated on load).",
   },
   {
     path: ["routing", "defaultAgentId"],
     message:
-      "routing.defaultAgentId was moved; use agents.list[].default instead (run `clawdbot doctor` to migrate).",
+      "routing.defaultAgentId was moved; use agents.list[].default instead (auto-migrated on load).",
   },
   {
     path: ["routing", "agentToAgent"],
     message:
-      "routing.agentToAgent was moved; use tools.agentToAgent instead (run `clawdbot doctor` to migrate).",
+      "routing.agentToAgent was moved; use tools.agentToAgent instead (auto-migrated on load).",
   },
   {
     path: ["routing", "groupChat", "requireMention"],
     message:
-      'routing.groupChat.requireMention was removed; use whatsapp/telegram/imessage groups defaults (e.g. whatsapp.groups."*".requireMention) instead (run `clawdbot doctor` to migrate).',
+      'routing.groupChat.requireMention was removed; use channels.whatsapp/telegram/imessage groups defaults (e.g. channels.whatsapp.groups."*".requireMention) instead (auto-migrated on load).',
   },
   {
     path: ["routing", "groupChat", "mentionPatterns"],
     message:
-      "routing.groupChat.mentionPatterns was moved; use agents.list[].groupChat.mentionPatterns or messages.groupChat.mentionPatterns instead (run `clawdbot doctor` to migrate).",
+      "routing.groupChat.mentionPatterns was moved; use agents.list[].groupChat.mentionPatterns or messages.groupChat.mentionPatterns instead (auto-migrated on load).",
   },
   {
     path: ["routing", "queue"],
     message:
-      "routing.queue was moved; use messages.queue instead (run `clawdbot doctor` to migrate).",
+      "routing.queue was moved; use messages.queue instead (auto-migrated on load).",
   },
   {
     path: ["routing", "transcribeAudio"],
     message:
-      "routing.transcribeAudio was moved; use tools.audio.transcription instead (run `clawdbot doctor` to migrate).",
+      "routing.transcribeAudio was moved; use tools.audio.transcription instead (auto-migrated on load).",
   },
   {
     path: ["telegram", "requireMention"],
     message:
-      'telegram.requireMention was removed; use telegram.groups."*".requireMention instead (run `clawdbot doctor` to migrate).',
+      'telegram.requireMention was removed; use channels.telegram.groups."*".requireMention instead (auto-migrated on load).',
   },
   {
     path: ["identity"],
     message:
-      "identity was moved; use agents.list[].identity instead (run `clawdbot doctor` to migrate).",
+      "identity was moved; use agents.list[].identity instead (auto-migrated on load).",
   },
   {
     path: ["agent"],
     message:
-      "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/exec settings) instead (run `clawdbot doctor` to migrate).",
+      "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/exec settings) instead (auto-migrated on load).",
   },
   {
     path: ["agent", "model"],
     message:
-      "agent.model string was replaced by agents.defaults.model.primary/fallbacks and agents.defaults.models (run `clawdbot doctor` to migrate).",
+      "agent.model string was replaced by agents.defaults.model.primary/fallbacks and agents.defaults.models (auto-migrated on load).",
     match: (value) => typeof value === "string",
   },
   {
     path: ["agent", "imageModel"],
     message:
-      "agent.imageModel string was replaced by agents.defaults.imageModel.primary/fallbacks (run `clawdbot doctor` to migrate).",
+      "agent.imageModel string was replaced by agents.defaults.imageModel.primary/fallbacks (auto-migrated on load).",
     match: (value) => typeof value === "string",
   },
   {
     path: ["agent", "allowedModels"],
     message:
-      "agent.allowedModels was replaced by agents.defaults.models (run `clawdbot doctor` to migrate).",
+      "agent.allowedModels was replaced by agents.defaults.models (auto-migrated on load).",
   },
   {
     path: ["agent", "modelAliases"],
     message:
-      "agent.modelAliases was replaced by agents.defaults.models.*.alias (run `clawdbot doctor` to migrate).",
+      "agent.modelAliases was replaced by agents.defaults.models.*.alias (auto-migrated on load).",
   },
   {
     path: ["agent", "modelFallbacks"],
     message:
-      "agent.modelFallbacks was replaced by agents.defaults.model.fallbacks (run `clawdbot doctor` to migrate).",
+      "agent.modelFallbacks was replaced by agents.defaults.model.fallbacks (auto-migrated on load).",
   },
   {
     path: ["agent", "imageModelFallbacks"],
     message:
-      "agent.imageModelFallbacks was replaced by agents.defaults.imageModel.fallbacks (run `clawdbot doctor` to migrate).",
+      "agent.imageModelFallbacks was replaced by agents.defaults.imageModel.fallbacks (auto-migrated on load).",
   },
   {
     path: ["gateway", "token"],
     message:
-      "gateway.token is ignored; use gateway.auth.token instead (run `clawdbot doctor` to migrate).",
+      "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },
 ];
 
 const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
   {
-    id: "routing.allowFrom->whatsapp.allowFrom",
-    describe: "Move routing.allowFrom to whatsapp.allowFrom",
+    id: "bindings.match.provider->bindings.match.channel",
+    describe: "Move bindings[].match.provider to bindings[].match.channel",
+    apply: (raw, changes) => {
+      const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
+      if (!bindings) return;
+
+      let touched = false;
+      for (const entry of bindings) {
+        if (!isRecord(entry)) continue;
+        const match = getRecord(entry.match);
+        if (!match) continue;
+        if (typeof match.channel === "string" && match.channel.trim()) continue;
+        const provider =
+          typeof match.provider === "string" ? match.provider.trim() : "";
+        if (!provider) continue;
+        match.channel = provider;
+        delete match.provider;
+        entry.match = match;
+        touched = true;
+      }
+
+      if (touched) {
+        raw.bindings = bindings;
+        changes.push(
+          "Moved bindings[].match.provider → bindings[].match.channel.",
+        );
+      }
+    },
+  },
+  {
+    id: "session.sendPolicy.rules.match.provider->match.channel",
+    describe: "Move session.sendPolicy.rules[].match.provider to match.channel",
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      if (!session) return;
+      const sendPolicy = getRecord(session.sendPolicy);
+      if (!sendPolicy) return;
+      const rules = Array.isArray(sendPolicy.rules) ? sendPolicy.rules : null;
+      if (!rules) return;
+
+      let touched = false;
+      for (const rule of rules) {
+        if (!isRecord(rule)) continue;
+        const match = getRecord(rule.match);
+        if (!match) continue;
+        if (typeof match.channel === "string" && match.channel.trim()) continue;
+        const provider =
+          typeof match.provider === "string" ? match.provider.trim() : "";
+        if (!provider) continue;
+        match.channel = provider;
+        delete match.provider;
+        rule.match = match;
+        touched = true;
+      }
+
+      if (touched) {
+        sendPolicy.rules = rules;
+        session.sendPolicy = sendPolicy;
+        raw.session = session;
+        changes.push(
+          "Moved session.sendPolicy.rules[].match.provider → match.channel.",
+        );
+      }
+    },
+  },
+  {
+    id: "messages.queue.byProvider->byChannel",
+    describe: "Move messages.queue.byProvider to messages.queue.byChannel",
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages) return;
+      const queue = getRecord(messages.queue);
+      if (!queue) return;
+      if (queue.byProvider === undefined) return;
+      if (queue.byChannel === undefined) {
+        queue.byChannel = queue.byProvider;
+        changes.push(
+          "Moved messages.queue.byProvider → messages.queue.byChannel.",
+        );
+      } else {
+        changes.push(
+          "Removed messages.queue.byProvider (messages.queue.byChannel already set).",
+        );
+      }
+      delete queue.byProvider;
+      messages.queue = queue;
+      raw.messages = messages;
+    },
+  },
+  {
+    id: "providers->channels",
+    describe: "Move provider config sections to channels.*",
+    apply: (raw, changes) => {
+      const legacyKeys = [
+        "whatsapp",
+        "telegram",
+        "discord",
+        "slack",
+        "signal",
+        "imessage",
+        "msteams",
+      ];
+      const legacyEntries = legacyKeys.filter((key) => isRecord(raw[key]));
+      if (legacyEntries.length === 0) return;
+
+      const channels = ensureRecord(raw, "channels");
+      for (const key of legacyEntries) {
+        const legacy = getRecord(raw[key]);
+        if (!legacy) continue;
+        const channelEntry = ensureRecord(channels, key);
+        const hadEntries = Object.keys(channelEntry).length > 0;
+        mergeMissing(channelEntry, legacy);
+        channels[key] = channelEntry;
+        delete raw[key];
+        changes.push(
+          hadEntries
+            ? `Merged ${key} → channels.${key}.`
+            : `Moved ${key} → channels.${key}.`,
+        );
+      }
+      raw.channels = channels;
+    },
+  },
+  {
+    id: "routing.allowFrom->channels.whatsapp.allowFrom",
+    describe: "Move routing.allowFrom to channels.whatsapp.allowFrom",
     apply: (raw, changes) => {
       const routing = raw.routing;
       if (!routing || typeof routing !== "object") return;
       const allowFrom = (routing as Record<string, unknown>).allowFrom;
       if (allowFrom === undefined) return;
 
+      const channels = ensureRecord(raw, "channels");
       const whatsapp =
-        raw.whatsapp && typeof raw.whatsapp === "object"
-          ? (raw.whatsapp as Record<string, unknown>)
+        channels.whatsapp && typeof channels.whatsapp === "object"
+          ? (channels.whatsapp as Record<string, unknown>)
           : {};
 
       if (whatsapp.allowFrom === undefined) {
         whatsapp.allowFrom = allowFrom;
-        changes.push("Moved routing.allowFrom → whatsapp.allowFrom.");
+        changes.push("Moved routing.allowFrom → channels.whatsapp.allowFrom.");
       } else {
         changes.push(
-          "Removed routing.allowFrom (whatsapp.allowFrom already set).",
+          "Removed routing.allowFrom (channels.whatsapp.allowFrom already set).",
         );
       }
 
@@ -248,13 +406,14 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       if (Object.keys(routing as Record<string, unknown>).length === 0) {
         delete raw.routing;
       }
-      raw.whatsapp = whatsapp;
+      channels.whatsapp = whatsapp;
+      raw.channels = channels;
     },
   },
   {
     id: "routing.groupChat.requireMention->groups.*.requireMention",
     describe:
-      "Move routing.groupChat.requireMention to whatsapp/telegram/imessage groups",
+      "Move routing.groupChat.requireMention to channels.whatsapp/telegram/imessage groups",
     apply: (raw, changes) => {
       const routing = raw.routing;
       if (!routing || typeof routing !== "object") return;
@@ -270,10 +429,11 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       const requireMention = groupChat.requireMention;
       if (requireMention === undefined) return;
 
+      const channels = ensureRecord(raw, "channels");
       const applyTo = (key: "whatsapp" | "telegram" | "imessage") => {
         const section =
-          raw[key] && typeof raw[key] === "object"
-            ? (raw[key] as Record<string, unknown>)
+          channels[key] && typeof channels[key] === "object"
+            ? (channels[key] as Record<string, unknown>)
             : {};
         const groups =
           section.groups && typeof section.groups === "object"
@@ -288,13 +448,13 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
           entry.requireMention = requireMention;
           groups[defaultKey] = entry;
           section.groups = groups;
-          raw[key] = section;
+          channels[key] = section;
           changes.push(
-            `Moved routing.groupChat.requireMention → ${key}.groups."*".requireMention.`,
+            `Moved routing.groupChat.requireMention → channels.${key}.groups."*".requireMention.`,
           );
         } else {
           changes.push(
-            `Removed routing.groupChat.requireMention (${key}.groups."*" already set).`,
+            `Removed routing.groupChat.requireMention (channels.${key}.groups."*" already set).`,
           );
         }
       };
@@ -310,6 +470,7 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       if (Object.keys(routing as Record<string, unknown>).length === 0) {
         delete raw.routing;
       }
+      raw.channels = channels;
     },
   },
   {
@@ -341,11 +502,12 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
     },
   },
   {
-    id: "telegram.requireMention->telegram.groups.*.requireMention",
+    id: "telegram.requireMention->channels.telegram.groups.*.requireMention",
     describe:
-      "Move telegram.requireMention to telegram.groups.*.requireMention",
+      "Move telegram.requireMention to channels.telegram.groups.*.requireMention",
     apply: (raw, changes) => {
-      const telegram = raw.telegram;
+      const channels = ensureRecord(raw, "channels");
+      const telegram = channels.telegram;
       if (!telegram || typeof telegram !== "object") return;
       const requireMention = (telegram as Record<string, unknown>)
         .requireMention;
@@ -370,18 +532,17 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
         groups[defaultKey] = entry;
         (telegram as Record<string, unknown>).groups = groups;
         changes.push(
-          'Moved telegram.requireMention → telegram.groups."*".requireMention.',
+          'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
         );
       } else {
         changes.push(
-          'Removed telegram.requireMention (telegram.groups."*" already set).',
+          'Removed telegram.requireMention (channels.telegram.groups."*" already set).',
         );
       }
 
       delete (telegram as Record<string, unknown>).requireMention;
-      if (Object.keys(telegram as Record<string, unknown>).length === 0) {
-        delete raw.telegram;
-      }
+      channels.telegram = telegram as Record<string, unknown>;
+      raw.channels = channels;
     },
   },
   {
@@ -889,6 +1050,29 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       agents.list = list;
       raw.agents = agents;
       delete raw.identity;
+    },
+  },
+  {
+    id: "bind-tailnet->auto",
+    describe: "Remap gateway/bridge bind 'tailnet' to 'auto'",
+    apply: (raw, changes) => {
+      const migrateBind = (
+        obj: Record<string, unknown> | null | undefined,
+        key: string,
+      ) => {
+        if (!obj) return;
+        const bind = obj.bind;
+        if (bind === "tailnet") {
+          obj.bind = "auto";
+          changes.push(`Migrated ${key}.bind from 'tailnet' to 'auto'.`);
+        }
+      };
+
+      const gateway = getRecord(raw.gateway);
+      migrateBind(gateway, "gateway");
+
+      const bridge = getRecord(raw.bridge);
+      migrateBind(bridge, "bridge");
     },
   },
 ];

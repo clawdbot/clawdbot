@@ -102,6 +102,168 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("falls back on credential validation errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error('No credentials found for profile "anthropic:claude-cli".'),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("does not append configured primary when fallbacksOverride is set", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.reject(Object.assign(new Error("nope"), { status: 401 })),
+      );
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride: ["anthropic/claude-haiku-3-5"],
+        run,
+      }),
+    ).rejects.toThrow("All models failed");
+
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-opus-4-5"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
+  it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    const res = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      fallbacksOverride: ["openai/gpt-4.1"],
+      run: async (provider, model) => {
+        calls.push({ provider, model });
+        if (provider === "anthropic") {
+          throw Object.assign(new Error("nope"), { status: 401 });
+        }
+        if (provider === "openai" && model === "gpt-4.1") {
+          return "ok";
+        }
+        throw new Error(`unexpected candidate: ${provider}/${model}`);
+      },
+    });
+
+    expect(res.result).toBe("ok");
+    expect(calls).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "openai", model: "gpt-4.1" },
+    ]);
+  });
+
+  it("treats an empty fallbacksOverride as disabling global fallbacks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride: [],
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw new Error("primary failed");
+        },
+      }),
+    ).rejects.toThrow("primary failed");
+
+    expect(calls).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+    ]);
+  });
+
+  it("falls back on missing API key errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("No API key found for profile openai."))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("falls back on lowercase credential errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("no api key found for profile openai"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
   it("appends the configured primary as a last fallback", async () => {
     const cfg = makeCfg({
       agents: {

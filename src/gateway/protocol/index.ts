@@ -11,6 +11,12 @@ import {
   AgentsListResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
+  type ChannelsLogoutParams,
+  ChannelsLogoutParamsSchema,
+  type ChannelsStatusParams,
+  ChannelsStatusParamsSchema,
+  type ChannelsStatusResult,
+  ChannelsStatusResultSchema,
   type ChatAbortParams,
   ChatAbortParamsSchema,
   type ChatEvent,
@@ -86,12 +92,6 @@ import {
   type PresenceEntry,
   PresenceEntrySchema,
   ProtocolSchemas,
-  type ProvidersLogoutParams,
-  ProvidersLogoutParamsSchema,
-  type ProvidersStatusParams,
-  ProvidersStatusParamsSchema,
-  type ProvidersStatusResult,
-  ProvidersStatusResultSchema,
   type RequestFrame,
   RequestFrameSchema,
   type ResponseFrame,
@@ -248,11 +248,11 @@ export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(
 );
 export const validateTalkModeParams =
   ajv.compile<TalkModeParams>(TalkModeParamsSchema);
-export const validateProvidersStatusParams = ajv.compile<ProvidersStatusParams>(
-  ProvidersStatusParamsSchema,
+export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
+  ChannelsStatusParamsSchema,
 );
-export const validateProvidersLogoutParams = ajv.compile<ProvidersLogoutParams>(
-  ProvidersLogoutParamsSchema,
+export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
+  ChannelsLogoutParamsSchema,
 );
 export const validateModelsListParams = ajv.compile<ModelsListParams>(
   ModelsListParamsSchema,
@@ -350,9 +350,9 @@ export {
   WizardNextResultSchema,
   WizardStartResultSchema,
   WizardStatusResultSchema,
-  ProvidersStatusParamsSchema,
-  ProvidersStatusResultSchema,
-  ProvidersLogoutParamsSchema,
+  ChannelsStatusParamsSchema,
+  ChannelsStatusResultSchema,
+  ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   AgentSummarySchema,
@@ -417,9 +417,9 @@ export type {
   WizardStartResult,
   WizardStatusResult,
   TalkModeParams,
-  ProvidersStatusParams,
-  ProvidersStatusResult,
-  ProvidersLogoutParams,
+  ChannelsStatusParams,
+  ChannelsStatusResult,
+  ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
   AgentSummary,

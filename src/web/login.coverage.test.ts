@@ -14,9 +14,11 @@ const authDir = path.join(os.tmpdir(), "wa-creds");
 vi.mock("../config/config.js", () => ({
   loadConfig: () =>
     ({
-      whatsapp: {
-        accounts: {
-          default: { enabled: true, authDir },
+      channels: {
+        whatsapp: {
+          accounts: {
+            default: { enabled: true, authDir },
+          },
         },
       },
     }) as never,

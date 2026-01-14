@@ -1,12 +1,19 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
+import { normalizeGoogleModelId } from "./models-config.providers.js";
 
 export type ModelRef = {
   provider: string;
   model: string;
 };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
@@ -47,6 +54,12 @@ function normalizeAnthropicModelId(model: string): string {
   return trimmed;
 }
 
+function normalizeProviderModelId(provider: string, model: string): string {
+  if (provider === "anthropic") return normalizeAnthropicModelId(model);
+  if (provider === "google") return normalizeGoogleModelId(model);
+  return model;
+}
+
 export function parseModelRef(
   raw: string,
   defaultProvider: string,
@@ -56,16 +69,14 @@ export function parseModelRef(
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
     const provider = normalizeProviderId(defaultProvider);
-    const model =
-      provider === "anthropic" ? normalizeAnthropicModelId(trimmed) : trimmed;
+    const model = normalizeProviderModelId(provider, trimmed);
     return { provider, model };
   }
   const providerRaw = trimmed.slice(0, slash).trim();
   const provider = normalizeProviderId(providerRaw);
   const model = trimmed.slice(slash + 1).trim();
   if (!provider || !model) return null;
-  const normalizedModel =
-    provider === "anthropic" ? normalizeAnthropicModelId(model) : model;
+  const normalizedModel = normalizeProviderModelId(provider, model);
   return { provider, model: normalizedModel };
 }
 

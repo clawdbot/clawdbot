@@ -59,6 +59,7 @@ export type ChatProps = {
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
+  onChatScroll?: (event: Event) => void;
 };
 
 export function renderChat(props: ChatProps) {
@@ -109,7 +110,12 @@ export function renderChat(props: ChatProps) {
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
-          <div class="chat-thread" role="log" aria-live="polite">
+          <div
+            class="chat-thread"
+            role="log"
+            aria-live="polite"
+            @scroll=${props.onChatScroll}
+          >
             ${props.loading
               ? html`<div class="muted">Loading chat…</div>`
               : nothing}

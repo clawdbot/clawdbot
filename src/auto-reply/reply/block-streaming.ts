@@ -1,17 +1,17 @@
+import { getChannelDock } from "../../channels/dock.js";
+import { CHANNEL_IDS, normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
-import { getProviderDock } from "../../providers/dock.js";
-import { normalizeProviderId, PROVIDER_IDS } from "../../providers/registry.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
 const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
-  ...PROVIDER_IDS,
-  INTERNAL_MESSAGE_PROVIDER,
+  ...CHANNEL_IDS,
+  INTERNAL_MESSAGE_CHANNEL,
 ]);
 
 function normalizeChunkProvider(
@@ -64,9 +64,9 @@ export function resolveBlockStreamingChunking(
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
   const providerKey = normalizeChunkProvider(provider);
-  const providerId = providerKey ? normalizeProviderId(providerKey) : null;
+  const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
-    ? getProviderDock(providerId)?.outbound?.textChunkLimit
+    ? getChannelDock(providerId)?.outbound?.textChunkLimit
     : undefined;
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
     fallbackLimit: providerChunkLimit,
@@ -102,15 +102,15 @@ export function resolveBlockStreamingCoalescing(
   },
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
-  const providerId = providerKey ? normalizeProviderId(providerKey) : null;
+  const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
-    ? getProviderDock(providerId)?.outbound?.textChunkLimit
+    ? getChannelDock(providerId)?.outbound?.textChunkLimit
     : undefined;
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
     fallbackLimit: providerChunkLimit,
   });
   const providerDefaults = providerId
-    ? getProviderDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
+    ? getChannelDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;
   const providerCfg = resolveProviderBlockStreamingCoalesce({
     cfg,

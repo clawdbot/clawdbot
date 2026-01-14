@@ -1,1 +1,1 @@
-export * from "../../providers/plugins/onboarding-types.js";
+export * from "../../channels/plugins/onboarding-types.js";

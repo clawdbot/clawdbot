@@ -108,7 +108,7 @@ describe("gateway SIGTERM", () => {
           ...process.env,
           CLAWDBOT_STATE_DIR: stateDir,
           CLAWDBOT_CONFIG_PATH: configPath,
-          CLAWDBOT_SKIP_PROVIDERS: "1",
+          CLAWDBOT_SKIP_CHANNELS: "1",
           CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
           CLAWDBOT_SKIP_CANVAS_HOST: "1",
           // Avoid port collisions with other test processes that may also start a bridge server.

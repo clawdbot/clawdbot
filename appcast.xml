@@ -3,6 +3,22 @@
     <channel>
         <title>Clawdbot</title>
         <item>
+            <title>2026.1.12-2</title>
+            <pubDate>Tue, 13 Jan 2026 10:05:25 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>5534</sparkle:version>
+            <sparkle:shortVersionString>2026.1.12-2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.12-2</h2>
+<h3>Fixes</h3>
+<ul>
+<li>Packaging: include <code>dist/memory/**</code> in the npm tarball (fixes <code>ERR_MODULE_NOT_FOUND</code> for <code>dist/memory/index.js</code>).</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.12-2/Clawdbot-2026.1.12-2.zip" length="19854203" type="application/octet-stream" sparkle:edSignature="CVpUofNS+pl6Smk/K0Q8q35saRuuFx90s4sePABORFvGcAF1biajC8zpiImKuXpqD0ENb+VTwDJ1ul1Oxh3wDA=="/>
+        </item>
+        <item>
             <title>2026.1.11-3</title>
             <pubDate>Mon, 12 Jan 2026 10:40:23 +0000</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
@@ -35,22 +51,6 @@
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.11-2/Clawdbot-2026.1.11-2.zip" length="19860732" type="application/octet-stream" sparkle:edSignature="0UG+d9v3Qf5F9vs/KozUB404WpHjFBQRVoRuhwtzF8kpU7jJmmGlQzh1c61E+LMN4fHcljpxIwHHrvvIfRyrCw=="/>
-        </item>
-        <item>
-            <title>2026.1.11-1</title>
-            <pubDate>Mon, 12 Jan 2026 09:53:46 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
-            <sparkle:version>5207</sparkle:version>
-            <sparkle:shortVersionString>2026.1.11-1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.11-1</h2>
-<h3>Fixes</h3>
-<ul>
-<li>Installer: include <code>patches/</code> in the npm package so postinstall patching works for npm/bun installs.</li>
-</ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.11-1/Clawdbot-2026.1.11-1.zip" length="19860761" type="application/octet-stream" sparkle:edSignature="CXKzzha/s6cGBeF0TMz+cV8/pfqoAL9ZyNVacYRLnnHEwA1cMbOWRftpGRhYe4HknVQYYBgNQqZK2lBxpOZgBg=="/>
         </item>
     </channel>
 </rss>

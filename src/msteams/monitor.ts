@@ -31,7 +31,7 @@ export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
   const cfg = opts.cfg;
-  const msteamsCfg = cfg.msteams;
+  const msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
     log.debug("msteams provider disabled");
     return { app: null, shutdown: async () => {} };

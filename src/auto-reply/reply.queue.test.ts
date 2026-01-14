@@ -48,7 +48,7 @@ function makeCfg(home: string, queue?: Record<string, unknown>) {
         workspace: path.join(home, "clawd"),
       },
     },
-    whatsapp: { allowFrom: ["*"] },
+    channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: path.join(home, "sessions.json") },
     messages: queue ? { queue } : undefined,
   };

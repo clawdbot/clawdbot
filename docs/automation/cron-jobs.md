@@ -20,6 +20,24 @@ cron is the mechanism.
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, optionally deliver output.
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 
+## Beginner-friendly overview
+Think of a cron job as: **when** to run + **what** to do.
+
+1) **Choose a schedule**
+   - One-shot reminder → `schedule.kind = "at"` (CLI: `--at`)
+   - Repeating job → `schedule.kind = "every"` or `schedule.kind = "cron"`
+   - If your ISO timestamp omits a timezone, it is treated as **UTC**.
+
+2) **Choose where it runs**
+   - `sessionTarget: "main"` → run during the next heartbeat with main context.
+   - `sessionTarget: "isolated"` → run a dedicated agent turn in `cron:<jobId>`.
+
+3) **Choose the payload**
+   - Main session → `payload.kind = "systemEvent"`
+   - Isolated session → `payload.kind = "agentTurn"`
+
+Optional: `deleteAfterRun: true` removes successful one-shot jobs from the store.
+
 ## Concepts
 
 ### Jobs
@@ -32,10 +50,11 @@ A cron job is a stored record with:
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
 In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
+Jobs can optionally auto-delete after a successful one-shot run via `deleteAfterRun: true`.
 
 ### Schedules
 Cron supports three schedule kinds:
-- `at`: one-shot timestamp (ms since epoch).
+- `at`: one-shot timestamp (ms since epoch). Gateway accepts ISO 8601 and coerces to UTC.
 - `every`: fixed interval (ms).
 - `cron`: 5-field cron expression with optional IANA timezone.
 
@@ -61,7 +80,7 @@ Key behaviors:
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
 - A summary is posted to the main session (prefix `Cron`, configurable).
 - `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
-- If `payload.deliver: true`, output is delivered to a provider; otherwise it stays internal.
+- If `payload.deliver: true`, output is delivered to a channel; otherwise it stays internal.
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
@@ -75,9 +94,9 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
-- `deliver`: `true` to send output to a provider target.
-- `provider`: `last` or a specific provider.
-- `to`: provider-specific target (phone/chat/channel id).
+- `deliver`: `true` to send output to a channel target.
+- `channel`: `last` or a specific channel.
+- `to`: channel-specific target (phone/chat/channel id).
 - `bestEffortDeliver`: avoid failing the job if delivery fails.
 
 Isolation options (only for `session=isolated`):
@@ -86,7 +105,7 @@ Isolation options (only for `session=isolated`):
 ### Model and thinking overrides
 Isolated jobs (`agentTurn`) can override the model and thinking level:
 - `model`: Provider/model string (e.g., `anthropic/claude-sonnet-4-20250514`) or alias (e.g., `opus`)
-- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`)
+- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models only)
 
 Note: You can set `model` on main-session jobs too, but it changes the shared main
 session model. We recommend model overrides only for isolated jobs to avoid
@@ -97,12 +116,12 @@ Resolution priority:
 2. Hook-specific defaults (e.g., `hooks.gmail.model`)
 3. Agent config default
 
-### Delivery (provider + target)
-Isolated jobs can deliver output to a provider. The job payload can specify:
-- `provider`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `last`
-- `to`: provider-specific recipient target
+### Delivery (channel + target)
+Isolated jobs can deliver output to a channel. The job payload can specify:
+- `channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `last`
+- `to`: channel-specific recipient target
 
-If `provider` or `to` is omitted, cron can fall back to the main session’s “last route”
+If `channel` or `to` is omitted, cron can fall back to the main session’s “last route”
 (the last place the agent replied).
 
 Target format reminders:
@@ -143,6 +162,17 @@ Disable cron entirely:
 
 ## CLI quickstart
 
+One-shot reminder (UTC ISO, auto-delete after success):
+```bash
+clawdbot cron add \
+  --name "Send reminder" \
+  --at "2026-01-12T18:00:00Z" \
+  --session main \
+  --system-event "Reminder: submit expense report." \
+  --wake now \
+  --delete-after-run
+```
+
 One-shot reminder (main session, wake immediately):
 ```bash
 clawdbot cron add \
@@ -162,7 +192,7 @@ clawdbot cron add \
   --session isolated \
   --message "Summarize inbox + calendar for today." \
   --deliver \
-  --provider whatsapp \
+  --channel whatsapp \
   --to "+15551234567"
 ```
 
@@ -175,7 +205,7 @@ clawdbot cron add \
   --session isolated \
   --message "Summarize today; send to the nightly topic." \
   --deliver \
-  --provider telegram \
+  --channel telegram \
   --to "-1001234567890:topic:123"
 ```
 
@@ -190,7 +220,7 @@ clawdbot cron add \
   --model "opus" \
   --thinking high \
   --deliver \
-  --provider whatsapp \
+  --channel whatsapp \
   --to "+15551234567"
 
 Agent selection (multi-agent setups):

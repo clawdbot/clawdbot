@@ -1,6 +1,6 @@
-import { requirePairingAdapter } from "../providers/plugins/pairing.js";
-import type { PairingProvider } from "./pairing-store.js";
+import { requirePairingAdapter } from "../channels/plugins/pairing.js";
+import type { PairingChannel } from "./pairing-store.js";
 
-export function resolvePairingIdLabel(provider: PairingProvider): string {
-  return requirePairingAdapter(provider).idLabel;
+export function resolvePairingIdLabel(channel: PairingChannel): string {
+  return requirePairingAdapter(channel).idLabel;
 }

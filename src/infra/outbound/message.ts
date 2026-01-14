@@ -1,26 +1,26 @@
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
-import type { ProviderId } from "../../providers/plugins/types.js";
-import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
-} from "../../utils/message-provider.js";
+} from "../../utils/message-channel.js";
+import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
-import { resolveMessageProviderSelection } from "./provider-selection.js";
-import type { OutboundProvider } from "./targets.js";
+import type { OutboundChannel } from "./targets.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 export type MessageGatewayOptions = {
@@ -35,7 +35,7 @@ export type MessageGatewayOptions = {
 type MessageSendParams = {
   to: string;
   content: string;
-  provider?: string;
+  channel?: string;
   mediaUrl?: string;
   gifPlayback?: boolean;
   accountId?: string;
@@ -48,7 +48,7 @@ type MessageSendParams = {
 };
 
 export type MessageSendResult = {
-  provider: string;
+  channel: string;
   to: string;
   via: "direct" | "gateway";
   mediaUrl: string | null;
@@ -62,7 +62,7 @@ type MessagePollParams = {
   options: string[];
   maxSelections?: number;
   durationHours?: number;
-  provider?: string;
+  channel?: string;
   dryRun?: boolean;
   cfg?: ClawdbotConfig;
   gateway?: MessageGatewayOptions;
@@ -70,7 +70,7 @@ type MessagePollParams = {
 };
 
 export type MessagePollResult = {
-  provider: string;
+  channel: string;
   to: string;
   question: string;
   options: string[];
@@ -105,21 +105,21 @@ export async function sendMessage(
   params: MessageSendParams,
 ): Promise<MessageSendResult> {
   const cfg = params.cfg ?? loadConfig();
-  const provider = params.provider?.trim()
-    ? normalizeProviderId(params.provider)
-    : (await resolveMessageProviderSelection({ cfg })).provider;
-  if (!provider) {
-    throw new Error(`Unknown provider: ${params.provider}`);
+  const channel = params.channel?.trim()
+    ? normalizeChannelId(params.channel)
+    : (await resolveMessageChannelSelection({ cfg })).channel;
+  if (!channel) {
+    throw new Error(`Unknown channel: ${params.channel}`);
   }
-  const plugin = getProviderPlugin(provider as ProviderId);
+  const plugin = getChannelPlugin(channel as ChannelId);
   if (!plugin) {
-    throw new Error(`Unknown provider: ${provider}`);
+    throw new Error(`Unknown channel: ${channel}`);
   }
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
 
   if (params.dryRun) {
     return {
-      provider,
+      channel,
       to: params.to,
       via: deliveryMode === "gateway" ? "gateway" : "direct",
       mediaUrl: params.mediaUrl ?? null,
@@ -128,9 +128,9 @@ export async function sendMessage(
   }
 
   if (deliveryMode !== "gateway") {
-    const outboundProvider = provider as Exclude<OutboundProvider, "none">;
+    const outboundChannel = channel as Exclude<OutboundChannel, "none">;
     const resolvedTarget = resolveOutboundTarget({
-      provider: outboundProvider,
+      channel: outboundChannel,
       to: params.to,
       cfg,
       accountId: params.accountId,
@@ -140,7 +140,7 @@ export async function sendMessage(
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider: outboundProvider,
+      channel: outboundChannel,
       to: resolvedTarget.to,
       accountId: params.accountId,
       payloads: [{ text: params.content, mediaUrl: params.mediaUrl }],
@@ -150,7 +150,7 @@ export async function sendMessage(
     });
 
     return {
-      provider,
+      channel,
       to: params.to,
       via: "direct",
       mediaUrl: params.mediaUrl ?? null,
@@ -169,7 +169,7 @@ export async function sendMessage(
       mediaUrl: params.mediaUrl,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
-      provider,
+      channel,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
     },
     timeoutMs: gateway.timeoutMs,
@@ -179,7 +179,7 @@ export async function sendMessage(
   });
 
   return {
-    provider,
+    channel,
     to: params.to,
     via: "gateway",
     mediaUrl: params.mediaUrl ?? null,
@@ -191,11 +191,11 @@ export async function sendPoll(
   params: MessagePollParams,
 ): Promise<MessagePollResult> {
   const cfg = params.cfg ?? loadConfig();
-  const provider = params.provider?.trim()
-    ? normalizeProviderId(params.provider)
-    : (await resolveMessageProviderSelection({ cfg })).provider;
-  if (!provider) {
-    throw new Error(`Unknown provider: ${params.provider}`);
+  const channel = params.channel?.trim()
+    ? normalizeChannelId(params.channel)
+    : (await resolveMessageChannelSelection({ cfg })).channel;
+  if (!channel) {
+    throw new Error(`Unknown channel: ${params.channel}`);
   }
 
   const pollInput: PollInput = {
@@ -204,10 +204,10 @@ export async function sendPoll(
     maxSelections: params.maxSelections,
     durationHours: params.durationHours,
   };
-  const plugin = getProviderPlugin(provider as ProviderId);
+  const plugin = getChannelPlugin(channel as ChannelId);
   const outbound = plugin?.outbound;
   if (!outbound?.sendPoll) {
-    throw new Error(`Unsupported poll provider: ${provider}`);
+    throw new Error(`Unsupported poll channel: ${channel}`);
   }
   const normalized = outbound.pollMaxOptions
     ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
@@ -215,7 +215,7 @@ export async function sendPoll(
 
   if (params.dryRun) {
     return {
-      provider,
+      channel,
       to: params.to,
       question: normalized.question,
       options: normalized.options,
@@ -243,7 +243,7 @@ export async function sendPoll(
       options: normalized.options,
       maxSelections: normalized.maxSelections,
       durationHours: normalized.durationHours,
-      provider,
+      channel,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
     },
     timeoutMs: gateway.timeoutMs,
@@ -253,7 +253,7 @@ export async function sendPoll(
   });
 
   return {
-    provider,
+    channel,
     to: params.to,
     question: normalized.question,
     options: normalized.options,

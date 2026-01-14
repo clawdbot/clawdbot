@@ -24,15 +24,16 @@ export function resolveTelegramToken(
   opts: ResolveTelegramTokenOpts = {},
 ): TelegramTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);
+  const telegramCfg = cfg?.channels?.telegram;
   const accountCfg =
     accountId !== DEFAULT_ACCOUNT_ID
-      ? cfg?.telegram?.accounts?.[accountId]
-      : cfg?.telegram?.accounts?.[DEFAULT_ACCOUNT_ID];
+      ? telegramCfg?.accounts?.[accountId]
+      : telegramCfg?.accounts?.[DEFAULT_ACCOUNT_ID];
   const accountTokenFile = accountCfg?.tokenFile?.trim();
   if (accountTokenFile) {
     if (!fs.existsSync(accountTokenFile)) {
       opts.logMissingFile?.(
-        `telegram.accounts.${accountId}.tokenFile not found: ${accountTokenFile}`,
+        `channels.telegram.accounts.${accountId}.tokenFile not found: ${accountTokenFile}`,
       );
       return { token: "", source: "none" };
     }
@@ -43,7 +44,9 @@ export function resolveTelegramToken(
       }
     } catch (err) {
       opts.logMissingFile?.(
-        `telegram.accounts.${accountId}.tokenFile read failed: ${String(err)}`,
+        `channels.telegram.accounts.${accountId}.tokenFile read failed: ${String(
+          err,
+        )}`,
       );
       return { token: "", source: "none" };
     }
@@ -63,10 +66,12 @@ export function resolveTelegramToken(
     return { token: envToken, source: "env" };
   }
 
-  const tokenFile = cfg?.telegram?.tokenFile?.trim();
+  const tokenFile = telegramCfg?.tokenFile?.trim();
   if (tokenFile && allowEnv) {
     if (!fs.existsSync(tokenFile)) {
-      opts.logMissingFile?.(`telegram.tokenFile not found: ${tokenFile}`);
+      opts.logMissingFile?.(
+        `channels.telegram.tokenFile not found: ${tokenFile}`,
+      );
       return { token: "", source: "none" };
     }
     try {
@@ -75,12 +80,14 @@ export function resolveTelegramToken(
         return { token, source: "tokenFile" };
       }
     } catch (err) {
-      opts.logMissingFile?.(`telegram.tokenFile read failed: ${String(err)}`);
+      opts.logMissingFile?.(
+        `channels.telegram.tokenFile read failed: ${String(err)}`,
+      );
       return { token: "", source: "none" };
     }
   }
 
-  const configToken = cfg?.telegram?.botToken?.trim();
+  const configToken = telegramCfg?.botToken?.trim();
   if (configToken && allowEnv) {
     return { token: configToken, source: "config" };
   }

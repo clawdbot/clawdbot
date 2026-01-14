@@ -1,42 +1,10 @@
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "clawdbot/clawdbot";
 const PER_LINE = 10;
-
-type MapConfig = {
-  ensureLogins?: string[];
-  displayName?: Record<string, string>;
-  nameToLogin?: Record<string, string>;
-  emailToLogin?: Record<string, string>;
-  placeholderAvatar?: string;
-  seedCommit?: string;
-};
-
-type ApiContributor = {
-  login?: string;
-  html_url?: string;
-  avatar_url?: string;
-  name?: string;
-  email?: string;
-  contributions?: number;
-};
-
-type User = {
-  login: string;
-  html_url: string;
-  avatar_url: string;
-};
-
-type Entry = {
-  key: string;
-  login?: string;
-  display: string;
-  html_url: string;
-  avatar_url: string;
-  lines: number;
-};
 
 const mapPath = resolve("scripts/clawtributors-map.json");
 const mapConfig = JSON.parse(readFileSync(mapPath, "utf8")) as MapConfig;

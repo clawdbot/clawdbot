@@ -1,17 +1,17 @@
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
-import { loadProviderOutboundAdapter } from "../../providers/plugins/outbound/load.js";
-import type { ProviderOutboundAdapter } from "../../providers/plugins/types.js";
 import type { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeOutboundPayloads } from "./payloads.js";
-import type { OutboundProvider } from "./targets.js";
+import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
@@ -31,7 +31,7 @@ export type OutboundSendDeps = {
 };
 
 export type OutboundDeliveryResult = {
-  provider: Exclude<OutboundProvider, "none">;
+  channel: Exclude<OutboundChannel, "none">;
   messageId: string;
   chatId?: string;
   channelId?: string;
@@ -39,13 +39,13 @@ export type OutboundDeliveryResult = {
   timestamp?: number;
   toJid?: string;
   pollId?: string;
-  // Provider docking: stash provider-specific fields here to avoid core type churn.
+  // Channel docking: stash channel-specific fields here to avoid core type churn.
   meta?: Record<string, unknown>;
 };
 
 type Chunker = (text: string, limit: number) => string[];
 
-type ProviderHandler = {
+type ChannelHandler = {
   chunker: Chunker | null;
   textChunkLimit?: number;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
@@ -61,25 +61,25 @@ function throwIfAborted(abortSignal?: AbortSignal): void {
   }
 }
 
-// Provider docking: outbound delivery delegates to plugin.outbound adapters.
-async function createProviderHandler(params: {
+// Channel docking: outbound delivery delegates to plugin.outbound adapters.
+async function createChannelHandler(params: {
   cfg: ClawdbotConfig;
-  provider: Exclude<OutboundProvider, "none">;
+  channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
   replyToId?: string | null;
   threadId?: number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
-}): Promise<ProviderHandler> {
-  const outbound = await loadProviderOutboundAdapter(params.provider);
+}): Promise<ChannelHandler> {
+  const outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound?.sendText || !outbound?.sendMedia) {
-    throw new Error(`Outbound not configured for provider: ${params.provider}`);
+    throw new Error(`Outbound not configured for channel: ${params.channel}`);
   }
   const handler = createPluginHandler({
     outbound,
     cfg: params.cfg,
-    provider: params.provider,
+    channel: params.channel,
     to: params.to,
     accountId: params.accountId,
     replyToId: params.replyToId,
@@ -88,22 +88,22 @@ async function createProviderHandler(params: {
     gifPlayback: params.gifPlayback,
   });
   if (!handler) {
-    throw new Error(`Outbound not configured for provider: ${params.provider}`);
+    throw new Error(`Outbound not configured for channel: ${params.channel}`);
   }
   return handler;
 }
 
 function createPluginHandler(params: {
-  outbound?: ProviderOutboundAdapter;
+  outbound?: ChannelOutboundAdapter;
   cfg: ClawdbotConfig;
-  provider: Exclude<OutboundProvider, "none">;
+  channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
   replyToId?: string | null;
   threadId?: number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
-}): ProviderHandler | null {
+}): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) return null;
   const sendText = outbound.sendText;
@@ -140,7 +140,7 @@ function createPluginHandler(params: {
 
 export async function deliverOutboundPayloads(params: {
   cfg: ClawdbotConfig;
-  provider: Exclude<OutboundProvider, "none">;
+  channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
   payloads: ReplyPayload[];
@@ -153,14 +153,14 @@ export async function deliverOutboundPayloads(params: {
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
 }): Promise<OutboundDeliveryResult[]> {
-  const { cfg, provider, to, payloads } = params;
+  const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const results: OutboundDeliveryResult[] = [];
-  const handler = await createProviderHandler({
+  const handler = await createChannelHandler({
     cfg,
-    provider,
+    channel,
     to,
     deps,
     accountId,
@@ -169,7 +169,7 @@ export async function deliverOutboundPayloads(params: {
     gifPlayback: params.gifPlayback,
   });
   const textLimit = handler.chunker
-    ? resolveTextChunkLimit(cfg, provider, accountId, {
+    ? resolveTextChunkLimit(cfg, channel, accountId, {
         fallbackLimit: handler.textChunkLimit,
       })
     : undefined;

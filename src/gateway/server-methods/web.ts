@@ -1,4 +1,4 @@
-import { listProviderPlugins } from "../../providers/plugins/index.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   ErrorCodes,
   errorShape,
@@ -12,7 +12,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
 const resolveWebLoginProvider = () =>
-  listProviderPlugins().find((plugin) =>
+  listChannelPlugins().find((plugin) =>
     (plugin.gatewayMethods ?? []).some((method) =>
       WEB_LOGIN_METHODS.has(method),
     ),
@@ -48,7 +48,7 @@ export const webHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      await context.stopProvider(provider.id, accountId);
+      await context.stopChannel(provider.id, accountId);
       if (!provider.gateway?.loginWithQrStart) {
         respond(
           false,
@@ -126,7 +126,7 @@ export const webHandlers: GatewayRequestHandlers = {
         accountId,
       });
       if (result.connected) {
-        await context.startProvider(provider.id, accountId);
+        await context.startChannel(provider.id, accountId);
       }
       respond(true, result, undefined);
     } catch (err) {

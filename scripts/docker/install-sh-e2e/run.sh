@@ -3,6 +3,11 @@ set -euo pipefail
 
 INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
 MODELS_MODE="${CLAWDBOT_E2E_MODELS:-both}" # both|openai|anthropic
+E2E_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}"
+SKIP_PREVIOUS="${CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS:-0}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
 
 if [[ "$MODELS_MODE" != "both" && "$MODELS_MODE" != "openai" && "$MODELS_MODE" != "anthropic" ]]; then
   echo "ERROR: CLAWDBOT_E2E_MODELS must be one of: both|openai|anthropic" >&2
@@ -10,31 +15,43 @@ if [[ "$MODELS_MODE" != "both" && "$MODELS_MODE" != "openai" && "$MODELS_MODE" !
 fi
 
 if [[ "$MODELS_MODE" == "both" ]]; then
-  if [[ -z "${OPENAI_API_KEY:-}" || -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    echo "ERROR: CLAWDBOT_E2E_MODELS=both requires OPENAI_API_KEY and ANTHROPIC_API_KEY." >&2
+  if [[ -z "$OPENAI_API_KEY" ]]; then
+    echo "ERROR: CLAWDBOT_E2E_MODELS=both requires OPENAI_API_KEY." >&2
     exit 2
   fi
-elif [[ "$MODELS_MODE" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
+  if [[ -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHROPIC_API_KEY" ]]; then
+    echo "ERROR: CLAWDBOT_E2E_MODELS=both requires ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY." >&2
+    exit 2
+  fi
+elif [[ "$MODELS_MODE" == "openai" && -z "$OPENAI_API_KEY" ]]; then
   echo "ERROR: CLAWDBOT_E2E_MODELS=openai requires OPENAI_API_KEY." >&2
   exit 2
-elif [[ "$MODELS_MODE" == "anthropic" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "ERROR: CLAWDBOT_E2E_MODELS=anthropic requires ANTHROPIC_API_KEY." >&2
+elif [[ "$MODELS_MODE" == "anthropic" && -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHROPIC_API_KEY" ]]; then
+  echo "ERROR: CLAWDBOT_E2E_MODELS=anthropic requires ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY." >&2
   exit 2
 fi
 
 echo "==> Resolve npm versions"
 LATEST_VERSION="$(npm view clawdbot version)"
-PREVIOUS_VERSION="$(node - <<'NODE'
+if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
+  PREVIOUS_VERSION="$E2E_PREVIOUS_VERSION"
+else
+  PREVIOUS_VERSION="$(node - <<'NODE'
 const { execSync } = require("node:child_process");
 const versions = JSON.parse(execSync("npm view clawdbot versions --json", { encoding: "utf8" }));
 if (!Array.isArray(versions) || versions.length === 0) process.exit(1);
 process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : versions[0]);
 NODE
-)"
+  )"
+fi
 echo "latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
 
-echo "==> Preinstall previous (forces installer upgrade path; avoids read() prompt)"
-npm install -g "clawdbot@${PREVIOUS_VERSION}"
+if [[ "$SKIP_PREVIOUS" == "1" ]]; then
+  echo "==> Skip preinstall previous (CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS=1)"
+else
+  echo "==> Preinstall previous (forces installer upgrade path; avoids read() prompt)"
+  npm install -g "clawdbot@${PREVIOUS_VERSION}"
+fi
 
 echo "==> Run official installer one-liner"
 curl -fsSL "$INSTALL_URL" | bash
@@ -313,6 +330,18 @@ run_profile() {
       --flow quickstart \
       --auth-choice openai-api-key \
       --openai-api-key "$OPENAI_API_KEY" \
+      --gateway-port "$port" \
+      --gateway-bind loopback \
+      --gateway-auth token \
+      --workspace "$workspace" \
+      --skip-health
+  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
+    clawdbot --profile "$profile" onboard \
+      --non-interactive \
+      --flow quickstart \
+      --auth-choice token \
+      --token-provider anthropic \
+      --token "$ANTHROPIC_API_TOKEN" \
       --gateway-port "$port" \
       --gateway-bind loopback \
       --gateway-auth token \

@@ -59,7 +59,7 @@ final class DeepLinkHandler {
         }
 
         do {
-            let provider = GatewayAgentProvider(raw: link.channel)
+            let channel = GatewayAgentChannel(raw: link.channel)
             let explicitSessionKey = link.sessionKey?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .nonEmpty
@@ -72,9 +72,9 @@ final class DeepLinkHandler {
                 message: messagePreview,
                 sessionKey: resolvedSessionKey,
                 thinking: link.thinking?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
-                deliver: provider.shouldDeliver(link.deliver),
+                deliver: channel.shouldDeliver(link.deliver),
                 to: link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
-                provider: provider,
+                channel: channel,
                 timeoutSeconds: link.timeoutSeconds,
                 idempotencyKey: UUID().uuidString)
 

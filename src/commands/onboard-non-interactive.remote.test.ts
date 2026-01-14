@@ -31,7 +31,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
       home: process.env.HOME,
       stateDir: process.env.CLAWDBOT_STATE_DIR,
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
+      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
       skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
@@ -39,7 +39,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
       password: process.env.CLAWDBOT_GATEWAY_PASSWORD,
     };
 
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
@@ -108,7 +108,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
       process.env.HOME = prev.home;
       process.env.CLAWDBOT_STATE_DIR = prev.stateDir;
       process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
-      process.env.CLAWDBOT_SKIP_PROVIDERS = prev.skipProviders;
+      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
       process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;

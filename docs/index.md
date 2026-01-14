@@ -23,7 +23,7 @@ read_when:
   <a href="/start/clawd">Clawdbot assistant setup</a>
 </p>
 
-Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
+Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / channels.discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
 Clawdbot also powers [Clawd](https://clawd.me), the space‑lobster assistant.
 
 ## Start here
@@ -62,7 +62,7 @@ WhatsApp / Telegram / Discord
               └─ Android node via Bridge + pairing
 ```
 
-Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns provider connections and the WebSocket control plane.
+Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns channel connections and the WebSocket control plane.
 
 ## Network model
 
@@ -78,7 +78,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 
 - 📱 **WhatsApp Integration** — Uses Baileys for WhatsApp Web protocol
 - ✈️ **Telegram Bot** — DMs + groups via grammY
-- 🎮 **Discord Bot** — DMs + guild channels via discord.js
+- 🎮 **Discord Bot** — DMs + guild channels via channels.discord.js
 - 💬 **iMessage** — Local imsg CLI integration (macOS)
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
 - ⏱️ **Streaming + chunking** — Block streaming + Telegram draft streaming details ([/concepts/streaming](/concepts/streaming))
@@ -107,7 +107,7 @@ npm install -g clawdbot@latest
 clawdbot onboard --install-daemon
 
 # Pair WhatsApp Web (shows QR)
-clawdbot providers login
+clawdbot channels login
 
 # Gateway runs via daemon after onboarding; manual run is still possible:
 clawdbot gateway --port 18789
@@ -145,17 +145,19 @@ clawdbot message send --to +15555550123 --message "Hello from Clawdbot"
 Config lives at `~/.clawdbot/clawdbot.json`.
 
 - If you **do nothing**, Clawdbot uses the bundled Pi binary in RPC mode with per-sender sessions.
-- If you want to lock it down, start with `whatsapp.allowFrom` and (for groups) mention rules.
+- If you want to lock it down, start with `channels.whatsapp.allowFrom` and (for groups) mention rules.
 
 Example:
 
 ```json5
 {
-  whatsapp: {
-    allowFrom: ["+15555550123"],
-    groups: { "*": { requireMention: true } }
+  channels: {
+    whatsapp: {
+      allowFrom: ["+15555550123"],
+      groups: { "*": { requireMention: true } }
+    }
   },
-  routing: { groupChat: { mentionPatterns: ["@clawd"] } }
+  messages: { groupChat: { mentionPatterns: ["@clawd"] } }
 }
 ```
 
@@ -184,9 +186,9 @@ Example:
 - Providers and UX:
   - [WebChat](/web/webchat)
   - [Control UI (browser)](/web/control-ui)
-  - [Telegram](/providers/telegram)
-  - [Discord](/providers/discord)
-  - [iMessage](/providers/imessage)
+  - [Telegram](/channels/telegram)
+  - [Discord](/channels/discord)
+  - [iMessage](/channels/imessage)
   - [Groups](/concepts/groups)
   - [WhatsApp group messages](/concepts/group-messages)
   - [Media: images](/nodes/images)

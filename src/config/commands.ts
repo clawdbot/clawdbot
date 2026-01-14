@@ -1,9 +1,9 @@
-import type { ProviderId } from "../providers/plugins/types.js";
-import { normalizeProviderId } from "../providers/registry.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeChannelId } from "../channels/registry.js";
 import type { NativeCommandsSetting } from "./types.js";
 
-function resolveAutoDefault(providerId?: ProviderId): boolean {
-  const id = normalizeProviderId(providerId);
+function resolveAutoDefault(providerId?: ChannelId): boolean {
+  const id = normalizeChannelId(providerId);
   if (!id) return false;
   if (id === "discord" || id === "telegram") return true;
   if (id === "slack") return false;
@@ -11,7 +11,7 @@ function resolveAutoDefault(providerId?: ProviderId): boolean {
 }
 
 export function resolveNativeCommandsEnabled(params: {
-  providerId: ProviderId;
+  providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
 }): boolean {

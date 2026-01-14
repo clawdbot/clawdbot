@@ -33,7 +33,7 @@ import type {
   LogEntry,
   LogLevel,
   PresenceEntry,
-  ProvidersStatusSnapshot,
+  ChannelsStatusSnapshot,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
@@ -63,7 +63,7 @@ import {
   updateConfigFormValue,
 } from "./controllers/config";
 import {
-  loadProviders,
+  loadChannels,
   logoutWhatsApp,
   saveDiscordConfig,
   saveIMessageConfig,
@@ -175,6 +175,7 @@ declare global {
 const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
+  agentId: "",
   enabled: true,
   scheduleKind: "every",
   scheduleAt: "",
@@ -187,7 +188,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   payloadKind: "systemEvent",
   payloadText: "",
   deliver: false,
-  provider: "last",
+  channel: "last",
   to: "",
   timeoutSeconds: "",
   postToMainPrefix: "",
@@ -246,10 +247,10 @@ export class ClawdbotApp extends LitElement {
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
 
-  @state() providersLoading = false;
-  @state() providersSnapshot: ProvidersStatusSnapshot | null = null;
-  @state() providersError: string | null = null;
-  @state() providersLastSuccess: number | null = null;
+  @state() channelsLoading = false;
+  @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
+  @state() channelsError: string | null = null;
+  @state() channelsLastSuccess: number | null = null;
   @state() whatsappLoginMessage: string | null = null;
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
@@ -400,6 +401,7 @@ export class ClawdbotApp extends LitElement {
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
+  private chatUserNearBottom = true;
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
@@ -525,10 +527,12 @@ export class ClawdbotApp extends LitElement {
         if (!target) return;
         const distanceFromBottom =
           target.scrollHeight - target.scrollTop - target.clientHeight;
-        const shouldStick = force || distanceFromBottom < 200;
+        const shouldStick =
+          force || this.chatUserNearBottom || distanceFromBottom < 200;
         if (!shouldStick) return;
         if (force) this.chatHasAutoScrolled = true;
         target.scrollTop = target.scrollHeight;
+        this.chatUserNearBottom = true;
         const retryDelay = force ? 150 : 120;
         this.chatScrollTimeout = window.setTimeout(() => {
           this.chatScrollTimeout = null;
@@ -536,8 +540,11 @@ export class ClawdbotApp extends LitElement {
           if (!latest) return;
           const latestDistanceFromBottom =
             latest.scrollHeight - latest.scrollTop - latest.clientHeight;
-          if (!force && latestDistanceFromBottom >= 250) return;
+          const shouldStickRetry =
+            force || this.chatUserNearBottom || latestDistanceFromBottom < 200;
+          if (!shouldStickRetry) return;
           latest.scrollTop = latest.scrollHeight;
+          this.chatUserNearBottom = true;
         }, retryDelay);
       });
     });
@@ -600,6 +607,14 @@ export class ClawdbotApp extends LitElement {
     });
   }
 
+  handleChatScroll(event: Event) {
+    const container = event.currentTarget as HTMLElement | null;
+    if (!container) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    this.chatUserNearBottom = distanceFromBottom < 200;
+  }
+
   handleLogsScroll(event: Event) {
     const container = event.currentTarget as HTMLElement | null;
     if (!container) return;
@@ -630,6 +645,7 @@ export class ClawdbotApp extends LitElement {
 
   resetChatScroll() {
     this.chatHasAutoScrolled = false;
+    this.chatUserNearBottom = true;
   }
 
   toggleToolOutput(id: string, expanded: boolean) {
@@ -1010,7 +1026,7 @@ export class ClawdbotApp extends LitElement {
 
   async loadOverview() {
     await Promise.all([
-      loadProviders(this, false),
+      loadChannels(this, false),
       loadPresence(this),
       loadSessions(this),
       loadCronStatus(this),
@@ -1019,7 +1035,7 @@ export class ClawdbotApp extends LitElement {
   }
 
   private async loadConnections() {
-    await Promise.all([loadProviders(this, true), loadConfig(this)]);
+    await Promise.all([loadChannels(this, true), loadConfig(this)]);
   }
 
   async loadCron() {
@@ -1131,47 +1147,47 @@ export class ClawdbotApp extends LitElement {
 
   async handleWhatsAppStart(force: boolean) {
     await startWhatsAppLogin(this, force);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleWhatsAppWait() {
     await waitWhatsAppLogin(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleWhatsAppLogout() {
     await logoutWhatsApp(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleTelegramSave() {
     await saveTelegramConfig(this);
     await loadConfig(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleDiscordSave() {
     await saveDiscordConfig(this);
     await loadConfig(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleSlackSave() {
     await saveSlackConfig(this);
     await loadConfig(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleSignalSave() {
     await saveSignalConfig(this);
     await loadConfig(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   async handleIMessageSave() {
     await saveIMessageConfig(this);
     await loadConfig(this);
-    await loadProviders(this, true);
+    await loadChannels(this, true);
   }
 
   // Sidebar handlers for tool output viewing

@@ -78,6 +78,7 @@ describe("dashboardCommand", () => {
     expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
       port: 18789,
       bind: "loopback",
+      customBindHost: undefined,
       basePath: undefined,
     });
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(

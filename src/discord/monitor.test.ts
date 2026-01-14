@@ -7,6 +7,7 @@ import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  registerDiscordListener,
   resolveDiscordChannelConfig,
   resolveDiscordGuildEntry,
   resolveDiscordReplyTarget,
@@ -33,6 +34,18 @@ const makeEntries = (
   }
   return out;
 };
+
+describe("registerDiscordListener", () => {
+  class FakeListener {}
+
+  it("dedupes listeners by constructor", () => {
+    const listeners: object[] = [];
+
+    expect(registerDiscordListener(listeners, new FakeListener())).toBe(true);
+    expect(registerDiscordListener(listeners, new FakeListener())).toBe(false);
+    expect(listeners).toHaveLength(1);
+  });
+});
 
 describe("discord allowlist helpers", () => {
   it("normalizes slugs", () => {

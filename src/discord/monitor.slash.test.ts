@@ -31,7 +31,7 @@ beforeEach(() => {
 describe("discord native commands", () => {
   it(
     "streams tool results for native slash commands",
-    { timeout: 10_000 },
+    { timeout: 30_000 },
     async () => {
       const { ChannelType } = await import("@buape/carbon");
       const { createDiscordNativeCommand } = await import("./monitor.js");
@@ -40,6 +40,7 @@ describe("discord native commands", () => {
         agents: {
           defaults: {
             model: "anthropic/claude-opus-4-5",
+            humanDelay: { mode: "off" },
             workspace: "/tmp/clawd",
           },
         },

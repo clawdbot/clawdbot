@@ -1,7 +1,7 @@
 import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 
 export type MessagingToolSend = {
   tool: string;
@@ -15,8 +15,8 @@ const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
 // Provider docking: any plugin with `actions` opts into messaging tool handling.
 export function isMessagingTool(toolName: string): boolean {
   if (CORE_MESSAGING_TOOLS.has(toolName)) return true;
-  const providerId = normalizeProviderId(toolName);
-  return Boolean(providerId && getProviderPlugin(providerId)?.actions);
+  const providerId = normalizeChannelId(toolName);
+  return Boolean(providerId && getChannelPlugin(providerId)?.actions);
 }
 
 export function isMessagingToolSendAction(
@@ -28,9 +28,9 @@ export function isMessagingToolSendAction(
   if (toolName === "message") {
     return action === "send" || action === "thread-reply";
   }
-  const providerId = normalizeProviderId(toolName);
+  const providerId = normalizeChannelId(toolName);
   if (!providerId) return false;
-  const plugin = getProviderPlugin(providerId);
+  const plugin = getChannelPlugin(providerId);
   if (!plugin?.actions?.extractToolSend) return false;
   return Boolean(plugin.actions.extractToolSend({ args })?.to);
 }
@@ -40,8 +40,8 @@ export function normalizeTargetForProvider(
   raw?: string,
 ): string | undefined {
   if (!raw) return undefined;
-  const providerId = normalizeProviderId(provider);
-  const plugin = providerId ? getProviderPlugin(providerId) : undefined;
+  const providerId = normalizeChannelId(provider);
+  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
   const normalized =
     plugin?.messaging?.normalizeTarget?.(raw) ??
     (raw.trim().toLowerCase() || undefined);

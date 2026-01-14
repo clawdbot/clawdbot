@@ -10,7 +10,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 ## What it is
 - A native chat UI for the gateway (no embedded browser and no local static server).
-- Uses the same sessions and routing rules as other providers.
+- Uses the same sessions and routing rules as other channels.
 - Deterministic routing: replies always go back to WebChat.
 
 ## Quick start
@@ -30,7 +30,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 ## Configuration reference (WebChat)
 Full configuration: [Configuration](/gateway/configuration)
 
-Provider options:
+Channel options:
 - No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.
 
 Related global options:

@@ -153,7 +153,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["message"],
     });
 
-    expect(prompt).toContain("message: Send messages and provider actions");
+    expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
   });
 
@@ -161,12 +161,12 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       runtimeInfo: {
-        provider: "telegram",
+        channel: "telegram",
         capabilities: ["inlineButtons"],
       },
     });
 
-    expect(prompt).toContain("provider=telegram");
+    expect(prompt).toContain("channel=telegram");
     expect(prompt).toContain("capabilities=inlineButtons");
   });
 

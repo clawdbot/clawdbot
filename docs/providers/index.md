@@ -1,30 +1,37 @@
 ---
-summary: "Messaging platforms Clawdbot can connect to"
+summary: "Model providers (LLMs) supported by Clawdbot"
 read_when:
-  - You want to choose a chat provider for Clawdbot
-  - You need a quick overview of supported messaging platforms
+  - You want to choose a model provider
+  - You need a quick overview of supported LLM backends
 ---
-# Chat Providers
+# Model Providers
 
-Clawdbot can talk to you on any chat app you already use. Each provider connects via the Gateway.
-Text is supported everywhere; media and reactions vary by provider.
+Clawdbot can use many LLM providers. Pick a provider, authenticate, then set the
+default model as `provider/model`.
 
-## Supported providers
+Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/etc.)? See [Channels](/channels).
 
-- [WhatsApp](/providers/whatsapp) — Most popular; uses Baileys and requires QR pairing.
-- [Telegram](/providers/telegram) — Bot API via grammY; supports groups.
-- [Discord](/providers/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
-- [Slack](/providers/slack) — Bolt SDK; workspace apps.
-- [Signal](/providers/signal) — signal-cli; privacy-focused.
-- [iMessage](/providers/imessage) — macOS only; native integration.
-- [Microsoft Teams](/providers/msteams) — Bot Framework; enterprise support.
-- [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
+## Quick start
 
-## Notes
+1) Authenticate with the provider (usually via `clawdbot onboard`).
+2) Set the default model:
 
-- Providers can run simultaneously; configure multiple and Clawdbot will route per chat.
-- Group behavior varies by provider; see [Groups](/concepts/groups).
-- DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
-- Telegram internals: [grammY notes](/providers/grammy).
-- Troubleshooting: [Provider troubleshooting](/providers/troubleshooting).
-- Model providers are documented separately; see [Model Providers](/providers/models).
+```json5
+{
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } }
+}
+```
+
+## Provider docs
+
+- [OpenAI (API + Codex)](/providers/openai)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [OpenRouter](/providers/openrouter)
+- [Moonshot AI (Kimi)](/providers/moonshot)
+- [OpenCode Zen](/providers/opencode)
+- [Z.AI](/providers/zai)
+- [GLM models](/providers/glm)
+- [MiniMax](/providers/minimax)
+
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

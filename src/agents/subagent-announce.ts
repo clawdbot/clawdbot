@@ -8,7 +8,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "./lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./tools/agent-step.js";
 import { resolveAnnounceTarget } from "./tools/sessions-announce-target.js";
@@ -139,7 +139,7 @@ async function buildSubagentStatsLine(params: {
 
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   childSessionKey: string;
   label?: string;
   task?: string;
@@ -182,8 +182,8 @@ export function buildSubagentSystemPrompt(params: {
     params.requesterSessionKey
       ? `- Requester session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterProvider
-      ? `- Requester provider: ${params.requesterProvider}.`
+    params.requesterChannel
+      ? `- Requester channel: ${params.requesterChannel}.`
       : undefined,
     `- Your session: ${params.childSessionKey}.`,
     "",
@@ -195,7 +195,7 @@ export function buildSubagentSystemPrompt(params: {
 
 function buildSubagentAnnouncePrompt(params: {
   requesterSessionKey?: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   announceChannel: string;
   task: string;
   subagentReply?: string;
@@ -205,10 +205,10 @@ function buildSubagentAnnouncePrompt(params: {
     params.requesterSessionKey
       ? `Requester session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterProvider
-      ? `Requester provider: ${params.requesterProvider}.`
+    params.requesterChannel
+      ? `Requester channel: ${params.requesterChannel}.`
       : undefined,
-    `Post target provider: ${params.announceChannel}.`,
+    `Post target channel: ${params.announceChannel}.`,
     `Original task: ${params.task}`,
     params.subagentReply
       ? `Sub-agent result: ${params.subagentReply}`
@@ -226,7 +226,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -236,7 +236,8 @@ export async function runSubagentAnnounceFlow(params: {
   startedAt?: number;
   endedAt?: number;
   label?: string;
-}) {
+}): Promise<boolean> {
+  let didAnnounce = false;
   try {
     let reply = params.roundOneReply;
     if (!reply && params.waitForCompletion !== false) {
@@ -249,7 +250,7 @@ export async function runSubagentAnnounceFlow(params: {
         },
         timeoutMs: waitMs + 2000,
       })) as { status?: string };
-      if (wait?.status !== "ok") return;
+      if (wait?.status !== "ok") return false;
       reply = await readLatestAssistantReply({
         sessionKey: params.childSessionKey,
       });
@@ -265,12 +266,12 @@ export async function runSubagentAnnounceFlow(params: {
       sessionKey: params.requesterSessionKey,
       displayKey: params.requesterDisplayKey,
     });
-    if (!announceTarget) return;
+    if (!announceTarget) return false;
 
     const announcePrompt = buildSubagentAnnouncePrompt({
       requesterSessionKey: params.requesterSessionKey,
-      requesterProvider: params.requesterProvider,
-      announceChannel: announceTarget.provider,
+      requesterChannel: params.requesterChannel,
+      announceChannel: announceTarget.channel,
       task: params.task,
       subagentReply: reply,
     });
@@ -280,7 +281,7 @@ export async function runSubagentAnnounceFlow(params: {
       message: "Sub-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.timeoutMs,
-      provider: INTERNAL_MESSAGE_PROVIDER,
+      channel: INTERNAL_MESSAGE_CHANNEL,
       lane: AGENT_LANE_NESTED,
     });
 
@@ -289,7 +290,7 @@ export async function runSubagentAnnounceFlow(params: {
       !announceReply.trim() ||
       isAnnounceSkip(announceReply)
     )
-      return;
+      return false;
 
     const statsLine = await buildSubagentStatsLine({
       sessionKey: params.childSessionKey,
@@ -305,12 +306,13 @@ export async function runSubagentAnnounceFlow(params: {
       params: {
         to: announceTarget.to,
         message,
-        provider: announceTarget.provider,
+        channel: announceTarget.channel,
         accountId: announceTarget.accountId,
         idempotencyKey: crypto.randomUUID(),
       },
       timeoutMs: 10_000,
     });
+    didAnnounce = true;
   } catch {
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
@@ -338,4 +340,5 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
   }
+  return didAnnounce;
 }

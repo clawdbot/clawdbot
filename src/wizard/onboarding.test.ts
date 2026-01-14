@@ -8,7 +8,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
 import type { WizardPrompter } from "./prompts.js";
 
-const setupProviders = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
@@ -25,8 +25,8 @@ const ensureControlUiAssetsBuilt = vi.hoisted(() =>
 );
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock("../commands/onboard-providers.js", () => ({
-  setupProviders,
+vi.mock("../commands/onboard-channels.js", () => ({
+  setupChannels,
 }));
 
 vi.mock("../commands/onboard-skills.js", () => ({
@@ -168,7 +168,7 @@ describe("runOnboardingWizard", () => {
     );
 
     expect(select).not.toHaveBeenCalled();
-    expect(setupProviders).not.toHaveBeenCalled();
+    expect(setupChannels).not.toHaveBeenCalled();
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();

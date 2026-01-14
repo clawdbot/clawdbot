@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertProvider, normalizeE164, toWhatsappJid } from "./index.js";
+import { assertWebChannel, normalizeE164, toWhatsappJid } from "./index.js";
 
 describe("normalizeE164", () => {
   it("strips whatsapp prefix and whitespace", () => {
@@ -23,12 +23,12 @@ describe("toWhatsappJid", () => {
   });
 });
 
-describe("assertProvider", () => {
-  it("accepts valid providers", () => {
-    expect(() => assertProvider("web")).not.toThrow();
+describe("assertWebChannel", () => {
+  it("accepts valid channels", () => {
+    expect(() => assertWebChannel("web")).not.toThrow();
   });
 
-  it("throws on invalid provider", () => {
-    expect(() => assertProvider("invalid" as string)).toThrow();
+  it("throws on invalid channel", () => {
+    expect(() => assertWebChannel("invalid" as string)).toThrow();
   });
 });

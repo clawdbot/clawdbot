@@ -287,7 +287,7 @@ describe("agentCommand", () => {
             message: "hi",
             to: "123",
             deliver: true,
-            provider: "telegram",
+            channel: "telegram",
           },
           runtime,
           deps,

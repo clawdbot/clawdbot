@@ -8,6 +8,7 @@ import {
   text as clackText,
 } from "@clack/prompts";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { listChatChannels } from "../channels/registry.js";
 import type { ClawdbotConfig, GatewayAuthConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -25,7 +26,7 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
-import { listChatProviders } from "../providers/registry.js";
+import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -53,6 +54,7 @@ import {
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { applyPrimaryModel, promptDefaultModel } from "./model-picker.js";
+import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -64,7 +66,6 @@ import {
   resolveControlUiLinks,
   summarizeExistingConfig,
 } from "./onboard-helpers.js";
-import { setupProviders } from "./onboard-providers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
@@ -74,14 +75,14 @@ export const CONFIGURE_WIZARD_SECTIONS = [
   "model",
   "gateway",
   "daemon",
-  "providers",
+  "channels",
   "skills",
   "health",
 ] as const;
 
 export type WizardSection = (typeof CONFIGURE_WIZARD_SECTIONS)[number];
 
-type ProvidersWizardMode = "configure" | "remove";
+type ChannelsWizardMode = "configure" | "remove";
 
 type ConfigureWizardParams = {
   command: "configure" | "update";
@@ -139,8 +140,8 @@ const CONFIGURE_SECTION_OPTIONS: {
     hint: "Install/manage the background service",
   },
   {
-    value: "providers",
-    label: "Providers",
+    value: "channels",
+    label: "Channels",
     hint: "Link WhatsApp/Telegram/etc and defaults",
   },
   {
@@ -151,7 +152,7 @@ const CONFIGURE_SECTION_OPTIONS: {
   {
     value: "health",
     label: "Health check",
-    hint: "Run gateway + provider checks",
+    hint: "Run gateway + channel checks",
   },
 ];
 
@@ -220,16 +221,61 @@ async function promptGatewayConfig(
 
   let bind = guardCancel(
     await select({
-      message: "Gateway bind",
+      message: "Gateway bind mode",
       options: [
-        { value: "loopback", label: "Loopback (127.0.0.1)" },
-        { value: "lan", label: "LAN" },
-        { value: "tailnet", label: "Tailnet" },
-        { value: "auto", label: "Auto" },
+        {
+          value: "auto",
+          label: "Auto (Tailnet → LAN)",
+          hint: "Prefer Tailnet IP, fall back to all interfaces if unavailable",
+        },
+        {
+          value: "lan",
+          label: "LAN (All interfaces)",
+          hint: "Bind to 0.0.0.0 - accessible from anywhere on your network",
+        },
+        {
+          value: "loopback",
+          label: "Loopback (Local only)",
+          hint: "Bind to 127.0.0.1 - secure, local-only access",
+        },
+        {
+          value: "custom",
+          label: "Custom IP",
+          hint: "Specify a specific IP address, with 0.0.0.0 fallback if unavailable",
+        },
       ],
     }),
     runtime,
-  ) as "loopback" | "lan" | "tailnet" | "auto";
+  ) as "auto" | "lan" | "loopback" | "custom";
+
+  let customBindHost: string | undefined;
+  if (bind === "custom") {
+    const input = guardCancel(
+      await text({
+        message: "Custom IP address",
+        placeholder: "192.168.1.100",
+        validate: (value) => {
+          if (!value) return "IP address is required for custom bind mode";
+          const trimmed = value.trim();
+          const parts = trimmed.split(".");
+          if (parts.length !== 4)
+            return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          if (
+            parts.every((part) => {
+              const n = parseInt(part, 10);
+              return (
+                !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n)
+              );
+            })
+          )
+            return undefined;
+          return "Invalid IPv4 address (each octet must be 0-255)";
+        },
+      }),
+      runtime,
+    );
+    customBindHost = typeof input === "string" ? input : undefined;
+  }
 
   let authMode = guardCancel(
     await select({
@@ -267,6 +313,23 @@ async function promptGatewayConfig(
     }),
     runtime,
   ) as "off" | "serve" | "funnel";
+
+  // Detect Tailscale binary before proceeding with serve/funnel setup
+  if (tailscaleMode !== "off") {
+    const tailscaleBin = await findTailscaleBinary();
+    if (!tailscaleBin) {
+      note(
+        [
+          "Tailscale binary not found in PATH or /Applications.",
+          "Ensure Tailscale is installed from:",
+          "  https://tailscale.com/download/mac",
+          "",
+          "You can continue setup, but serve/funnel will fail at runtime.",
+        ].join("\n"),
+        "Tailscale Warning",
+      );
+    }
+  }
 
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
@@ -348,6 +411,7 @@ async function promptGatewayConfig(
       port,
       bind,
       auth: authConfig,
+      ...(customBindHost && { customBindHost }),
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
@@ -409,6 +473,7 @@ async function maybeInstallDaemon(params: {
 }) {
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({
+    env: process.env,
     profile: process.env.CLAWDBOT_PROFILE,
   });
   let shouldCheckLinger = false;
@@ -428,6 +493,7 @@ async function maybeInstallDaemon(params: {
     );
     if (action === "restart") {
       await service.restart({
+        env: process.env,
         profile: process.env.CLAWDBOT_PROFILE,
         stdout: process.stdout,
       });
@@ -504,34 +570,31 @@ async function maybeInstallDaemon(params: {
   }
 }
 
-async function removeProviderConfigWizard(
+async function removeChannelConfigWizard(
   cfg: ClawdbotConfig,
   runtime: RuntimeEnv,
 ): Promise<ClawdbotConfig> {
   let next = { ...cfg };
 
-  const listConfiguredProviders = () =>
-    listChatProviders().filter((meta) => {
-      const value = (next as Record<string, unknown>)[meta.id];
-      return value !== undefined;
-    });
+  const listConfiguredChannels = () =>
+    listChatChannels().filter((meta) => next.channels?.[meta.id] !== undefined);
 
   while (true) {
-    const configured = listConfiguredProviders();
+    const configured = listConfiguredChannels();
     if (configured.length === 0) {
       note(
         [
-          "No provider config found in clawdbot.json.",
-          "Tip: `clawdbot providers status` shows what is configured and enabled.",
+          "No channel config found in clawdbot.json.",
+          "Tip: `clawdbot channels status` shows what is configured and enabled.",
         ].join("\n"),
-        "Remove provider",
+        "Remove channel",
       );
       return next;
     }
 
-    const provider = guardCancel(
+    const channel = guardCancel(
       await select({
-        message: "Remove which provider config?",
+        message: "Remove which channel config?",
         options: [
           ...configured.map((meta) => ({
             value: meta.id,
@@ -544,11 +607,10 @@ async function removeProviderConfigWizard(
       runtime,
     ) as string;
 
-    if (provider === "done") return next;
+    if (channel === "done") return next;
 
     const label =
-      listChatProviders().find((meta) => meta.id === provider)?.label ??
-      provider;
+      listChatChannels().find((meta) => meta.id === channel)?.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
         message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
@@ -558,16 +620,21 @@ async function removeProviderConfigWizard(
     );
     if (!confirmed) continue;
 
-    const clone = { ...next } as Record<string, unknown>;
-    delete clone[provider];
-    next = clone as ClawdbotConfig;
+    const nextChannels: Record<string, unknown> = { ...next.channels };
+    delete nextChannels[channel];
+    next = {
+      ...next,
+      channels: Object.keys(nextChannels).length
+        ? (nextChannels as ClawdbotConfig["channels"])
+        : undefined,
+    };
 
     note(
       [
         `${label} removed from config.`,
         "Note: credentials/sessions on disk are unchanged.",
       ].join("\n"),
-      "Provider removed",
+      "Channel removed",
     );
   }
 }
@@ -728,34 +795,34 @@ export async function runConfigureWizard(
         gatewayToken = gateway.token;
       }
 
-      if (selected.includes("providers")) {
-        const providerMode = guardCancel(
+      if (selected.includes("channels")) {
+        const channelMode = guardCancel(
           await select({
-            message: "Providers",
+            message: "Channels",
             options: [
               {
                 value: "configure",
                 label: "Configure/link",
-                hint: "Add/update providers; disable unselected accounts",
+                hint: "Add/update channels; disable unselected accounts",
               },
               {
                 value: "remove",
-                label: "Remove provider config",
-                hint: "Delete provider tokens/settings from clawdbot.json",
+                label: "Remove channel config",
+                hint: "Delete channel tokens/settings from clawdbot.json",
               },
             ],
             initialValue: "configure",
           }),
           runtime,
-        ) as ProvidersWizardMode;
+        ) as ChannelsWizardMode;
 
-        if (providerMode === "configure") {
-          nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+        if (channelMode === "configure") {
+          nextConfig = await setupChannels(nextConfig, runtime, prompter, {
             allowDisable: true,
             allowSignalInstall: true,
           });
         } else {
-          nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+          nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
         }
       }
 
@@ -851,34 +918,34 @@ export async function runConfigureWizard(
           await persistConfig();
         }
 
-        if (choice === "providers") {
-          const providerMode = guardCancel(
+        if (choice === "channels") {
+          const channelMode = guardCancel(
             await select({
-              message: "Providers",
+              message: "Channels",
               options: [
                 {
                   value: "configure",
                   label: "Configure/link",
-                  hint: "Add/update providers; disable unselected accounts",
+                  hint: "Add/update channels; disable unselected accounts",
                 },
                 {
                   value: "remove",
-                  label: "Remove provider config",
-                  hint: "Delete provider tokens/settings from clawdbot.json",
+                  label: "Remove channel config",
+                  hint: "Delete channel tokens/settings from clawdbot.json",
                 },
               ],
               initialValue: "configure",
             }),
             runtime,
-          ) as ProvidersWizardMode;
+          ) as ChannelsWizardMode;
 
-          if (providerMode === "configure") {
-            nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+          if (channelMode === "configure") {
+            nextConfig = await setupChannels(nextConfig, runtime, prompter, {
               allowDisable: true,
               allowSignalInstall: true,
             });
           } else {
-            nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+            nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
           }
           await persistConfig();
         }
@@ -943,16 +1010,32 @@ export async function runConfigureWizard(
     const links = resolveControlUiLinks({
       bind,
       port: gatewayPort,
+      customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
-    const gatewayProbe = await probeGatewayReachable({
+    // Try both new and old passwords since gateway may still have old config
+    const newPassword =
+      nextConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    const oldPassword =
+      baseConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    const token =
+      nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+
+    let gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
-      token:
-        nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-      password:
-        nextConfig.gateway?.auth?.password ??
-        process.env.CLAWDBOT_GATEWAY_PASSWORD,
+      token,
+      password: newPassword,
     });
+    // If new password failed and it's different from old password, try old too
+    if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
+      gatewayProbe = await probeGatewayReachable({
+        url: links.wsUrl,
+        token,
+        password: oldPassword,
+      });
+    }
     const gatewayStatusLine = gatewayProbe.ok
       ? "Gateway: reachable"
       : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;

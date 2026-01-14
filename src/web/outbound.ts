@@ -9,7 +9,7 @@ import {
 } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
-const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
+const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child(
   "outbound",
 );
 

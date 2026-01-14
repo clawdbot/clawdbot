@@ -13,6 +13,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -39,7 +40,6 @@ import {
 } from "../infra/voicewake.js";
 import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { clearCommandLane } from "../process/command-queue.js";
-import { normalizeProviderId } from "../providers/plugins/index.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -471,11 +471,11 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             label: entry?.label,
             displayName: entry?.displayName,
             chatType: entry?.chatType,
-            provider: entry?.provider,
+            channel: entry?.channel,
             subject: entry?.subject,
             room: entry?.room,
             space: entry?.space,
-            lastProvider: entry?.lastProvider,
+            lastChannel: entry?.lastChannel,
             lastTo: entry?.lastTo,
             skillsSnapshot: entry?.skillsSnapshot,
           };
@@ -965,7 +965,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 thinking: p.thinking,
                 deliver: p.deliver,
                 timeout: Math.ceil(timeoutMs / 1000).toString(),
-                messageProvider: `node(${nodeId})`,
+                messageChannel: `node(${nodeId})`,
                 abortSignal: abortController.signal,
               },
               defaultRuntime,
@@ -1074,7 +1074,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           reasoningLevel: entry?.reasoningLevel,
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
-          lastProvider: entry?.lastProvider,
+          lastChannel: entry?.lastChannel,
           lastTo: entry?.lastTo,
         };
         if (storePath) {
@@ -1095,7 +1095,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             sessionKey,
             thinking: "low",
             deliver: false,
-            messageProvider: "node",
+            messageChannel: "node",
           },
           defaultRuntime,
           ctx.deps,
@@ -1130,12 +1130,12 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
 
         const channelRaw =
           typeof link?.channel === "string" ? link.channel.trim() : "";
-        const provider = normalizeProviderId(channelRaw) ?? undefined;
+        const channel = normalizeChannelId(channelRaw) ?? undefined;
         const to =
           typeof link?.to === "string" && link.to.trim()
             ? link.to.trim()
             : undefined;
-        const deliver = Boolean(link?.deliver) && Boolean(provider);
+        const deliver = Boolean(link?.deliver) && Boolean(channel);
 
         const sessionKeyRaw = (link?.sessionKey ?? "").trim();
         const sessionKey =
@@ -1152,7 +1152,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           reasoningLevel: entry?.reasoningLevel,
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
-          lastProvider: entry?.lastProvider,
+          lastChannel: entry?.lastChannel,
           lastTo: entry?.lastTo,
         };
         if (storePath) {
@@ -1167,12 +1167,12 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             thinking: link?.thinking ?? undefined,
             deliver,
             to,
-            provider,
+            channel,
             timeout:
               typeof link?.timeoutSeconds === "number"
                 ? link.timeoutSeconds.toString()
                 : undefined,
-            messageProvider: "node",
+            messageChannel: "node",
           },
           defaultRuntime,
           ctx.deps,

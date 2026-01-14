@@ -30,6 +30,9 @@ export function mergeWhatsAppConfig(
 ): ClawdbotConfig {
   return {
     ...cfg,
-    whatsapp: mergeConfigSection(cfg.whatsapp, patch, options),
+    channels: {
+      ...cfg.channels,
+      whatsapp: mergeConfigSection(cfg.channels?.whatsapp, patch, options),
+    },
   };
 }

@@ -1,17 +1,17 @@
+import {
+  CHANNEL_MESSAGE_ACTION_NAMES,
+  type ChannelMessageActionName,
+} from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
-import {
-  PROVIDER_MESSAGE_ACTION_NAMES,
-  type ProviderMessageActionName,
-} from "../providers/plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
 
 export async function messageCommand(
@@ -22,8 +22,8 @@ export async function messageCommand(
   const cfg = loadConfig();
   const rawAction =
     typeof opts.action === "string" ? opts.action.trim().toLowerCase() : "";
-  const action = (rawAction || "send") as ProviderMessageActionName;
-  if (!(PROVIDER_MESSAGE_ACTION_NAMES as readonly string[]).includes(action)) {
+  const action = (rawAction || "send") as ChannelMessageActionName;
+  if (!(CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).includes(action)) {
     throw new Error(`Unknown message action: ${action}`);
   }
 

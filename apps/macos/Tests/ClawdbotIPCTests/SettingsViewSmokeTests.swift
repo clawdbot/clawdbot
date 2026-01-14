@@ -12,9 +12,11 @@ struct SettingsViewSmokeTests {
 
         let job1 = CronJob(
             id: "job-1",
+            agentId: "ops",
             name: "  Morning Check-in  ",
             description: nil,
             enabled: true,
+            deleteAfterRun: nil,
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
@@ -32,9 +34,11 @@ struct SettingsViewSmokeTests {
 
         let job2 = CronJob(
             id: "job-2",
+            agentId: nil,
             name: "",
             description: nil,
             enabled: false,
+            deleteAfterRun: nil,
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .every(everyMs: 30000, anchorMs: nil),

@@ -7,11 +7,12 @@ read_when:
 
 ## What it does
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
-- Levels (aliases): `off | minimal | low | medium | high`
+- Levels (aliases): `off | minimal | low | medium | high | xhigh` (GPT-5.2 + Codex models only)
   - minimal → “think”
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
+  - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
   - `highest`, `max` map to `high`.
 
 ## Resolution order

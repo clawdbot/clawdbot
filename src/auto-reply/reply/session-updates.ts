@@ -3,8 +3,8 @@ import crypto from "node:crypto";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
-import { buildProviderSummary } from "../../infra/provider-summary.js";
-import { drainSystemEvents } from "../../infra/system-events.js";
+import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { drainSystemEventEntries } from "../../infra/system-events.js";
 
 export async function prependSystemEvents(params: {
   cfg: ClawdbotConfig;
@@ -25,13 +25,30 @@ export async function prependSystemEvents(params: {
     return trimmed;
   };
 
+  const formatSystemEventTimestamp = (ts: number) =>
+    new Date(ts).toLocaleString("en-US", {
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
   const systemLines: string[] = [];
-  const queued = drainSystemEvents(params.sessionKey);
+  const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
-    ...queued.map(compactSystemEvent).filter((v): v is string => Boolean(v)),
+    ...queued
+      .map((event) => {
+        const compacted = compactSystemEvent(event.text);
+        if (!compacted) return null;
+        return `[${formatSystemEventTimestamp(event.ts)}] ${compacted}`;
+      })
+      .filter((v): v is string => Boolean(v)),
   );
   if (params.isMainSession && params.isNewSession) {
-    const summary = await buildProviderSummary(params.cfg);
+    const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) systemLines.unshift(...summary);
   }
   if (systemLines.length === 0) return params.prefixedBodyBase;

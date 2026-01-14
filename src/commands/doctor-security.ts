@@ -1,8 +1,8 @@
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { readProviderAllowFromStore } from "../pairing/pairing-store.js";
-import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
-import type { ProviderId } from "../providers/plugins/types.js";
+import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { note } from "../terminal/note.js";
 
 export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
@@ -10,7 +10,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
 
   const warnDmPolicy = async (params: {
     label: string;
-    provider: ProviderId;
+    provider: ChannelId;
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
@@ -24,7 +24,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
       String(v).trim(),
     );
     const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readProviderAllowFromStore(
+    const storeAllowFrom = await readChannelAllowFromStore(
       params.provider,
     ).catch(() => []);
     const normalizedCfg = configAllowFrom
@@ -68,10 +68,10 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
     }
   };
 
-  for (const plugin of listProviderPlugins()) {
+  for (const plugin of listChannelPlugins()) {
     if (!plugin.security) continue;
     const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveProviderDefaultAccountId({
+    const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
       cfg,
       accountIds,

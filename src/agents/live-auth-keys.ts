@@ -48,3 +48,14 @@ export function isAnthropicRateLimitError(message: string): boolean {
   if (lower.includes("429")) return true;
   return false;
 }
+
+export function isAnthropicBillingError(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (lower.includes("credit balance")) return true;
+  if (lower.includes("insufficient credit")) return true;
+  if (lower.includes("insufficient credits")) return true;
+  if (lower.includes("payment required")) return true;
+  if (lower.includes("billing") && lower.includes("disabled")) return true;
+  if (lower.includes("402")) return true;
+  return false;
+}

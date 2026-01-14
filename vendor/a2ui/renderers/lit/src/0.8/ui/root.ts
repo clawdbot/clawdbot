@@ -1,19 +1,15 @@
 /*
  Copyright 2025 Google LLC
-
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
  You may obtain a copy of the License at
-
       https://www.apache.org/licenses/LICENSE-2.0
-
  Unless required by applicable law or agreed to in writing, software
  distributed under the License is distributed on an "AS IS" BASIS,
  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  See the License for the specific language governing permissions and
  limitations under the License.
  */
-
 import { SignalWatcher } from "@lit-labs/signals";
 import { consume } from "@lit/context";
 import {
@@ -34,48 +30,36 @@ import { Theme, AnyComponentNode, SurfaceID } from "../types/types.js";
 import { themeContext } from "./context/theme.js";
 import { structuralStyles } from "./styles.js";
 import { componentRegistry } from "./component-registry.js";
-
 type NodeOfType<T extends AnyComponentNode["type"]> = Extract<
   AnyComponentNode,
   { type: T }
 >;
-
 // This is the base class all the components will inherit
 @customElement("a2ui-root")
 export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
   @property()
   accessor surfaceId: SurfaceID | null = null;
-
   @property()
   accessor component: AnyComponentNode | null = null;
-
   @consume({ context: themeContext })
   accessor theme!: Theme;
-
   @property({ attribute: false })
   accessor childComponents: AnyComponentNode[] | null = null;
-
   @property({ attribute: false })
   accessor processor: A2uiMessageProcessor | null = null;
-
   @property()
   accessor dataContextPath: string = "";
-
   @property()
   accessor enableCustomElements = false;
-
   @property()
   set weight(weight: string | number) {
     this.#weight = weight;
     this.style.setProperty("--weight", `${weight}`);
   }
-
   get weight() {
     return this.#weight;
   }
-
   #weight: string | number = 1;
-
   static styles = [
     structuralStyles,
     css`
@@ -87,44 +71,36 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
       }
     `,
   ];
-
   /**
    * Holds the cleanup function for our effect.
    * We need this to stop the effect when the component is disconnected.
    */
   #lightDomEffectDisposer: null | (() => void) = null;
-
   protected willUpdate(changedProperties: PropertyValues<this>): void {
     if (changedProperties.has("childComponents")) {
       if (this.#lightDomEffectDisposer) {
         this.#lightDomEffectDisposer();
       }
-
       // This effect watches the A2UI Children signal and updates the Light DOM.
       this.#lightDomEffectDisposer = effect(() => {
         // 1. Read the signal to create the subscription.
         const allChildren = this.childComponents ?? null;
-
         // 2. Generate the template for the children.
         const lightDomTemplate = this.renderComponentTree(allChildren);
-
         // 3. Imperatively render that template into the component itself.
         render(lightDomTemplate, this, { host: this });
       });
     }
   }
-
   /**
    * Clean up the effect when the component is removed from the DOM.
    */
   disconnectedCallback(): void {
     super.disconnectedCallback();
-
     if (this.#lightDomEffectDisposer) {
       this.#lightDomEffectDisposer();
     }
   }
-
   /**
    * Turns the SignalMap into a renderable TemplateResult for Lit.
    */
@@ -134,18 +110,15 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
     if (!components) {
       return nothing;
     }
-
     if (!Array.isArray(components)) {
       return nothing;
     }
-
     return html` ${map(components, (component) => {
       // 1. Check if there is a registered custom component or override.
       if (this.enableCustomElements) {
         const registeredCtor = componentRegistry.get(component.type);
         // We also check customElements.get for non-registered but defined elements
         const elCtor = registeredCtor || customElements.get(component.type);
-
         if (elCtor) {
           const node = component as AnyComponentNode;
           const el = new elCtor() as Root;
@@ -158,7 +131,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
           el.processor = this.processor;
           el.surfaceId = this.surfaceId;
           el.dataContextPath = node.dataContextPath ?? "/";
-
           for (const [prop, val] of Object.entries(component.properties)) {
             // @ts-expect-error We're off the books.
             el[prop] = val;
@@ -166,7 +138,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
           return html`${el}`;
         }
       }
-
       // 2. Fallback to standard components.
       switch (component.type) {
         case "List": {
@@ -184,7 +155,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-list>`;
         }
-
         case "Card": {
           const node = component as NodeOfType<"Card">;
           let childComponents: AnyComponentNode[] | null =
@@ -192,7 +162,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
           if (!childComponents && node.properties.child) {
             childComponents = [node.properties.child];
           }
-
           return html`<a2ui-card
             id=${node.id}
             slot=${node.slotName ? node.slotName : nothing}
@@ -205,7 +174,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-card>`;
         }
-
         case "Column": {
           const node = component as NodeOfType<"Column">;
           return html`<a2ui-column
@@ -222,7 +190,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-column>`;
         }
-
         case "Row": {
           const node = component as NodeOfType<"Row">;
           return html`<a2ui-row
@@ -239,7 +206,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-row>`;
         }
-
         case "Image": {
           const node = component as NodeOfType<"Image">;
           return html`<a2ui-image
@@ -256,7 +222,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-image>`;
         }
-
         case "Icon": {
           const node = component as NodeOfType<"Icon">;
           return html`<a2ui-icon
@@ -271,7 +236,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-icon>`;
         }
-
         case "AudioPlayer": {
           const node = component as NodeOfType<"AudioPlayer">;
           return html`<a2ui-audioplayer
@@ -286,7 +250,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-audioplayer>`;
         }
-
         case "Button": {
           const node = component as NodeOfType<"Button">;
           return html`<a2ui-button
@@ -302,7 +265,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-button>`;
         }
-
         case "Text": {
           const node = component as NodeOfType<"Text">;
           return html`<a2ui-text
@@ -319,7 +281,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-text>`;
         }
-
         case "CheckBox": {
           const node = component as NodeOfType<"CheckBox">;
           return html`<a2ui-checkbox
@@ -335,7 +296,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-checkbox>`;
         }
-
         case "DateTimeInput": {
           const node = component as NodeOfType<"DateTimeInput">;
           return html`<a2ui-datetimeinput
@@ -353,7 +313,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-datetimeinput>`;
         }
-
         case "Divider": {
           // TODO: thickness, axis and color.
           const node = component as NodeOfType<"Divider">;
@@ -371,7 +330,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-divider>`;
         }
-
         case "MultipleChoice": {
           // TODO: maxAllowedSelections and selections.
           const node = component as NodeOfType<"MultipleChoice">;
@@ -389,7 +347,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-multiplechoice>`;
         }
-
         case "Slider": {
           const node = component as NodeOfType<"Slider">;
           return html`<a2ui-slider
@@ -406,7 +363,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-slider>`;
         }
-
         case "TextField": {
           // TODO: type and validationRegexp.
           const node = component as NodeOfType<"TextField">;
@@ -425,7 +381,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-textfield>`;
         }
-
         case "Video": {
           const node = component as NodeOfType<"Video">;
           return html`<a2ui-video
@@ -440,7 +395,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-video>`;
         }
-
         case "Tabs": {
           const node = component as NodeOfType<"Tabs">;
           const titles: StringValue[] = [];
@@ -451,7 +405,6 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
               childComponents.push(item.child);
             }
           }
-
           return html`<a2ui-tabs
             id=${node.id}
             slot=${node.slotName ? node.slotName : nothing}
@@ -465,16 +418,13 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-tabs>`;
         }
-
         case "Modal": {
           const node = component as NodeOfType<"Modal">;
           const childComponents: AnyComponentNode[] = [
             node.properties.entryPointChild,
             node.properties.contentChild,
           ];
-
           node.properties.entryPointChild.slotName = "entry";
-
           return html`<a2ui-modal
             id=${node.id}
             slot=${node.slotName ? node.slotName : nothing}
@@ -487,27 +437,22 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
             .enableCustomElements=${this.enableCustomElements}
           ></a2ui-modal>`;
         }
-
         default: {
           return this.renderCustomComponent(component);
         }
       }
     })}`;
   }
-
   private renderCustomComponent(component: AnyComponentNode) {
     if (!this.enableCustomElements) {
       return;
     }
-
     const node = component as AnyComponentNode;
     const registeredCtor = componentRegistry.get(component.type);
     const elCtor = registeredCtor || customElements.get(component.type);
-
     if (!elCtor) {
       return html`Unknown element ${component.type}`;
     }
-
     const el = new elCtor() as Root;
     el.id = node.id;
     if (node.slotName) {
@@ -518,14 +463,12 @@ export class Root extends (SignalWatcher(LitElement) as typeof LitElement) {
     el.processor = this.processor;
     el.surfaceId = this.surfaceId;
     el.dataContextPath = node.dataContextPath ?? "/";
-
     for (const [prop, val] of Object.entries(component.properties)) {
       // @ts-expect-error We're off the books.
       el[prop] = val;
     }
     return html`${el}`;
   }
-
   render(): TemplateResult | typeof nothing {
     return html`<slot></slot>`;
   }

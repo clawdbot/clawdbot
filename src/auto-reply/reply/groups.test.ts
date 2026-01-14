@@ -7,12 +7,14 @@ import { resolveGroupRequireMention } from "./groups.js";
 describe("resolveGroupRequireMention", () => {
   it("respects Discord guild/channel requireMention settings", () => {
     const cfg: ClawdbotConfig = {
-      discord: {
-        guilds: {
-          "145": {
-            requireMention: false,
-            channels: {
-              general: { allow: true },
+      channels: {
+        discord: {
+          guilds: {
+            "145": {
+              requireMention: false,
+              channels: {
+                general: { allow: true },
+              },
             },
           },
         },
@@ -25,7 +27,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
-      provider: "discord",
+      channel: "discord",
       id: "123",
       chatType: "group",
     };
@@ -37,9 +39,11 @@ describe("resolveGroupRequireMention", () => {
 
   it("respects Slack channel requireMention settings", () => {
     const cfg: ClawdbotConfig = {
-      slack: {
-        channels: {
-          C123: { requireMention: false },
+      channels: {
+        slack: {
+          channels: {
+            C123: { requireMention: false },
+          },
         },
       },
     };
@@ -49,7 +53,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
-      provider: "slack",
+      channel: "slack",
       id: "C123",
       chatType: "group",
     };

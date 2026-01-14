@@ -8,7 +8,7 @@ read_when:
 
 # Gateway CLI
 
-The Gateway is Clawdbot’s WebSocket server (providers, nodes, sessions, hooks).
+The Gateway is Clawdbot’s WebSocket server (channels, nodes, sessions, hooks).
 
 Subcommands in this page live under `clawdbot gateway …`.
 

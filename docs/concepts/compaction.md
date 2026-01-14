@@ -15,6 +15,9 @@ Compaction **summarizes older conversation** into a compact summary entry and ke
 
 Compaction **persists** in the session’s JSONL history.
 
+## Configuration
+See [Compaction config & modes](/compaction) for the `agents.defaults.compaction` settings.
+
 ## Auto-compaction (default on)
 When a session nears or exceeds the model’s context window, Clawdbot triggers auto-compaction and may retry the original request using the compacted context.
 

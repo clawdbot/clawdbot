@@ -24,7 +24,7 @@ export {
   getWebAuthAgeMs,
   logoutWeb,
   logWebSelfId,
-  pickProvider,
+  pickWebChannel,
   readWebSelfId,
   WA_WEB_AUTH_DIR,
   webAuthExists,
@@ -138,7 +138,7 @@ export async function createWaSocket(
           if (status === DisconnectReason.loggedOut) {
             console.error(
               danger(
-                "WhatsApp session logged out. Run: clawdbot providers login",
+                "WhatsApp session logged out. Run: clawdbot channels login",
               ),
             );
           }

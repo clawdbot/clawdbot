@@ -1,17 +1,13 @@
-import crypto from "node:crypto";
 import {
   resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentModelPrimary,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { runCliAgent } from "../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
-import { lookupContextTokens } from "../agents/context.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../agents/defaults.js";
+import { getCliSessionId } from "../agents/cli-session.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
@@ -24,28 +20,21 @@ import {
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
-import { hasNonzeroUsage } from "../agents/usage.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import type { MsgContext } from "../auto-reply/templating.js";
 import {
+  formatThinkingLevels,
+  formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
+import { loadConfig } from "../config/config.js";
 import {
-  type CliDeps,
-  createDefaultDeps,
-  createOutboundSendDeps,
-} from "../cli/deps.js";
-import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import {
-  DEFAULT_IDLE_MINUTES,
-  loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
-  resolveSessionKey,
-  resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
@@ -53,145 +42,14 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
-import {
-  formatOutboundPayloadLog,
-  type NormalizedOutboundPayload,
-  normalizeOutboundPayloads,
-  normalizeOutboundPayloadsForJson,
-} from "../infra/outbound/payloads.js";
-import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
-import type { ProviderOutboundTargetMode } from "../providers/plugins/types.js";
-import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
-import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import {
-  isInternalMessageProvider,
-  resolveGatewayMessageProvider,
-  resolveMessageProvider,
-} from "../utils/message-provider.js";
-
-/** Image content block for Claude API multimodal messages. */
-type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
-
-type AgentCommandOpts = {
-  message: string;
-  /** Optional image attachments for multimodal messages. */
-  images?: ImageContent[];
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  thinking?: string;
-  thinkingOnce?: string;
-  verbose?: string;
-  json?: boolean;
-  timeout?: string;
-  deliver?: boolean;
-  /** Message provider context (webchat|voicewake|whatsapp|...). */
-  messageProvider?: string;
-  provider?: string; // delivery provider (whatsapp|telegram|...)
-  deliveryTargetMode?: ProviderOutboundTargetMode;
-  bestEffortDeliver?: boolean;
-  abortSignal?: AbortSignal;
-  lane?: string;
-  runId?: string;
-  extraSystemPrompt?: string;
-};
-
-type SessionResolution = {
-  sessionId: string;
-  sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath: string;
-  isNewSession: boolean;
-  persistedThinking?: ThinkLevel;
-  persistedVerbose?: VerboseLevel;
-};
-
-function resolveSession(opts: {
-  cfg: ClawdbotConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): SessionResolution {
-  const sessionCfg = opts.cfg.session;
-  const scope = sessionCfg?.scope ?? "per-sender";
-  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const idleMinutes = Math.max(
-    sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
-    1,
-  );
-  const idleMs = idleMinutes * 60_000;
-  const explicitSessionKey = opts.sessionKey?.trim();
-  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
-  const storePath = resolveStorePath(sessionCfg?.store, {
-    agentId: storeAgentId,
-  });
-  const sessionStore = loadSessionStore(storePath);
-  const now = Date.now();
-
-  const ctx: MsgContext | undefined = opts.to?.trim()
-    ? { From: opts.to }
-    : undefined;
-  let sessionKey: string | undefined =
-    explicitSessionKey ??
-    (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
-  let sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
-
-  // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
-  if (
-    !explicitSessionKey &&
-    opts.sessionId &&
-    (!sessionEntry || sessionEntry.sessionId !== opts.sessionId)
-  ) {
-    const foundKey = Object.keys(sessionStore).find(
-      (key) => sessionStore[key]?.sessionId === opts.sessionId,
-    );
-    if (foundKey) {
-      sessionKey = sessionKey ?? foundKey;
-      sessionEntry = sessionStore[foundKey];
-    }
-  }
-
-  const fresh = sessionEntry && sessionEntry.updatedAt >= now - idleMs;
-  const sessionId =
-    opts.sessionId?.trim() ||
-    (fresh ? sessionEntry?.sessionId : undefined) ||
-    crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
-
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
-  const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
-      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-      : undefined;
-
-  return {
-    sessionId,
-    sessionKey,
-    sessionEntry,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  };
-}
+import { resolveMessageChannel } from "../utils/message-channel.js";
+import { deliverAgentCommandResult } from "./agent/delivery.js";
+import { resolveSession } from "./agent/session.js";
+import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
+import type { AgentCommandOpts } from "./agent/types.js";
 
 export async function agentCommand(
   opts: AgentCommandOpts,
@@ -214,17 +72,26 @@ export async function agentCommand(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  const configuredModel = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+  );
 
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
     throw new Error(
-      "Invalid thinking level. Use one of: off, minimal, low, medium, high.",
+      `Invalid thinking level. Use one of: ${thinkingLevelsHint}.`,
     );
   }
   if (opts.thinkingOnce && !thinkOnce) {
     throw new Error(
-      "Invalid one-shot thinking level. Use one of: off, minimal, low, medium, high.",
+      `Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`,
     );
   }
 
@@ -273,7 +140,7 @@ export async function agentCommand(
       cfg,
       entry: sessionEntry,
       sessionKey,
-      provider: sessionEntry?.provider,
+      channel: sessionEntry?.channel,
       chatType: sessionEntry?.chatType,
     });
     if (sendPolicy === "deny") {
@@ -333,9 +200,28 @@ export async function agentCommand(
     await saveSessionStore(storePath, sessionStore);
   }
 
+  const agentModelPrimary = resolveAgentModelPrimary(cfg, sessionAgentId);
+  const cfgForModelSelection = agentModelPrimary
+    ? {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: {
+              ...(typeof cfg.agents?.defaults?.model === "object"
+                ? cfg.agents.defaults.model
+                : undefined),
+              primary: agentModelPrimary,
+            },
+          },
+        },
+      }
+    : cfg;
+
   const { provider: defaultProvider, model: defaultModel } =
     resolveConfiguredModelRef({
-      cfg,
+      cfg: cfgForModelSelection,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
@@ -423,6 +309,29 @@ export async function agentCommand(
       catalog: catalogForThinking,
     });
   }
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    const explicitThink = Boolean(thinkOnce || thinkOverride);
+    if (explicitThink) {
+      throw new Error(
+        `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+      );
+    }
+    resolvedThinkLevel = "high";
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
+      sessionEntry.thinkingLevel = "high";
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    }
+  }
   const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
     agentId: sessionAgentId,
   });
@@ -434,14 +343,18 @@ export async function agentCommand(
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const messageProvider = resolveMessageProvider(
-      opts.messageProvider,
-      opts.provider,
+    const messageChannel = resolveMessageChannel(
+      opts.messageChannel,
+      opts.channel,
     );
     const fallbackResult = await runWithModelFallback({
       cfg,
       provider,
       model,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        cfg,
+        sessionAgentId,
+      ),
       run: (providerOverride, modelOverride) => {
         if (isCliProvider(providerOverride, cfg)) {
           const cliSessionId = getCliSessionId(sessionEntry, providerOverride);
@@ -465,7 +378,7 @@ export async function agentCommand(
         return runEmbeddedPiAgent({
           sessionId,
           sessionKey,
-          messageProvider,
+          messageChannel,
           sessionFile,
           workspaceDir,
           config: cfg,
@@ -533,144 +446,29 @@ export async function agentCommand(
 
   // Update token+model fields in the session store.
   if (sessionStore && sessionKey) {
-    const usage = result.meta.agentMeta?.usage;
-    const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed =
-      result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
-    const contextTokens =
-      agentCfg?.contextTokens ??
-      lookupContextTokens(modelUsed) ??
-      DEFAULT_CONTEXT_TOKENS;
-
-    const entry = sessionStore[sessionKey] ?? {
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      contextTokensOverride: agentCfg?.contextTokens,
       sessionId,
-      updatedAt: Date.now(),
-    };
-    const next: SessionEntry = {
-      ...entry,
-      sessionId,
-      updatedAt: Date.now(),
-      modelProvider: providerUsed,
-      model: modelUsed,
-      contextTokens,
-    };
-    if (isCliProvider(providerUsed, cfg)) {
-      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-      if (cliSessionId) setCliSessionId(next, providerUsed, cliSessionId);
-    }
-    next.abortedLastRun = result.meta.aborted ?? false;
-    if (hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const promptTokens =
-        input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-      next.inputTokens = input;
-      next.outputTokens = output;
-      next.totalTokens =
-        promptTokens > 0 ? promptTokens : (usage.total ?? input);
-    }
-    sessionStore[sessionKey] = next;
-    await saveSessionStore(storePath, sessionStore);
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: provider,
+      defaultModel: model,
+      fallbackProvider,
+      fallbackModel,
+      result,
+    });
   }
 
   const payloads = result.payloads ?? [];
-  const deliver = opts.deliver === true;
-  const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryProvider =
-    resolveGatewayMessageProvider(opts.provider) ?? DEFAULT_CHAT_PROVIDER;
-  // Provider docking: delivery providers are resolved via plugin registry.
-  const deliveryPlugin = !isInternalMessageProvider(deliveryProvider)
-    ? getProviderPlugin(
-        normalizeProviderId(deliveryProvider) ?? deliveryProvider,
-      )
-    : undefined;
-
-  const logDeliveryError = (err: unknown) => {
-    const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
-    runtime.error?.(message);
-    if (!runtime.error) runtime.log(message);
-  };
-
-  const isDeliveryProviderKnown =
-    isInternalMessageProvider(deliveryProvider) || Boolean(deliveryPlugin);
-
-  const targetMode: ProviderOutboundTargetMode =
-    opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
-  const resolvedTarget =
-    deliver && isDeliveryProviderKnown && deliveryProvider
-      ? resolveOutboundTarget({
-          provider: deliveryProvider,
-          to: opts.to,
-          cfg,
-          accountId:
-            targetMode === "implicit" ? sessionEntry?.lastAccountId : undefined,
-          mode: targetMode,
-        })
-      : null;
-  const deliveryTarget = resolvedTarget?.ok ? resolvedTarget.to : undefined;
-
-  if (deliver) {
-    if (!isDeliveryProviderKnown) {
-      const err = new Error(`Unknown provider: ${deliveryProvider}`);
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    } else if (resolvedTarget && !resolvedTarget.ok) {
-      if (!bestEffortDeliver) throw resolvedTarget.error;
-      logDeliveryError(resolvedTarget.error);
-    }
-  }
-
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads);
-  if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        buildOutboundResultEnvelope({
-          payloads: normalizedPayloads,
-          meta: result.meta,
-        }),
-        null,
-        2,
-      ),
-    );
-    if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
-    }
-  }
-
-  if (payloads.length === 0) {
-    runtime.log("No reply from agent.");
-    return { payloads: [], meta: result.meta };
-  }
-
-  const deliveryPayloads = normalizeOutboundPayloads(payloads);
-  const logPayload = (payload: NormalizedOutboundPayload) => {
-    if (opts.json) return;
-    const output = formatOutboundPayloadLog(payload);
-    if (output) runtime.log(output);
-  };
-  if (!deliver) {
-    for (const payload of deliveryPayloads) {
-      logPayload(payload);
-    }
-  }
-  if (
-    deliver &&
-    deliveryProvider &&
-    !isInternalMessageProvider(deliveryProvider)
-  ) {
-    if (deliveryTarget) {
-      await deliverOutboundPayloads({
-        cfg,
-        provider: deliveryProvider,
-        to: deliveryTarget,
-        payloads: deliveryPayloads,
-        bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
-        onPayload: logPayload,
-        deps: createOutboundSendDeps(deps, cfg),
-      });
-    }
-  }
-
-  return { payloads: normalizedPayloads, meta: result.meta };
+  return await deliverAgentCommandResult({
+    cfg,
+    deps,
+    runtime,
+    opts,
+    sessionEntry,
+    result,
+    payloads,
+  });
 }

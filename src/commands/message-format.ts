@@ -1,14 +1,14 @@
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import type {
+  ChannelId,
+  ChannelMessageActionName,
+} from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import {
   formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
-import { getProviderPlugin } from "../providers/plugins/index.js";
-import type {
-  ProviderId,
-  ProviderMessageActionName,
-} from "../providers/plugins/types.js";
 import { renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -18,8 +18,8 @@ const shortenText = (value: string, maxLen: number) => {
   return `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
 };
 
-const resolveProviderLabel = (provider: ProviderId) =>
-  getProviderPlugin(provider)?.meta.label ?? provider;
+const resolveChannelLabel = (channel: ChannelId) =>
+  getChannelPlugin(channel)?.meta.label ?? channel;
 
 function extractMessageId(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
@@ -34,8 +34,8 @@ function extractMessageId(payload: unknown): string | null {
 }
 
 export type MessageCliJsonEnvelope = {
-  action: ProviderMessageActionName;
-  provider: ProviderId;
+  action: ChannelMessageActionName;
+  channel: ChannelId;
   dryRun: boolean;
   handledBy: "plugin" | "core" | "dry-run";
   payload: unknown;
@@ -46,7 +46,7 @@ export function buildMessageCliJson(
 ): MessageCliJsonEnvelope {
   return {
     action: result.action,
-    provider: result.provider,
+    channel: result.channel,
     dryRun: result.dryRun,
     handledBy: result.handledBy,
     payload: result.payload,
@@ -256,7 +256,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
   if (result.handledBy === "dry-run") {
     return [
-      muted(`[dry-run] would run ${result.action} via ${result.provider}`),
+      muted(`[dry-run] would run ${result.action} via ${result.channel}`),
     ];
   }
 
@@ -265,20 +265,20 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
       const send = result.sendResult;
       if (send.via === "direct") {
         const directResult = send.result as OutboundDeliveryResult | undefined;
-        return [ok(formatOutboundDeliverySummary(send.provider, directResult))];
+        return [ok(formatOutboundDeliverySummary(send.channel, directResult))];
       }
       const gatewayResult = send.result as { messageId?: string } | undefined;
       return [
         ok(
           formatGatewaySummary({
-            provider: send.provider,
+            channel: send.channel,
             messageId: gatewayResult?.messageId ?? null,
           }),
         ),
       ];
     }
 
-    const label = resolveProviderLabel(result.provider);
+    const label = resolveChannelLabel(result.channel);
     const msgId = extractMessageId(result.payload);
     return [ok(`✅ Sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
@@ -292,7 +292,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
         ok(
           formatGatewaySummary({
             action: "Poll sent",
-            provider: poll.provider,
+            channel: poll.channel,
             messageId: msgId,
           }),
         ),
@@ -301,14 +301,14 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
       return lines;
     }
 
-    const label = resolveProviderLabel(result.provider);
+    const label = resolveChannelLabel(result.channel);
     const msgId = extractMessageId(result.payload);
     return [
       ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`),
     ];
   }
 
-  // provider actions (non-send/poll)
+  // channel actions (non-send/poll)
   const payload = result.payload;
   const lines: string[] = [];
 
@@ -372,7 +372,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
   // Generic success + compact details table.
   lines.push(
-    ok(`✅ ${result.action} via ${resolveProviderLabel(result.provider)}.`),
+    ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`),
   );
   const summary = renderObjectSummary(payload, opts);
   if (summary.length) {

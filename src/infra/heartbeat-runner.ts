@@ -7,6 +7,11 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -20,13 +25,8 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
-import type { ProviderHeartbeatDeps } from "../providers/plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -38,7 +38,7 @@ import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
 
 type HeartbeatDeps = OutboundSendDeps &
-  ProviderHeartbeatDeps & {
+  ChannelHeartbeatDeps & {
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     nowMs?: () => number;
@@ -221,17 +221,17 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
-  const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
-      ? normalizeProviderId(entry.lastProvider)
+  const lastChannel =
+    entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL
+      ? normalizeChannelId(entry.lastChannel)
       : undefined;
   const senderProvider =
-    delivery.provider !== "none" ? delivery.provider : lastProvider;
+    delivery.channel !== "none" ? delivery.channel : lastChannel;
   const senderAllowFrom = senderProvider
-    ? (getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
+    ? (getChannelPlugin(senderProvider)?.config.resolveAllowFrom?.({
         cfg,
         accountId:
-          senderProvider === lastProvider ? entry?.lastAccountId : undefined,
+          senderProvider === lastChannel ? entry?.lastAccountId : undefined,
       }) ?? [])
     : [];
   const sender = resolveHeartbeatSender({
@@ -316,7 +316,7 @@ export async function runHeartbeatOnce(opts: {
           .join("\n")
       : normalized.text;
 
-    if (delivery.provider === "none" || !delivery.to) {
+    if (delivery.channel === "none" || !delivery.to) {
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
@@ -328,8 +328,8 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const deliveryAccountId =
-      delivery.provider === lastProvider ? entry?.lastAccountId : undefined;
-    const heartbeatPlugin = getProviderPlugin(delivery.provider);
+      delivery.channel === lastChannel ? entry?.lastAccountId : undefined;
+    const heartbeatPlugin = getChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -344,8 +344,8 @@ export async function runHeartbeatOnce(opts: {
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
         });
-        log.info("heartbeat: provider not ready", {
-          provider: delivery.provider,
+        log.info("heartbeat: channel not ready", {
+          channel: delivery.channel,
           reason: readiness.reason,
         });
         return { status: "skipped", reason: readiness.reason };
@@ -354,7 +354,7 @@ export async function runHeartbeatOnce(opts: {
 
     await deliverOutboundPayloads({
       cfg,
-      provider: delivery.provider,
+      channel: delivery.channel,
       to: delivery.to,
       accountId: deliveryAccountId,
       payloads: [

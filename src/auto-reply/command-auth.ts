@@ -1,12 +1,12 @@
+import type { ChannelDock } from "../channels/dock.js";
+import { getChannelDock, listChannelDocks } from "../channels/dock.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeChannelId } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import type { ProviderDock } from "../providers/dock.js";
-import { getProviderDock, listProviderDocks } from "../providers/dock.js";
-import type { ProviderId } from "../providers/plugins/types.js";
-import { normalizeProviderId } from "../providers/registry.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
-  providerId?: ProviderId;
+  providerId?: ChannelId;
   ownerList: string[];
   senderId?: string;
   isAuthorizedSender: boolean;
@@ -17,20 +17,20 @@ export type CommandAuthorization = {
 function resolveProviderFromContext(
   ctx: MsgContext,
   cfg: ClawdbotConfig,
-): ProviderId | undefined {
+): ChannelId | undefined {
   const direct =
-    normalizeProviderId(ctx.Provider) ??
-    normalizeProviderId(ctx.Surface) ??
-    normalizeProviderId(ctx.OriginatingChannel);
+    normalizeChannelId(ctx.Provider) ??
+    normalizeChannelId(ctx.Surface) ??
+    normalizeChannelId(ctx.OriginatingChannel);
   if (direct) return direct;
   const candidates = [ctx.From, ctx.To]
     .filter((value): value is string => Boolean(value?.trim()))
     .flatMap((value) => value.split(":").map((part) => part.trim()));
   for (const candidate of candidates) {
-    const normalized = normalizeProviderId(candidate);
+    const normalized = normalizeChannelId(candidate);
     if (normalized) return normalized;
   }
-  const configured = listProviderDocks()
+  const configured = listChannelDocks()
     .map((dock) => {
       if (!dock.config?.resolveAllowFrom) return null;
       const allowFrom = dock.config.resolveAllowFrom({
@@ -40,13 +40,13 @@ function resolveProviderFromContext(
       if (!Array.isArray(allowFrom) || allowFrom.length === 0) return null;
       return dock.id;
     })
-    .filter((value): value is ProviderId => Boolean(value));
+    .filter((value): value is ChannelId => Boolean(value));
   if (configured.length === 1) return configured[0];
   return undefined;
 }
 
 function formatAllowFromList(params: {
-  dock?: ProviderDock;
+  dock?: ChannelDock;
   cfg: ClawdbotConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
@@ -66,7 +66,7 @@ export function resolveCommandAuthorization(params: {
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;
   const providerId = resolveProviderFromContext(ctx, cfg);
-  const dock = providerId ? getProviderDock(providerId) : undefined;
+  const dock = providerId ? getChannelDock(providerId) : undefined;
   const from = (ctx.From ?? "").trim();
   const to = (ctx.To ?? "").trim();
   const allowFromRaw = dock?.config?.resolveAllowFrom

@@ -186,7 +186,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       contextTokens: entry?.contextTokens,
       sendPolicy: entry?.sendPolicy,
       label: entry?.label,
-      lastProvider: entry?.lastProvider,
+      lastChannel: entry?.lastChannel,
       lastTo: entry?.lastTo,
       skillsSnapshot: entry?.skillsSnapshot,
     };

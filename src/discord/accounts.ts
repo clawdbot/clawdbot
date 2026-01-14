@@ -16,7 +16,7 @@ export type ResolvedDiscordAccount = {
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = cfg.discord?.accounts;
+  const accounts = cfg.channels?.discord?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
@@ -37,7 +37,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): DiscordAccountConfig | undefined {
-  const accounts = cfg.discord?.accounts;
+  const accounts = cfg.channels?.discord?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
   return accounts[accountId] as DiscordAccountConfig | undefined;
 }
@@ -46,7 +46,7 @@ function mergeDiscordAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.discord ??
+  const { accounts: _ignored, ...base } = (cfg.channels?.discord ??
     {}) as DiscordAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
@@ -57,7 +57,7 @@ export function resolveDiscordAccount(params: {
   accountId?: string | null;
 }): ResolvedDiscordAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = params.cfg.discord?.enabled !== false;
+  const baseEnabled = params.cfg.channels?.discord?.enabled !== false;
   const merged = mergeDiscordAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;

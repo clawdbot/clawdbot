@@ -49,5 +49,5 @@ clawdhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.2.0 --
 
 Notes
 - Default registry: https://clawdhub.com (override with CLAWDHUB_REGISTRY or --registry)
-- Default workdir: cwd; install dir: ./skills (override with --workdir / --dir)
+- Default workdir: cwd (falls back to Clawdbot workspace); install dir: ./skills (override with --workdir / --dir / CLAWDHUB_WORKDIR)
 - Update command hashes local files, resolves matching version, and upgrades to latest unless --version is set

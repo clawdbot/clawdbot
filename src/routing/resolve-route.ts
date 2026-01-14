@@ -17,7 +17,7 @@ export type RoutePeer = {
 
 export type ResolveAgentRouteInput = {
   cfg: ClawdbotConfig;
-  provider: string;
+  channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
   guildId?: string | null;
@@ -26,7 +26,7 @@ export type ResolveAgentRouteInput = {
 
 export type ResolvedAgentRoute = {
   agentId: string;
-  provider: string;
+  channel: string;
   accountId: string;
   /** Internal session key used for persistence + concurrency. */
   sessionKey: string;
@@ -38,7 +38,7 @@ export type ResolvedAgentRoute = {
     | "binding.guild"
     | "binding.team"
     | "binding.account"
-    | "binding.provider"
+    | "binding.channel"
     | "default";
 };
 
@@ -66,15 +66,15 @@ function matchesAccountId(match: string | undefined, actual: string): boolean {
 
 export function buildAgentSessionKey(params: {
   agentId: string;
-  provider: string;
+  channel: string;
   peer?: RoutePeer | null;
 }): string {
-  const provider = normalizeToken(params.provider) || "unknown";
+  const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
     mainKey: DEFAULT_MAIN_KEY,
-    provider,
+    channel,
     peerKind: peer?.kind ?? "dm",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
   });
@@ -103,13 +103,13 @@ function pickFirstExistingAgentId(
   return normalizeAgentId(resolveDefaultAgentId(cfg));
 }
 
-function matchesProvider(
-  match: { provider?: string | undefined } | undefined,
-  provider: string,
+function matchesChannel(
+  match: { channel?: string | undefined } | undefined,
+  channel: string,
 ): boolean {
-  const key = normalizeToken(match?.provider);
+  const key = normalizeToken(match?.channel);
   if (!key) return false;
-  return key === provider;
+  return key === channel;
 }
 
 function matchesPeer(
@@ -145,7 +145,7 @@ function matchesTeam(
 export function resolveAgentRoute(
   input: ResolveAgentRouteInput,
 ): ResolvedAgentRoute {
-  const provider = normalizeToken(input.provider);
+  const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
     ? { kind: input.peer.kind, id: normalizeId(input.peer.id) }
@@ -155,7 +155,7 @@ export function resolveAgentRoute(
 
   const bindings = listBindings(input.cfg).filter((binding) => {
     if (!binding || typeof binding !== "object") return false;
-    if (!matchesProvider(binding.match, provider)) return false;
+    if (!matchesChannel(binding.match, channel)) return false;
     return matchesAccountId(binding.match?.accountId, accountId);
   });
 
@@ -166,11 +166,11 @@ export function resolveAgentRoute(
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     return {
       agentId: resolvedAgentId,
-      provider,
+      channel,
       accountId,
       sessionKey: buildAgentSessionKey({
         agentId: resolvedAgentId,
-        provider,
+        channel,
         peer,
       }),
       mainSessionKey: buildAgentMainSessionKey({
@@ -213,7 +213,7 @@ export function resolveAgentRoute(
       !b.match?.teamId,
   );
   if (anyAccountMatch)
-    return choose(anyAccountMatch.agentId, "binding.provider");
+    return choose(anyAccountMatch.agentId, "binding.channel");
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }

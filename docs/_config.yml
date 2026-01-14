@@ -41,7 +41,7 @@ nav:
   - title: "Android App"
     url: "/platforms/android/"
   - title: "Telegram"
-    url: "/providers/telegram/"
+    url: "/channels/telegram/"
   - title: "Security"
     url: "/gateway/security/"
   - title: "Troubleshooting"

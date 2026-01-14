@@ -60,8 +60,10 @@ function makeCfg(home: string) {
         workspace: join(home, "clawd"),
       },
     },
-    whatsapp: {
-      allowFrom: ["*"],
+    channels: {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
     },
     session: { store: join(home, "sessions.json") },
   };

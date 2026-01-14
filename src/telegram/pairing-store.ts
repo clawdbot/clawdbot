@@ -1,10 +1,10 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import {
-  addProviderAllowFromStoreEntry,
-  approveProviderPairingCode,
-  listProviderPairingRequests,
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  addChannelAllowFromStoreEntry,
+  approveChannelPairingCode,
+  listChannelPairingRequests,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 
 export type TelegramPairingListEntry = {
@@ -22,15 +22,15 @@ const PROVIDER = "telegram" as const;
 export async function readTelegramAllowFromStore(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
-  return readProviderAllowFromStore(PROVIDER, env);
+  return readChannelAllowFromStore(PROVIDER, env);
 }
 
 export async function addTelegramAllowFromStoreEntry(params: {
   entry: string | number;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
-  return addProviderAllowFromStoreEntry({
-    provider: PROVIDER,
+  return addChannelAllowFromStoreEntry({
+    channel: PROVIDER,
     entry: params.entry,
     env: params.env,
   });
@@ -39,7 +39,7 @@ export async function addTelegramAllowFromStoreEntry(params: {
 export async function listTelegramPairingRequests(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<TelegramPairingListEntry[]> {
-  const list = await listProviderPairingRequests(PROVIDER, env);
+  const list = await listChannelPairingRequests(PROVIDER, env);
   return list.map((r) => ({
     chatId: r.id,
     code: r.code,
@@ -58,8 +58,8 @@ export async function upsertTelegramPairingRequest(params: {
   lastName?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ code: string; created: boolean }> {
-  return upsertProviderPairingRequest({
-    provider: PROVIDER,
+  return upsertChannelPairingRequest({
+    channel: PROVIDER,
     id: String(params.chatId),
     env: params.env,
     meta: {
@@ -74,8 +74,8 @@ export async function approveTelegramPairingCode(params: {
   code: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ chatId: string; entry?: TelegramPairingListEntry } | null> {
-  const res = await approveProviderPairingCode({
-    provider: PROVIDER,
+  const res = await approveChannelPairingCode({
+    channel: PROVIDER,
     code: params.code,
     env: params.env,
   });
@@ -99,12 +99,14 @@ export async function resolveTelegramEffectiveAllowFrom(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ dm: string[]; group: string[] }> {
   const env = params.env ?? process.env;
-  const cfgAllowFrom = (params.cfg.telegram?.allowFrom ?? [])
+  const cfgAllowFrom = (params.cfg.channels?.telegram?.allowFrom ?? [])
     .map((v) => String(v).trim())
     .filter(Boolean)
     .map((v) => v.replace(/^(telegram|tg):/i, ""))
     .filter((v) => v !== "*");
-  const cfgGroupAllowFrom = (params.cfg.telegram?.groupAllowFrom ?? [])
+  const cfgGroupAllowFrom = (
+    params.cfg.channels?.telegram?.groupAllowFrom ?? []
+  )
     .map((v) => String(v).trim())
     .filter(Boolean)
     .map((v) => v.replace(/^(telegram|tg):/i, ""))

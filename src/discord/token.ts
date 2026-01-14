@@ -23,10 +23,11 @@ export function resolveDiscordToken(
   opts: { accountId?: string | null; envToken?: string | null } = {},
 ): DiscordTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);
+  const discordCfg = cfg?.channels?.discord;
   const accountCfg =
     accountId !== DEFAULT_ACCOUNT_ID
-      ? cfg?.discord?.accounts?.[accountId]
-      : cfg?.discord?.accounts?.[DEFAULT_ACCOUNT_ID];
+      ? discordCfg?.accounts?.[accountId]
+      : discordCfg?.accounts?.[DEFAULT_ACCOUNT_ID];
   const accountToken = normalizeDiscordToken(accountCfg?.token ?? undefined);
   if (accountToken) return { token: accountToken, source: "config" };
 
@@ -37,7 +38,7 @@ export function resolveDiscordToken(
   if (envToken) return { token: envToken, source: "env" };
 
   const configToken = allowEnv
-    ? normalizeDiscordToken(cfg?.discord?.token ?? undefined)
+    ? normalizeDiscordToken(discordCfg?.token ?? undefined)
     : undefined;
   if (configToken) return { token: configToken, source: "config" };
 

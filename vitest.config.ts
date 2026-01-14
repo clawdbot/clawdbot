@@ -47,7 +47,7 @@ export default defineConfig({
         // Gateway server integration surfaces are intentionally validated via manual/e2e runs.
         "src/gateway/control-ui.ts",
         "src/gateway/server-bridge.ts",
-        "src/gateway/server-providers.ts",
+        "src/gateway/server-channels.ts",
         "src/gateway/server-methods/config.ts",
         "src/gateway/server-methods/send.ts",
         "src/gateway/server-methods/skills.ts",
@@ -62,13 +62,13 @@ export default defineConfig({
         // Interactive UIs/flows are intentionally validated via manual/e2e runs.
         "src/tui/**",
         "src/wizard/**",
-        // Provider surfaces are largely integration-tested (or manually validated).
+        // Channel surfaces are largely integration-tested (or manually validated).
         "src/discord/**",
         "src/imessage/**",
         "src/signal/**",
         "src/slack/**",
         "src/browser/**",
-        "src/providers/web/**",
+        "src/channels/web/**",
         "src/telegram/index.ts",
         "src/telegram/proxy.ts",
         "src/telegram/webhook-set.ts",

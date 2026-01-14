@@ -18,7 +18,7 @@ node.
 - Runs or connects to the Gateway (local or remote).
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
 - Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`clawdbot`) via npm/pnpm/bun on request.
+- Installs the global CLI (`clawdbot`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
 
 ## Local vs remote mode
 
@@ -70,7 +70,7 @@ Query parameters:
 - `message` (required)
 - `sessionKey` (optional)
 - `thinking` (optional)
-- `deliver` / `to` / `provider` (optional)
+- `deliver` / `to` / `channel` (optional)
 - `timeoutSeconds` (optional)
 - `key` (optional unattended mode key)
 

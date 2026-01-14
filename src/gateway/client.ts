@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import {
   type ConnectParams,
   type EventFrame,

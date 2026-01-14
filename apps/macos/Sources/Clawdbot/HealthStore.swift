@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 
 struct HealthSnapshot: Codable, Sendable {
-    struct ProviderSummary: Codable, Sendable {
+    struct ChannelSummary: Codable, Sendable {
         struct Probe: Codable, Sendable {
             struct Bot: Codable, Sendable {
                 let username: String?
@@ -44,9 +44,9 @@ struct HealthSnapshot: Codable, Sendable {
     let ok: Bool?
     let ts: Double
     let durationMs: Double
-    let providers: [String: ProviderSummary]
-    let providerOrder: [String]?
-    let providerLabels: [String: String]?
+    let channels: [String: ChannelSummary]
+    let channelOrder: [String]?
+    let channelLabels: [String: String]?
     let heartbeatSeconds: Int?
     let sessions: Sessions
 }
@@ -144,13 +144,13 @@ final class HealthStore {
         }
     }
 
-    private static func isProviderHealthy(_ summary: HealthSnapshot.ProviderSummary) -> Bool {
+    private static func isChannelHealthy(_ summary: HealthSnapshot.ChannelSummary) -> Bool {
         guard summary.configured == true else { return false }
         // If probe is missing, treat it as "configured but unknown health" (not a hard fail).
         return summary.probe?.ok ?? true
     }
 
-    private static func describeProbeFailure(_ probe: HealthSnapshot.ProviderSummary.Probe) -> String {
+    private static func describeProbeFailure(_ probe: HealthSnapshot.ChannelSummary.Probe) -> String {
         let elapsed = probe.elapsedMs.map { "\(Int($0))ms" }
         if let error = probe.error, error.lowercased().contains("timeout") || probe.status == nil {
             if let elapsed { return "Health check timed out (\(elapsed))" }
@@ -162,28 +162,28 @@ final class HealthStore {
         return "\(reason) (\(code))"
     }
 
-    private func resolveLinkProvider(
-        _ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ProviderSummary)?
+    private func resolveLinkChannel(
+        _ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ChannelSummary)?
     {
-        let order = snap.providerOrder ?? Array(snap.providers.keys)
+        let order = snap.channelOrder ?? Array(snap.channels.keys)
         for id in order {
-            if let summary = snap.providers[id], summary.linked != nil {
+            if let summary = snap.channels[id], summary.linked != nil {
                 return (id: id, summary: summary)
             }
         }
         return nil
     }
 
-    private func resolveFallbackProvider(
+    private func resolveFallbackChannel(
         _ snap: HealthSnapshot,
-        excluding id: String?) -> (id: String, summary: HealthSnapshot.ProviderSummary)?
+        excluding id: String?) -> (id: String, summary: HealthSnapshot.ChannelSummary)?
     {
-        let order = snap.providerOrder ?? Array(snap.providers.keys)
-        for providerId in order {
-            if providerId == id { continue }
-            guard let summary = snap.providers[providerId] else { continue }
-            if Self.isProviderHealthy(summary) {
-                return (id: providerId, summary: summary)
+        let order = snap.channelOrder ?? Array(snap.channels.keys)
+        for channelId in order {
+            if channelId == id { continue }
+            guard let summary = snap.channels[channelId] else { continue }
+            if Self.isChannelHealthy(summary) {
+                return (id: channelId, summary: summary)
             }
         }
         return nil
@@ -194,13 +194,13 @@ final class HealthStore {
             return .degraded(error)
         }
         guard let snap = self.snapshot else { return .unknown }
-        guard let link = self.resolveLinkProvider(snap) else { return .unknown }
+        guard let link = self.resolveLinkChannel(snap) else { return .unknown }
         if link.summary.linked != true {
-            // Linking is optional if any other provider is healthy; don't paint the whole app red.
-            let fallback = self.resolveFallbackProvider(snap, excluding: link.id)
+            // Linking is optional if any other channel is healthy; don't paint the whole app red.
+            let fallback = self.resolveFallbackChannel(snap, excluding: link.id)
             return fallback != nil ? .degraded("Not linked") : .linkingNeeded
         }
-        // A provider can be "linked" but still unhealthy (failed probe / cannot connect).
+        // A channel can be "linked" but still unhealthy (failed probe / cannot connect).
         if let probe = link.summary.probe, probe.ok == false {
             return .degraded(Self.describeProbeFailure(probe))
         }
@@ -211,10 +211,10 @@ final class HealthStore {
         if self.isRefreshing { return "Health check running…" }
         if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
-        guard let link = self.resolveLinkProvider(snap) else { return "Health check pending" }
+        guard let link = self.resolveLinkChannel(snap) else { return "Health check pending" }
         if link.summary.linked != true {
-            if let fallback = self.resolveFallbackProvider(snap, excluding: link.id) {
-                let fallbackLabel = snap.providerLabels?[fallback.id] ?? fallback.id.capitalized
+            if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
+                let fallbackLabel = snap.channelLabels?[fallback.id] ?? fallback.id.capitalized
                 let fallbackState = (fallback.summary.probe?.ok ?? true) ? "ok" : "degraded"
                 return "\(fallbackLabel) \(fallbackState) · Not linked — run clawdbot login"
             }
@@ -247,10 +247,10 @@ final class HealthStore {
     }
 
     func describeFailure(from snap: HealthSnapshot, fallback: String?) -> String {
-        if let link = self.resolveLinkProvider(snap), link.summary.linked != true {
+        if let link = self.resolveLinkChannel(snap), link.summary.linked != true {
             return "Not linked — run clawdbot login"
         }
-        if let link = self.resolveLinkProvider(snap), let probe = link.summary.probe, probe.ok == false {
+        if let link = self.resolveLinkChannel(snap), let probe = link.summary.probe, probe.ok == false {
             return Self.describeProbeFailure(probe)
         }
         if let fallback, !fallback.isEmpty {

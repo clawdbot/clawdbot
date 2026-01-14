@@ -20,7 +20,7 @@ runtime on the current machine.
 - Output:
   - default: prints reply text (plus `MEDIA:<url>` lines)
   - `--json`: prints structured payload + metadata
-- Optional delivery back to a provider with `--deliver` + `--provider` (target formats match `clawdbot message --to`).
+- Optional delivery back to a channel with `--deliver` + `--channel` (target formats match `clawdbot message --to`).
 
 If the Gateway is unreachable, the CLI **falls back** to the embedded local run.
 
@@ -35,10 +35,10 @@ clawdbot agent --to +15555550123 --message "Summon reply" --deliver
 
 ## Flags
 
-- `--local`: run locally (requires provider keys in your shell)
-- `--deliver`: send the reply to the chosen provider (requires `--to`)
-- `--provider`: `whatsapp|telegram|discord|slack|signal|imessage` (default: `whatsapp`)
-- `--thinking <off|minimal|low|medium|high>`: persist thinking level
+- `--local`: run locally (requires model provider API keys in your shell)
+- `--deliver`: send the reply to the chosen channel (requires `--to`)
+- `--channel`: `whatsapp|telegram|discord|slack|signal|imessage` (default: `whatsapp`)
+- `--thinking <off|minimal|low|medium|high|xhigh>`: persist thinking level (GPT-5.2 + Codex models only)
 - `--verbose <on|off>`: persist verbose level
 - `--timeout <seconds>`: override agent timeout
 - `--json`: output structured JSON

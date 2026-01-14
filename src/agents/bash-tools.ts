@@ -40,20 +40,6 @@ const DEFAULT_PATH =
   process.env.PATH ??
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-// NOTE: Using Type.Unsafe with enum instead of Type.Union([Type.Literal(...)])
-// because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
-// Type.Union of literals compiles to { anyOf: [{enum:["a"]}, {enum:["b"]}, ...] }
-// which is valid but not accepted. A flat enum { type: "string", enum: [...] } works.
-const _stringEnum = <T extends readonly string[]>(
-  values: T,
-  options?: { description?: string },
-) =>
-  Type.Unsafe<T[number]>({
-    type: "string",
-    enum: values as unknown as string[],
-    ...options,
-  });
-
 export type ExecToolDefaults = {
   backgroundMs?: number;
   timeoutSec?: number;

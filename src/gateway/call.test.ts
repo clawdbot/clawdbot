@@ -74,24 +74,14 @@ describe("callGateway url resolution", () => {
     closeReason = "";
   });
 
-  it("uses tailnet IP when local bind is tailnet", async () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "tailnet" } });
+  it("uses tailnet IP when local bind is auto and tailnet is present", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "auto" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
 
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.url).toBe("ws://100.64.0.1:18800");
-  });
-
-  it("uses tailnet IP when local bind is auto and tailnet is present", async () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "auto" } });
-    resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.2");
-
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.url).toBe("ws://100.64.0.2:18800");
   });
 
   it("falls back to loopback when local bind is auto without tailnet IP", async () => {

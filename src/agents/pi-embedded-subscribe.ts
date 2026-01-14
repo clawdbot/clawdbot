@@ -6,13 +6,13 @@ import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -124,15 +124,15 @@ function extractMessagingToolSend(
     if (!toRaw) return undefined;
     const providerRaw =
       typeof args.provider === "string" ? args.provider.trim() : "";
-    const providerId = providerRaw ? normalizeProviderId(providerRaw) : null;
+    const providerId = providerRaw ? normalizeChannelId(providerRaw) : null;
     const provider =
       providerId ?? (providerRaw ? providerRaw.toLowerCase() : "message");
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }
-  const providerId = normalizeProviderId(toolName);
+  const providerId = normalizeChannelId(toolName);
   if (!providerId) return undefined;
-  const plugin = getProviderPlugin(providerId);
+  const plugin = getChannelPlugin(providerId);
   const extracted = plugin?.actions?.extractToolSend?.({ args });
   if (!extracted?.to) return undefined;
   const to = normalizeTargetForProvider(providerId, extracted.to);
@@ -146,7 +146,7 @@ function extractMessagingToolSend(
     : undefined;
 }
 
-export function subscribeEmbeddedPiSession(params: {
+export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
   verboseLevel?: "off" | "on";
@@ -173,12 +173,17 @@ export function subscribeEmbeddedPiSession(params: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
+  onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
   }) => void;
   enforceFinalTag?: boolean;
-}) {
+};
+
+export function subscribeEmbeddedPiSession(
+  params: SubscribeEmbeddedPiSessionParams,
+) {
   const assistantTexts: string[] = [];
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
@@ -492,6 +497,8 @@ export function subscribeEmbeddedPiSession(params: {
           // may deliver late text_end updates after message_end, which would
           // otherwise re-trigger block replies.
           resetAssistantMessageState(assistantTexts.length);
+          // Use assistant message_start as the earliest "writing" signal for typing.
+          void params.onAssistantMessageStart?.();
         }
       }
 

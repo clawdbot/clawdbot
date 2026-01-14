@@ -12,9 +12,9 @@ Clawdbot integrates external CLIs via JSON-RPC. Two patterns are used today.
 - `signal-cli` runs as a daemon with JSON-RPC over HTTP.
 - Event stream is SSE (`/api/v1/events`).
 - Health probe: `/api/v1/check`.
-- Clawdbot owns lifecycle when `signal.autoStart=true`.
+- Clawdbot owns lifecycle when `channels.signal.autoStart=true`.
 
-See [Signal](/providers/signal) for setup and endpoints.
+See [Signal](/channels/signal) for setup and endpoints.
 
 ## Pattern B: stdio child process (imsg)
 - Clawdbot spawns `imsg rpc` as a child process.
@@ -27,7 +27,7 @@ Core methods used:
 - `send`
 - `chats.list` (probe/diagnostics)
 
-See [iMessage](/providers/imessage) for setup and addressing (`chat_id` preferred).
+See [iMessage](/channels/imessage) for setup and addressing (`chat_id` preferred).
 
 ## Adapter guidelines
 - Gateway owns the process (start/stop tied to provider lifecycle).

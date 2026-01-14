@@ -25,10 +25,16 @@ export async function dashboardCommand(
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
+  const customBindHost = cfg.gateway?.customBindHost;
   const token =
     cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? "";
 
-  const links = resolveControlUiLinks({ port, bind, basePath });
+  const links = resolveControlUiLinks({
+    port,
+    bind,
+    customBindHost,
+    basePath,
+  });
   const authedUrl = token
     ? `${links.httpUrl}?token=${encodeURIComponent(token)}`
     : links.httpUrl;

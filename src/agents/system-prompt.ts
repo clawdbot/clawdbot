@@ -1,9 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { PROVIDER_IDS } from "../providers/registry.js";
+import { CHANNEL_IDS } from "../channels/registry.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 
-const MESSAGE_PROVIDER_OPTIONS = PROVIDER_IDS.join("|");
+const MESSAGE_CHANNEL_OPTIONS = CHANNEL_IDS.join("|");
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
@@ -26,7 +26,7 @@ export function buildAgentSystemPrompt(params: {
     arch?: string;
     node?: string;
     model?: string;
-    provider?: string;
+    channel?: string;
     capabilities?: string[];
   };
   sandboxInfo?: {
@@ -56,12 +56,12 @@ export function buildAgentSystemPrompt(params: {
     ls: "List directory contents",
     exec: "Run shell commands",
     process: "Manage background exec sessions",
-    // Provider docking: add provider login tools here when a provider needs interactive linking.
+    // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events",
-    message: "Send messages and provider actions",
+    cron: "Manage cron jobs and wake events (use for reminders)",
+    message: "Send messages and channel actions",
     gateway:
       "Restart, apply config, or run updates on the running Clawdbot process",
     agents_list: "List agent ids allowed for sessions_spawn",
@@ -166,7 +166,7 @@ export function buildAgentSystemPrompt(params: {
     ? `Heartbeat prompt: ${heartbeatPrompt}`
     : "Heartbeat prompt: (configured)";
   const runtimeInfo = params.runtimeInfo;
-  const runtimeProvider = runtimeInfo?.provider?.trim().toLowerCase();
+  const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
     .map((cap) => String(cap).trim())
     .filter(Boolean);
@@ -211,7 +211,7 @@ export function buildAgentSystemPrompt(params: {
           "- browser: control clawd's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events",
+          "- cron: manage cron jobs and wake events (use for reminders)",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
@@ -322,23 +322,23 @@ export function buildAgentSystemPrompt(params: {
     "- [[reply_to_current]] replies to the triggering message.",
     "- [[reply_to:<id>]] replies to a specific message id when you have it.",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
-    "Tags are stripped before sending; support depends on the current provider config.",
+    "Tags are stripped before sending; support depends on the current channel config.",
     "",
     "## Messaging",
-    "- Reply in current session → automatically routes to the source provider (Signal, Telegram, etc.)",
+    "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Never use exec/curl for provider messaging; Clawdbot handles all routing internally.",
     availableTools.has("message")
       ? [
           "",
           "### message tool",
-          "- Use `message` for proactive sends + provider actions (polls, reactions, etc.).",
+          "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
-          `- If multiple providers are configured, pass \`provider\` (${MESSAGE_PROVIDER_OPTIONS}).`,
+          `- If multiple channels are configured, pass \`channel\` (${MESSAGE_CHANNEL_OPTIONS}).`,
           inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
-            : runtimeProvider
-              ? `- Inline buttons not enabled for ${runtimeProvider}. If you need them, ask to add "inlineButtons" to ${runtimeProvider}.capabilities or ${runtimeProvider}.accounts.<id>.capabilities.`
+            : runtimeChannel
+              ? `- Inline buttons not enabled for ${runtimeChannel}. If you need them, ask to add "inlineButtons" to ${runtimeChannel}.capabilities or ${runtimeChannel}.accounts.<id>.capabilities.`
               : "",
         ]
           .filter(Boolean)
@@ -397,8 +397,8 @@ export function buildAgentSystemPrompt(params: {
           : "",
       runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
       runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-      runtimeProvider ? `provider=${runtimeProvider}` : "",
-      runtimeProvider
+      runtimeChannel ? `channel=${runtimeChannel}` : "",
+      runtimeChannel
         ? `capabilities=${
             runtimeCapabilities.length > 0
               ? runtimeCapabilities.join(",")

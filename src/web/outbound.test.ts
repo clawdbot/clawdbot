@@ -58,7 +58,7 @@ describe("web outbound", () => {
     ).rejects.toThrow(/No active WhatsApp Web listener/);
     await expect(
       sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
-    ).rejects.toThrow(/providers login/);
+    ).rejects.toThrow(/channels login/);
     await expect(
       sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
     ).rejects.toThrow(/account: work/);

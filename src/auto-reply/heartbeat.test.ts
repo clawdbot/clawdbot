@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { stripHeartbeatToken } from "./heartbeat.js";
+import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  stripHeartbeatToken,
+} from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 describe("stripHeartbeatToken", () => {
@@ -52,7 +55,7 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("keeps heartbeat replies when remaining content exceeds threshold", () => {
-    const long = "A".repeat(400);
+    const long = "A".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
     expect(
       stripHeartbeatToken(`${long} ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" }),
     ).toEqual({

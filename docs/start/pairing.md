@@ -18,14 +18,14 @@ Security context: [Security](/gateway/security)
 
 ## 1) DM pairing (inbound chat access)
 
-When a provider is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
+When a channel is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
 
 Default DM policies are documented in: [Security](/gateway/security)
 
 Pairing codes:
 - 8 characters, uppercase, no ambiguous chars (`0O1I`).
 - **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
-- Pending DM pairing requests are capped at **3 per provider** by default; additional requests are ignored until one expires or is approved.
+- Pending DM pairing requests are capped at **3 per channel** by default; additional requests are ignored until one expires or is approved.
 
 ### Approve a sender
 
@@ -34,13 +34,13 @@ clawdbot pairing list telegram
 clawdbot pairing approve telegram <CODE>
 ```
 
-Supported providers: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
+Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
 
 ### Where the state lives
 
 Stored under `~/.clawdbot/credentials/`:
-- Pending requests: `<provider>-pairing.json`
-- Approved allowlist store: `<provider>-allowFrom.json`
+- Pending requests: `<channel>-pairing.json`
+- Approved allowlist store: `<channel>-allowFrom.json`
 
 Treat these as sensitive (they gate access to your assistant).
 
@@ -72,10 +72,10 @@ Full protocol + design notes: [Gateway pairing](/gateway/pairing)
 
 - Security model + prompt injection: [Security](/gateway/security)
 - Updating safely (run doctor): [Updating](/install/updating)
-- Provider configs:
-  - Telegram: [Telegram](/providers/telegram)
-  - WhatsApp: [WhatsApp](/providers/whatsapp)
-  - Signal: [Signal](/providers/signal)
-  - iMessage: [iMessage](/providers/imessage)
-  - Discord: [Discord](/providers/discord)
-  - Slack: [Slack](/providers/slack)
+- Channel configs:
+  - Telegram: [Telegram](/channels/telegram)
+  - WhatsApp: [WhatsApp](/channels/whatsapp)
+  - Signal: [Signal](/channels/signal)
+  - iMessage: [iMessage](/channels/imessage)
+  - Discord: [Discord](/channels/discord)
+  - Slack: [Slack](/channels/slack)

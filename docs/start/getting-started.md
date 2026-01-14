@@ -1,5 +1,5 @@
 ---
-summary: "Beginner guide: from zero to first message (wizard, auth, providers, pairing)"
+summary: "Beginner guide: from zero to first message (wizard, auth, channels, pairing)"
 read_when:
   - First time setup from zero
   - You want the fastest path from install → onboarding → first message
@@ -12,7 +12,7 @@ Goal: go from **zero** → **first working chat** (with sane defaults) as quickl
 Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It sets up:
 - model/auth (OAuth recommended)
 - gateway settings
-- providers (WhatsApp/Telegram/Discord/…)
+- channels (WhatsApp/Telegram/Discord/…)
 - pairing defaults (secure DMs)
 - workspace bootstrap + skills
 - optional background daemon
@@ -79,7 +79,7 @@ What you’ll choose:
 - **Auth**: OpenAI Code (Codex) subscription (OAuth) or API keys. For Anthropic we recommend an API key; `claude setup-token` is also supported.
 - **Providers**: WhatsApp QR login, Telegram/Discord bot tokens, etc.
 - **Daemon**: background install (launchd/systemd; WSL2 uses systemd)
-  - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
+  - **Runtime**: Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
 - **Gateway token**: the wizard generates one by default (even on loopback) and stores it in `gateway.auth.token`.
 
 Wizard doc: [Wizard](/start/wizard)
@@ -110,29 +110,26 @@ clawdbot gateway --port 18789 --verbose
 Dashboard (local loopback): `http://127.0.0.1:18789/`
 If a token is configured, paste it into the Control UI settings (stored as `connect.params.auth.token`).
 
-⚠️ **WhatsApp + Bun warning:** Baileys (WhatsApp Web library) uses a WebSocket
-path that is currently incompatible with Bun and can cause memory corruption on
-reconnect. If you use WhatsApp, run the Gateway with **Node** until this is
-resolved. Baileys: https://github.com/WhiskeySockets/Baileys · Bun issue:
-https://github.com/oven-sh/bun/issues/5951
+⚠️ **Bun warning (WhatsApp + Telegram):** Bun has known issues with these
+channels. If you use WhatsApp or Telegram, run the Gateway with **Node**.
 
 ## 4) Pair + connect your first chat surface
 
 ### WhatsApp (QR login)
 
 ```bash
-clawdbot providers login
+clawdbot channels login
 ```
 
 Scan via WhatsApp → Settings → Linked Devices.
 
-WhatsApp doc: [WhatsApp](/providers/whatsapp)
+WhatsApp doc: [WhatsApp](/channels/whatsapp)
 
 ### Telegram / Discord / others
 
 The wizard can write tokens/config for you. If you prefer manual config, start with:
-- Telegram: [Telegram](/providers/telegram)
-- Discord: [Discord](/providers/discord)
+- Telegram: [Telegram](/channels/telegram)
+- Discord: [Discord](/channels/discord)
 
 **Telegram DM tip:** your first DM returns a pairing code. Approve it (see next step) or the bot won’t respond.
 

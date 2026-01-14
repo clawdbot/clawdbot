@@ -84,7 +84,7 @@ export async function resolveMSTeamsSendContext(params: {
   cfg: ClawdbotConfig;
   to: string;
 }): Promise<MSTeamsProactiveContext> {
-  const msteamsCfg = params.cfg.msteams;
+  const msteamsCfg = params.cfg.channels?.msteams;
 
   if (!msteamsCfg?.enabled) {
     throw new Error("msteams provider is not enabled");

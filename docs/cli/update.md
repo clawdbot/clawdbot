@@ -9,7 +9,7 @@ read_when:
 
 Safely update a **source checkout** (git install) of Clawdbot.
 
-If you installed via **npm/pnpm/bun** (global install, no git metadata), use the package manager flow in [Updating](/install/updating).
+If you installed via **npm/pnpm** (global install, no git metadata), use the package manager flow in [Updating](/install/updating).
 
 ## Usage
 
@@ -32,7 +32,7 @@ High-level:
 
 1. Requires a clean worktree (no uncommitted changes).
 2. Fetches and rebases against `@{upstream}`.
-3. Installs deps (pnpm/bun/npm depending on the checkout).
+3. Installs deps (pnpm preferred; npm fallback).
 4. Builds + builds the Control UI.
 5. Runs `clawdbot doctor` as the final “safe update” check.
 

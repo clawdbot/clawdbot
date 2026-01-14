@@ -89,7 +89,7 @@ export function buildAgentMainSessionKey(params: {
 export function buildAgentPeerSessionKey(params: {
   agentId: string;
   mainKey?: string | undefined;
-  provider: string;
+  channel: string;
   peerKind?: "dm" | "group" | "channel" | null;
   peerId?: string | null;
 }): string {
@@ -100,21 +100,21 @@ export function buildAgentPeerSessionKey(params: {
       mainKey: params.mainKey,
     });
   }
-  const provider = (params.provider ?? "").trim().toLowerCase() || "unknown";
+  const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
   const peerId = (params.peerId ?? "").trim() || "unknown";
-  return `agent:${normalizeAgentId(params.agentId)}:${provider}:${peerKind}:${peerId}`;
+  return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
 export function buildGroupHistoryKey(params: {
-  provider: string;
+  channel: string;
   accountId?: string | null;
   peerKind: "group" | "channel";
   peerId: string;
 }): string {
-  const provider = normalizeToken(params.provider) || "unknown";
+  const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
   const peerId = params.peerId.trim() || "unknown";
-  return `${provider}:${accountId}:${params.peerKind}:${peerId}`;
+  return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 
 export function resolveThreadSessionKeys(params: {

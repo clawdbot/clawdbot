@@ -1,0 +1,86 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import type { Api, Model } from "@mariozechner/pi-ai";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
+
+import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
+import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
+import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
+import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
+
+function resolvePiExtensionPath(id: string): string {
+  const self = fileURLToPath(import.meta.url);
+  const dir = path.dirname(self);
+  // In dev this file is `.ts` (tsx), in production it's `.js`.
+  const ext = path.extname(self) === ".ts" ? "ts" : "js";
+  return path.join(dir, "..", "pi-extensions", `${id}.${ext}`);
+}
+
+function resolveContextWindowTokens(params: {
+  cfg: ClawdbotConfig | undefined;
+  provider: string;
+  modelId: string;
+  model: Model<Api> | undefined;
+}): number {
+  return resolveContextWindowInfo({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelContextWindow: params.model?.contextWindow,
+    defaultTokens: DEFAULT_CONTEXT_TOKENS,
+  }).tokens;
+}
+
+function buildContextPruningExtension(params: {
+  cfg: ClawdbotConfig | undefined;
+  sessionManager: SessionManager;
+  provider: string;
+  modelId: string;
+  model: Model<Api> | undefined;
+}): { additionalExtensionPaths?: string[] } {
+  const raw = params.cfg?.agents?.defaults?.contextPruning;
+  if (raw?.mode !== "adaptive" && raw?.mode !== "aggressive") return {};
+
+  const settings = computeEffectiveSettings(raw);
+  if (!settings) return {};
+
+  setContextPruningRuntime(params.sessionManager, {
+    settings,
+    contextWindowTokens: resolveContextWindowTokens(params),
+    isToolPrunable: makeToolPrunablePredicate(settings.tools),
+  });
+
+  return {
+    additionalExtensionPaths: [resolvePiExtensionPath("context-pruning")],
+  };
+}
+
+function resolveCompactionMode(cfg?: ClawdbotConfig): "default" | "safeguard" {
+  return cfg?.agents?.defaults?.compaction?.mode === "safeguard"
+    ? "safeguard"
+    : "default";
+}
+
+export function buildEmbeddedExtensionPaths(params: {
+  cfg: ClawdbotConfig | undefined;
+  sessionManager: SessionManager;
+  provider: string;
+  modelId: string;
+  model: Model<Api> | undefined;
+}): string[] {
+  const paths = [resolvePiExtensionPath("transcript-sanitize")];
+  if (resolveCompactionMode(params.cfg) === "safeguard") {
+    paths.push(resolvePiExtensionPath("compaction-safeguard"));
+  }
+  const pruning = buildContextPruningExtension(params);
+  if (pruning.additionalExtensionPaths) {
+    paths.push(...pruning.additionalExtensionPaths);
+  }
+  return paths;
+}
+
+export { ensurePiCompactionReserveTokens };

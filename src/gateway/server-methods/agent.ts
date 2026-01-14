@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-
+import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -10,15 +10,14 @@ import {
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { DEFAULT_CHAT_PROVIDER } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
-  INTERNAL_MESSAGE_PROVIDER,
-  isDeliverableMessageProvider,
-  isGatewayMessageProvider,
-  normalizeMessageProvider,
-} from "../../utils/message-provider.js";
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  isGatewayMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import {
   type AgentWaitParams,
@@ -60,7 +59,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         fileName?: string;
         content?: unknown;
       }>;
-      provider?: string;
+      channel?: string;
       lane?: string;
       extraSystemPrompt?: string;
       idempotencyKey: string;
@@ -115,21 +114,21 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const rawProvider =
-      typeof request.provider === "string" ? request.provider.trim() : "";
-    if (rawProvider) {
-      const normalized = normalizeMessageProvider(rawProvider);
+    const rawChannel =
+      typeof request.channel === "string" ? request.channel.trim() : "";
+    if (rawChannel) {
+      const normalized = normalizeMessageChannel(rawChannel);
       if (
         normalized &&
         normalized !== "last" &&
-        !isGatewayMessageProvider(normalized)
+        !isGatewayMessageChannel(normalized)
       ) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown provider: ${normalized}`,
+            `invalid agent params: unknown channel: ${normalized}`,
           ),
         );
         return;
@@ -162,7 +161,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         systemSent: entry?.systemSent,
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
-        lastProvider: entry?.lastProvider,
+        lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
@@ -174,7 +173,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         cfg,
         entry,
         sessionKey: requestedSessionKey,
-        provider: entry?.provider,
+        channel: entry?.channel,
         chatType: entry?.chatType,
       });
       if (sendPolicy === "deny") {
@@ -213,10 +212,9 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const runId = idem;
 
-    const requestedProvider =
-      normalizeMessageProvider(request.provider) ?? "last";
+    const requestedChannel = normalizeMessageChannel(request.channel) ?? "last";
 
-    const lastProvider = sessionEntry?.lastProvider;
+    const lastChannel = sessionEntry?.lastChannel;
     const lastTo =
       typeof sessionEntry?.lastTo === "string"
         ? sessionEntry.lastTo.trim()
@@ -224,24 +222,22 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const wantsDelivery = request.deliver === true;
 
-    const resolvedProvider = (() => {
-      if (requestedProvider === "last") {
+    const resolvedChannel = (() => {
+      if (requestedChannel === "last") {
         // WebChat is not a deliverable surface. Treat it as "unset" for routing,
         // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        if (lastProvider && lastProvider !== INTERNAL_MESSAGE_PROVIDER) {
-          return lastProvider;
+        if (lastChannel && lastChannel !== INTERNAL_MESSAGE_CHANNEL) {
+          return lastChannel;
         }
-        return wantsDelivery
-          ? DEFAULT_CHAT_PROVIDER
-          : INTERNAL_MESSAGE_PROVIDER;
+        return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
       }
 
-      if (isGatewayMessageProvider(requestedProvider)) return requestedProvider;
+      if (isGatewayMessageChannel(requestedChannel)) return requestedChannel;
 
-      if (lastProvider && lastProvider !== INTERNAL_MESSAGE_PROVIDER) {
-        return lastProvider;
+      if (lastChannel && lastChannel !== INTERNAL_MESSAGE_CHANNEL) {
+        return lastChannel;
       }
-      return wantsDelivery ? DEFAULT_CHAT_PROVIDER : INTERNAL_MESSAGE_PROVIDER;
+      return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
     })();
 
     const explicitTo =
@@ -250,18 +246,18 @@ export const agentHandlers: GatewayRequestHandlers = {
         : undefined;
     const deliveryTargetMode = explicitTo
       ? "explicit"
-      : isDeliverableMessageProvider(resolvedProvider)
+      : isDeliverableMessageChannel(resolvedChannel)
         ? "implicit"
         : undefined;
     let resolvedTo =
       explicitTo ||
-      (isDeliverableMessageProvider(resolvedProvider)
+      (isDeliverableMessageChannel(resolvedChannel)
         ? lastTo || undefined
         : undefined);
-    if (!resolvedTo && isDeliverableMessageProvider(resolvedProvider)) {
+    if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfg = cfgForAgent ?? loadConfig();
       const fallback = resolveOutboundTarget({
-        provider: resolvedProvider,
+        channel: resolvedChannel,
         cfg,
         accountId: sessionEntry?.lastAccountId ?? undefined,
         mode: "implicit",
@@ -272,8 +268,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const deliver =
-      request.deliver === true &&
-      resolvedProvider !== INTERNAL_MESSAGE_PROVIDER;
+      request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
     const accepted = {
       runId,
@@ -298,10 +293,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         thinking: request.thinking,
         deliver,
         deliveryTargetMode,
-        provider: resolvedProvider,
+        channel: resolvedChannel,
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
-        messageProvider: resolvedProvider,
+        messageChannel: resolvedChannel,
         runId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,

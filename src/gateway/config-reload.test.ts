@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listProviderPlugins } from "../providers/plugins/index.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
@@ -37,11 +37,11 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it("restarts providers when provider config prefixes change", () => {
-    const changedPaths = ["web.enabled", "telegram.botToken"];
+    const changedPaths = ["web.enabled", "channels.telegram.botToken"];
     const plan = buildGatewayReloadPlan(changedPaths);
     expect(plan.restartGateway).toBe(false);
     const expected = new Set(
-      listProviderPlugins()
+      listChannelPlugins()
         .filter((plugin) =>
           (plugin.reload?.configPrefixes ?? []).some((prefix) =>
             changedPaths.some(
@@ -52,7 +52,7 @@ describe("buildGatewayReloadPlan", () => {
         .map((plugin) => plugin.id),
     );
     expect(expected.size).toBeGreaterThan(0);
-    expect(plan.restartProviders).toEqual(expected);
+    expect(plan.restartChannels).toEqual(expected);
   });
 
   it("treats gateway.remote as no-op", () => {

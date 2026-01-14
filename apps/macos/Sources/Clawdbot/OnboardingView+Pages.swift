@@ -694,7 +694,7 @@ extension OnboardingView {
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
                     title: "Connect WhatsApp or Telegram",
-                    subtitle: "Open Settings → Connections to link providers and monitor status.",
+                    subtitle: "Open Settings → Connections to link channels and monitor status.",
                     systemImage: "link")
                 {
                     self.openSettings(tab: .connections)

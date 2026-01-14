@@ -8,7 +8,7 @@ vi.mock("../../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 
-describe("sendMessage provider normalization", () => {
+describe("sendMessage channel normalization", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
   });
@@ -22,7 +22,7 @@ describe("sendMessage provider normalization", () => {
       cfg: {},
       to: "conversation:19:abc@thread.tacv2",
       content: "hi",
-      provider: "teams",
+      channel: "teams",
       deps: { sendMSTeams },
     });
 
@@ -30,7 +30,7 @@ describe("sendMessage provider normalization", () => {
       "conversation:19:abc@thread.tacv2",
       "hi",
     );
-    expect(result.provider).toBe("msteams");
+    expect(result.channel).toBe("msteams");
   });
 
   it("normalizes iMessage alias", async () => {
@@ -39,7 +39,7 @@ describe("sendMessage provider normalization", () => {
       cfg: {},
       to: "someone@example.com",
       content: "hi",
-      provider: "imsg",
+      channel: "imsg",
       deps: { sendIMessage },
     });
 
@@ -48,11 +48,11 @@ describe("sendMessage provider normalization", () => {
       "hi",
       expect.any(Object),
     );
-    expect(result.provider).toBe("imessage");
+    expect(result.channel).toBe("imessage");
   });
 });
 
-describe("sendPoll provider normalization", () => {
+describe("sendPoll channel normalization", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
   });
@@ -65,13 +65,13 @@ describe("sendPoll provider normalization", () => {
       to: "conversation:19:abc@thread.tacv2",
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
-      provider: "Teams",
+      channel: "Teams",
     });
 
     const call = callGatewayMock.mock.calls[0]?.[0] as {
       params?: Record<string, unknown>;
     };
-    expect(call?.params?.provider).toBe("msteams");
-    expect(result.provider).toBe("msteams");
+    expect(call?.params?.channel).toBe("msteams");
+    expect(result.channel).toBe("msteams");
   });
 });

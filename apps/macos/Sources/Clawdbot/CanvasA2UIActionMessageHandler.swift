@@ -86,7 +86,7 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
                     thinking: "low",
                     deliver: false,
                     to: nil,
-                    provider: .last,
+                    channel: .last,
                     idempotencyKey: actionId))
 
             await MainActor.run {

@@ -7,6 +7,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramBot } from "./bot.js";
 import { makeProxyFetch } from "./proxy.js";
+import {
+  readTelegramUpdateOffset,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -75,7 +79,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const token = opts.token?.trim() || account.token;
   if (!token) {
     throw new Error(
-      `Telegram bot token missing for account "${account.accountId}" (set telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
+      `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
     );
   }
 
@@ -85,17 +89,41 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       ? makeProxyFetch(account.config.proxy as string)
       : undefined);
 
+  let lastUpdateId = await readTelegramUpdateOffset({
+    accountId: account.accountId,
+  });
+  const persistUpdateId = async (updateId: number) => {
+    if (lastUpdateId !== null && updateId <= lastUpdateId) return;
+    lastUpdateId = updateId;
+    try {
+      await writeTelegramUpdateOffset({
+        accountId: account.accountId,
+        updateId,
+      });
+    } catch (err) {
+      (opts.runtime?.error ?? console.error)(
+        `telegram: failed to persist update offset: ${String(err)}`,
+      );
+    }
+  };
+
   const bot = createTelegramBot({
     token,
     runtime: opts.runtime,
     proxyFetch,
     config: cfg,
     accountId: account.accountId,
+    updateOffset: {
+      lastUpdateId,
+      onUpdateId: persistUpdateId,
+    },
   });
 
   if (opts.useWebhook) {
     await startTelegramWebhook({
       token,
+      accountId: account.accountId,
+      config: cfg,
       path: opts.webhookPath,
       port: opts.webhookPort,
       secret: opts.webhookSecret,

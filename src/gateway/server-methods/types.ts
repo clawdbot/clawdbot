@@ -10,7 +10,7 @@ import type {
   ErrorShape,
   RequestFrame,
 } from "../protocol/index.js";
-import type { ProviderRuntimeSnapshot } from "../server-providers.js";
+import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
 
 export type GatewayClient = {
@@ -68,17 +68,17 @@ export type GatewayRequestContext = {
   wizardSessions: Map<string, WizardSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
-  getRuntimeSnapshot: () => ProviderRuntimeSnapshot;
-  startProvider: (
-    provider: import("../../providers/plugins/types.js").ProviderId,
+  getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
+  startChannel: (
+    channel: import("../../channels/plugins/types.js").ChannelId,
     accountId?: string,
   ) => Promise<void>;
-  stopProvider: (
-    provider: import("../../providers/plugins/types.js").ProviderId,
+  stopChannel: (
+    channel: import("../../channels/plugins/types.js").ChannelId,
     accountId?: string,
   ) => Promise<void>;
-  markProviderLoggedOut: (
-    providerId: import("../../providers/plugins/types.js").ProviderId,
+  markChannelLoggedOut: (
+    channelId: import("../../channels/plugins/types.js").ChannelId,
     cleared: boolean,
     accountId?: string,
   ) => void;

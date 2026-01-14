@@ -56,7 +56,7 @@ export async function handleDiscordAction(
   cfg: ClawdbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
-  const isActionEnabled = createActionGate(cfg.discord?.actions);
+  const isActionEnabled = createActionGate(cfg.channels?.discord?.actions);
 
   if (messagingActions.has(action)) {
     return await handleDiscordMessagingAction(action, params, isActionEnabled);

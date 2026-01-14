@@ -24,9 +24,11 @@ describe("resolveReplyToMode", () => {
 
   it("uses configured value when present", () => {
     const cfg = {
-      telegram: { replyToMode: "all" },
-      discord: { replyToMode: "first" },
-      slack: { replyToMode: "all" },
+      channels: {
+        telegram: { replyToMode: "all" },
+        discord: { replyToMode: "first" },
+        slack: { replyToMode: "all" },
+      },
     } as ClawdbotConfig;
     expect(resolveReplyToMode(cfg, "telegram")).toBe("all");
     expect(resolveReplyToMode(cfg, "discord")).toBe("first");

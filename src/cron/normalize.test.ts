@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeCronJobCreate } from "./normalize.js";
 
 describe("normalizeCronJobCreate", () => {
-  it("maps legacy payload.channel to payload.provider and strips channel", () => {
+  it("maps legacy payload.provider to payload.channel and strips provider", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy",
       enabled: true,
@@ -14,14 +14,14 @@ describe("normalizeCronJobCreate", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        channel: " TeLeGrAm ",
+        provider: " TeLeGrAm ",
         to: "7200373102",
       },
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.provider).toBe("telegram");
-    expect("channel" in payload).toBe(false);
+    expect(payload.channel).toBe("telegram");
+    expect("provider" in payload).toBe(false);
   });
 
   it("normalizes agentId and drops null", () => {
@@ -56,7 +56,7 @@ describe("normalizeCronJobCreate", () => {
     expect(cleared.agentId).toBeNull();
   });
 
-  it("canonicalizes payload.provider casing", () => {
+  it("canonicalizes payload.channel casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy provider",
       enabled: true,
@@ -67,12 +67,48 @@ describe("normalizeCronJobCreate", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        provider: "Telegram",
+        channel: "Telegram",
         to: "7200373102",
       },
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.provider).toBe("telegram");
+    expect(payload.channel).toBe("telegram");
+  });
+
+  it("coerces ISO schedule.at to atMs (UTC)", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "iso at",
+      enabled: true,
+      schedule: { at: "2026-01-12T18:00:00" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("at");
+    expect(schedule.atMs).toBe(Date.parse("2026-01-12T18:00:00Z"));
+  });
+
+  it("coerces ISO schedule.atMs string to atMs (UTC)", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "iso atMs",
+      enabled: true,
+      schedule: { kind: "at", atMs: "2026-01-12T18:00:00" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("at");
+    expect(schedule.atMs).toBe(Date.parse("2026-01-12T18:00:00Z"));
   });
 });

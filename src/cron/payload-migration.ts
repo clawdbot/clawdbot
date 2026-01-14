@@ -5,32 +5,32 @@ function readString(value: unknown): string | undefined {
   return value;
 }
 
-function normalizeProvider(value: string): string {
+function normalizeChannel(value: string): string {
   return value.trim().toLowerCase();
 }
 
 export function migrateLegacyCronPayload(payload: UnknownRecord): boolean {
   let mutated = false;
 
-  const providerValue = readString(payload.provider);
   const channelValue = readString(payload.channel);
+  const providerValue = readString(payload.provider);
 
-  const nextProvider =
-    typeof providerValue === "string" && providerValue.trim().length > 0
-      ? normalizeProvider(providerValue)
-      : typeof channelValue === "string" && channelValue.trim().length > 0
-        ? normalizeProvider(channelValue)
+  const nextChannel =
+    typeof channelValue === "string" && channelValue.trim().length > 0
+      ? normalizeChannel(channelValue)
+      : typeof providerValue === "string" && providerValue.trim().length > 0
+        ? normalizeChannel(providerValue)
         : "";
 
-  if (nextProvider) {
-    if (providerValue !== nextProvider) {
-      payload.provider = nextProvider;
+  if (nextChannel) {
+    if (channelValue !== nextChannel) {
+      payload.channel = nextChannel;
       mutated = true;
     }
   }
 
-  if ("channel" in payload) {
-    delete payload.channel;
+  if ("provider" in payload) {
+    delete payload.provider;
     mutated = true;
   }
 

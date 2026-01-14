@@ -180,6 +180,86 @@ describe("gateway server cron", () => {
     testState.cronStorePath = undefined;
   });
 
+  test("accepts jobId for cron.update", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(
+      testState.cronStorePath,
+      JSON.stringify({ version: 1, jobs: [] }),
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const addRes = await rpcReq(ws, "cron.add", {
+      name: "jobId test",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+    expect(addRes.ok).toBe(true);
+    const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+    const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+    expect(jobId.length > 0).toBe(true);
+
+    const atMs = Date.now() + 2_000;
+    const updateRes = await rpcReq(ws, "cron.update", {
+      jobId,
+      patch: {
+        schedule: { atMs },
+        payload: { text: "updated" },
+      },
+    });
+    expect(updateRes.ok).toBe(true);
+
+    ws.close();
+    await server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    testState.cronStorePath = undefined;
+  });
+
+  test("disables cron jobs via enabled:false patches", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(
+      testState.cronStorePath,
+      JSON.stringify({ version: 1, jobs: [] }),
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const addRes = await rpcReq(ws, "cron.add", {
+      name: "disable test",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+    expect(addRes.ok).toBe(true);
+    const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+    const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+    expect(jobId.length > 0).toBe(true);
+
+    const updateRes = await rpcReq(ws, "cron.update", {
+      id: jobId,
+      patch: { enabled: false },
+    });
+    expect(updateRes.ok).toBe(true);
+    const updated = updateRes.payload as { enabled?: unknown } | undefined;
+    expect(updated?.enabled).toBe(false);
+
+    ws.close();
+    await server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    testState.cronStorePath = undefined;
+  });
+
   test("writes cron run history to runs/<jobId>.jsonl", async () => {
     const dir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-gw-cron-log-"),

@@ -10,6 +10,10 @@ import {
   LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
   resolveGatewayLaunchAgentLabel,
 } from "./constants.js";
+import {
+  buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
+  readLaunchAgentProgramArgumentsFromFile,
+} from "./launchd-plist.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
@@ -19,6 +23,15 @@ const formatLine = (label: string, value: string) => {
   const rich = isRich();
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
+
+function resolveLaunchAgentLabel(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): string {
+  const envLabel = params?.env?.CLAWDBOT_LAUNCHD_LABEL?.trim();
+  if (envLabel) return envLabel;
+  return resolveGatewayLaunchAgentLabel(params?.profile);
+}
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) throw new Error("Missing HOME");
@@ -77,45 +90,6 @@ function resolveUserPathWithHome(input: string, home: string): string {
   return path.resolve(trimmed);
 }
 
-function plistEscape(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
-function plistUnescape(value: string): string {
-  return value
-    .replaceAll("&apos;", "'")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&gt;", ">")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&amp;", "&");
-}
-
-function renderEnvDict(
-  env: Record<string, string | undefined> | undefined,
-): string {
-  if (!env) return "";
-  const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
-  );
-  if (entries.length === 0) return "";
-  const items = entries
-    .map(
-      ([key, value]) => `
-    <key>${plistEscape(key)}</key>
-    <string>${plistEscape(value?.trim() ?? "")}</string>`,
-    )
-    .join("");
-  return `
-    <key>EnvironmentVariables</key>
-    <dict>${items}
-    </dict>`;
-}
-
 export async function readLaunchAgentProgramArguments(
   env: Record<string, string | undefined>,
 ): Promise<{
@@ -125,44 +99,7 @@ export async function readLaunchAgentProgramArguments(
   sourcePath?: string;
 } | null> {
   const plistPath = resolveLaunchAgentPlistPath(env);
-  try {
-    const plist = await fs.readFile(plistPath, "utf8");
-    const programMatch = plist.match(
-      /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i,
-    );
-    if (!programMatch) return null;
-    const args = Array.from(
-      programMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/gi),
-    ).map((match) => plistUnescape(match[1] ?? "").trim());
-    const workingDirMatch = plist.match(
-      /<key>WorkingDirectory<\/key>\s*<string>([\s\S]*?)<\/string>/i,
-    );
-    const workingDirectory = workingDirMatch
-      ? plistUnescape(workingDirMatch[1] ?? "").trim()
-      : "";
-    const envMatch = plist.match(
-      /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i,
-    );
-    const environment: Record<string, string> = {};
-    if (envMatch) {
-      for (const pair of envMatch[1].matchAll(
-        /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
-      )) {
-        const key = plistUnescape(pair[1] ?? "").trim();
-        if (!key) continue;
-        const value = plistUnescape(pair[2] ?? "").trim();
-        environment[key] = value;
-      }
-    }
-    return {
-      programArguments: args.filter(Boolean),
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      sourcePath: plistPath,
-    };
-  } catch {
-    return null;
-  }
+  return readLaunchAgentProgramArgumentsFromFile(plistPath);
 }
 
 export function buildLaunchAgentPlist({
@@ -182,42 +119,15 @@ export function buildLaunchAgentPlist({
   stderrPath: string;
   environment?: Record<string, string | undefined>;
 }): string {
-  const argsXml = programArguments
-    .map((arg) => `\n      <string>${plistEscape(arg)}</string>`)
-    .join("");
-  const workingDirXml = workingDirectory
-    ? `
-    <key>WorkingDirectory</key>
-    <string>${plistEscape(workingDirectory)}</string>`
-    : "";
-  const commentXml = comment?.trim()
-    ? `
-    <key>Comment</key>
-    <string>${plistEscape(comment.trim())}</string>`
-    : "";
-  const envXml = renderEnvDict(environment);
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>${plistEscape(label)}</string>
-    ${commentXml}
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>ProgramArguments</key>
-    <array>${argsXml}
-    </array>
-    ${workingDirXml}
-    <key>StandardOutPath</key>
-    <string>${plistEscape(stdoutPath)}</string>
-    <key>StandardErrorPath</key>
-    <string>${plistEscape(stderrPath)}</string>${envXml}
-  </dict>
-</plist>
-`;
+  return buildLaunchAgentPlistImpl({
+    label,
+    comment,
+    programArguments,
+    workingDirectory,
+    stdoutPath,
+    stderrPath,
+    environment,
+  });
 }
 
 async function execLaunchctl(
@@ -284,9 +194,12 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   return info;
 }
 
-export async function isLaunchAgentLoaded(profile?: string): Promise<boolean> {
+export async function isLaunchAgentLoaded(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): Promise<boolean> {
   const domain = resolveGuiDomain();
-  const label = resolveGatewayLaunchAgentLabel(profile);
+  const label = resolveLaunchAgentLabel(params);
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
 }
@@ -461,13 +374,15 @@ function isLaunchctlNotLoaded(res: {
 
 export async function stopLaunchAgent({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   const domain = resolveGuiDomain();
-  const label = resolveGatewayLaunchAgentLabel(profile);
+  const label = resolveLaunchAgentLabel({ env, profile });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(
@@ -548,13 +463,15 @@ export async function installLaunchAgent({
 
 export async function restartLaunchAgent({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   const domain = resolveGuiDomain();
-  const label = resolveGatewayLaunchAgentLabel(profile);
+  const label = resolveLaunchAgentLabel({ env, profile });
   const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (res.code !== 0) {
     throw new Error(

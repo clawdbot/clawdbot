@@ -1,13 +1,16 @@
 ---
-summary: "Bun workflow (preferred): installs, patches, and gotchas vs pnpm"
+summary: "Bun workflow (experimental): installs, patches, and gotchas vs pnpm"
 read_when:
   - You want the fastest local dev loop (bun + watch)
   - You hit Bun install/patch/lifecycle script issues
 ---
 
-# Bun
+# Bun (experimental)
 
-Goal: run this repo with **Bun** (optional) without losing pnpm patch behavior.
+Goal: run this repo with **Bun** (optional, not recommended for WhatsApp/Telegram)
+without losing pnpm patch behavior.
+
+⚠️ **Not recommended for Gateway runtime** (WhatsApp/Telegram bugs). Use Node for production.
 
 ## Status
 

@@ -24,22 +24,25 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
+import { getChannelDock } from "../channels/dock.js";
+import {
+  CHAT_CHANNEL_ORDER,
+  normalizeChannelId,
+} from "../channels/registry.js";
 import {
   type AgentElevatedAllowFromConfig,
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
-import { resolveSessionFilePath } from "../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  saveSessionStore,
+} from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
-import { getProviderDock } from "../providers/dock.js";
-import {
-  CHAT_PROVIDER_ORDER,
-  normalizeProviderId,
-} from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
@@ -94,8 +97,10 @@ import {
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
+  formatXHighModelHint,
   normalizeThinkLevel,
   type ReasoningLevel,
+  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
@@ -136,8 +141,8 @@ function slugAllowToken(value?: string) {
 }
 
 const SENDER_PREFIXES = [
-  ...CHAT_PROVIDER_ORDER,
-  INTERNAL_MESSAGE_PROVIDER,
+  ...CHAT_CHANNEL_ORDER,
+  INTERNAL_MESSAGE_CHANNEL,
   "user",
   "group",
   "channel",
@@ -282,9 +287,9 @@ function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedProvider = normalizeChannelId(params.provider);
   const dockFallbackAllowFrom = normalizedProvider
-    ? getProviderDock(normalizedProvider)?.elevated?.allowFromFallback?.({
+    ? getChannelDock(normalizedProvider)?.elevated?.allowFromFallback?.({
         cfg: params.cfg,
         accountId: params.ctx.AccountId,
       })
@@ -976,6 +981,11 @@ export async function getReplyFromConfig(
       command: inlineCommandContext,
       agentId,
       directives,
+      elevated: {
+        enabled: elevatedEnabled,
+        allowed: elevatedAllowed,
+        failures: elevatedFailures,
+      },
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -1007,10 +1017,8 @@ export async function getReplyFromConfig(
   }
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.providerId
-    ? Boolean(
-        getProviderDock(command.providerId)?.commands?.skipWhenConfigEmpty,
-      )
+  const skipWhenConfigEmpty = command.channelId
+    ? Boolean(getChannelDock(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
@@ -1033,6 +1041,11 @@ export async function getReplyFromConfig(
     command,
     agentId,
     directives,
+    elevated: {
+      enabled: elevatedEnabled,
+      allowed: elevatedAllowed,
+      failures: elevatedFailures,
+    },
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -1187,13 +1200,43 @@ export async function getReplyFromConfig(
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel) {
+    if (
+      maybeLevel &&
+      (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+  }
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    const explicitThink =
+      directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    if (explicitThink) {
+      typing.cleanup();
+      return {
+        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+      };
+    }
+    resolvedThinkLevel = "high";
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
+      sessionEntry.thinkingLevel = "high";
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await saveSessionStore(storePath, sessionStore);
+      }
+    }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
@@ -1210,7 +1253,7 @@ export async function getReplyFromConfig(
     : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
-    provider: sessionCtx.Provider,
+    channel: sessionCtx.Provider,
     sessionEntry,
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,

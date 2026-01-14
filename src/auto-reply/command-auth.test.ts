@@ -7,7 +7,7 @@ import type { MsgContext } from "./templating.js";
 describe("resolveCommandAuthorization", () => {
   it("falls back from empty SenderId to SenderE164", () => {
     const cfg = {
-      whatsapp: { allowFrom: ["+123"] },
+      channels: { whatsapp: { allowFrom: ["+123"] } },
     } as ClawdbotConfig;
 
     const ctx = {

@@ -42,7 +42,7 @@ export type ClawdbotPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
-  messageProvider?: string;
+  messageChannel?: string;
   agentAccountId?: string;
   sandboxed?: boolean;
 };

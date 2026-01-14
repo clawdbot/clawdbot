@@ -8,6 +8,7 @@ import {
   parseCanvasSnapshotPayload,
 } from "../../cli/nodes-canvas.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
   imageResult,
@@ -17,76 +18,44 @@ import {
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
-const CanvasToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("present"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-    target: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number()),
-    y: Type.Optional(Type.Number()),
-    width: Type.Optional(Type.Number()),
-    height: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("hide"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("navigate"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-    url: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("eval"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-    javaScript: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("snapshot"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-    format: Type.Optional(
-      Type.Union([
-        Type.Literal("png"),
-        Type.Literal("jpg"),
-        Type.Literal("jpeg"),
-      ]),
-    ),
-    maxWidth: Type.Optional(Type.Number()),
-    quality: Type.Optional(Type.Number()),
-    delayMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("a2ui_push"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-    jsonl: Type.Optional(Type.String()),
-    jsonlPath: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("a2ui_reset"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.Optional(Type.String()),
-  }),
-]);
+const CANVAS_ACTIONS = [
+  "present",
+  "hide",
+  "navigate",
+  "eval",
+  "snapshot",
+  "a2ui_push",
+  "a2ui_reset",
+] as const;
+
+const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+
+// Flattened schema: runtime validates per-action requirements.
+const CanvasToolSchema = Type.Object({
+  action: stringEnum(CANVAS_ACTIONS),
+  gatewayUrl: Type.Optional(Type.String()),
+  gatewayToken: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
+  node: Type.Optional(Type.String()),
+  // present
+  target: Type.Optional(Type.String()),
+  x: Type.Optional(Type.Number()),
+  y: Type.Optional(Type.Number()),
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
+  // navigate
+  url: Type.Optional(Type.String()),
+  // eval
+  javaScript: Type.Optional(Type.String()),
+  // snapshot
+  format: optionalStringEnum(CANVAS_SNAPSHOT_FORMATS),
+  maxWidth: Type.Optional(Type.Number()),
+  quality: Type.Optional(Type.Number()),
+  delayMs: Type.Optional(Type.Number()),
+  // a2ui_push
+  jsonl: Type.Optional(Type.String()),
+  jsonlPath: Type.Optional(Type.String()),
+});
 
 export function createCanvasTool(): AnyAgentTool {
   return {

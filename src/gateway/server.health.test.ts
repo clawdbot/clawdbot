@@ -6,7 +6,7 @@ import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import {
   connectOk,
   getFreePort,
@@ -38,9 +38,9 @@ describe("gateway server health/presence", () => {
         ws,
         (o) => o.type === "res" && o.id === "presence1",
       );
-      const providersP = onceMessage(
+      const channelsP = onceMessage(
         ws,
-        (o) => o.type === "res" && o.id === "providers1",
+        (o) => o.type === "res" && o.id === "channels1",
       );
 
       const sendReq = (id: string, method: string) =>
@@ -48,16 +48,16 @@ describe("gateway server health/presence", () => {
       sendReq("health1", "health");
       sendReq("status1", "status");
       sendReq("presence1", "system-presence");
-      sendReq("providers1", "providers.status");
+      sendReq("channels1", "channels.status");
 
       const health = await healthP;
       const status = await statusP;
       const presence = await presenceP;
-      const providers = await providersP;
+      const channels = await channelsP;
       expect(health.ok).toBe(true);
       expect(status.ok).toBe(true);
       expect(presence.ok).toBe(true);
-      expect(providers.ok).toBe(true);
+      expect(channels.ok).toBe(true);
       expect(Array.isArray(presence.payload)).toBe(true);
 
       ws.close();

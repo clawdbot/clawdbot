@@ -28,7 +28,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `--token <token>`: Gateway token (if required).
 - `--password <password>`: Gateway password (if required).
 - `--session <key>`: Session key (default: `main`, or `global` when scope is global).
-- `--deliver`: Deliver assistant replies to the provider (default off).
+- `--deliver`: Deliver assistant replies to the channel (default off).
 - `--thinking <level>`: Override thinking level for sends.
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`).
 - `--history-limit <n>`: History entries to load (default 200).
@@ -50,7 +50,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model>` (or `/model list`, `/models`)
-- `/think <off|minimal|low|medium|high>`
+- `/think <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
 - `/verbose <on|off>`
 - `/reasoning <on|off|stream>` (stream = Telegram draft only)
 - `/cost <on|off>`
@@ -67,3 +67,6 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 ## Notes
 - The TUI shows Gateway chat deltas (`event: chat`) and agent tool events.
 - It registers as a Gateway client with `mode: "tui"` for presence and debugging.
+- The TUI uses the **Gateway’s** model/auth config and environment. If a model
+  token works in your shell but not in TUI, put it in `~/.clawdbot/.env` or
+  enable `env.shellEnv.enabled`, then restart the Gateway.

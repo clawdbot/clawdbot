@@ -20,6 +20,9 @@ extension CronSettings {
             HStack(spacing: 6) {
                 StatusPill(text: job.sessionTarget.rawValue, tint: .secondary)
                 StatusPill(text: job.wakeMode.rawValue, tint: .secondary)
+                if let agentId = job.agentId, !agentId.isEmpty {
+                    StatusPill(text: "agent \(agentId)", tint: .secondary)
+                }
                 if let status = job.state.lastStatus {
                     StatusPill(text: status, tint: status == "ok" ? .green : .orange)
                 }
@@ -91,8 +94,14 @@ extension CronSettings {
     func detailCard(_ job: CronJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             LabeledContent("Schedule") { Text(self.scheduleSummary(job.schedule)).font(.callout) }
+            if case .at = job.schedule, job.deleteAfterRun == true {
+                LabeledContent("Auto-delete") { Text("after success") }
+            }
             if let desc = job.description, !desc.isEmpty {
                 LabeledContent("Description") { Text(desc).font(.callout) }
+            }
+            if let agentId = job.agentId, !agentId.isEmpty {
+                LabeledContent("Agent") { Text(agentId) }
             }
             LabeledContent("Session") { Text(job.sessionTarget.rawValue) }
             LabeledContent("Wake") { Text(job.wakeMode.rawValue) }

@@ -80,7 +80,7 @@ sudo systemctl restart clawdbot
 
 # Provider login (run as clawdbot user)
 sudo -i -u clawdbot
-clawdbot providers login
+clawdbot channels login
 ```
 
 ## Security Architecture
@@ -187,7 +187,7 @@ Make sure you're running as the `clawdbot` user:
 
 ```bash
 sudo -i -u clawdbot
-clawdbot providers login
+clawdbot channels login
 ```
 
 ## Advanced Configuration

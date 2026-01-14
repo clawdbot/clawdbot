@@ -3,12 +3,12 @@ import Testing
 @testable import Clawdbot
 
 @Suite struct HealthStoreStateTests {
-    @Test @MainActor func linkedProviderProbeFailureDegradesState() async throws {
+    @Test @MainActor func linkedChannelProbeFailureDegradesState() async throws {
         let snap = HealthSnapshot(
             ok: true,
             ts: 0,
             durationMs: 1,
-            providers: [
+            channels: [
                 "whatsapp": .init(
                     configured: true,
                     linked: true,
@@ -19,28 +19,24 @@ import Testing
                         error: "gateway connect failed",
                         elapsedMs: 12,
                         bot: nil,
-                        webhook: nil
-                    ),
-                    lastProbeAt: 0
-                ),
+                        webhook: nil),
+                    lastProbeAt: 0),
             ],
-            providerOrder: ["whatsapp"],
-            providerLabels: ["whatsapp": "WhatsApp"],
+            channelOrder: ["whatsapp"],
+            channelLabels: ["whatsapp": "WhatsApp"],
             heartbeatSeconds: 60,
-            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: [])
-        )
+            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: []))
 
         let store = HealthStore.shared
         store.__setSnapshotForTest(snap, lastError: nil)
 
         switch store.state {
-        case .degraded(let message):
+        case let .degraded(message):
             #expect(!message.isEmpty)
         default:
-            Issue.record("Expected degraded state when probe fails for linked provider")
+            Issue.record("Expected degraded state when probe fails for linked channel")
         }
 
         #expect(store.summaryLine.contains("probe degraded"))
     }
 }
-

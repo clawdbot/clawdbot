@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { applyTemplate } from "./auto-reply/templating.js";
+import { monitorWebChannel } from "./channel-web.js";
 import { createDefaultDeps } from "./cli/deps.js";
 import { promptYesNo } from "./cli/prompt.js";
 import { waitForever } from "./cli/wait.js";
@@ -30,8 +31,7 @@ import { assertSupportedRuntime } from "./infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
-import { monitorWebProvider } from "./provider-web.js";
-import { assertProvider, normalizeE164, toWhatsappJid } from "./utils.js";
+import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
 loadDotEnv({ quiet: true });
 normalizeEnv();
@@ -48,7 +48,7 @@ import { buildProgram } from "./cli/program.js";
 const program = buildProgram();
 
 export {
-  assertProvider,
+  assertWebChannel,
   applyTemplate,
   createDefaultDeps,
   deriveSessionKey,
@@ -59,7 +59,7 @@ export {
   handlePortError,
   loadConfig,
   loadSessionStore,
-  monitorWebProvider,
+  monitorWebChannel,
   normalizeE164,
   PortInUseError,
   promptYesNo,

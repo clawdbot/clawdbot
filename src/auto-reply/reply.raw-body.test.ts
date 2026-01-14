@@ -67,7 +67,7 @@ describe("RawBody directive parsing", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -103,7 +103,7 @@ describe("RawBody directive parsing", () => {
               },
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -136,7 +136,7 @@ describe("RawBody directive parsing", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -173,7 +173,7 @@ describe("RawBody directive parsing", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -220,7 +220,7 @@ describe("RawBody directive parsing", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );

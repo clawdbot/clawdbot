@@ -7,6 +7,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
@@ -18,16 +19,11 @@ const GATEWAY_ACTIONS = [
   "update.run",
 ] as const;
 
-type GatewayAction = (typeof GATEWAY_ACTIONS)[number];
-
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
 // The discriminator (action) determines which properties are relevant; runtime validates.
 const GatewayToolSchema = Type.Object({
-  action: Type.Unsafe<GatewayAction>({
-    type: "string",
-    enum: [...GATEWAY_ACTIONS],
-  }),
+  action: stringEnum(GATEWAY_ACTIONS),
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),

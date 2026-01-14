@@ -28,7 +28,7 @@ describe("sessions_send gating", () => {
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createSessionsSendTool({
       agentSessionKey: "agent:main:main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     });
 
     const result = await tool.execute("call1", {

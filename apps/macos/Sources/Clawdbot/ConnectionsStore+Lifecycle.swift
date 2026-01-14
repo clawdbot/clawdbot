@@ -31,8 +31,8 @@ extension ConnectionsStore {
                 "probe": AnyCodable(probe),
                 "timeoutMs": AnyCodable(8000),
             ]
-            let snap: ProvidersStatusSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .providersStatus,
+            let snap: ChannelsStatusSnapshot = try await GatewayConnection.shared.requestDecoded(
+                method: .channelsStatus,
                 params: params,
                 timeoutMs: 12000)
             self.snapshot = snap
@@ -101,10 +101,10 @@ extension ConnectionsStore {
         defer { self.whatsappBusy = false }
         do {
             let params: [String: AnyCodable] = [
-                "provider": AnyCodable("whatsapp"),
+                "channel": AnyCodable("whatsapp"),
             ]
-            let result: ProviderLogoutResult = try await GatewayConnection.shared.requestDecoded(
-                method: .providersLogout,
+            let result: ChannelLogoutResult = try await GatewayConnection.shared.requestDecoded(
+                method: .channelsLogout,
                 params: params,
                 timeoutMs: 15000)
             self.whatsappLoginMessage = result.cleared
@@ -123,10 +123,10 @@ extension ConnectionsStore {
         defer { self.telegramBusy = false }
         do {
             let params: [String: AnyCodable] = [
-                "provider": AnyCodable("telegram"),
+                "channel": AnyCodable("telegram"),
             ]
-            let result: ProviderLogoutResult = try await GatewayConnection.shared.requestDecoded(
-                method: .providersLogout,
+            let result: ChannelLogoutResult = try await GatewayConnection.shared.requestDecoded(
+                method: .channelsLogout,
                 params: params,
                 timeoutMs: 15000)
             if result.envToken == true {
@@ -154,8 +154,8 @@ private struct WhatsAppLoginWaitResult: Codable {
     let message: String
 }
 
-private struct ProviderLogoutResult: Codable {
-    let provider: String?
+private struct ChannelLogoutResult: Codable {
+    let channel: String?
     let accountId: String?
     let cleared: Bool
     let envToken: Bool?

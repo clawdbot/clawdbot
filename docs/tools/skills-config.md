@@ -20,7 +20,7 @@ All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.j
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm" // npm | pnpm | yarn | bun
+      nodeManager: "npm" // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
     },
     entries: {
       "nano-banana-pro": {
@@ -44,6 +44,8 @@ All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.j
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `install.preferBrew`: prefer brew installers when available (default: true).
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
+  This only affects **skill installs**; the Gateway runtime should still be Node
+  (Bun not recommended for WhatsApp/Telegram).
 - `entries.<skillKey>`: per-skill overrides.
 
 Per-skill fields:

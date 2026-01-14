@@ -12,14 +12,14 @@ describe("deliverOutboundPayloads", () => {
       .fn()
       .mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: ClawdbotConfig = {
-      telegram: { botToken: "tok-1", textChunkLimit: 2 },
+      channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
       const results = await deliverOutboundPayloads({
         cfg,
-        provider: "telegram",
+        channel: "telegram",
         to: "123",
         payloads: [{ text: "abcd" }],
         deps: { sendTelegram },
@@ -32,7 +32,7 @@ describe("deliverOutboundPayloads", () => {
         );
       }
       expect(results).toHaveLength(2);
-      expect(results[0]).toMatchObject({ provider: "telegram", chatId: "c1" });
+      expect(results[0]).toMatchObject({ channel: "telegram", chatId: "c1" });
     } finally {
       if (prevTelegramToken === undefined) {
         delete process.env.TELEGRAM_BOT_TOKEN;
@@ -47,12 +47,12 @@ describe("deliverOutboundPayloads", () => {
       .fn()
       .mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: ClawdbotConfig = {
-      telegram: { botToken: "tok-1", textChunkLimit: 2 },
+      channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
 
     await deliverOutboundPayloads({
       cfg,
-      provider: "telegram",
+      channel: "telegram",
       to: "123",
       accountId: "default",
       payloads: [{ text: "hi" }],
@@ -70,11 +70,11 @@ describe("deliverOutboundPayloads", () => {
     const sendSignal = vi
       .fn()
       .mockResolvedValue({ messageId: "s1", timestamp: 123 });
-    const cfg: ClawdbotConfig = { signal: { mediaMaxMb: 2 } };
+    const cfg: ClawdbotConfig = { channels: { signal: { mediaMaxMb: 2 } } };
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider: "signal",
+      channel: "signal",
       to: "+1555",
       payloads: [{ text: "hi", mediaUrl: "https://x.test/a.jpg" }],
       deps: { sendSignal },
@@ -88,7 +88,7 @@ describe("deliverOutboundPayloads", () => {
         maxBytes: 2 * 1024 * 1024,
       }),
     );
-    expect(results[0]).toMatchObject({ provider: "signal", messageId: "s1" });
+    expect(results[0]).toMatchObject({ channel: "signal", messageId: "s1" });
   });
 
   it("chunks WhatsApp text and returns all results", async () => {
@@ -97,12 +97,12 @@ describe("deliverOutboundPayloads", () => {
       .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
       .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
     const cfg: ClawdbotConfig = {
-      whatsapp: { textChunkLimit: 2 },
+      channels: { whatsapp: { textChunkLimit: 2 } },
     };
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "abcd" }],
       deps: { sendWhatsApp },
@@ -120,7 +120,7 @@ describe("deliverOutboundPayloads", () => {
 
     await deliverOutboundPayloads({
       cfg,
-      provider: "imessage",
+      channel: "imessage",
       to: "chat_id:42",
       payloads: [{ text: "hello" }],
       deps: { sendIMessage },
@@ -156,7 +156,7 @@ describe("deliverOutboundPayloads", () => {
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "a" }, { text: "b" }],
       deps: { sendWhatsApp },
@@ -167,7 +167,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(results).toEqual([
-      { provider: "whatsapp", messageId: "w2", toJid: "jid" },
+      { channel: "whatsapp", messageId: "w2", toJid: "jid" },
     ]);
   });
 });

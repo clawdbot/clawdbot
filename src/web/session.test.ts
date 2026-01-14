@@ -89,9 +89,7 @@ describe("web session", () => {
     logWebSelfId("/tmp/wa-creds", runtime as never, true);
 
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Web Provider: +12345 (jid 12345@s.whatsapp.net)",
-      ),
+      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
     );
     existsSpy.mockRestore();
     readSpy.mockRestore();

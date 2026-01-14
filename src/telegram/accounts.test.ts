@@ -9,7 +9,9 @@ describe("resolveTelegramAccount", () => {
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
       const cfg: ClawdbotConfig = {
-        telegram: { accounts: { work: { botToken: "tok-work" } } },
+        channels: {
+          telegram: { accounts: { work: { botToken: "tok-work" } } },
+        },
       };
 
       const account = resolveTelegramAccount({ cfg });
@@ -30,7 +32,9 @@ describe("resolveTelegramAccount", () => {
     process.env.TELEGRAM_BOT_TOKEN = "tok-env";
     try {
       const cfg: ClawdbotConfig = {
-        telegram: { accounts: { work: { botToken: "tok-work" } } },
+        channels: {
+          telegram: { accounts: { work: { botToken: "tok-work" } } },
+        },
       };
 
       const account = resolveTelegramAccount({ cfg });
@@ -51,7 +55,9 @@ describe("resolveTelegramAccount", () => {
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
       const cfg: ClawdbotConfig = {
-        telegram: { accounts: { work: { botToken: "tok-work" } } },
+        channels: {
+          telegram: { accounts: { work: { botToken: "tok-work" } } },
+        },
       };
 
       const account = resolveTelegramAccount({ cfg, accountId: "default" });

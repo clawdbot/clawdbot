@@ -15,9 +15,9 @@ status: experimental
 
 Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
 
-Current scope: **WhatsApp only** (web provider).
+Current scope: **WhatsApp only** (web channel).
 
-Broadcast groups are evaluated after provider allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when Clawdbot would normally reply (for example: on mention, depending on your group settings).
+Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when Clawdbot would normally reply (for example: on mention, depending on your group settings).
 
 ## Use Cases
 
@@ -152,7 +152,7 @@ Agents process in order (one waits for previous to finish):
 4. **If not in broadcast list**:
    - Normal routing applies (first matching binding)
 
-Note: broadcast groups do not bypass provider allowlists or group activation rules (mentions/commands/etc). They only change *which agents run* when a message is eligible for processing.
+Note: broadcast groups do not bypass channel allowlists or group activation rules (mentions/commands/etc). They only change *which agents run* when a message is eligible for processing.
 
 ### Session Isolation
 
@@ -272,7 +272,7 @@ Broadcast groups work alongside existing routing:
 ```json
 {
   "bindings": [
-    { "match": { "provider": "whatsapp", "peer": { "kind": "group", "id": "GROUP_A" } }, "agentId": "alfred" }
+    { "match": { "channel": "whatsapp", "peer": { "kind": "group", "id": "GROUP_A" } }, "agentId": "alfred" }
   ],
   "broadcast": {
     "GROUP_B": ["agent1", "agent2"]
@@ -403,5 +403,5 @@ Planned features:
 ## See Also
 
 - [Multi-Agent Configuration](/multi-agent-sandbox-tools)
-- [Routing Configuration](/concepts/provider-routing)
+- [Routing Configuration](/concepts/channel-routing)
 - [Session Management](/concepts/sessions)

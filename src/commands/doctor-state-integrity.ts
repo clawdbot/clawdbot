@@ -236,7 +236,7 @@ export async function noteStateIntegrity(
 
     for (const [dir, label] of dirCandidates) {
       if (!existsDir(dir)) {
-        warnings.push(`- ${label} missing (${dir}).`);
+        warnings.push(`- CRITICAL: ${label} missing (${dir}).`);
         const create = await prompter.confirmSkipInNonInteractive({
           message: `Create ${label} at ${dir}?`,
           initialValue: true,

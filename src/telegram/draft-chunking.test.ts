@@ -18,7 +18,7 @@ describe("resolveTelegramDraftStreamingChunking", () => {
 
   it("clamps to telegram.textChunkLimit", () => {
     const cfg: ClawdbotConfig = {
-      telegram: { allowFrom: ["*"], textChunkLimit: 150 },
+      channels: { telegram: { allowFrom: ["*"], textChunkLimit: 150 } },
     };
     const chunking = resolveTelegramDraftStreamingChunking(cfg, "default");
     expect(chunking).toEqual({
@@ -30,15 +30,17 @@ describe("resolveTelegramDraftStreamingChunking", () => {
 
   it("supports per-account overrides", () => {
     const cfg: ClawdbotConfig = {
-      telegram: {
-        allowFrom: ["*"],
-        accounts: {
-          default: {
-            allowFrom: ["*"],
-            draftChunk: {
-              minChars: 10,
-              maxChars: 20,
-              breakPreference: "sentence",
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          accounts: {
+            default: {
+              allowFrom: ["*"],
+              draftChunk: {
+                minChars: 10,
+                maxChars: 20,
+                breakPreference: "sentence",
+              },
             },
           },
         },

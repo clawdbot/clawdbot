@@ -3,6 +3,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { normalizeChannelId } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -11,7 +12,6 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
-import { normalizeProviderId } from "../providers/registry.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -22,7 +22,7 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -66,11 +66,11 @@ function inferProviderFromSessionKey(params: {
   if (parts[0] === configuredMainKey) return undefined;
   const candidate = parts[0]?.trim().toLowerCase();
   if (!candidate) return undefined;
-  if (candidate === INTERNAL_MESSAGE_PROVIDER) return INTERNAL_MESSAGE_PROVIDER;
-  return normalizeProviderId(candidate) ?? undefined;
+  if (candidate === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
+  return normalizeChannelId(candidate) ?? undefined;
 }
 
-function resolveActiveProvider(params: {
+function resolveActiveChannel(params: {
   cfg: ClawdbotConfig;
   agentId: string;
   sessionKey: string;
@@ -79,17 +79,26 @@ function resolveActiveProvider(params: {
     agentId: params.agentId,
   });
   const store = loadSessionStore(storePath);
-  const entry = store[params.sessionKey];
+  const entry = store[params.sessionKey] as
+    | {
+        lastChannel?: string;
+        channel?: string;
+        // Legacy keys (pre-rename).
+        lastProvider?: string;
+        provider?: string;
+      }
+    | undefined;
   const candidate = (
+    entry?.lastChannel ??
+    entry?.channel ??
     entry?.lastProvider ??
-    entry?.providerOverride ??
     entry?.provider ??
     ""
   )
     .trim()
     .toLowerCase();
-  if (candidate === INTERNAL_MESSAGE_PROVIDER) return INTERNAL_MESSAGE_PROVIDER;
-  const normalized = normalizeProviderId(candidate);
+  if (candidate === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
+  const normalized = normalizeChannelId(candidate);
   if (normalized) return normalized;
   return inferProviderFromSessionKey({
     cfg: params.cfg,
@@ -133,7 +142,7 @@ export async function sandboxExplainCommand(
         ? false
         : sessionKey.trim() !== mainSessionKey.trim();
 
-  const provider = resolveActiveProvider({
+  const channel = resolveActiveChannel({
     cfg,
     agentId: resolvedAgentId,
     sessionKey,
@@ -146,12 +155,10 @@ export async function sandboxExplainCommand(
   const elevatedAgentEnabled = elevatedAgent?.enabled !== false;
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
-  const globalAllow = provider
-    ? elevatedGlobal?.allowFrom?.[provider]
+  const globalAllow = channel
+    ? elevatedGlobal?.allowFrom?.[channel]
     : undefined;
-  const agentAllow = provider
-    ? elevatedAgent?.allowFrom?.[provider]
-    : undefined;
+  const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 
   const allowTokens = (values?: Array<string | number>) =>
     (values ?? []).map((v) => String(v).trim()).filter(Boolean);
@@ -160,7 +167,7 @@ export async function sandboxExplainCommand(
 
   const elevatedAllowedByConfig =
     elevatedEnabled &&
-    Boolean(provider) &&
+    Boolean(channel) &&
     globalAllowTokens.length > 0 &&
     (elevatedAgent?.allowFrom ? agentAllowTokens.length > 0 : true);
 
@@ -179,16 +186,16 @@ export async function sandboxExplainCommand(
       key: "agents.list[].tools.elevated.enabled",
     });
   }
-  if (provider && globalAllowTokens.length === 0) {
+  if (channel && globalAllowTokens.length === 0) {
     elevatedFailures.push({
       gate: "allowFrom",
-      key: `tools.elevated.allowFrom.${provider}`,
+      key: `tools.elevated.allowFrom.${channel}`,
     });
   }
-  if (provider && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {
+  if (channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {
     elevatedFailures.push({
       gate: "allowFrom",
-      key: `agents.list[].tools.elevated.allowFrom.${provider}`,
+      key: `agents.list[].tools.elevated.allowFrom.${channel}`,
     });
   }
 
@@ -202,7 +209,7 @@ export async function sandboxExplainCommand(
   fixIt.push("agents.list[].tools.sandbox.tools.allow");
   fixIt.push("agents.list[].tools.sandbox.tools.deny");
   fixIt.push("tools.elevated.enabled");
-  if (provider) fixIt.push(`tools.elevated.allowFrom.${provider}`);
+  if (channel) fixIt.push(`tools.elevated.allowFrom.${channel}`);
 
   const payload = {
     docsUrl: SANDBOX_DOCS_URL,
@@ -224,13 +231,13 @@ export async function sandboxExplainCommand(
     },
     elevated: {
       enabled: elevatedEnabled,
-      provider,
+      channel,
       allowedByConfig: elevatedAllowedByConfig,
       alwaysAllowedByConfig: elevatedAlwaysAllowedByConfig,
       allowFrom: {
-        global: provider ? globalAllowTokens : undefined,
+        global: channel ? globalAllowTokens : undefined,
         agent:
-          elevatedAgent?.allowFrom && provider ? agentAllowTokens : undefined,
+          elevatedAgent?.allowFrom && channel ? agentAllowTokens : undefined,
       },
       failures: elevatedFailures,
     },
@@ -287,7 +294,7 @@ export async function sandboxExplainCommand(
   lines.push(heading("Elevated:"));
   lines.push(`  ${key("enabled:")} ${bool(payload.elevated.enabled)}`);
   lines.push(
-    `  ${key("provider:")} ${value(payload.elevated.provider ?? "(unknown)")}`,
+    `  ${key("channel:")} ${value(payload.elevated.channel ?? "(unknown)")}`,
   );
   lines.push(
     `  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`,

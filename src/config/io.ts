@@ -23,7 +23,7 @@ import {
   applyTalkApiKey,
 } from "./defaults.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
-import { findLegacyConfigIssues } from "./legacy.js";
+import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -49,6 +49,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "ZAI_API_KEY",
   "OPENROUTER_API_KEY",
   "MINIMAX_API_KEY",
+  "SYNTHETIC_API_KEY",
   "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
   "DISCORD_BOT_TOKEN",
@@ -83,6 +84,10 @@ function warnOnConfigMiskeys(
       'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
     );
   }
+}
+
+function formatLegacyMigrationLog(changes: string[]): string {
+  return `Auto-migrated config:\n${changes.map((entry) => `- ${entry}`).join("\n")}`;
 }
 
 function applyConfigEnv(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): void {
@@ -141,6 +146,53 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
 
+  const writeConfigFileSync = (cfg: ClawdbotConfig) => {
+    const dir = path.dirname(configPath);
+    deps.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const json = JSON.stringify(applyModelDefaults(cfg), null, 2)
+      .trimEnd()
+      .concat("\n");
+
+    const tmp = path.join(
+      dir,
+      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+
+    deps.fs.writeFileSync(tmp, json, { encoding: "utf-8", mode: 0o600 });
+
+    try {
+      deps.fs.copyFileSync(configPath, `${configPath}.bak`);
+    } catch {
+      // best-effort
+    }
+
+    try {
+      deps.fs.renameSync(tmp, configPath);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "EPERM" || code === "EEXIST") {
+        deps.fs.copyFileSync(tmp, configPath);
+        try {
+          deps.fs.chmodSync(configPath, 0o600);
+        } catch {
+          // best-effort
+        }
+        try {
+          deps.fs.unlinkSync(tmp);
+        } catch {
+          // best-effort
+        }
+        return;
+      }
+      try {
+        deps.fs.unlinkSync(tmp);
+      } catch {
+        // best-effort
+      }
+      throw err;
+    }
+  };
+
   function loadConfig(): ClawdbotConfig {
     try {
       if (!deps.fs.existsSync(configPath)) {
@@ -164,15 +216,28 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parseJson: (raw) => deps.json5.parse(raw),
       });
 
-      warnOnConfigMiskeys(resolved, deps.logger);
-      if (typeof resolved !== "object" || resolved === null) return {};
-      const validated = ClawdbotSchema.safeParse(resolved);
+      const migrated = applyLegacyMigrations(resolved);
+      const resolvedConfig = migrated.next ?? resolved;
+      warnOnConfigMiskeys(resolvedConfig, deps.logger);
+      if (typeof resolvedConfig !== "object" || resolvedConfig === null)
+        return {};
+      const validated = ClawdbotSchema.safeParse(resolvedConfig);
       if (!validated.success) {
         deps.logger.error("Invalid config:");
         for (const iss of validated.error.issues) {
           deps.logger.error(`- ${iss.path.join(".")}: ${iss.message}`);
         }
         return {};
+      }
+      if (migrated.next && migrated.changes.length > 0) {
+        deps.logger.warn(formatLegacyMigrationLog(migrated.changes));
+        try {
+          writeConfigFileSync(resolvedConfig as ClawdbotConfig);
+        } catch (err) {
+          deps.logger.warn(
+            `Failed to write migrated config at ${configPath}: ${String(err)}`,
+          );
+        }
       }
       const cfg = applyModelDefaults(
         applyContextPruningDefaults(
@@ -286,14 +351,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      const legacyIssues = findLegacyConfigIssues(resolved);
-      const resolvedConfig =
-        typeof resolved === "object" && resolved !== null
-          ? (resolved as ClawdbotConfig)
-          : {};
+      const migrated = applyLegacyMigrations(resolved);
+      const resolvedConfigRaw = migrated.next ?? resolved;
+      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
-      const validated = validateConfigObject(resolved);
+      const validated = validateConfigObject(resolvedConfigRaw);
       if (!validated.ok) {
+        const resolvedConfig =
+          typeof resolvedConfigRaw === "object" && resolvedConfigRaw !== null
+            ? (resolvedConfigRaw as ClawdbotConfig)
+            : {};
         return {
           path: configPath,
           exists: true,
@@ -304,6 +371,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           issues: validated.issues,
           legacyIssues,
         };
+      }
+
+      if (migrated.next && migrated.changes.length > 0) {
+        deps.logger.warn(formatLegacyMigrationLog(migrated.changes));
+        await writeConfigFile(validated.config).catch((err) => {
+          deps.logger.warn(
+            `Failed to write migrated config at ${configPath}: ${String(err)}`,
+          );
+        });
       }
 
       return {

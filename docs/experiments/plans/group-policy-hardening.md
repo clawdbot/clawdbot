@@ -35,4 +35,4 @@ false negatives when deciding whether to respond in DMs or groups.
 ## Related docs
 
 - [Group Chats](/concepts/groups)
-- [Telegram Provider](/providers/telegram)
+- [Telegram Provider](/channels/telegram)

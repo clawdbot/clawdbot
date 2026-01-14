@@ -38,7 +38,9 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 
-Large files are truncated with a marker. Missing files inject a short missing-file marker.
+Large files are truncated with a marker. The max per-file size is controlled by
+`agents.defaults.bootstrapMaxChars` (default: 20000). Missing files inject a
+short missing-file marker.
 
 ## Time handling
 

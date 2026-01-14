@@ -9,9 +9,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import type { GatewayMessageProvider } from "../../utils/message-provider.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
@@ -30,9 +31,7 @@ const SessionsSpawnToolSchema = Type.Object({
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  cleanup: Type.Optional(
-    Type.Union([Type.Literal("delete"), Type.Literal("keep")]),
-  ),
+  cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
 
 function normalizeModelSelection(value: unknown): string | undefined {
@@ -48,7 +47,7 @@ function normalizeModelSelection(value: unknown): string | undefined {
 
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
-  agentProvider?: GatewayMessageProvider;
+  agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -175,7 +174,7 @@ export function createSessionsSpawnTool(opts?: {
       }
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
-        requesterProvider: opts?.agentProvider,
+        requesterChannel: opts?.agentChannel,
         childSessionKey,
         label: label || undefined,
         task,
@@ -189,7 +188,7 @@ export function createSessionsSpawnTool(opts?: {
           params: {
             message: task,
             sessionKey: childSessionKey,
-            provider: opts?.agentProvider,
+            channel: opts?.agentChannel,
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
@@ -222,7 +221,7 @@ export function createSessionsSpawnTool(opts?: {
         runId: childRunId,
         childSessionKey,
         requesterSessionKey: requesterInternalKey,
-        requesterProvider: opts?.agentProvider,
+        requesterChannel: opts?.agentChannel,
         requesterDisplayKey,
         task,
         cleanup,

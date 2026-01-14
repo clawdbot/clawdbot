@@ -50,7 +50,7 @@ function makeCfg(home: string) {
         workspace: path.join(home, "clawd"),
       },
     },
-    whatsapp: { allowFrom: ["*"] },
+    channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: path.join(home, "sessions.json") },
   };
 }

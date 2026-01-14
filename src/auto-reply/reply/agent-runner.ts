@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -20,6 +21,9 @@ import {
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import { getChannelDock } from "../../channels/dock.js";
+import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -36,9 +40,6 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { isAudioFileName } from "../../media/mime.js";
-import { getProviderDock } from "../../providers/dock.js";
-import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
-import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import {
@@ -95,19 +96,19 @@ function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: ClawdbotConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
-}): ProviderThreadingToolContext {
+}): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   if (!config) return {};
-  const provider = normalizeProviderId(sessionCtx.Provider);
+  const provider = normalizeChannelId(sessionCtx.Provider);
   if (!provider) return {};
-  const dock = getProviderDock(provider);
+  const dock = getChannelDock(provider);
   if (!dock?.threading?.buildToolContext) return {};
   return (
     dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {
-        Provider: sessionCtx.Provider,
+        Channel: sessionCtx.Provider,
         To: sessionCtx.To,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
@@ -394,6 +395,10 @@ export async function runReplyAgent(params: {
         cfg: followupRun.run.config,
         provider: followupRun.run.provider,
         model: followupRun.run.model,
+        fallbacksOverride: resolveAgentModelFallbacksOverride(
+          followupRun.run.config,
+          resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+        ),
         run: (provider, model) =>
           runEmbeddedPiAgent({
             sessionId: followupRun.run.sessionId,
@@ -586,6 +591,10 @@ export async function runReplyAgent(params: {
           cfg: followupRun.run.config,
           provider: followupRun.run.provider,
           model: followupRun.run.model,
+          fallbacksOverride: resolveAgentModelFallbacksOverride(
+            followupRun.run.config,
+            resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+          ),
           run: (provider, model) => {
             if (isCliProvider(provider, followupRun.run.config)) {
               const startedAt = Date.now();
@@ -689,6 +698,9 @@ export async function runReplyAgent(params: {
                     });
                   }
                 : undefined,
+              onAssistantMessageStart: async () => {
+                await typingSignals.signalMessageStart();
+              },
               onReasoningStream:
                 typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
                   ? async (payload) => {
@@ -704,7 +716,7 @@ export async function runReplyAgent(params: {
                 if (evt.stream === "tool") {
                   const phase =
                     typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "start") {
+                  if (phase === "start" || phase === "update") {
                     void typingSignals.signalToolStart();
                   }
                 }
@@ -822,6 +834,20 @@ export async function runReplyAgent(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+
+        // Some embedded runs surface context overflow as an error payload instead of throwing.
+        // Treat those as a session-level failure and auto-recover by starting a fresh session.
+        const embeddedError = runResult.meta?.error;
+        if (
+          embeddedError &&
+          isContextOverflowError(embeddedError.message) &&
+          !didResetAfterCompactionFailure &&
+          (await resetSessionAfterCompactionFailure(embeddedError.message))
+        ) {
+          didResetAfterCompactionFailure = true;
+          continue;
+        }
+
         break;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -882,7 +908,7 @@ export async function runReplyAgent(params: {
         defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
         return finalizeWithFollowup({
           text: isContextOverflow
-            ? "⚠️ Context overflow - conversation too long. Starting fresh might help!"
+            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : `⚠️ Agent failed before reply: ${message}. Check gateway logs for details.`,
         });
       }

@@ -10,7 +10,7 @@ vi.mock("../../web/outbound.js", () => ({
 }));
 
 const enabledConfig = {
-  whatsapp: { actions: { reactions: true } },
+  channels: { whatsapp: { actions: { reactions: true } } },
 } as ClawdbotConfig;
 
 describe("handleWhatsAppAction", () => {
@@ -112,7 +112,7 @@ describe("handleWhatsAppAction", () => {
 
   it("respects reaction gating", async () => {
     const cfg = {
-      whatsapp: { actions: { reactions: false } },
+      channels: { whatsapp: { actions: { reactions: false } } },
     } as ClawdbotConfig;
     await expect(
       handleWhatsAppAction(

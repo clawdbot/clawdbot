@@ -21,7 +21,7 @@ type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
-  model?: string;
+  model?: AgentEntry["model"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
   identity?: AgentEntry["identity"];
@@ -95,7 +95,11 @@ export function resolveAgentConfig(
     workspace:
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
-    model: typeof entry.model === "string" ? entry.model : undefined,
+    model:
+      typeof entry.model === "string" ||
+      (entry.model && typeof entry.model === "object")
+        ? entry.model
+        : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
     identity: entry.identity,
@@ -107,6 +111,28 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentModelPrimary(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): string | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  if (!raw) return undefined;
+  if (typeof raw === "string") return raw.trim() || undefined;
+  const primary = raw.primary?.trim();
+  return primary || undefined;
+}
+
+export function resolveAgentModelFallbacksOverride(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): string[] | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  if (!raw || typeof raw === "string") return undefined;
+  // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
+  if (!Object.hasOwn(raw, "fallbacks")) return undefined;
+  return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
 export function resolveAgentWorkspaceDir(cfg: ClawdbotConfig, agentId: string) {
@@ -128,13 +154,4 @@ export function resolveAgentDir(cfg: ClawdbotConfig, agentId: string) {
   if (configured) return resolveUserPath(configured);
   const root = resolveStateDir(process.env, os.homedir);
   return path.join(root, "agents", id, "agent");
-}
-
-/**
- * Resolve the agent directory for the default agent without requiring config.
- * Used by onboarding when writing auth profiles before config is fully set up.
- */
-export function resolveDefaultAgentDir(): string {
-  const root = resolveStateDir(process.env, os.homedir);
-  return path.join(root, "agents", DEFAULT_AGENT_ID, "agent");
 }

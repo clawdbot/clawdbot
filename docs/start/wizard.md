@@ -1,5 +1,5 @@
 ---
-summary: "CLI onboarding wizard: guided setup for gateway, workspace, providers, and skills"
+summary: "CLI onboarding wizard: guided setup for gateway, workspace, channels, and skills"
 read_when:
   - Running or configuring the onboarding wizard
   - Setting up a new machine
@@ -9,7 +9,7 @@ read_when:
 
 The onboarding wizard is the **recommended** way to set up Clawdbot on macOS,
 Linux, or Windows (via WSL2; strongly recommended).
-It configures a local Gateway or a remote Gateway connection, plus providers, skills,
+It configures a local Gateway or a remote Gateway connection, plus channels, skills,
 and workspace defaults in one guided flow.
 
 Primary entrypoint:
@@ -36,7 +36,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Tailscale exposure **Off**
 - Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for your phone number)
 
-**Advanced** exposes every step (mode, workspace, gateway, providers, daemon, skills).
+**Advanced** exposes every step (mode, workspace, gateway, channels, daemon, skills).
 
 ## What the wizard does
 
@@ -84,6 +84,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **API key**: stores the key for you.
    - **MiniMax M2.1**: config is auto-written.
    - More detail: [MiniMax](/providers/minimax)
+   - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
+   - More detail: [Synthetic](/providers/synthetic)
    - **Moonshot (Kimi K2)**: config is auto-written.
    - More detail: [Moonshot AI](/providers/moonshot)
    - **Skip**: no auth configured yet.
@@ -103,13 +105,13 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Disable auth only if you fully trust every local process.
    - Non‑loopback binds still require auth.
 
-5) **Providers**
+5) **Channels**
    - WhatsApp: optional QR login.
    - Telegram: bot token.
    - Discord: bot token.
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
-  - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve <provider> <code>` or use allowlists.
+  - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve <channel> <code>` or use allowlists.
 
 6) **Daemon install**
    - macOS: LaunchAgent
@@ -117,7 +119,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Linux (and Windows via WSL2): systemd user unit
      - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
-   - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
+   - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
@@ -125,7 +127,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 8) **Skills (recommended)**
    - Reads the available skills and checks requirements.
-   - Lets you choose a node manager: **npm / pnpm / bun**.
+   - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
    - Installs optional dependencies (some use Homebrew on macOS).
 
 9) **Finish**
@@ -214,6 +216,17 @@ clawdbot onboard --non-interactive \
   --gateway-bind loopback
 ```
 
+Synthetic example:
+
+```bash
+clawdbot onboard --non-interactive \
+  --mode local \
+  --auth-choice synthetic-api-key \
+  --synthetic-api-key "$SYNTHETIC_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
 OpenCode Zen example:
 
 ```bash
@@ -246,7 +259,7 @@ Clients (macOS app, Control UI) can render steps without re‑implementing onboa
 The wizard can install `signal-cli` from GitHub releases:
 - Downloads the appropriate release asset.
 - Stores it under `~/.clawdbot/tools/signal-cli/<version>/`.
-- Writes `signal.cliPath` to your config.
+- Writes `channels.signal.cliPath` to your config.
 
 Notes:
 - JVM builds require **Java 21**.
@@ -259,7 +272,7 @@ Typical fields in `~/.clawdbot/clawdbot.json`:
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `telegram.botToken`, `discord.token`, `signal.*`, `imessage.*`
+- `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
 - `skills.install.nodeManager`
 - `wizard.lastRunAt`
 - `wizard.lastRunVersion`
@@ -276,5 +289,5 @@ Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
 
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
-- Providers: [WhatsApp](/providers/whatsapp), [Telegram](/providers/telegram), [Discord](/providers/discord), [Signal](/providers/signal), [iMessage](/providers/imessage)
+- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Signal](/channels/signal), [iMessage](/channels/imessage)
 - Skills: [Skills](/tools/skills), [Skills config](/tools/skills-config)

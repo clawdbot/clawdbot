@@ -1,0 +1,263 @@
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { TSchema } from "@sinclair/typebox";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { ClawdbotConfig } from "../../config/config.js";
+import type { PollInput } from "../../polls.js";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../utils/message-channel.js";
+import type { ChatChannelId } from "../registry.js";
+import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+
+export type ChannelId = ChatChannelId;
+
+export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
+
+export type ChannelAgentTool = AgentTool<TSchema, unknown>;
+
+export type ChannelAgentToolFactory = (params: {
+  cfg?: ClawdbotConfig;
+}) => ChannelAgentTool[];
+
+export type ChannelSetupInput = {
+  name?: string;
+  token?: string;
+  tokenFile?: string;
+  botToken?: string;
+  appToken?: string;
+  signalNumber?: string;
+  cliPath?: string;
+  dbPath?: string;
+  service?: "imessage" | "sms" | "auto";
+  region?: string;
+  authDir?: string;
+  httpUrl?: string;
+  httpHost?: string;
+  httpPort?: string;
+  useEnv?: boolean;
+};
+
+export type ChannelStatusIssue = {
+  channel: ChannelId;
+  accountId: string;
+  kind: "intent" | "permissions" | "config" | "auth" | "runtime";
+  message: string;
+  fix?: string;
+};
+
+export type ChannelAccountState =
+  | "linked"
+  | "not linked"
+  | "configured"
+  | "not configured"
+  | "enabled"
+  | "disabled";
+
+export type ChannelHeartbeatDeps = {
+  webAuthExists?: () => Promise<boolean>;
+  hasActiveWebListener?: () => boolean;
+};
+
+export type ChannelMeta = {
+  id: ChannelId;
+  label: string;
+  selectionLabel: string;
+  docsPath: string;
+  docsLabel?: string;
+  blurb: string;
+  order?: number;
+  showConfigured?: boolean;
+  quickstartAllowFrom?: boolean;
+  forceAccountBinding?: boolean;
+  preferSessionLookupForAnnounceTarget?: boolean;
+};
+
+export type ChannelAccountSnapshot = {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  linked?: boolean;
+  running?: boolean;
+  connected?: boolean;
+  reconnectAttempts?: number;
+  lastConnectedAt?: number | null;
+  lastDisconnect?:
+    | string
+    | {
+        at: number;
+        status?: number;
+        error?: string;
+        loggedOut?: boolean;
+      }
+    | null;
+  lastMessageAt?: number | null;
+  lastEventAt?: number | null;
+  lastError?: string | null;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+  mode?: string;
+  dmPolicy?: string;
+  allowFrom?: string[];
+  tokenSource?: string;
+  botTokenSource?: string;
+  appTokenSource?: string;
+  baseUrl?: string;
+  allowUnmentionedGroups?: boolean;
+  cliPath?: string | null;
+  dbPath?: string | null;
+  port?: number | null;
+  probe?: unknown;
+  lastProbeAt?: number | null;
+  audit?: unknown;
+  application?: unknown;
+  bot?: unknown;
+};
+
+export type ChannelLogSink = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+  error: (msg: string) => void;
+  debug?: (msg: string) => void;
+};
+
+export type ChannelGroupContext = {
+  cfg: ClawdbotConfig;
+  groupId?: string | null;
+  groupRoom?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+};
+
+export type ChannelCapabilities = {
+  chatTypes: Array<"direct" | "group" | "channel" | "thread">;
+  polls?: boolean;
+  reactions?: boolean;
+  threads?: boolean;
+  media?: boolean;
+  nativeCommands?: boolean;
+  blockStreaming?: boolean;
+};
+
+export type ChannelSecurityDmPolicy = {
+  policy: string;
+  allowFrom?: Array<string | number> | null;
+  policyPath?: string;
+  allowFromPath: string;
+  approveHint: string;
+  normalizeEntry?: (raw: string) => string;
+};
+
+export type ChannelSecurityContext<ResolvedAccount = unknown> = {
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  account: ResolvedAccount;
+};
+
+export type ChannelMentionAdapter = {
+  stripPatterns?: (params: {
+    ctx: MsgContext;
+    cfg: ClawdbotConfig | undefined;
+    agentId?: string;
+  }) => string[];
+  stripMentions?: (params: {
+    text: string;
+    ctx: MsgContext;
+    cfg: ClawdbotConfig | undefined;
+    agentId?: string;
+  }) => string;
+};
+
+export type ChannelStreamingAdapter = {
+  blockStreamingCoalesceDefaults?: {
+    minChars: number;
+    idleMs: number;
+  };
+};
+
+export type ChannelThreadingAdapter = {
+  resolveReplyToMode?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+  }) => "off" | "first" | "all";
+  allowTagsWhenOff?: boolean;
+  buildToolContext?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    context: ChannelThreadingContext;
+    hasRepliedRef?: { value: boolean };
+  }) => ChannelThreadingToolContext | undefined;
+};
+
+export type ChannelThreadingContext = {
+  Channel?: string;
+  To?: string;
+  ReplyToId?: string;
+  ThreadLabel?: string;
+};
+
+export type ChannelThreadingToolContext = {
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  replyToMode?: "off" | "first" | "all";
+  hasRepliedRef?: { value: boolean };
+};
+
+export type ChannelMessagingAdapter = {
+  normalizeTarget?: (raw: string) => string | undefined;
+};
+
+export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+
+export type ChannelMessageActionContext = {
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  cfg: ClawdbotConfig;
+  params: Record<string, unknown>;
+  accountId?: string | null;
+  gateway?: {
+    url?: string;
+    token?: string;
+    timeoutMs?: number;
+    clientName: GatewayClientName;
+    clientDisplayName?: string;
+    mode: GatewayClientMode;
+  };
+  toolContext?: ChannelThreadingToolContext;
+  dryRun?: boolean;
+};
+
+export type ChannelToolSend = {
+  to: string;
+  accountId?: string | null;
+};
+
+export type ChannelMessageActionAdapter = {
+  listActions?: (params: { cfg: ClawdbotConfig }) => ChannelMessageActionName[];
+  supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
+  supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
+  extractToolSend?: (params: {
+    args: Record<string, unknown>;
+  }) => ChannelToolSend | null;
+  handleAction?: (
+    ctx: ChannelMessageActionContext,
+  ) => Promise<AgentToolResult<unknown>>;
+};
+
+export type ChannelPollResult = {
+  messageId: string;
+  toJid?: string;
+  channelId?: string;
+  conversationId?: string;
+  pollId?: string;
+};
+
+export type ChannelPollContext = {
+  cfg: ClawdbotConfig;
+  to: string;
+  poll: PollInput;
+  accountId?: string | null;
+};

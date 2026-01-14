@@ -236,4 +236,28 @@ describe("getApiKeyForModel", () => {
       }
     }
   });
+
+  it("resolves Synthetic API key from env", async () => {
+    const previousSynthetic = process.env.SYNTHETIC_API_KEY;
+
+    try {
+      process.env.SYNTHETIC_API_KEY = "synthetic-test-key";
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "synthetic",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("synthetic-test-key");
+      expect(resolved.source).toContain("SYNTHETIC_API_KEY");
+    } finally {
+      if (previousSynthetic === undefined) {
+        delete process.env.SYNTHETIC_API_KEY;
+      } else {
+        process.env.SYNTHETIC_API_KEY = previousSynthetic;
+      }
+    }
+  });
 });

@@ -226,8 +226,10 @@ describe("routeReply", () => {
   it("routes MS Teams via proactive sender", async () => {
     mocks.sendMessageMSTeams.mockClear();
     const cfg = {
-      msteams: {
-        enabled: true,
+      channels: {
+        msteams: {
+          enabled: true,
+        },
       },
     } as unknown as ClawdbotConfig;
     await routeReply({

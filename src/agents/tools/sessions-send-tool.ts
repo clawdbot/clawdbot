@@ -4,8 +4,6 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -13,14 +11,12 @@ import {
 } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
-  type GatewayMessageProvider,
-  INTERNAL_MESSAGE_PROVIDER,
-} from "../../utils/message-provider.js";
+  type GatewayMessageChannel,
+  INTERNAL_MESSAGE_CHANNEL,
+} from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
-import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   extractAssistantText,
   resolveDisplaySessionKey,
@@ -29,15 +25,10 @@ import {
   stripToolMessages,
 } from "./sessions-helpers.js";
 import {
-  buildAgentToAgentAnnounceContext,
   buildAgentToAgentMessageContext,
-  buildAgentToAgentReplyContext,
-  isAnnounceSkip,
-  isReplySkip,
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
-
-const log = createSubsystemLogger("agents/sessions-send");
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -51,7 +42,7 @@ const SessionsSendToolSchema = Type.Object({
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentProvider?: GatewayMessageProvider;
+  agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -297,7 +288,7 @@ export function createSessionsSendTool(opts?: {
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
-        requesterProvider: opts?.agentProvider,
+        requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
       const sendParams = {
@@ -305,134 +296,26 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
-        provider: INTERNAL_MESSAGE_PROVIDER,
+        channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: agentMessageContext,
       };
       const requesterSessionKey = opts?.agentSessionKey;
-      const requesterProvider = opts?.agentProvider;
+      const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
-
-      const runAgentToAgentFlow = async (
-        roundOneReply?: string,
-        runInfo?: { runId: string },
-      ) => {
-        const runContextId = runInfo?.runId ?? runId;
-        try {
-          let primaryReply = roundOneReply;
-          let latestReply = roundOneReply;
-          if (!primaryReply && runInfo?.runId) {
-            const waitMs = Math.min(announceTimeoutMs, 60_000);
-            const wait = (await callGateway({
-              method: "agent.wait",
-              params: {
-                runId: runInfo.runId,
-                timeoutMs: waitMs,
-              },
-              timeoutMs: waitMs + 2000,
-            })) as { status?: string };
-            if (wait?.status === "ok") {
-              primaryReply = await readLatestAssistantReply({
-                sessionKey: resolvedKey,
-              });
-              latestReply = primaryReply;
-            }
-          }
-          if (!latestReply) return;
-          const announceTarget = await resolveAnnounceTarget({
-            sessionKey: resolvedKey,
-            displayKey,
-          });
-          const targetProvider = announceTarget?.provider ?? "unknown";
-          if (
-            maxPingPongTurns > 0 &&
-            requesterSessionKey &&
-            requesterSessionKey !== resolvedKey
-          ) {
-            let currentSessionKey = requesterSessionKey;
-            let nextSessionKey = resolvedKey;
-            let incomingMessage = latestReply;
-            for (let turn = 1; turn <= maxPingPongTurns; turn += 1) {
-              const currentRole =
-                currentSessionKey === requesterSessionKey
-                  ? "requester"
-                  : "target";
-              const replyPrompt = buildAgentToAgentReplyContext({
-                requesterSessionKey,
-                requesterProvider,
-                targetSessionKey: displayKey,
-                targetProvider,
-                currentRole,
-                turn,
-                maxTurns: maxPingPongTurns,
-              });
-              const replyText = await runAgentStep({
-                sessionKey: currentSessionKey,
-                message: incomingMessage,
-                extraSystemPrompt: replyPrompt,
-                timeoutMs: announceTimeoutMs,
-                lane: AGENT_LANE_NESTED,
-              });
-              if (!replyText || isReplySkip(replyText)) {
-                break;
-              }
-              latestReply = replyText;
-              incomingMessage = replyText;
-              const swap = currentSessionKey;
-              currentSessionKey = nextSessionKey;
-              nextSessionKey = swap;
-            }
-          }
-          const announcePrompt = buildAgentToAgentAnnounceContext({
-            requesterSessionKey,
-            requesterProvider,
-            targetSessionKey: displayKey,
-            targetProvider,
-            originalMessage: message,
-            roundOneReply: primaryReply,
-            latestReply,
-          });
-          const announceReply = await runAgentStep({
-            sessionKey: resolvedKey,
-            message: "Agent-to-agent announce step.",
-            extraSystemPrompt: announcePrompt,
-            timeoutMs: announceTimeoutMs,
-            lane: AGENT_LANE_NESTED,
-          });
-          if (
-            announceTarget &&
-            announceReply &&
-            announceReply.trim() &&
-            !isAnnounceSkip(announceReply)
-          ) {
-            try {
-              await callGateway({
-                method: "send",
-                params: {
-                  to: announceTarget.to,
-                  message: announceReply.trim(),
-                  provider: announceTarget.provider,
-                  accountId: announceTarget.accountId,
-                  idempotencyKey: crypto.randomUUID(),
-                },
-                timeoutMs: 10_000,
-              });
-            } catch (err) {
-              log.warn("sessions_send announce delivery failed", {
-                runId: runContextId,
-                provider: announceTarget.provider,
-                to: announceTarget.to,
-                error: formatErrorMessage(err),
-              });
-            }
-          }
-        } catch (err) {
-          log.warn("sessions_send announce flow failed", {
-            runId: runContextId,
-            error: formatErrorMessage(err),
-          });
-        }
+      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        void runSessionsSendA2AFlow({
+          targetSessionKey: resolvedKey,
+          displayKey,
+          message,
+          announceTimeoutMs,
+          maxPingPongTurns,
+          requesterSessionKey,
+          requesterChannel,
+          roundOneReply,
+          waitRunId,
+        });
       };
 
       if (timeoutSeconds === 0) {
@@ -445,7 +328,7 @@ export function createSessionsSendTool(opts?: {
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
-          void runAgentToAgentFlow(undefined, { runId });
+          startA2AFlow(undefined, runId);
           return jsonResult({
             runId,
             status: "accepted",
@@ -547,7 +430,7 @@ export function createSessionsSendTool(opts?: {
       const last =
         filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
-      void runAgentToAgentFlow(reply ?? undefined);
+      startA2AFlow(reply ?? undefined);
 
       return jsonResult({
         runId,

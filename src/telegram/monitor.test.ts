@@ -31,7 +31,7 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
   })),
   loadConfig: vi.fn(() => ({
     agents: { defaults: { maxConcurrent: 2 } },
-    telegram: {},
+    channels: { telegram: {} },
   })),
 }));
 
@@ -80,7 +80,7 @@ describe("monitorTelegramProvider (grammY)", () => {
   beforeEach(() => {
     loadConfig.mockReturnValue({
       agents: { defaults: { maxConcurrent: 2 } },
-      telegram: {},
+      channels: { telegram: {} },
     });
     initSpy.mockClear();
     runSpy.mockClear();
@@ -110,7 +110,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     runSpy.mockClear();
     loadConfig.mockReturnValue({
       agents: { defaults: { maxConcurrent: 3 } },
-      telegram: {},
+      channels: { telegram: {} },
     });
 
     await monitorTelegramProvider({ token: "tok" });

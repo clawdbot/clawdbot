@@ -322,8 +322,8 @@ export function createSessionStatusTool(opts?: {
 
       const queueSettings = resolveQueueSettings({
         cfg,
-        provider:
-          resolved.entry.provider ?? resolved.entry.lastProvider ?? "unknown",
+        channel:
+          resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
         sessionEntry: resolved.entry,
       });
       const queueKey = resolved.key ?? resolved.entry.sessionId;

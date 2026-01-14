@@ -5,7 +5,7 @@ read_when:
 ---
 # Image & Media Support — 2025-12-05
 
-Clawdbot is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
+The WhatsApp channel runs via **Baileys Web**. This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Goals
 - Send media with optional captions via `clawdbot message send --media`.
@@ -15,9 +15,9 @@ Clawdbot is now **web-only** (Baileys). This document captures the current media
 ## CLI Surface
 - `clawdbot message send --media <path-or-url> [--message <caption>]`
   - `--media` optional; caption can be empty for media-only sends.
-  - `--dry-run` prints the resolved payload; `--json` emits `{ provider, to, messageId, mediaUrl, caption }`.
+  - `--dry-run` prints the resolved payload; `--json` emits `{ channel, to, messageId, mediaUrl, caption }`.
 
-## Web Provider Behavior
+## WhatsApp Web channel behavior
 - Input: local file path **or** HTTP(S) URL.
 - Flow: load into a Buffer, detect media kind, and build the correct payload:
   - **Images:** resize & recompress to JPEG (max side 2048px) targeting `agents.defaults.mediaMaxMb` (default 5 MB), capped at 6 MB.

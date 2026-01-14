@@ -53,12 +53,7 @@ const GROUP_LABELS: Record<string, string> = {
   ui: "UI",
   browser: "Browser",
   talk: "Talk",
-  telegram: "Telegram",
-  discord: "Discord",
-  slack: "Slack",
-  signal: "Signal",
-  imessage: "iMessage",
-  whatsapp: "WhatsApp",
+  channels: "Messaging Channels",
   skills: "Skills",
   plugins: "Plugins",
   discovery: "Discovery",
@@ -82,12 +77,7 @@ const GROUP_ORDER: Record<string, number> = {
   ui: 120,
   browser: 130,
   talk: 140,
-  telegram: 150,
-  discord: 160,
-  slack: 165,
-  signal: 170,
-  imessage: 180,
-  whatsapp: 190,
+  channels: 150,
   skills: 200,
   plugins: 205,
   discovery: 210,
@@ -107,6 +97,8 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.audio.transcription.args": "Audio Transcription Args",
   "tools.audio.transcription.timeoutSeconds":
     "Audio Transcription Timeout (sec)",
+  "tools.profile": "Tool Profile",
+  "agents.list[].tools.profile": "Agent Tool Profile",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "gateway.controlUi.basePath": "Control UI Base Path",
@@ -115,6 +107,7 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
+  "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
@@ -152,6 +145,8 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.cliBackends": "CLI Backends",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
+  "commands.bash": "Allow Bash Chat Command",
+  "commands.bashForegroundMs": "Bash Foreground Window (ms)",
   "commands.config": "Allow /config",
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
@@ -162,34 +157,41 @@ const FIELD_LABELS: Record<string, string> = {
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "talk.apiKey": "Talk API Key",
-  "telegram.botToken": "Telegram Bot Token",
-  "telegram.dmPolicy": "Telegram DM Policy",
-  "telegram.streamMode": "Telegram Draft Stream Mode",
-  "telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
-  "telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
-  "telegram.draftChunk.breakPreference":
+  "channels.whatsapp": "WhatsApp",
+  "channels.telegram": "Telegram",
+  "channels.discord": "Discord",
+  "channels.slack": "Slack",
+  "channels.signal": "Signal",
+  "channels.imessage": "iMessage",
+  "channels.msteams": "MS Teams",
+  "channels.telegram.botToken": "Telegram Bot Token",
+  "channels.telegram.dmPolicy": "Telegram DM Policy",
+  "channels.telegram.streamMode": "Telegram Draft Stream Mode",
+  "channels.telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
+  "channels.telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
+  "channels.telegram.draftChunk.breakPreference":
     "Telegram Draft Chunk Break Preference",
-  "telegram.retry.attempts": "Telegram Retry Attempts",
-  "telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
-  "telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
-  "telegram.retry.jitter": "Telegram Retry Jitter",
-  "whatsapp.dmPolicy": "WhatsApp DM Policy",
-  "whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
-  "signal.dmPolicy": "Signal DM Policy",
-  "imessage.dmPolicy": "iMessage DM Policy",
-  "discord.dm.policy": "Discord DM Policy",
-  "discord.retry.attempts": "Discord Retry Attempts",
-  "discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
-  "discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
-  "discord.retry.jitter": "Discord Retry Jitter",
-  "discord.maxLinesPerMessage": "Discord Max Lines Per Message",
-  "slack.dm.policy": "Slack DM Policy",
-  "slack.allowBots": "Slack Allow Bot Messages",
-  "discord.token": "Discord Bot Token",
-  "slack.botToken": "Slack Bot Token",
-  "slack.appToken": "Slack App Token",
-  "signal.account": "Signal Account",
-  "imessage.cliPath": "iMessage CLI Path",
+  "channels.telegram.retry.attempts": "Telegram Retry Attempts",
+  "channels.telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
+  "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
+  "channels.telegram.retry.jitter": "Telegram Retry Jitter",
+  "channels.whatsapp.dmPolicy": "WhatsApp DM Policy",
+  "channels.whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
+  "channels.signal.dmPolicy": "Signal DM Policy",
+  "channels.imessage.dmPolicy": "iMessage DM Policy",
+  "channels.discord.dm.policy": "Discord DM Policy",
+  "channels.discord.retry.attempts": "Discord Retry Attempts",
+  "channels.discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
+  "channels.discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
+  "channels.discord.retry.jitter": "Discord Retry Jitter",
+  "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
+  "channels.slack.dm.policy": "Slack DM Policy",
+  "channels.slack.allowBots": "Slack Allow Bot Messages",
+  "channels.discord.token": "Discord Bot Token",
+  "channels.slack.botToken": "Slack Bot Token",
+  "channels.slack.appToken": "Slack App Token",
+  "channels.signal.account": "Signal Account",
+  "channels.imessage.cliPath": "iMessage CLI Path",
   "plugins.enabled": "Enable Plugins",
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
@@ -220,7 +222,7 @@ const FIELD_HELP: Record<string, string> = {
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
-  "slack.allowBots":
+  "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order":
@@ -233,6 +235,8 @@ const FIELD_HELP: Record<string, string> = {
     "Cap (hours) for billing backoff (default: 24).",
   "auth.cooldowns.failureWindowHours":
     "Failure window (hours) for backoff counters (default: 24).",
+  "agents.defaults.bootstrapMaxChars":
+    "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.models":
     "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
@@ -282,8 +286,12 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.maxMs":
     "Maximum delay in ms for custom humanDelay (default: 2500).",
   "commands.native":
-    "Register native commands with connectors that support it (Discord/Slack/Telegram).",
+    "Register native commands with channels that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
+  "commands.bash":
+    "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
+  "commands.bashForegroundMs":
+    "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config":
     "Allow /config chat command to read/write config on disk (default: false).",
   "commands.debug":
@@ -292,11 +300,11 @@ const FIELD_HELP: Record<string, string> = {
     "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups":
     "Enforce access-group allowlists/policies for commands.",
-  "discord.commands.native":
+  "channels.discord.commands.native":
     'Override native commands for Discord (bool or "auto").',
-  "telegram.commands.native":
+  "channels.telegram.commands.native":
     'Override native commands for Telegram (bool or "auto").',
-  "slack.commands.native":
+  "channels.slack.commands.native":
     'Override native commands for Slack (bool or "auto").',
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
@@ -304,46 +312,46 @@ const FIELD_HELP: Record<string, string> = {
     "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
-  "telegram.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
-  "telegram.streamMode":
+  "channels.telegram.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  "channels.telegram.streamMode":
     "Draft streaming mode for Telegram replies (off | partial | block). Separate from block streaming; requires private topics + sendMessageDraft.",
-  "telegram.draftChunk.minChars":
-    'Minimum chars before emitting a Telegram draft update when telegram.streamMode="block" (default: 200).',
-  "telegram.draftChunk.maxChars":
-    'Target max size for a Telegram draft update chunk when telegram.streamMode="block" (default: 800; clamped to telegram.textChunkLimit).',
-  "telegram.draftChunk.breakPreference":
+  "channels.telegram.draftChunk.minChars":
+    'Minimum chars before emitting a Telegram draft update when channels.telegram.streamMode="block" (default: 200).',
+  "channels.telegram.draftChunk.maxChars":
+    'Target max size for a Telegram draft update chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
+  "channels.telegram.draftChunk.breakPreference":
     "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
-  "telegram.retry.attempts":
+  "channels.telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
-  "telegram.retry.minDelayMs":
+  "channels.telegram.retry.minDelayMs":
     "Minimum retry delay in ms for Telegram outbound calls.",
-  "telegram.retry.maxDelayMs":
+  "channels.telegram.retry.maxDelayMs":
     "Maximum retry delay cap in ms for Telegram outbound calls.",
-  "telegram.retry.jitter":
+  "channels.telegram.retry.jitter":
     "Jitter factor (0-1) applied to Telegram retry delays.",
-  "whatsapp.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
-  "whatsapp.selfChatMode":
+  "channels.whatsapp.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+  "channels.whatsapp.selfChatMode":
     "Same-phone setup (bot uses your personal WhatsApp number).",
-  "signal.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires signal.allowFrom=["*"].',
-  "imessage.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires imessage.allowFrom=["*"].',
-  "discord.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires discord.dm.allowFrom=["*"].',
-  "discord.retry.attempts":
+  "channels.signal.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
+  "channels.imessage.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+  "channels.discord.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
+  "channels.discord.retry.attempts":
     "Max retry attempts for outbound Discord API calls (default: 3).",
-  "discord.retry.minDelayMs":
+  "channels.discord.retry.minDelayMs":
     "Minimum retry delay in ms for Discord outbound calls.",
-  "discord.retry.maxDelayMs":
+  "channels.discord.retry.maxDelayMs":
     "Maximum retry delay cap in ms for Discord outbound calls.",
-  "discord.retry.jitter":
+  "channels.discord.retry.jitter":
     "Jitter factor (0-1) applied to Discord retry delays.",
-  "discord.maxLinesPerMessage":
+  "channels.discord.maxLinesPerMessage":
     "Soft max line count per Discord message (default: 17).",
-  "slack.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
+  "channels.slack.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

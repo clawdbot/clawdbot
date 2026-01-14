@@ -32,7 +32,7 @@ Example hook config (enable Gmail preset mapping):
 ```
 
 To deliver the Gmail summary to a chat surface, override the preset with a mapping
-that sets `deliver` + optional `provider`/`to`:
+that sets `deliver` + optional `channel`/`to`:
 
 ```json5
 {
@@ -51,7 +51,7 @@ that sets `deliver` + optional `provider`/`to`:
           "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
         model: "openai/gpt-5.2-mini",
         deliver: true,
-        provider: "last"
+        channel: "last"
         // to: "+15551234567"
       }
     ]
@@ -59,7 +59,7 @@ that sets `deliver` + optional `provider`/`to`:
 }
 ```
 
-If you want a fixed channel, set `provider` + `to`. Otherwise `provider: "last"`
+If you want a fixed channel, set `channel` + `to`. Otherwise `channel: "last"`
 uses the last delivery route (falls back to WhatsApp).
 
 To force a cheaper model for Gmail runs, set `model` in the mapping

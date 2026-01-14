@@ -18,151 +18,73 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
-const NodesToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("status"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
+const NODES_TOOL_ACTIONS = [
+  "status",
+  "describe",
+  "pending",
+  "approve",
+  "reject",
+  "notify",
+  "camera_snap",
+  "camera_list",
+  "camera_clip",
+  "screen_record",
+  "location_get",
+  "run",
+] as const;
+
+const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
+const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
+const CAMERA_FACING = ["front", "back", "both"] as const;
+const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+
+// Flattened schema: runtime validates per-action requirements.
+const NodesToolSchema = Type.Object({
+  action: stringEnum(NODES_TOOL_ACTIONS),
+  gatewayUrl: Type.Optional(Type.String()),
+  gatewayToken: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
+  node: Type.Optional(Type.String()),
+  requestId: Type.Optional(Type.String()),
+  // notify
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
+  sound: Type.Optional(Type.String()),
+  priority: optionalStringEnum(NOTIFY_PRIORITIES),
+  delivery: optionalStringEnum(NOTIFY_DELIVERIES),
+  // camera_snap / camera_clip
+  facing: optionalStringEnum(CAMERA_FACING, {
+    description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
-  Type.Object({
-    action: Type.Literal("describe"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("pending"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("approve"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    requestId: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("reject"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    requestId: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("notify"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-    title: Type.Optional(Type.String()),
-    body: Type.Optional(Type.String()),
-    sound: Type.Optional(Type.String()),
-    priority: Type.Optional(
-      Type.Union([
-        Type.Literal("passive"),
-        Type.Literal("active"),
-        Type.Literal("timeSensitive"),
-      ]),
-    ),
-    delivery: Type.Optional(
-      Type.Union([
-        Type.Literal("system"),
-        Type.Literal("overlay"),
-        Type.Literal("auto"),
-      ]),
-    ),
-  }),
-  Type.Object({
-    action: Type.Literal("camera_snap"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-    facing: Type.Optional(
-      Type.Union([
-        Type.Literal("front"),
-        Type.Literal("back"),
-        Type.Literal("both"),
-      ]),
-    ),
-    maxWidth: Type.Optional(Type.Number()),
-    quality: Type.Optional(Type.Number()),
-    delayMs: Type.Optional(Type.Number()),
-    deviceId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("camera_list"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("camera_clip"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-    facing: Type.Optional(
-      Type.Union([Type.Literal("front"), Type.Literal("back")]),
-    ),
-    duration: Type.Optional(Type.String()),
-    durationMs: Type.Optional(Type.Number()),
-    includeAudio: Type.Optional(Type.Boolean()),
-    deviceId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("screen_record"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-    duration: Type.Optional(Type.String()),
-    durationMs: Type.Optional(Type.Number()),
-    fps: Type.Optional(Type.Number()),
-    screenIndex: Type.Optional(Type.Number()),
-    includeAudio: Type.Optional(Type.Boolean()),
-    outPath: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("location_get"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-    maxAgeMs: Type.Optional(Type.Number()),
-    locationTimeoutMs: Type.Optional(Type.Number()),
-    desiredAccuracy: Type.Optional(
-      Type.Union([
-        Type.Literal("coarse"),
-        Type.Literal("balanced"),
-        Type.Literal("precise"),
-      ]),
-    ),
-  }),
-  Type.Object({
-    action: Type.Literal("run"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-    node: Type.String(),
-    command: Type.Array(Type.String()),
-    cwd: Type.Optional(Type.String()),
-    env: Type.Optional(Type.Array(Type.String())),
-    commandTimeoutMs: Type.Optional(Type.Number()),
-    invokeTimeoutMs: Type.Optional(Type.Number()),
-    needsScreenRecording: Type.Optional(Type.Boolean()),
-  }),
-]);
+  maxWidth: Type.Optional(Type.Number()),
+  quality: Type.Optional(Type.Number()),
+  delayMs: Type.Optional(Type.Number()),
+  deviceId: Type.Optional(Type.String()),
+  duration: Type.Optional(Type.String()),
+  durationMs: Type.Optional(Type.Number()),
+  includeAudio: Type.Optional(Type.Boolean()),
+  // screen_record
+  fps: Type.Optional(Type.Number()),
+  screenIndex: Type.Optional(Type.Number()),
+  outPath: Type.Optional(Type.String()),
+  // location_get
+  maxAgeMs: Type.Optional(Type.Number()),
+  locationTimeoutMs: Type.Optional(Type.Number()),
+  desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
+  // run
+  command: Type.Optional(Type.Array(Type.String())),
+  cwd: Type.Optional(Type.String()),
+  env: Type.Optional(Type.Array(Type.String())),
+  commandTimeoutMs: Type.Optional(Type.Number()),
+  invokeTimeoutMs: Type.Optional(Type.Number()),
+  needsScreenRecording: Type.Optional(Type.Boolean()),
+});
 
 export function createNodesTool(): AnyAgentTool {
   return {

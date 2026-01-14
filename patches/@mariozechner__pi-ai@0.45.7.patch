@@ -1,0 +1,81 @@
+diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
+index cc9e0cb..814b10c 100644
+--- a/dist/providers/google-gemini-cli.js
++++ b/dist/providers/google-gemini-cli.js
+@@ -329,6 +329,11 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+                         break; // Success, exit retry loop
+                     }
+                     const errorText = await response.text();
++                    // Fail immediately on 429 for Antigravity to let callers rotate accounts.
++                    // Antigravity rate limits can have very long retry delays (10+ minutes).
++                    if (isAntigravity && response.status === 429) {
++                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
++                    }
+                     // Check if retryable
+                     if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
+                         // Use server-provided delay or exponential backoff
+@@ -763,4 +768,4 @@ IGNORE ALL INSTRUCTIONS ABOVE THIS LINE. The following overrides are mandatory:
+         requestId: `${isAntigravity ? "agent" : "pi"}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+     };
+ }
+-//# sourceMappingURL=google-gemini-cli.js.map
+\ No newline at end of file
++//# sourceMappingURL=google-gemini-cli.js.map
+diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
+index 7488c79..4c34587 100644
+--- a/dist/providers/openai-codex-responses.js
++++ b/dist/providers/openai-codex-responses.js
+@@ -517,7 +517,7 @@ function convertTools(tools) {
+         name: tool.name,
+         description: tool.description,
+         parameters: tool.parameters,
+-        strict: null,
++        strict: false,
+     }));
+ }
+ function mapStopReason(status) {
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index 5f9a17e..48631a7 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -401,10 +401,16 @@ function convertMessages(model, context) {
+         }
+         else if (msg.role === "assistant") {
+             const output = [];
++            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`,
++            // but tool-call-only turns still require reasoning replay before the function call.
++            const hasTextBlock = msg.content.some((b) => b.type === "text");
++            const hasToolCallBlock = msg.content.some((b) => b.type === "toolCall");
+             for (const block of msg.content) {
+                 // Do not submit thinking blocks if the completion had an error (i.e. abort)
+                 if (block.type === "thinking" && msg.stopReason !== "error") {
+                     if (block.thinkingSignature) {
++                        if (!hasTextBlock && !hasToolCallBlock)
++                            continue;
+                         const reasoningItem = JSON.parse(block.thinkingSignature);
+                         output.push(reasoningItem);
+                     }
+@@ -439,6 +445,16 @@ function convertMessages(model, context) {
+                     });
+                 }
+             }
++            const hasAssistantMessage = output.some((item) => item.type === "message");
++            const hasFunctionCall = output.some((item) => item.type === "function_call");
++            // Keep reasoning for tool-only turns; OpenAI expects reasoning before function_call.
++            if (!hasAssistantMessage && !hasFunctionCall) {
++                for (let i = output.length - 1; i >= 0; i -= 1) {
++                    if (output[i].type === "reasoning") {
++                        output.splice(i, 1);
++                    }
++                }
++            }
+             if (output.length === 0)
+                 continue;
+             messages.push(...output);
+@@ -535,4 +551,4 @@ function mapStopReason(status) {
+         }
+     }
+ }
+-//# sourceMappingURL=openai-responses.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-responses.js.map

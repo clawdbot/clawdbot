@@ -1,6 +1,6 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.11-4",
+  "version": "2026.1.14",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,7 @@
     "dist/config/**",
     "dist/control-ui/**",
     "dist/cron/**",
+    "dist/channels/**",
     "dist/daemon/**",
     "dist/discord/**",
     "dist/gateway/**",
@@ -50,6 +51,7 @@
     "dist/routing/**",
     "dist/utils/**",
     "dist/logging/**",
+    "dist/memory/**",
     "dist/markdown/**",
     "dist/pairing/**",
     "dist/whatsapp/**"
@@ -69,8 +71,8 @@
     "start": "tsx src/entry.ts",
     "clawdbot": "tsx src/entry.ts",
     "gateway:watch": "tsx watch src/entry.ts gateway --force",
-    "gateway:dev": "CLAWDBOT_PROFILE=dev tsx src/entry.ts gateway --dev",
-    "gateway:dev:reset": "CLAWDBOT_PROFILE=dev tsx src/entry.ts gateway --reset",
+    "gateway:dev": "tsx src/entry.ts --dev gateway",
+    "gateway:dev:reset": "tsx src/entry.ts --dev gateway --reset",
     "tui": "tsx src/entry.ts tui",
     "tui:dev": "CLAWDBOT_PROFILE=dev tsx src/entry.ts tui",
     "clawdbot:rpc": "tsx src/entry.ts agent --mode rpc --json",
@@ -117,7 +119,8 @@
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
-    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh"
+    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
+    "check:loc": "tsx scripts/check-ts-max-loc.ts --max 500"
   },
   "keywords": [],
   "author": "",
@@ -132,10 +135,10 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
-    "@mariozechner/pi-agent-core": "^0.43.0",
-    "@mariozechner/pi-ai": "^0.43.0",
-    "@mariozechner/pi-coding-agent": "^0.43.0",
-    "@mariozechner/pi-tui": "^0.43.0",
+    "@mariozechner/pi-agent-core": "^0.45.3",
+    "@mariozechner/pi-ai": "0.45.7",
+    "@mariozechner/pi-coding-agent": "^0.45.3",
+    "@mariozechner/pi-tui": "^0.45.3",
     "@microsoft/agents-hosting": "^1.1.1",
     "@microsoft/agents-hosting-express": "^1.1.1",
     "@microsoft/agents-hosting-extensions-teams": "^1.1.1",
@@ -207,7 +210,7 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-ai@0.43.0": "patches/@mariozechner__pi-ai@0.43.0.patch"
+      "@mariozechner/pi-ai@0.45.7": "patches/@mariozechner__pi-ai@0.45.7.patch"
     }
   },
   "vitest": {

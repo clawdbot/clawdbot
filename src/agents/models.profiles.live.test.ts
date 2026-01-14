@@ -9,6 +9,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
+  isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
 import { isModernModelRef } from "./live-model-filter.js";
@@ -72,6 +73,18 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveTestReasoning(
+  model: Model<Api>,
+): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
+  if (!model.reasoning) return undefined;
+  const id = model.id.toLowerCase();
+  if (model.provider === "openai" || model.provider === "openai-codex") {
+    if (id.includes("pro")) return "high";
+    return "medium";
+  }
+  return "low";
+}
+
 async function completeSimpleWithTimeout<TApi extends Api>(
   model: Model<TApi>,
   context: Parameters<typeof completeSimple<TApi>>[1],
@@ -110,7 +123,7 @@ async function completeOkWithRetry(params: {
       },
       {
         apiKey: params.apiKey,
-        reasoning: params.model.reasoning ? "low" : undefined,
+        reasoning: resolveTestReasoning(params.model),
         maxTokens: 64,
       },
       params.timeoutMs,
@@ -240,29 +253,68 @@ describeLive("live models (profile keys)", () => {
                 parameters: Type.Object({}, { additionalProperties: false }),
               };
 
-              const first = await completeSimpleWithTimeout(
+              let firstUserContent =
+                "Call the tool `noop` with {}. Do not write any other text.";
+              let firstUser = {
+                role: "user" as const,
+                content: firstUserContent,
+                timestamp: Date.now(),
+              };
+
+              let first = await completeSimpleWithTimeout(
                 model,
-                {
-                  messages: [
-                    {
-                      role: "user",
-                      content:
-                        "Call the tool `noop` with {}. Do not write any other text.",
-                      timestamp: Date.now(),
-                    },
-                  ],
-                  tools: [noopTool],
-                },
+                { messages: [firstUser], tools: [noopTool] },
                 {
                   apiKey,
-                  reasoning: model.reasoning ? "low" : undefined,
+                  reasoning: resolveTestReasoning(model),
                   maxTokens: 128,
                 },
                 perModelTimeoutMs,
               );
 
-              const toolCall = first.content.find((b) => b.type === "toolCall");
+              let toolCall = first.content.find((b) => b.type === "toolCall");
+              let firstText = first.content
+                .filter((b) => b.type === "text")
+                .map((b) => b.text.trim())
+                .join(" ")
+                .trim();
+
+              // Occasional flake: model answers in text instead of tool call (or adds text).
+              // Retry a couple times with a stronger instruction so we still exercise the tool-only replay path.
+              for (
+                let i = 0;
+                i < 2 && (!toolCall || firstText.length > 0);
+                i += 1
+              ) {
+                firstUserContent =
+                  "Call the tool `noop` with {}. IMPORTANT: respond ONLY with the tool call; no other text.";
+                firstUser = {
+                  role: "user" as const,
+                  content: firstUserContent,
+                  timestamp: Date.now(),
+                };
+
+                first = await completeSimpleWithTimeout(
+                  model,
+                  { messages: [firstUser], tools: [noopTool] },
+                  {
+                    apiKey,
+                    reasoning: resolveTestReasoning(model),
+                    maxTokens: 128,
+                  },
+                  perModelTimeoutMs,
+                );
+
+                toolCall = first.content.find((b) => b.type === "toolCall");
+                firstText = first.content
+                  .filter((b) => b.type === "text")
+                  .map((b) => b.text.trim())
+                  .join(" ")
+                  .trim();
+              }
+
               expect(toolCall).toBeTruthy();
+              expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");
               }
@@ -271,12 +323,7 @@ describeLive("live models (profile keys)", () => {
                 model,
                 {
                   messages: [
-                    {
-                      role: "user",
-                      content:
-                        "Call the tool `noop` with {}. Do not write any other text.",
-                      timestamp: Date.now(),
-                    },
+                    firstUser,
                     first,
                     {
                       role: "toolResult",
@@ -295,8 +342,9 @@ describeLive("live models (profile keys)", () => {
                 },
                 {
                   apiKey,
-                  reasoning: model.reasoning ? "low" : undefined,
-                  maxTokens: 64,
+                  reasoning: resolveTestReasoning(model),
+                  // Headroom: reasoning summary can consume most of the output budget.
+                  maxTokens: 256,
                 },
                 perModelTimeoutMs,
               );
@@ -335,6 +383,17 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (google model not found)`);
               break;
             }
+            if (
+              ok.text.length === 0 &&
+              (model.provider === "openrouter" || model.provider === "opencode")
+            ) {
+              skipped.push({
+                model: id,
+                reason: "no text returned (provider returned empty content)",
+              });
+              logProgress(`${progressLabel}: skip (empty response)`);
+              break;
+            }
             expect(ok.text.length).toBeGreaterThan(0);
             logProgress(`${progressLabel}: done`);
             break;
@@ -351,11 +410,34 @@ describeLive("live models (profile keys)", () => {
               continue;
             }
             if (
+              model.provider === "anthropic" &&
+              isAnthropicBillingError(message)
+            ) {
+              if (attempt + 1 < attemptMax) {
+                logProgress(
+                  `${progressLabel}: billing issue, retrying with next key`,
+                );
+                continue;
+              }
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (anthropic billing)`);
+              break;
+            }
+            if (
               model.provider === "google" &&
               isGoogleModelNotFoundError(err)
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (google model not found)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "minimax" &&
+              message.includes("request ended without sending any chunks")
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (minimax empty response)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

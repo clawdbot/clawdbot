@@ -8,11 +8,11 @@ export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
 }
 
-export type Provider = "web";
+export type WebChannel = "web";
 
-export function assertProvider(input: string): asserts input is Provider {
+export function assertWebChannel(input: string): asserts input is WebChannel {
   if (input !== "web") {
-    throw new Error("Provider must be 'web'");
+    throw new Error("Web channel must be 'web'");
   }
 }
 
@@ -34,7 +34,7 @@ export function normalizeE164(number: string): string {
 
 /**
  * "Self-chat mode" heuristic (single phone): the gateway is logged in as the owner's own WhatsApp account,
- * and `whatsapp.allowFrom` includes that same number. Used to avoid side-effects that make no sense when the
+ * and `channels.whatsapp.allowFrom` includes that same number. Used to avoid side-effects that make no sense when the
  * "bot" and the human are the same WhatsApp identity (e.g. auto read receipts, @mention JID triggers).
  */
 export function isSelfChatMode(

@@ -42,8 +42,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Security & permissions
 
-- The bridge validates **caller code signatures**; TeamID `Y5PE65HELJ` is
-  allowed by default (Peekaboo’s signing team), plus the Clawdbot app’s TeamID.
+- The bridge validates **caller code signatures**; an allowlist of TeamIDs is
+  enforced (Peekaboo host TeamID + Clawdbot app TeamID).
 - Requests time out after ~10 seconds.
 - If required permissions are missing, the bridge returns a clear error message
   rather than launching System Settings.

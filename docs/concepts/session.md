@@ -18,7 +18,7 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
   - Store file: `~/.clawdbot/agents/<agentId>/sessions/sessions.json` (per agent).
 - Transcripts: `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl` (Telegram topic sessions use `.../<SessionId>-topic-<threadId>.jsonl`).
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
-- Group entries may include `displayName`, `provider`, `subject`, `room`, and `space` to label sessions in UIs.
+- Group entries may include `displayName`, `channel`, `subject`, `room`, and `space` to label sessions in UIs.
 - Clawdbot does **not** read legacy Pi/Tau session folders.
 
 ## Session pruning
@@ -33,11 +33,11 @@ the workspace is writable. See [Memory](/concepts/memory) and
 
 ## Mapping transports → session keys
 - Direct chats collapse to the per-agent primary key: `agent:<agentId>:<mainKey>`.
-  - Multiple phone numbers and providers can map to the same agent main key; they act as transports into one conversation.
-- Group chats isolate state: `agent:<agentId>:<provider>:group:<id>` (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
+  - Multiple phone numbers and channels can map to the same agent main key; they act as transports into one conversation.
+- Group chats isolate state: `agent:<agentId>:<channel>:group:<id>` (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
   - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
   - Legacy `group:<id>` keys are still recognized for migration.
-  - Inbound contexts may still use `group:<id>`; the provider is inferred from `Provider` and normalized to the canonical `agent:<agentId>:<provider>:group:<id>` form.
+- Inbound contexts may still use `group:<id>`; the channel is inferred from `Provider` and normalized to the canonical `agent:<agentId>:<channel>:group:<id>` form.
 - Other sources:
   - Cron jobs: `cron:<job.id>`
   - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)
@@ -56,7 +56,7 @@ Block delivery for specific session types without listing individual ids.
   session: {
     sendPolicy: {
       rules: [
-        { action: "deny", match: { provider: "discord", chatType: "group" } },
+        { action: "deny", match: { channel: "discord", chatType: "group" } },
         { action: "deny", match: { keyPrefix: "cron:" } }
       ],
       default: "allow"

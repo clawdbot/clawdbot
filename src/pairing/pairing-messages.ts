@@ -1,11 +1,11 @@
-import type { PairingProvider } from "./pairing-store.js";
+import type { PairingChannel } from "./pairing-store.js";
 
 export function buildPairingReply(params: {
-  provider: PairingProvider;
+  channel: PairingChannel;
   idLine: string;
   code: string;
 }): string {
-  const { provider, idLine, code } = params;
+  const { channel, idLine, code } = params;
   return [
     "Clawdbot: access not configured.",
     "",
@@ -14,6 +14,6 @@ export function buildPairingReply(params: {
     `Pairing code: ${code}`,
     "",
     "Ask the bot owner to approve with:",
-    `clawdbot pairing approve ${provider} <code>`,
+    `clawdbot pairing approve ${channel} <code>`,
   ].join("\n");
 }

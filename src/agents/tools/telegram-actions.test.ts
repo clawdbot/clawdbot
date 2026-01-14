@@ -34,7 +34,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("adds reactions", async () => {
-    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -53,7 +55,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("removes reactions on empty emoji", async () => {
-    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -72,7 +76,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("removes reactions when remove flag set", async () => {
-    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -93,7 +99,9 @@ describe("handleTelegramAction", () => {
 
   it("respects reaction gating", async () => {
     const cfg = {
-      telegram: { botToken: "tok", actions: { reactions: false } },
+      channels: {
+        telegram: { botToken: "tok", actions: { reactions: false } },
+      },
     } as ClawdbotConfig;
     await expect(
       handleTelegramAction(
@@ -109,7 +117,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("sends a text message", async () => {
-    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
     const result = await handleTelegramAction(
       {
         action: "sendMessage",
@@ -130,7 +140,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("sends a message with media", async () => {
-    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -152,7 +164,9 @@ describe("handleTelegramAction", () => {
 
   it("respects sendMessage gating", async () => {
     const cfg = {
-      telegram: { botToken: "tok", actions: { sendMessage: false } },
+      channels: {
+        telegram: { botToken: "tok", actions: { sendMessage: false } },
+      },
     } as ClawdbotConfig;
     await expect(
       handleTelegramAction(
@@ -182,7 +196,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("requires inlineButtons capability when buttons are provided", async () => {
-    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -198,7 +214,9 @@ describe("handleTelegramAction", () => {
 
   it("sends messages with inline keyboard buttons when enabled", async () => {
     const cfg = {
-      telegram: { botToken: "tok", capabilities: ["inlineButtons"] },
+      channels: {
+        telegram: { botToken: "tok", capabilities: ["inlineButtons"] },
+      },
     } as ClawdbotConfig;
     await handleTelegramAction(
       {

@@ -1,6 +1,6 @@
 import {
-  resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentModelPrimary,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
@@ -37,6 +37,11 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
+import {
+  formatThinkingLevels,
+  formatXHighModelHint,
+  supportsXHighThinking,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type ElevatedLevel,
@@ -350,6 +355,7 @@ const MODEL_PICK_PROVIDER_PREFERENCE = [
   "openai",
   "openai-codex",
   "minimax",
+  "synthetic",
   "google",
   "zai",
   "openrouter",
@@ -777,6 +783,7 @@ export async function handleDirectiveOnly(params: {
     allowedModelCatalog,
     resetModelOverride,
     provider,
+    model,
     initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
@@ -942,161 +949,6 @@ export async function handleDirectiveOnly(params: {
     }
   }
 
-  if (directives.hasThinkDirective && !directives.thinkLevel) {
-    // If no argument was provided, show the current level
-    if (!directives.rawThinkLevel) {
-      const level = currentThinkLevel ?? "off";
-      return {
-        text: withOptions(
-          `Current thinking level: ${level}.`,
-          "off, minimal, low, medium, high",
-        ),
-      };
-    }
-    return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: off, minimal, low, medium, high.`,
-    };
-  }
-  if (directives.hasVerboseDirective && !directives.verboseLevel) {
-    if (!directives.rawVerboseLevel) {
-      const level = currentVerboseLevel ?? "off";
-      return {
-        text: withOptions(`Current verbose level: ${level}.`, "on, off"),
-      };
-    }
-    return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on.`,
-    };
-  }
-  if (directives.hasReasoningDirective && !directives.reasoningLevel) {
-    if (!directives.rawReasoningLevel) {
-      const level = currentReasoningLevel ?? "off";
-      return {
-        text: withOptions(
-          `Current reasoning level: ${level}.`,
-          "on, off, stream",
-        ),
-      };
-    }
-    return {
-      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
-    };
-  }
-  if (directives.hasElevatedDirective && !directives.elevatedLevel) {
-    if (!directives.rawElevatedLevel) {
-      if (!elevatedEnabled || !elevatedAllowed) {
-        return {
-          text: formatElevatedUnavailableText({
-            runtimeSandboxed: runtimeIsSandboxed,
-            failures: params.elevatedFailures,
-            sessionKey: params.sessionKey,
-          }),
-        };
-      }
-      const level = currentElevatedLevel ?? "off";
-      return {
-        text: [
-          withOptions(`Current elevated level: ${level}.`, "on, off"),
-          shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      };
-    }
-    return {
-      text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on.`,
-    };
-  }
-  if (
-    directives.hasElevatedDirective &&
-    (!elevatedEnabled || !elevatedAllowed)
-  ) {
-    return {
-      text: formatElevatedUnavailableText({
-        runtimeSandboxed: runtimeIsSandboxed,
-        failures: params.elevatedFailures,
-        sessionKey: params.sessionKey,
-      }),
-    };
-  }
-
-  if (
-    directives.hasQueueDirective &&
-    !directives.queueMode &&
-    !directives.queueReset &&
-    !directives.hasQueueOptions &&
-    directives.rawQueueMode === undefined &&
-    directives.rawDebounce === undefined &&
-    directives.rawCap === undefined &&
-    directives.rawDrop === undefined
-  ) {
-    const settings = resolveQueueSettings({
-      cfg: params.cfg,
-      provider,
-      sessionEntry,
-    });
-    const debounceLabel =
-      typeof settings.debounceMs === "number"
-        ? `${settings.debounceMs}ms`
-        : "default";
-    const capLabel =
-      typeof settings.cap === "number" ? String(settings.cap) : "default";
-    const dropLabel = settings.dropPolicy ?? "default";
-    return {
-      text: withOptions(
-        `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
-        "modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize",
-      ),
-    };
-  }
-
-  const queueModeInvalid =
-    directives.hasQueueDirective &&
-    !directives.queueMode &&
-    !directives.queueReset &&
-    Boolean(directives.rawQueueMode);
-  const queueDebounceInvalid =
-    directives.hasQueueDirective &&
-    directives.rawDebounce !== undefined &&
-    typeof directives.debounceMs !== "number";
-  const queueCapInvalid =
-    directives.hasQueueDirective &&
-    directives.rawCap !== undefined &&
-    typeof directives.cap !== "number";
-  const queueDropInvalid =
-    directives.hasQueueDirective &&
-    directives.rawDrop !== undefined &&
-    !directives.dropPolicy;
-  if (
-    queueModeInvalid ||
-    queueDebounceInvalid ||
-    queueCapInvalid ||
-    queueDropInvalid
-  ) {
-    const errors: string[] = [];
-    if (queueModeInvalid) {
-      errors.push(
-        `Unrecognized queue mode "${directives.rawQueueMode ?? ""}". Valid modes: steer, followup, collect, steer+backlog, interrupt.`,
-      );
-    }
-    if (queueDebounceInvalid) {
-      errors.push(
-        `Invalid debounce "${directives.rawDebounce ?? ""}". Use ms/s/m (e.g. debounce:1500ms, debounce:2s).`,
-      );
-    }
-    if (queueCapInvalid) {
-      errors.push(
-        `Invalid cap "${directives.rawCap ?? ""}". Use a positive integer (e.g. cap:10).`,
-      );
-    }
-    if (queueDropInvalid) {
-      errors.push(
-        `Invalid drop policy "${directives.rawDrop ?? ""}". Use drop:old, drop:new, or drop:summarize.`,
-      );
-    }
-    return { text: errors.join(" ") };
-  }
-
   let modelSelection: ModelDirectiveSelection | undefined;
   let profileOverride: string | undefined;
   if (directives.hasModelDirective && directives.rawModelDirective) {
@@ -1188,34 +1040,199 @@ export async function handleDirectiveOnly(params: {
       }
       modelSelection = resolved.selection;
     }
-    if (modelSelection) {
-      if (directives.rawModelProfile) {
-        const profileResolved = resolveProfileOverride({
-          rawProfile: directives.rawModelProfile,
-          provider: modelSelection.provider,
-          cfg: params.cfg,
-          agentDir,
-        });
-        if (profileResolved.error) {
-          return { text: profileResolved.error };
-        }
-        profileOverride = profileResolved.profileId;
+    if (modelSelection && directives.rawModelProfile) {
+      const profileResolved = resolveProfileOverride({
+        rawProfile: directives.rawModelProfile,
+        provider: modelSelection.provider,
+        cfg: params.cfg,
+        agentDir,
+      });
+      if (profileResolved.error) {
+        return { text: profileResolved.error };
       }
-      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
-      if (nextLabel !== initialModelLabel) {
-        enqueueSystemEvent(
-          formatModelSwitchEvent(nextLabel, modelSelection.alias),
-          {
-            sessionKey,
-            contextKey: `model:${nextLabel}`,
-          },
-        );
-      }
+      profileOverride = profileResolved.profileId;
     }
   }
   if (directives.rawModelProfile && !modelSelection) {
     return { text: "Auth profile override requires a model selection." };
   }
+
+  const resolvedProvider = modelSelection?.provider ?? provider;
+  const resolvedModel = modelSelection?.model ?? model;
+
+  if (directives.hasThinkDirective && !directives.thinkLevel) {
+    // If no argument was provided, show the current level
+    if (!directives.rawThinkLevel) {
+      const level = currentThinkLevel ?? "off";
+      return {
+        text: withOptions(
+          `Current thinking level: ${level}.`,
+          formatThinkingLevels(resolvedProvider, resolvedModel),
+        ),
+      };
+    }
+    return {
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+    };
+  }
+  if (directives.hasVerboseDirective && !directives.verboseLevel) {
+    if (!directives.rawVerboseLevel) {
+      const level = currentVerboseLevel ?? "off";
+      return {
+        text: withOptions(`Current verbose level: ${level}.`, "on, off"),
+      };
+    }
+    return {
+      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on.`,
+    };
+  }
+  if (directives.hasReasoningDirective && !directives.reasoningLevel) {
+    if (!directives.rawReasoningLevel) {
+      const level = currentReasoningLevel ?? "off";
+      return {
+        text: withOptions(
+          `Current reasoning level: ${level}.`,
+          "on, off, stream",
+        ),
+      };
+    }
+    return {
+      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
+    };
+  }
+  if (directives.hasElevatedDirective && !directives.elevatedLevel) {
+    if (!directives.rawElevatedLevel) {
+      if (!elevatedEnabled || !elevatedAllowed) {
+        return {
+          text: formatElevatedUnavailableText({
+            runtimeSandboxed: runtimeIsSandboxed,
+            failures: params.elevatedFailures,
+            sessionKey: params.sessionKey,
+          }),
+        };
+      }
+      const level = currentElevatedLevel ?? "off";
+      return {
+        text: [
+          withOptions(`Current elevated level: ${level}.`, "on, off"),
+          shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      };
+    }
+    return {
+      text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on.`,
+    };
+  }
+  if (
+    directives.hasElevatedDirective &&
+    (!elevatedEnabled || !elevatedAllowed)
+  ) {
+    return {
+      text: formatElevatedUnavailableText({
+        runtimeSandboxed: runtimeIsSandboxed,
+        failures: params.elevatedFailures,
+        sessionKey: params.sessionKey,
+      }),
+    };
+  }
+
+  if (
+    directives.hasQueueDirective &&
+    !directives.queueMode &&
+    !directives.queueReset &&
+    !directives.hasQueueOptions &&
+    directives.rawQueueMode === undefined &&
+    directives.rawDebounce === undefined &&
+    directives.rawCap === undefined &&
+    directives.rawDrop === undefined
+  ) {
+    const settings = resolveQueueSettings({
+      cfg: params.cfg,
+      channel: provider,
+      sessionEntry,
+    });
+    const debounceLabel =
+      typeof settings.debounceMs === "number"
+        ? `${settings.debounceMs}ms`
+        : "default";
+    const capLabel =
+      typeof settings.cap === "number" ? String(settings.cap) : "default";
+    const dropLabel = settings.dropPolicy ?? "default";
+    return {
+      text: withOptions(
+        `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
+        "modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize",
+      ),
+    };
+  }
+
+  const queueModeInvalid =
+    directives.hasQueueDirective &&
+    !directives.queueMode &&
+    !directives.queueReset &&
+    Boolean(directives.rawQueueMode);
+  const queueDebounceInvalid =
+    directives.hasQueueDirective &&
+    directives.rawDebounce !== undefined &&
+    typeof directives.debounceMs !== "number";
+  const queueCapInvalid =
+    directives.hasQueueDirective &&
+    directives.rawCap !== undefined &&
+    typeof directives.cap !== "number";
+  const queueDropInvalid =
+    directives.hasQueueDirective &&
+    directives.rawDrop !== undefined &&
+    !directives.dropPolicy;
+  if (
+    queueModeInvalid ||
+    queueDebounceInvalid ||
+    queueCapInvalid ||
+    queueDropInvalid
+  ) {
+    const errors: string[] = [];
+    if (queueModeInvalid) {
+      errors.push(
+        `Unrecognized queue mode "${directives.rawQueueMode ?? ""}". Valid modes: steer, followup, collect, steer+backlog, interrupt.`,
+      );
+    }
+    if (queueDebounceInvalid) {
+      errors.push(
+        `Invalid debounce "${directives.rawDebounce ?? ""}". Use ms/s/m (e.g. debounce:1500ms, debounce:2s).`,
+      );
+    }
+    if (queueCapInvalid) {
+      errors.push(
+        `Invalid cap "${directives.rawCap ?? ""}". Use a positive integer (e.g. cap:10).`,
+      );
+    }
+    if (queueDropInvalid) {
+      errors.push(
+        `Invalid drop policy "${directives.rawDrop ?? ""}". Use drop:old, drop:new, or drop:summarize.`,
+      );
+    }
+    return { text: errors.join(" ") };
+  }
+
+  if (
+    directives.hasThinkDirective &&
+    directives.thinkLevel === "xhigh" &&
+    !supportsXHighThinking(resolvedProvider, resolvedModel)
+  ) {
+    return {
+      text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+    };
+  }
+
+  const nextThinkLevel = directives.hasThinkDirective
+    ? directives.thinkLevel
+    : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      currentThinkLevel);
+  const shouldDowngradeXHigh =
+    !directives.hasThinkDirective &&
+    nextThinkLevel === "xhigh" &&
+    !supportsXHighThinking(resolvedProvider, resolvedModel);
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
@@ -1237,6 +1254,9 @@ export async function handleDirectiveOnly(params: {
     if (directives.hasThinkDirective && directives.thinkLevel) {
       if (directives.thinkLevel === "off") delete sessionEntry.thinkingLevel;
       else sessionEntry.thinkingLevel = directives.thinkLevel;
+    }
+    if (shouldDowngradeXHigh) {
+      sessionEntry.thinkingLevel = "high";
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
@@ -1294,6 +1314,18 @@ export async function handleDirectiveOnly(params: {
     if (storePath) {
       await saveSessionStore(storePath, sessionStore);
     }
+    if (modelSelection) {
+      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
+      if (nextLabel !== initialModelLabel) {
+        enqueueSystemEvent(
+          formatModelSwitchEvent(nextLabel, modelSelection.alias),
+          {
+            sessionKey,
+            contextKey: `model:${nextLabel}`,
+          },
+        );
+      }
+    }
     if (elevatedChanged) {
       const nextElevated = (sessionEntry.elevatedLevel ??
         "off") as ElevatedLevel;
@@ -1343,6 +1375,11 @@ export async function handleDirectiveOnly(params: {
         : formatDirectiveAck("Elevated mode enabled."),
     );
     if (shouldHintDirectRuntime) parts.push(formatElevatedRuntimeHint());
+  }
+  if (shouldDowngradeXHigh) {
+    parts.push(
+      `Thinking level set to high (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
+    );
   }
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
@@ -1592,7 +1629,7 @@ export function resolveDefaultModel(params: {
   aliasIndex: ModelAliasIndex;
 } {
   const agentModelOverride = params.agentId
-    ? resolveAgentConfig(params.cfg, params.agentId)?.model?.trim()
+    ? resolveAgentModelPrimary(params.cfg, params.agentId)
     : undefined;
   const cfg =
     agentModelOverride && agentModelOverride.length > 0

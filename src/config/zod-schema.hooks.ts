@@ -1,0 +1,84 @@
+import { z } from "zod";
+
+export const HookMappingSchema = z
+  .object({
+    id: z.string().optional(),
+    match: z
+      .object({
+        path: z.string().optional(),
+        source: z.string().optional(),
+      })
+      .optional(),
+    action: z.union([z.literal("wake"), z.literal("agent")]).optional(),
+    wakeMode: z
+      .union([z.literal("now"), z.literal("next-heartbeat")])
+      .optional(),
+    name: z.string().optional(),
+    sessionKey: z.string().optional(),
+    messageTemplate: z.string().optional(),
+    textTemplate: z.string().optional(),
+    deliver: z.boolean().optional(),
+    channel: z
+      .union([
+        z.literal("last"),
+        z.literal("whatsapp"),
+        z.literal("telegram"),
+        z.literal("discord"),
+        z.literal("slack"),
+        z.literal("signal"),
+        z.literal("imessage"),
+        z.literal("msteams"),
+      ])
+      .optional(),
+    to: z.string().optional(),
+    model: z.string().optional(),
+    thinking: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    transform: z
+      .object({
+        module: z.string(),
+        export: z.string().optional(),
+      })
+      .optional(),
+  })
+  .optional();
+
+export const HooksGmailSchema = z
+  .object({
+    account: z.string().optional(),
+    label: z.string().optional(),
+    topic: z.string().optional(),
+    subscription: z.string().optional(),
+    pushToken: z.string().optional(),
+    hookUrl: z.string().optional(),
+    includeBody: z.boolean().optional(),
+    maxBytes: z.number().int().positive().optional(),
+    renewEveryMinutes: z.number().int().positive().optional(),
+    serve: z
+      .object({
+        bind: z.string().optional(),
+        port: z.number().int().positive().optional(),
+        path: z.string().optional(),
+      })
+      .optional(),
+    tailscale: z
+      .object({
+        mode: z
+          .union([z.literal("off"), z.literal("serve"), z.literal("funnel")])
+          .optional(),
+        path: z.string().optional(),
+        target: z.string().optional(),
+      })
+      .optional(),
+    model: z.string().optional(),
+    thinking: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+      ])
+      .optional(),
+  })
+  .optional();

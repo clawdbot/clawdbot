@@ -12,7 +12,7 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
   trap "" PIPE
   export TERM=xterm-256color
-  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-providers --skip-skills --skip-daemon --skip-ui"
+  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
   export PATH="/tmp/clawdbot-bin:$PATH"
@@ -135,7 +135,7 @@ TRASH
   }
 
   send_local_basic() {
-    # Choose local gateway, accept defaults, skip provider/skills/daemon, skip UI.
+    # Choose local gateway, accept defaults, skip channels/skills/daemon, skip UI.
     send $'"'"'\r'"'"' 0.5
   }
 
@@ -149,14 +149,14 @@ TRASH
     send_local_basic
   }
 
-  send_providers_flow() {
-    # Configure providers via configure wizard.
+  send_channels_flow() {
+    # Configure channels via configure wizard.
     send $'"'"'\r'"'"' 1.0
     send "" 1.5
-    # Provider mode (default Configure providers)
+    # Mode (default Configure channels)
     send $'"'"'\r'"'"' 0.8
     send "" 1.0
-    # Configure chat providers now? -> No
+    # Configure chat channels now? -> No
     send $'"'"'n\r'"'"' 0.6
   }
 
@@ -339,11 +339,11 @@ if (errors.length > 0) {
 NODE
   }
 
-  run_case_providers() {
+  run_case_channels() {
     local home_dir
-    home_dir="$(make_home providers)"
-    # Providers-only configure flow.
-    run_wizard_cmd providers "$home_dir" "node dist/index.js configure --section providers" send_providers_flow
+    home_dir="$(make_home channels)"
+    # Channels-only configure flow.
+    run_wizard_cmd channels "$home_dir" "node dist/index.js configure --section channels" send_channels_flow
 
     config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
@@ -440,7 +440,7 @@ NODE
   run_case_local_basic
   run_case_remote_non_interactive
   run_case_reset
-  run_case_providers
+  run_case_channels
   run_case_skills
 '
 

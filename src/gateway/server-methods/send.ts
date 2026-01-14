@@ -1,14 +1,14 @@
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
+import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { loadConfig } from "../../config/config.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-import type { OutboundProvider } from "../../infra/outbound/targets.js";
+import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
-import type { ProviderId } from "../../providers/plugins/types.js";
-import { DEFAULT_CHAT_PROVIDER } from "../../providers/registry.js";
 import {
   ErrorCodes,
   errorShape,
@@ -38,7 +38,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       message: string;
       mediaUrl?: string;
       gifPlayback?: boolean;
-      provider?: string;
+      channel?: string;
       accountId?: string;
       idempotencyKey: string;
     };
@@ -52,44 +52,44 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const message = request.message.trim();
-    const providerInput =
-      typeof request.provider === "string" ? request.provider : undefined;
-    const normalizedProvider = providerInput
-      ? normalizeProviderId(providerInput)
+    const channelInput =
+      typeof request.channel === "string" ? request.channel : undefined;
+    const normalizedChannel = channelInput
+      ? normalizeChannelId(channelInput)
       : null;
-    if (providerInput && !normalizedProvider) {
+    if (channelInput && !normalizedChannel) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `unsupported provider: ${providerInput}`,
+          `unsupported channel: ${channelInput}`,
         ),
       );
       return;
     }
-    const provider = normalizedProvider ?? DEFAULT_CHAT_PROVIDER;
+    const channel = normalizedChannel ?? DEFAULT_CHAT_CHANNEL;
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
         : undefined;
     try {
-      const outboundProvider = provider as Exclude<OutboundProvider, "none">;
-      const plugin = getProviderPlugin(provider as ProviderId);
+      const outboundChannel = channel as Exclude<OutboundChannel, "none">;
+      const plugin = getChannelPlugin(channel as ChannelId);
       if (!plugin) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `unsupported provider: ${provider}`,
+            `unsupported channel: ${channel}`,
           ),
         );
         return;
       }
       const cfg = loadConfig();
       const resolved = resolveOutboundTarget({
-        provider: outboundProvider,
+        channel: outboundChannel,
         to,
         cfg,
         accountId,
@@ -105,7 +105,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
       const results = await deliverOutboundPayloads({
         cfg,
-        provider: outboundProvider,
+        channel: outboundChannel,
         to: resolved.to,
         accountId,
         payloads: [{ text: message, mediaUrl: request.mediaUrl }],
@@ -118,7 +118,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       const payload: Record<string, unknown> = {
         runId: idem,
         messageId: result.messageId,
-        provider,
+        channel,
       };
       if ("chatId" in result) payload.chatId = result.chatId;
       if ("channelId" in result) payload.channelId = result.channelId;
@@ -131,7 +131,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ok: true,
         payload,
       });
-      respond(true, payload, undefined, { provider });
+      respond(true, payload, undefined, { channel });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       context.dedupe.set(`send:${idem}`, {
@@ -139,10 +139,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ok: false,
         error,
       });
-      respond(false, undefined, error, {
-        provider,
-        error: formatForLog(err),
-      });
+      respond(false, undefined, error, { channel, error: formatForLog(err) });
     }
   },
   poll: async ({ params, respond, context }) => {
@@ -164,7 +161,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       options: string[];
       maxSelections?: number;
       durationHours?: number;
-      provider?: string;
+      channel?: string;
       accountId?: string;
       idempotencyKey: string;
     };
@@ -177,23 +174,23 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const to = request.to.trim();
-    const providerInput =
-      typeof request.provider === "string" ? request.provider : undefined;
-    const normalizedProvider = providerInput
-      ? normalizeProviderId(providerInput)
+    const channelInput =
+      typeof request.channel === "string" ? request.channel : undefined;
+    const normalizedChannel = channelInput
+      ? normalizeChannelId(channelInput)
       : null;
-    if (providerInput && !normalizedProvider) {
+    if (channelInput && !normalizedChannel) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `unsupported poll provider: ${providerInput}`,
+          `unsupported poll channel: ${channelInput}`,
         ),
       );
       return;
     }
-    const provider = normalizedProvider ?? DEFAULT_CHAT_PROVIDER;
+    const channel = normalizedChannel ?? DEFAULT_CHAT_CHANNEL;
     const poll = {
       question: request.question,
       options: request.options,
@@ -205,7 +202,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = getProviderPlugin(provider as ProviderId);
+      const plugin = getChannelPlugin(channel as ChannelId);
       const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(
@@ -213,14 +210,14 @@ export const sendHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `unsupported poll provider: ${provider}`,
+            `unsupported poll channel: ${channel}`,
           ),
         );
         return;
       }
       const cfg = loadConfig();
       const resolved = resolveOutboundTarget({
-        provider: provider as Exclude<OutboundProvider, "none">,
+        channel: channel as Exclude<OutboundChannel, "none">,
         to,
         cfg,
         accountId,
@@ -246,7 +243,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       const payload: Record<string, unknown> = {
         runId: idem,
         messageId: result.messageId,
-        provider,
+        channel,
       };
       if (result.toJid) payload.toJid = result.toJid;
       if (result.channelId) payload.channelId = result.channelId;
@@ -257,7 +254,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ok: true,
         payload,
       });
-      respond(true, payload, undefined, { provider });
+      respond(true, payload, undefined, { channel });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       context.dedupe.set(`poll:${idem}`, {
@@ -266,7 +263,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         error,
       });
       respond(false, undefined, error, {
-        provider,
+        channel,
         error: formatForLog(err),
       });
     }

@@ -20,14 +20,14 @@ read_when:
 ### PeekabooBridge (UI automation)
 - UI automation uses a separate UNIX socket named `bridge.sock` and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app → Claude.app → Clawdbot.app → local execution.
-- Security: bridge hosts require TeamID `Y5PE65HELJ`; DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
+- Security: bridge hosts require an allowed TeamID; DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
 - See: [PeekabooBridge usage](/platforms/mac/peekaboo) for details.
 
 ### Mach/XPC
 - Not required for automation; `node.invoke` + PeekabooBridge cover current needs.
 
 ## Operational flows
-- Restart/rebuild: `SIGN_IDENTITY="Apple Development: Peter Steinberger (2ZAC4GM7GD)" scripts/restart-mac.sh`
+- Restart/rebuild: `SIGN_IDENTITY="Apple Development: <Developer Name> (<TEAMID>)" scripts/restart-mac.sh`
   - Kills existing instances
   - Swift build + package
   - Writes/bootstraps/kickstarts the LaunchAgent

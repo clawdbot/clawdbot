@@ -18,7 +18,7 @@ We now serialize command-based auto-replies (WhatsApp Web listener) through a ti
 - When verbose logging is enabled, queued commands emit a short notice if they waited more than ~2s before starting.
 - Typing indicators (`onReplyStart`) still fire immediately on enqueue so user experience is unchanged while we wait our turn.
 
-## Queue modes (per provider)
+## Queue modes (per channel)
 Inbound messages can steer the current run, wait for a followup turn, or do both:
 - `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
 - `followup`: enqueue for the next agent turn after the current run ends.
@@ -30,12 +30,12 @@ Inbound messages can steer the current run, wait for a followup turn, or do both
 Steer-backlog means you can get a followup response after the steered run, so
 streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
 one response per inbound message.
-Send `/queue collect` as a standalone command (per-session) or set `messages.queue.byProvider.discord: "collect"`.
+Send `/queue collect` as a standalone command (per-session) or set `messages.queue.byChannel.discord: "collect"`.
 
 Defaults (when unset in config):
 - All surfaces → `collect`
 
-Configure globally or per provider via `messages.queue`:
+Configure globally or per channel via `messages.queue`:
 
 ```json5
 {
@@ -45,7 +45,7 @@ Configure globally or per provider via `messages.queue`:
       debounceMs: 1000,
       cap: 20,
       drop: "summarize",
-      byProvider: { discord: "collect" }
+      byChannel: { discord: "collect" }
     }
   }
 }

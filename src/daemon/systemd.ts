@@ -1,9 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   formatGatewayServiceDescription,
@@ -12,6 +10,16 @@ import {
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import {
+  enableSystemdUserLinger,
+  readSystemdUserLingerStatus,
+  type SystemdUserLingerStatus,
+} from "./systemd-linger.js";
+import {
+  buildSystemdUnit,
+  parseSystemdEnvAssignment,
+  parseSystemdExecStart,
+} from "./systemd-unit.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,6 +54,14 @@ function resolveSystemdServiceName(
   return resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
 }
 
+function resolveSystemdServiceNameFromParams(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): string {
+  if (params?.env) return resolveSystemdServiceName(params.env);
+  return resolveGatewaySystemdServiceName(params?.profile);
+}
+
 function resolveSystemdUnitPath(
   env: Record<string, string | undefined>,
 ): string {
@@ -58,171 +74,10 @@ export function resolveSystemdUserUnitPath(
   return resolveSystemdUnitPath(env);
 }
 
-function resolveLoginctlUser(
-  env: Record<string, string | undefined>,
-): string | null {
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) return fromEnv;
-  try {
-    return os.userInfo().username;
-  } catch {
-    return null;
-  }
-}
+export { enableSystemdUserLinger, readSystemdUserLingerStatus };
+export type { SystemdUserLingerStatus };
 
-export type SystemdUserLingerStatus = {
-  user: string;
-  linger: "yes" | "no";
-};
-
-export async function readSystemdUserLingerStatus(
-  env: Record<string, string | undefined>,
-): Promise<SystemdUserLingerStatus | null> {
-  const user = resolveLoginctlUser(env);
-  if (!user) return null;
-  try {
-    const { stdout } = await runExec(
-      "loginctl",
-      ["show-user", user, "-p", "Linger"],
-      { timeoutMs: 5_000 },
-    );
-    const line = stdout
-      .split("\n")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.startsWith("Linger="));
-    const value = line?.split("=")[1]?.trim().toLowerCase();
-    if (value === "yes" || value === "no") {
-      return { user, linger: value };
-    }
-  } catch {
-    // ignore; loginctl may be unavailable
-  }
-  return null;
-}
-
-export async function enableSystemdUserLinger(params: {
-  env: Record<string, string | undefined>;
-  user?: string;
-  sudoMode?: "prompt" | "non-interactive";
-}): Promise<{ ok: boolean; stdout: string; stderr: string; code: number }> {
-  const user = params.user ?? resolveLoginctlUser(params.env);
-  if (!user) {
-    return { ok: false, stdout: "", stderr: "Missing user", code: 1 };
-  }
-  const needsSudo =
-    typeof process.getuid === "function" ? process.getuid() !== 0 : true;
-  const sudoArgs =
-    needsSudo && params.sudoMode !== undefined
-      ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]
-      : [];
-  const argv = [...sudoArgs, "loginctl", "enable-linger", user];
-  try {
-    const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000 });
-    return {
-      ok: result.code === 0,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      code: result.code ?? 1,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, stdout: "", stderr: message, code: 1 };
-  }
-}
-
-function systemdEscapeArg(value: string): string {
-  if (!/[\s"\\]/.test(value)) return value;
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-function renderEnvLines(
-  env: Record<string, string | undefined> | undefined,
-): string[] {
-  if (!env) return [];
-  const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
-  );
-  if (entries.length === 0) return [];
-  return entries.map(
-    ([key, value]) =>
-      `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
-  );
-}
-
-function buildSystemdUnit({
-  description,
-  programArguments,
-  workingDirectory,
-  environment,
-}: {
-  description?: string;
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string | undefined>;
-}): string {
-  const execStart = programArguments.map(systemdEscapeArg).join(" ");
-  const descriptionLine = `Description=${description?.trim() || "Clawdbot Gateway"}`;
-  const workingDirLine = workingDirectory
-    ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
-    : null;
-  const envLines = renderEnvLines(environment);
-  return [
-    "[Unit]",
-    descriptionLine,
-    "After=network-online.target",
-    "Wants=network-online.target",
-    "",
-    "[Service]",
-    `ExecStart=${execStart}`,
-    "Restart=always",
-    "RestartSec=5",
-    // KillMode=process ensures systemd only waits for the main process to exit.
-    // Without this, podman's conmon (container monitor) processes block shutdown
-    // since they run as children of the gateway and stay in the same cgroup.
-    "KillMode=process",
-    workingDirLine,
-    ...envLines,
-    "",
-    "[Install]",
-    "WantedBy=default.target",
-    "",
-  ]
-    .filter((line) => line !== null)
-    .join("\n");
-}
-
-function parseSystemdExecStart(value: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  let escapeNext = false;
-
-  for (const char of value) {
-    if (escapeNext) {
-      current += char;
-      escapeNext = false;
-      continue;
-    }
-    if (char === "\\") {
-      escapeNext = true;
-      continue;
-    }
-    if (char === '"') {
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (!inQuotes && /\s/.test(char)) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current) args.push(current);
-  return args;
-}
+// Unit file parsing/rendering: see systemd-unit.ts
 
 export async function readSystemdServiceExecStart(
   env: Record<string, string | undefined>,
@@ -262,39 +117,6 @@ export async function readSystemdServiceExecStart(
   } catch {
     return null;
   }
-}
-
-function parseSystemdEnvAssignment(
-  raw: string,
-): { key: string; value: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  const unquoted = (() => {
-    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) return trimmed;
-    let out = "";
-    let escapeNext = false;
-    for (const ch of trimmed.slice(1, -1)) {
-      if (escapeNext) {
-        out += ch;
-        escapeNext = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escapeNext = true;
-        continue;
-      }
-      out += ch;
-    }
-    return out;
-  })();
-
-  const eq = unquoted.indexOf("=");
-  if (eq <= 0) return null;
-  const key = unquoted.slice(0, eq).trim();
-  if (!key) return null;
-  const value = unquoted.slice(eq + 1);
-  return { key, value };
 }
 
 export type SystemdServiceInfo = {
@@ -466,13 +288,15 @@ export async function uninstallSystemdService({
 
 export async function stopSystemdService({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(profile);
+  const serviceName = resolveSystemdServiceNameFromParams({ env, profile });
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "stop", unitName]);
   if (res.code !== 0) {
@@ -485,13 +309,15 @@ export async function stopSystemdService({
 
 export async function restartSystemdService({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(profile);
+  const serviceName = resolveSystemdServiceNameFromParams({ env, profile });
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "restart", unitName]);
   if (res.code !== 0) {
@@ -502,11 +328,12 @@ export async function restartSystemdService({
   stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
 }
 
-export async function isSystemdServiceEnabled(
-  profile?: string,
-): Promise<boolean> {
+export async function isSystemdServiceEnabled(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): Promise<boolean> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(profile);
+  const serviceName = resolveSystemdServiceNameFromParams(params);
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
   return res.code === 0;

@@ -83,7 +83,7 @@ const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
 });
 
 describe("messageCommand", () => {
-  it("defaults provider when only one configured", async () => {
+  it("defaults channel when only one configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
     const deps = makeDeps();
     await messageCommand(
@@ -97,7 +97,7 @@ describe("messageCommand", () => {
     expect(handleTelegramAction).toHaveBeenCalled();
   });
 
-  it("requires provider when multiple configured", async () => {
+  it("requires channel when multiple configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
     process.env.DISCORD_BOT_TOKEN = "token-discord";
     const deps = makeDeps();
@@ -110,7 +110,7 @@ describe("messageCommand", () => {
         deps,
         runtime,
       ),
-    ).rejects.toThrow(/Provider is required/);
+    ).rejects.toThrow(/Channel is required/);
   });
 
   it("sends via gateway for WhatsApp", async () => {
@@ -119,7 +119,7 @@ describe("messageCommand", () => {
     await messageCommand(
       {
         action: "send",
-        provider: "whatsapp",
+        channel: "whatsapp",
         to: "+1",
         message: "hi",
       },
@@ -134,7 +134,7 @@ describe("messageCommand", () => {
     await messageCommand(
       {
         action: "poll",
-        provider: "discord",
+        channel: "discord",
         to: "channel:123",
         pollQuestion: "Snack?",
         pollOption: ["Pizza", "Sushi"],

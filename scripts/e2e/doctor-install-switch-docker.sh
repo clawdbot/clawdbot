@@ -11,6 +11,11 @@ echo "Running doctor install switch E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 
+  # Keep logs focused; the npm global install step can emit noisy deprecation warnings.
+  export npm_config_loglevel=error
+  export npm_config_fund=false
+  export npm_config_audit=false
+
   # Stub systemd/loginctl so doctor + daemon flows work in Docker.
   export PATH="/tmp/clawdbot-bin:$PATH"
   mkdir -p /tmp/clawdbot-bin
@@ -64,14 +69,15 @@ if [[ "$*" == *"enable-linger"* ]]; then
 fi
 exit 0
 LOGINCTL
-  chmod +x /tmp/clawdbot-bin/loginctl
-
-  # Install the npm-global variant from the local /app source.
-  npm install -g --prefix /tmp/npm-prefix /app
-
-  npm_bin="/tmp/npm-prefix/bin/clawdbot"
-  npm_entry="/tmp/npm-prefix/lib/node_modules/clawdbot/dist/entry.js"
-  git_entry="/app/dist/entry.js"
+	  chmod +x /tmp/clawdbot-bin/loginctl
+	
+	  # Install the npm-global variant from the local /app source.
+	  pkg_tgz="$(npm pack --silent /app)"
+	  npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz"
+	
+	  npm_bin="/tmp/npm-prefix/bin/clawdbot"
+	  npm_entry="/tmp/npm-prefix/lib/node_modules/clawdbot/dist/entry.js"
+	  git_entry="/app/dist/entry.js"
 
   assert_entrypoint() {
     local unit_path="$1"
@@ -81,14 +87,16 @@ LOGINCTL
     if [ -z "$exec_line" ]; then
       echo "Missing ExecStart in $unit_path"
       exit 1
-    fi
-    exec_line="${exec_line#ExecStart=}"
-    entrypoint=$(echo "$exec_line" | awk "{print \$2}")
-    if [ "$entrypoint" != "$expected" ]; then
-      echo "Expected entrypoint $expected, got $entrypoint"
-      exit 1
-    fi
-  }
+	    fi
+	    exec_line="${exec_line#ExecStart=}"
+	    entrypoint=$(echo "$exec_line" | awk "{print \$2}")
+	    entrypoint="${entrypoint%\"}"
+	    entrypoint="${entrypoint#\"}"
+	    if [ "$entrypoint" != "$expected" ]; then
+	      echo "Expected entrypoint $expected, got $entrypoint"
+	      exit 1
+	    fi
+	  }
 
   # Each flow: install service with one variant, run doctor from the other,
   # and verify ExecStart entrypoint switches accordingly.
@@ -118,17 +126,17 @@ LOGINCTL
     assert_entrypoint "$unit_path" "$doctor_expected"
   }
 
-  run_flow \
-    "npm-to-git" \
-    "$npm_bin daemon install --force" \
-    "$npm_entry" \
-    "node $git_entry doctor --repair" \
-    "$git_entry"
+	  run_flow \
+	    "npm-to-git" \
+	    "$npm_bin daemon install --force" \
+	    "$npm_entry" \
+	    "node $git_entry doctor --repair --force" \
+	    "$git_entry"
 
-  run_flow \
-    "git-to-npm" \
-    "node $git_entry daemon install --force" \
-    "$git_entry" \
-    "$npm_bin doctor --repair" \
-    "$npm_entry"
+	  run_flow \
+	    "git-to-npm" \
+	    "node $git_entry daemon install --force" \
+	    "$git_entry" \
+	    "$npm_bin doctor --repair --force" \
+	    "$npm_entry"
 '

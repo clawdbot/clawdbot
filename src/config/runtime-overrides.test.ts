@@ -24,17 +24,17 @@ describe("runtime overrides", () => {
 
   it("merges object overrides without clobbering siblings", () => {
     const cfg = {
-      whatsapp: { dmPolicy: "pairing", allowFrom: ["+1"] },
+      channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+1"] } },
     } as ClawdbotConfig;
-    setConfigOverride("whatsapp.dmPolicy", "open");
+    setConfigOverride("channels.whatsapp.dmPolicy", "open");
     const next = applyConfigOverrides(cfg);
-    expect(next.whatsapp?.dmPolicy).toBe("open");
-    expect(next.whatsapp?.allowFrom).toEqual(["+1"]);
+    expect(next.channels?.whatsapp?.dmPolicy).toBe("open");
+    expect(next.channels?.whatsapp?.allowFrom).toEqual(["+1"]);
   });
 
   it("unsets overrides and prunes empty branches", () => {
-    setConfigOverride("whatsapp.dmPolicy", "open");
-    const removed = unsetConfigOverride("whatsapp.dmPolicy");
+    setConfigOverride("channels.whatsapp.dmPolicy", "open");
+    const removed = unsetConfigOverride("channels.whatsapp.dmPolicy");
     expect(removed.ok).toBe(true);
     expect(removed.removed).toBe(true);
     expect(Object.keys(getConfigOverrides()).length).toBe(0);

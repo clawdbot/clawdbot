@@ -107,6 +107,24 @@ describe("parseModelRef", () => {
       model: "claude-opus-4-5",
     });
   });
+
+  it("normalizes google gemini 3 models to preview ids", () => {
+    expect(parseModelRef("google/gemini-3-pro", "anthropic")).toEqual({
+      provider: "google",
+      model: "gemini-3-pro-preview",
+    });
+    expect(parseModelRef("google/gemini-3-flash", "anthropic")).toEqual({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+    });
+  });
+
+  it("normalizes default-provider google models", () => {
+    expect(parseModelRef("gemini-3-pro", "google")).toEqual({
+      provider: "google",
+      model: "gemini-3-pro-preview",
+    });
+  });
 });
 
 describe("resolveHooksGmailModel", () => {

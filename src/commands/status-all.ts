@@ -11,10 +11,10 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { probeGateway } from "../gateway/probe.js";
+import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
-import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import {
   readRestartSentinel,
   summarizeRestartSentinel,
@@ -31,6 +31,7 @@ import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { getAgentLocalStatuses } from "./status-all/agents.js";
+import { buildChannelsTable } from "./status-all/channels.js";
 import {
   formatAge,
   formatDuration,
@@ -42,7 +43,6 @@ import {
   readFileTailLines,
   summarizeLogTail,
 } from "./status-all/gateway.js";
-import { buildProvidersTable } from "./status-all/providers.js";
 
 export async function statusAllCommand(
   runtime: RuntimeEnv,
@@ -167,7 +167,10 @@ export async function statusAllCommand(
           const service = resolveGatewayService();
           const [loaded, runtimeInfo, command] = await Promise.all([
             service
-              .isLoaded({ profile: process.env.CLAWDBOT_PROFILE })
+              .isLoaded({
+                env: process.env,
+                profile: process.env.CLAWDBOT_PROFILE,
+              })
               .catch(() => false),
             service.readRuntime(process.env).catch(() => undefined),
             service.readCommand(process.env).catch(() => null),
@@ -189,8 +192,8 @@ export async function statusAllCommand(
       progress.setLabel("Scanning agents…");
       const agentStatus = await getAgentLocalStatuses(cfg);
       progress.tick();
-      progress.setLabel("Summarizing providers…");
-      const providers = await buildProvidersTable(cfg, { showSecrets: false });
+      progress.setLabel("Summarizing channels…");
+      const channels = await buildChannelsTable(cfg, { showSecrets: false });
       progress.tick();
 
       const connectionDetailsForReport = (() => {
@@ -226,16 +229,16 @@ export async function statusAllCommand(
           }).catch((err) => ({ error: String(err) }))
         : { error: gatewayProbe?.error ?? "gateway unreachable" };
 
-      const providersStatus = gatewayReachable
+      const channelsStatus = gatewayReachable
         ? await callGateway<Record<string, unknown>>({
-            method: "providers.status",
+            method: "channels.status",
             params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
             timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
             ...callOverrides,
           }).catch(() => null)
         : null;
-      const providerIssues = providersStatus
-        ? collectProvidersStatusIssues(providersStatus)
+      const channelIssues = channelsStatus
+        ? collectChannelStatusIssues(channelsStatus)
         : [];
       progress.tick();
 
@@ -271,6 +274,7 @@ export async function statusAllCommand(
         ? resolveControlUiLinks({
             port,
             bind: cfg.gateway?.bind,
+            customBindHost: cfg.gateway?.customBindHost,
             basePath: cfg.gateway?.controlUi?.basePath,
           }).httpUrl
         : null;
@@ -424,9 +428,9 @@ export async function statusAllCommand(
         rows: overviewRows,
       });
 
-      const providerRows = providers.rows.map((row) => ({
-        providerId: row.id,
-        Provider: row.provider,
+      const channelRows = channels.rows.map((row) => ({
+        channelId: row.id,
+        Channel: row.label,
         Enabled: row.enabled ? ok("ON") : muted("OFF"),
         State:
           row.state === "ok"
@@ -438,18 +442,18 @@ export async function statusAllCommand(
                 : theme.accentDim("SETUP"),
         Detail: row.detail,
       }));
-      const providerIssuesByProvider = (() => {
-        const map = new Map<string, typeof providerIssues>();
-        for (const issue of providerIssues) {
-          const key = issue.provider;
+      const channelIssuesByChannel = (() => {
+        const map = new Map<string, typeof channelIssues>();
+        for (const issue of channelIssues) {
+          const key = issue.channel;
           const list = map.get(key);
           if (list) list.push(issue);
           else map.set(key, [issue]);
         }
         return map;
       })();
-      const providerRowsWithIssues = providerRows.map((row) => {
-        const issues = providerIssuesByProvider.get(row.providerId) ?? [];
+      const channelRowsWithIssues = channelRows.map((row) => {
+        const issues = channelIssuesByChannel.get(row.channelId) ?? [];
         if (issues.length === 0) return row;
         const issue = issues[0];
         const suffix = ` · ${warn(`gateway: ${String(issue.message).slice(0, 90)}`)}`;
@@ -460,15 +464,15 @@ export async function statusAllCommand(
         };
       });
 
-      const providersTable = renderTable({
+      const channelsTable = renderTable({
         width: tableWidth,
         columns: [
-          { key: "Provider", header: "Provider", minWidth: 10 },
+          { key: "Channel", header: "Channel", minWidth: 10 },
           { key: "Enabled", header: "Enabled", minWidth: 7 },
           { key: "State", header: "State", minWidth: 8 },
           { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
         ],
-        rows: providerRowsWithIssues,
+        rows: channelRowsWithIssues,
       });
 
       const agentRows = agentStatus.agents.map((a) => ({
@@ -503,9 +507,9 @@ export async function statusAllCommand(
       lines.push(heading("Overview"));
       lines.push(overview.trimEnd());
       lines.push("");
-      lines.push(heading("Providers"));
-      lines.push(providersTable.trimEnd());
-      for (const detail of providers.details) {
+      lines.push(heading("Channels"));
+      lines.push(channelsTable.trimEnd());
+      for (const detail of channels.details) {
         lines.push("");
         lines.push(heading(detail.title));
         lines.push(
@@ -686,23 +690,23 @@ export async function statusAllCommand(
       }
       progress.tick();
 
-      if (providersStatus) {
+      if (channelsStatus) {
         emitCheck(
-          `Provider issues (${providerIssues.length || "none"})`,
-          providerIssues.length === 0 ? "ok" : "warn",
+          `Channel issues (${channelIssues.length || "none"})`,
+          channelIssues.length === 0 ? "ok" : "warn",
         );
-        for (const issue of providerIssues.slice(0, 12)) {
+        for (const issue of channelIssues.slice(0, 12)) {
           const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
           lines.push(
-            `  - ${issue.provider}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
+            `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
           );
         }
-        if (providerIssues.length > 12) {
-          lines.push(`  ${muted(`… +${providerIssues.length - 12} more`)}`);
+        if (channelIssues.length > 12) {
+          lines.push(`  ${muted(`… +${channelIssues.length - 12} more`)}`);
         }
       } else {
         emitCheck(
-          `Provider issues skipped (gateway ${gatewayReachable ? "query failed" : "unreachable"})`,
+          `Channel issues skipped (gateway ${gatewayReachable ? "query failed" : "unreachable"})`,
           "warn",
         );
       }

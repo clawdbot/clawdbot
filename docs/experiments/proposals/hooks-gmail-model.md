@@ -39,7 +39,7 @@ Add `hooks.gmail.model` config option to specify an optional cheaper model for G
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `hooks.gmail.model` | `string` | (none) | Model to use for Gmail hook processing. Accepts `provider/model` refs or aliases from `agents.defaults.models`. |
-| `hooks.gmail.thinking` | `string` | (inherited) | Thinking level override (`off`, `minimal`, `low`, `medium`, `high`). If unset, inherits from `agents.defaults.thinkingDefault` or model's default. |
+| `hooks.gmail.thinking` | `string` | (inherited) | Thinking level override (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models only). If unset, inherits from `agents.defaults.thinkingDefault` or model's default. |
 
 ### Alias Support
 

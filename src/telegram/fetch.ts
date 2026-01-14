@@ -7,7 +7,9 @@ export function resolveTelegramFetch(
   const isBun = "Bun" in globalThis || Boolean(process?.versions?.bun);
   if (!isBun) return undefined;
   if (!fetchImpl) {
-    throw new Error("fetch is not available; set telegram.proxy in config");
+    throw new Error(
+      "fetch is not available; set channels.telegram.proxy in config",
+    );
   }
   return fetchImpl;
 }

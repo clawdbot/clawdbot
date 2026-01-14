@@ -14,7 +14,7 @@ export async function handleWhatsAppAction(
   cfg: ClawdbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
-  const isActionEnabled = createActionGate(cfg.whatsapp?.actions);
+  const isActionEnabled = createActionGate(cfg.channels?.whatsapp?.actions);
 
   if (action === "react") {
     if (!isActionEnabled("reactions")) {

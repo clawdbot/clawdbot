@@ -17,15 +17,17 @@ describe("normalizeConfigPaths", () => {
           path: "~/.clawdbot/hooks.json5",
           transformsDir: "~/hooks-xform",
         },
-        telegram: {
-          accounts: {
-            personal: {
-              tokenFile: "~/.clawdbot/telegram.token",
+        channels: {
+          telegram: {
+            accounts: {
+              personal: {
+                tokenFile: "~/.clawdbot/telegram.token",
+              },
             },
           },
-        },
-        imessage: {
-          accounts: { personal: { dbPath: "~/Library/Messages/chat.db" } },
+          imessage: {
+            accounts: { personal: { dbPath: "~/Library/Messages/chat.db" } },
+          },
         },
         agents: {
           defaults: { workspace: "~/ws-default" },
@@ -51,10 +53,10 @@ describe("normalizeConfigPaths", () => {
       );
       expect(cfg.hooks?.path).toBe(path.join(home, ".clawdbot", "hooks.json5"));
       expect(cfg.hooks?.transformsDir).toBe(path.join(home, "hooks-xform"));
-      expect(cfg.telegram?.accounts?.personal?.tokenFile).toBe(
+      expect(cfg.channels?.telegram?.accounts?.personal?.tokenFile).toBe(
         path.join(home, ".clawdbot", "telegram.token"),
       );
-      expect(cfg.imessage?.accounts?.personal?.dbPath).toBe(
+      expect(cfg.channels?.imessage?.accounts?.personal?.dbPath).toBe(
         path.join(home, "Library", "Messages", "chat.db"),
       );
       expect(cfg.agents?.defaults?.workspace).toBe(

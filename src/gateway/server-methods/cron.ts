@@ -111,11 +111,24 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = candidate as {
-      id: string;
+      id?: string;
+      jobId?: string;
       patch: Record<string, unknown>;
     };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid cron.update params: missing id",
+        ),
+      );
+      return;
+    }
     const job = await context.cron.update(
-      p.id,
+      jobId,
       p.patch as unknown as CronJobPatch,
     );
     respond(true, job, undefined);
@@ -132,8 +145,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id: string };
-    const result = await context.cron.remove(p.id);
+    const p = params as { id?: string; jobId?: string };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid cron.remove params: missing id",
+        ),
+      );
+      return;
+    }
+    const result = await context.cron.remove(jobId);
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context }) => {
@@ -148,8 +173,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id: string; mode?: "due" | "force" };
-    const result = await context.cron.run(p.id, p.mode);
+    const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid cron.run params: missing id",
+        ),
+      );
+      return;
+    }
+    const result = await context.cron.run(jobId, p.mode);
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {
@@ -164,14 +201,26 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id: string; limit?: number };
+    const p = params as { id?: string; jobId?: string; limit?: number };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid cron.runs params: missing id",
+        ),
+      );
+      return;
+    }
     const logPath = resolveCronRunLogPath({
       storePath: context.cronStorePath,
-      jobId: p.id,
+      jobId,
     });
     const entries = await readCronRunLogEntries(logPath, {
       limit: p.limit,
-      jobId: p.id,
+      jobId,
     });
     respond(true, { entries }, undefined);
   },

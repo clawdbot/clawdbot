@@ -19,7 +19,7 @@ describe("formatOutboundDeliverySummary", () => {
   it("adds chat or channel details", () => {
     expect(
       formatOutboundDeliverySummary("telegram", {
-        provider: "telegram",
+        channel: "telegram",
         messageId: "m1",
         chatId: "c1",
       }),
@@ -27,7 +27,7 @@ describe("formatOutboundDeliverySummary", () => {
 
     expect(
       formatOutboundDeliverySummary("discord", {
-        provider: "discord",
+        channel: "discord",
         messageId: "d1",
         channelId: "chan",
       }),
@@ -39,13 +39,13 @@ describe("buildOutboundDeliveryJson", () => {
   it("builds direct delivery payloads", () => {
     expect(
       buildOutboundDeliveryJson({
-        provider: "telegram",
+        channel: "telegram",
         to: "123",
-        result: { provider: "telegram", messageId: "m1", chatId: "c1" },
+        result: { channel: "telegram", messageId: "m1", chatId: "c1" },
         mediaUrl: "https://example.com/a.png",
       }),
     ).toEqual({
-      provider: "telegram",
+      channel: "telegram",
       via: "direct",
       to: "123",
       messageId: "m1",
@@ -57,12 +57,12 @@ describe("buildOutboundDeliveryJson", () => {
   it("supports whatsapp metadata when present", () => {
     expect(
       buildOutboundDeliveryJson({
-        provider: "whatsapp",
+        channel: "whatsapp",
         to: "+1",
-        result: { provider: "whatsapp", messageId: "w1", toJid: "jid" },
+        result: { channel: "whatsapp", messageId: "w1", toJid: "jid" },
       }),
     ).toEqual({
-      provider: "whatsapp",
+      channel: "whatsapp",
       via: "direct",
       to: "+1",
       messageId: "w1",
@@ -74,12 +74,12 @@ describe("buildOutboundDeliveryJson", () => {
   it("keeps timestamp for signal", () => {
     expect(
       buildOutboundDeliveryJson({
-        provider: "signal",
+        channel: "signal",
         to: "+1",
-        result: { provider: "signal", messageId: "s1", timestamp: 123 },
+        result: { channel: "signal", messageId: "s1", timestamp: 123 },
       }),
     ).toEqual({
-      provider: "signal",
+      channel: "signal",
       via: "direct",
       to: "+1",
       messageId: "s1",
@@ -90,17 +90,17 @@ describe("buildOutboundDeliveryJson", () => {
 });
 
 describe("formatGatewaySummary", () => {
-  it("formats gateway summaries with provider", () => {
-    expect(
-      formatGatewaySummary({ provider: "whatsapp", messageId: "m1" }),
-    ).toBe("✅ Sent via gateway (whatsapp). Message ID: m1");
+  it("formats gateway summaries with channel", () => {
+    expect(formatGatewaySummary({ channel: "whatsapp", messageId: "m1" })).toBe(
+      "✅ Sent via gateway (whatsapp). Message ID: m1",
+    );
   });
 
   it("supports custom actions", () => {
     expect(
       formatGatewaySummary({
         action: "Poll sent",
-        provider: "discord",
+        channel: "discord",
         messageId: "p1",
       }),
     ).toBe("✅ Poll sent via gateway (discord). Message ID: p1");

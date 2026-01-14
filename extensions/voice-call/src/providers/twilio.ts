@@ -15,10 +15,11 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
-import { verifyTwilioWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
 import type { OpenAITTSProvider } from "./tts-openai.js";
 import { chunkAudio } from "./tts-openai.js";
+import { twilioApiRequest } from "./twilio/api.js";
+import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
 /**
  * Twilio Voice API provider implementation.
@@ -79,45 +80,26 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Set the current public webhook URL (called when tunnel starts).
-   */
   setPublicUrl(url: string): void {
     this.currentPublicUrl = url;
   }
 
-  /**
-   * Get the current public webhook URL.
-   */
   getPublicUrl(): string | null {
     return this.currentPublicUrl;
   }
 
-  /**
-   * Set the OpenAI TTS provider for streaming TTS.
-   * When set, playTts will use OpenAI audio via media streams.
-   */
   setTTSProvider(provider: OpenAITTSProvider): void {
     this.ttsProvider = provider;
   }
 
-  /**
-   * Set the media stream handler for sending audio.
-   */
   setMediaStreamHandler(handler: MediaStreamHandler): void {
     this.mediaStreamHandler = handler;
   }
 
-  /**
-   * Register a call's stream SID for audio routing.
-   */
   registerCallStream(callSid: string, streamSid: string): void {
     this.callStreamMap.set(callSid, streamSid);
   }
 
-  /**
-   * Unregister a call's stream SID.
-   */
   unregisterCallStream(callSid: string): void {
     this.callStreamMap.delete(callSid);
   }
@@ -130,25 +112,14 @@ export class TwilioProvider implements VoiceCallProvider {
     params: Record<string, string>,
     options?: { allowNotFound?: boolean },
   ): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams(params),
+    return await twilioApiRequest<T>({
+      baseUrl: this.baseUrl,
+      accountSid: this.accountSid,
+      authToken: this.authToken,
+      endpoint,
+      body: params,
+      allowNotFound: options?.allowNotFound,
     });
-
-    if (!response.ok) {
-      if (options?.allowNotFound && response.status === 404) {
-        return undefined as T;
-      }
-      const errorText = await response.text();
-      throw new Error(`Twilio API error: ${response.status} ${errorText}`);
-    }
-
-    const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
   }
 
   /**
@@ -160,23 +131,12 @@ export class TwilioProvider implements VoiceCallProvider {
    * @see https://www.twilio.com/docs/usage/webhooks/webhooks-security
    */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
-    const result = verifyTwilioWebhook(ctx, this.authToken, {
-      publicUrl: this.currentPublicUrl || undefined,
-      allowNgrokFreeTier: this.options.allowNgrokFreeTier ?? true,
-      skipVerification: this.options.skipVerification,
+    return verifyTwilioProviderWebhook({
+      ctx,
+      authToken: this.authToken,
+      currentPublicUrl: this.currentPublicUrl,
+      options: this.options,
     });
-
-    if (!result.ok) {
-      console.warn(`[twilio] Webhook verification failed: ${result.reason}`);
-      if (result.verificationUrl) {
-        console.warn(`[twilio] Verification URL: ${result.verificationUrl}`);
-      }
-    }
-
-    return {
-      ok: result.ok,
-      reason: result.reason,
-    };
   }
 
   /**

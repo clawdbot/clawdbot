@@ -6,7 +6,8 @@ read_when:
 ---
 # Platforms
 
-Clawdbot core is written in TypeScript, so the CLI + Gateway run anywhere Node or Bun runs.
+Clawdbot core is written in TypeScript. **Node is the recommended runtime**.
+Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
 Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
 Linux companion apps are planned, but the Gateway is fully supported today.

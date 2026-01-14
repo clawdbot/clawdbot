@@ -45,8 +45,9 @@ surface those skills teach.
 
 ## ClawdHub (install + sync)
 
-ClawdHub is the public skills registry for Clawdbot. Use it to discover,
-install, update, and back up skills. Full guide: [ClawdHub](/tools/clawdhub).
+ClawdHub is the public skills registry for Clawdbot. Browse at
+https://clawdhub.com. Use it to discover, install, update, and back up skills.
+Full guide: [ClawdHub](/tools/clawdhub).
 
 Common flows:
 
@@ -58,7 +59,8 @@ Common flows:
   - `clawdhub sync --all`
 
 By default, `clawdhub` installs into `./skills` under your current working
-directory; Clawdbot picks that up as `<workspace>/skills` on the next session.
+directory (or falls back to the configured Clawdbot workspace). Clawdbot picks
+that up as `<workspace>/skills` on the next session.
 
 ## Format (AgentSkills + Pi-compatible)
 
@@ -116,6 +118,8 @@ metadata: {"clawdbot":{"emoji":"♊️","requires":{"bins":["gemini"]},"install"
 Notes:
 - If multiple installers are listed, the gateway picks a **single** preferred option (brew when available, otherwise node).
 - Node installs honor `skills.install.nodeManager` in `clawdbot.json` (default: npm; options: npm/pnpm/yarn/bun).
+  This only affects **skill installs**; the Gateway runtime should still be Node
+  (Bun is not recommended for WhatsApp/Telegram).
 - Go installs: if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew’s `bin` when possible.
 
 If no `metadata.clawdbot` is present, the skill is always eligible (unless
@@ -200,6 +204,6 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse [ClawdHub](/tools/clawdhub).
+Browse https://clawdhub.com.
 
 ---

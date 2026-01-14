@@ -21,7 +21,7 @@ import type {
   LogEntry,
   LogLevel,
   PresenceEntry,
-  ProvidersStatusSnapshot,
+  ChannelsStatusSnapshot,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
@@ -47,7 +47,7 @@ import { renderOverview } from "./views/overview";
 import { renderSessions } from "./views/sessions";
 import { renderSkills } from "./views/skills";
 import {
-  loadProviders,
+  loadChannels,
   updateDiscordForm,
   updateIMessageForm,
   updateSlackForm,
@@ -119,10 +119,10 @@ export type AppViewState = {
   configUiHints: Record<string, unknown>;
   configForm: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
-  providersLoading: boolean;
-  providersSnapshot: ProvidersStatusSnapshot | null;
-  providersError: string | null;
-  providersLastSuccess: number | null;
+  channelsLoading: boolean;
+  channelsSnapshot: ChannelsStatusSnapshot | null;
+  channelsError: string | null;
+  channelsLastSuccess: number | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
@@ -299,7 +299,7 @@ export function renderApp(state: AppViewState) {
               sessionsCount,
               cronEnabled: state.cronStatus?.enabled ?? null,
               cronNext,
-              lastProvidersRefresh: state.providersLastSuccess,
+              lastChannelsRefresh: state.channelsLastSuccess,
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
@@ -320,10 +320,10 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "connections"
           ? renderConnections({
               connected: state.connected,
-              loading: state.providersLoading,
-              snapshot: state.providersSnapshot,
-              lastError: state.providersError,
-              lastSuccessAt: state.providersLastSuccess,
+              loading: state.channelsLoading,
+              snapshot: state.channelsSnapshot,
+              lastError: state.channelsError,
+              lastSuccessAt: state.channelsLastSuccess,
               whatsappMessage: state.whatsappLoginMessage,
               whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
               whatsappConnected: state.whatsappLoginConnected,
@@ -347,7 +347,7 @@ export function renderApp(state: AppViewState) {
               imessageForm: state.imessageForm,
               imessageSaving: state.imessageSaving,
               imessageStatus: state.imessageConfigStatus,
-              onRefresh: (probe) => loadProviders(state, probe),
+              onRefresh: (probe) => loadChannels(state, probe),
               onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
               onWhatsAppWait: () => state.handleWhatsAppWait(),
               onWhatsAppLogout: () => state.handleWhatsAppLogout(),
@@ -494,13 +494,14 @@ export function renderApp(state: AppViewState) {
                   ...state.settings,
                   useNewChatLayout: !state.settings.useNewChatLayout,
                 }),
-	              onDraftChange: (next) => (state.chatMessage = next),
-	              onSend: () => state.handleSendChat(),
-	              canAbort: Boolean(state.chatRunId),
-	              onAbort: () => void state.handleAbortChat(),
-	              onQueueRemove: (id) => state.removeQueuedMessage(id),
-	              onNewSession: () =>
-	                state.handleSendChat("/new", { restoreDraft: true }),
+              onChatScroll: (event) => state.handleChatScroll(event),
+              onDraftChange: (next) => (state.chatMessage = next),
+              onSend: () => state.handleSendChat(),
+              canAbort: Boolean(state.chatRunId),
+              onAbort: () => void state.handleAbortChat(),
+              onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onNewSession: () =>
+                state.handleSendChat("/new", { restoreDraft: true }),
               // Sidebar props for tool output viewing
               sidebarOpen: state.sidebarOpen,
               sidebarContent: state.sidebarContent,

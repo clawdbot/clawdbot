@@ -18,7 +18,7 @@ struct CronJobEditor: View {
     static let scheduleKindNote =
         "“At” runs once, “Every” repeats with a duration, “Cron” uses a 5-field Unix expression."
     static let isolatedPayloadNote =
-        "Isolated jobs always run an agent turn. The result can be delivered to a provider, "
+        "Isolated jobs always run an agent turn. The result can be delivered to a channel, "
             + "and a short summary is posted back to your main chat."
     static let mainPayloadNote =
         "System events are injected into the current main session. Agent turns require an isolated session target."
@@ -27,9 +27,11 @@ struct CronJobEditor: View {
 
     @State var name: String = ""
     @State var description: String = ""
+    @State var agentId: String = ""
     @State var enabled: Bool = true
     @State var sessionTarget: CronSessionTarget = .main
     @State var wakeMode: CronWakeMode = .nextHeartbeat
+    @State var deleteAfterRun: Bool = false
 
     enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String { rawValue } }
     @State var scheduleKind: ScheduleKind = .every
@@ -43,7 +45,7 @@ struct CronJobEditor: View {
     @State var systemEventText: String = ""
     @State var agentMessage: String = ""
     @State var deliver: Bool = false
-    @State var provider: GatewayAgentProvider = .last
+    @State var channel: GatewayAgentChannel = .last
     @State var to: String = ""
     @State var thinking: String = ""
     @State var timeoutSeconds: String = ""
@@ -74,6 +76,12 @@ struct CronJobEditor: View {
                             GridRow {
                                 self.gridLabel("Description")
                                 TextField("Optional notes", text: self.$description)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            GridRow {
+                                self.gridLabel("Agent ID")
+                                TextField("Optional (default agent)", text: self.$agentId)
                                     .textFieldStyle(.roundedBorder)
                                     .frame(maxWidth: .infinity)
                             }
@@ -148,6 +156,11 @@ struct CronJobEditor: View {
                                         displayedComponents: [.date, .hourAndMinute])
                                         .labelsHidden()
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                GridRow {
+                                    self.gridLabel("Auto-delete")
+                                    Toggle("Delete after successful run", isOn: self.$deleteAfterRun)
+                                        .toggleStyle(.switch)
                                 }
                             case .every:
                                 GridRow {
@@ -310,7 +323,7 @@ struct CronJobEditor: View {
                 }
                 GridRow {
                     self.gridLabel("Deliver")
-                    Toggle("Deliver result to a provider", isOn: self.$deliver)
+                    Toggle("Deliver result to a channel", isOn: self.$deliver)
                         .toggleStyle(.switch)
                 }
             }
@@ -318,15 +331,15 @@ struct CronJobEditor: View {
             if self.deliver {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
-                        self.gridLabel("Provider")
-                        Picker("", selection: self.$provider) {
-                            Text("last").tag(GatewayAgentProvider.last)
-                            Text("whatsapp").tag(GatewayAgentProvider.whatsapp)
-                            Text("telegram").tag(GatewayAgentProvider.telegram)
-                            Text("discord").tag(GatewayAgentProvider.discord)
-                            Text("slack").tag(GatewayAgentProvider.slack)
-                            Text("signal").tag(GatewayAgentProvider.signal)
-                            Text("imessage").tag(GatewayAgentProvider.imessage)
+                        self.gridLabel("Channel")
+                        Picker("", selection: self.$channel) {
+                            Text("last").tag(GatewayAgentChannel.last)
+                            Text("whatsapp").tag(GatewayAgentChannel.whatsapp)
+                            Text("telegram").tag(GatewayAgentChannel.telegram)
+                            Text("discord").tag(GatewayAgentChannel.discord)
+                            Text("slack").tag(GatewayAgentChannel.slack)
+                            Text("signal").tag(GatewayAgentChannel.signal)
+                            Text("imessage").tag(GatewayAgentChannel.imessage)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)

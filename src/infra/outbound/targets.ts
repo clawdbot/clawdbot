@@ -1,25 +1,25 @@
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
+import type {
+  ChannelId,
+  ChannelOutboundTargetMode,
+} from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
 import type {
-  ProviderId,
-  ProviderOutboundTargetMode,
-} from "../../providers/plugins/types.js";
-import type {
-  DeliverableMessageProvider,
-  GatewayMessageProvider,
-} from "../../utils/message-provider.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
+  DeliverableMessageChannel,
+  GatewayMessageChannel,
+} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
-export type OutboundProvider = DeliverableMessageProvider | "none";
+export type OutboundChannel = DeliverableMessageChannel | "none";
 
-export type HeartbeatTarget = OutboundProvider | "last";
+export type HeartbeatTarget = OutboundChannel | "last";
 
 export type OutboundTarget = {
-  provider: OutboundProvider;
+  channel: OutboundChannel;
   to?: string;
   reason?: string;
 };
@@ -28,16 +28,16 @@ export type OutboundTargetResolution =
   | { ok: true; to: string }
   | { ok: false; error: Error };
 
-// Provider docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
+// Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
-  provider: GatewayMessageProvider;
+  channel: GatewayMessageChannel;
   to?: string;
   allowFrom?: string[];
   cfg?: ClawdbotConfig;
   accountId?: string | null;
-  mode?: ProviderOutboundTargetMode;
+  mode?: ChannelOutboundTargetMode;
 }): OutboundTargetResolution {
-  if (params.provider === INTERNAL_MESSAGE_PROVIDER) {
+  if (params.channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
       error: new Error(
@@ -46,11 +46,11 @@ export function resolveOutboundTarget(params: {
     };
   }
 
-  const plugin = getProviderPlugin(params.provider as ProviderId);
+  const plugin = getChannelPlugin(params.channel as ChannelId);
   if (!plugin) {
     return {
       ok: false,
-      error: new Error(`Unsupported provider: ${params.provider}`),
+      error: new Error(`Unsupported channel: ${params.channel}`),
     };
   }
 
@@ -94,12 +94,12 @@ export function resolveHeartbeatDeliveryTarget(params: {
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
-    const normalized = normalizeProviderId(rawTarget);
+    const normalized = normalizeChannelId(rawTarget);
     if (normalized) target = normalized;
   }
 
   if (target === "none") {
-    return { provider: "none", reason: "target-none" };
+    return { channel: "none", reason: "target-none" };
   }
 
   const explicitTo =
@@ -108,40 +108,39 @@ export function resolveHeartbeatDeliveryTarget(params: {
       ? cfg.agents.defaults.heartbeat.to.trim()
       : undefined;
 
-  const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
-      ? normalizeProviderId(entry.lastProvider)
+  const lastChannel =
+    entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL
+      ? normalizeChannelId(entry.lastChannel)
       : undefined;
   const lastTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
-  const provider = target === "last" ? lastProvider : target;
+  const channel = target === "last" ? lastChannel : target;
 
   const to =
     explicitTo ||
-    (provider && lastProvider === provider ? lastTo : undefined) ||
+    (channel && lastChannel === channel ? lastTo : undefined) ||
     (target === "last" ? lastTo : undefined);
 
-  if (!provider || !to) {
-    return { provider: "none", reason: "no-target" };
+  if (!channel || !to) {
+    return { channel: "none", reason: "no-target" };
   }
 
-  const accountId =
-    provider === lastProvider ? entry?.lastAccountId : undefined;
+  const accountId = channel === lastChannel ? entry?.lastAccountId : undefined;
   const resolved = resolveOutboundTarget({
-    provider,
+    channel,
     to,
     cfg,
     accountId,
     mode: "heartbeat",
   });
   if (!resolved.ok) {
-    return { provider: "none", reason: "no-target" };
+    return { channel: "none", reason: "no-target" };
   }
 
   let reason: string | undefined;
-  const plugin = getProviderPlugin(provider as ProviderId);
+  const plugin = getChannelPlugin(channel as ChannelId);
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
-      provider,
+      channel,
       to,
       cfg,
       accountId,
@@ -153,6 +152,6 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   return reason
-    ? { provider, to: resolved.to, reason }
-    : { provider, to: resolved.to };
+    ? { channel, to: resolved.to, reason }
+    : { channel, to: resolved.to };
 }

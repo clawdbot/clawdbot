@@ -7,8 +7,8 @@ import type {
 import { type ApiClientOptions, Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { recordProviderActivity } from "../infra/provider-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -65,7 +65,7 @@ function resolveToken(
   if (explicit?.trim()) return explicit.trim();
   if (!params.token) {
     throw new Error(
-      `Telegram bot token missing for account "${params.accountId}" (set telegram.accounts.${params.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
+      `Telegram bot token missing for account "${params.accountId}" (set channels.telegram.accounts.${params.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
     );
   }
   return params.token.trim();
@@ -269,8 +269,8 @@ export async function sendMessageTelegram(
       });
     }
     const messageId = String(result?.message_id ?? "unknown");
-    recordProviderActivity({
-      provider: "telegram",
+    recordChannelActivity({
+      channel: "telegram",
       accountId: account.accountId,
       direction: "outbound",
     });
@@ -324,8 +324,8 @@ export async function sendMessageTelegram(
     throw wrapChatNotFound(err);
   });
   const messageId = String(res?.message_id ?? "unknown");
-  recordProviderActivity({
-    provider: "telegram",
+  recordChannelActivity({
+    channel: "telegram",
     accountId: account.accountId,
     direction: "outbound",
   });

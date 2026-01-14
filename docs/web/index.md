@@ -94,7 +94,10 @@ Open:
 - Binding the Gateway to a non-loopback address **requires** auth (`gateway.auth` or `CLAWDBOT_GATEWAY_TOKEN`).
 - The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
-- Use `gateway.auth.allowTailscale: false` to require explicit credentials even in Serve mode.
+- With Serve, Tailscale identity headers can satisfy auth when
+  `gateway.auth.allowTailscale` is `true` (no token/password required). Set
+  `gateway.auth.allowTailscale: false` to require explicit credentials. See
+  [Tailscale](/gateway/tailscale) and [Security](/gateway/security).
 - `gateway.tailscale.mode: "funnel"` requires `gateway.auth.mode: "password"` (shared password).
 
 ## Building the UI

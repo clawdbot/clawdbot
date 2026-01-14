@@ -42,7 +42,7 @@ function resolveToken(explicit?: string, accountId?: string) {
       )} source=${account.botTokenSource ?? "unknown"}`,
     );
     throw new Error(
-      "SLACK_BOT_TOKEN or slack.botToken is required for Slack actions",
+      "SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions",
     );
   }
   return token;

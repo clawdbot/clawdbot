@@ -37,7 +37,7 @@ This flow lets the macOS app act as a full remote control for a Clawdbot gateway
 - Nodes advertise their permission state via `node.list` / `node.describe` so agents know what’s available.
 
 ## WhatsApp login flow (remote)
-- Run `clawdbot providers login --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
+- Run `clawdbot channels login --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
 - Re-run login on that host if auth expires. Health check will surface link problems.
 
 ## Troubleshooting

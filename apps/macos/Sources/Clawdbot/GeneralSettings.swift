@@ -496,18 +496,18 @@ struct GeneralSettings: View {
             }
 
             if let snap = snapshot {
-                let linkId = snap.providerOrder?.first(where: {
-                    if let summary = snap.providers[$0] { return summary.linked != nil }
+                let linkId = snap.channelOrder?.first(where: {
+                    if let summary = snap.channels[$0] { return summary.linked != nil }
                     return false
-                }) ?? snap.providers.keys.first(where: {
-                    if let summary = snap.providers[$0] { return summary.linked != nil }
+                }) ?? snap.channels.keys.first(where: {
+                    if let summary = snap.channels[$0] { return summary.linked != nil }
                     return false
                 })
                 let linkLabel =
-                    linkId.flatMap { snap.providerLabels?[$0] } ??
+                    linkId.flatMap { snap.channelLabels?[$0] } ??
                     linkId?.capitalized ??
-                    "Link provider"
-                let linkAge = linkId.flatMap { snap.providers[$0]?.authAgeMs }
+                    "Link channel"
+                let linkAge = linkId.flatMap { snap.channels[$0]?.authAgeMs }
                 Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
                     .font(.caption)
                     .foregroundStyle(.secondary)

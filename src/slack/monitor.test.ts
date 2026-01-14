@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isSlackRoomAllowedByPolicy, resolveSlackThreadTs } from "./monitor.js";
+import {
+  buildSlackSlashCommandMatcher,
+  isSlackRoomAllowedByPolicy,
+  resolveSlackThreadTs,
+} from "./monitor.js";
 
 describe("slack groupPolicy gating", () => {
   it("allows when policy is open", () => {
@@ -150,5 +154,21 @@ describe("resolveSlackThreadTs", () => {
         }),
       ).toBe(messageTs);
     });
+  });
+});
+
+describe("buildSlackSlashCommandMatcher", () => {
+  it("matches with or without a leading slash", () => {
+    const matcher = buildSlackSlashCommandMatcher("clawd");
+
+    expect(matcher.test("clawd")).toBe(true);
+    expect(matcher.test("/clawd")).toBe(true);
+  });
+
+  it("does not match similar names", () => {
+    const matcher = buildSlackSlashCommandMatcher("clawd");
+
+    expect(matcher.test("/clawd-bot")).toBe(false);
+    expect(matcher.test("clawd-bot")).toBe(false);
   });
 });

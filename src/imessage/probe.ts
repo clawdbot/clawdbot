@@ -9,8 +9,8 @@ export type IMessageProbe = {
 
 export async function probeIMessage(timeoutMs = 2000): Promise<IMessageProbe> {
   const cfg = loadConfig();
-  const cliPath = cfg.imessage?.cliPath?.trim() || "imsg";
-  const dbPath = cfg.imessage?.dbPath?.trim();
+  const cliPath = cfg.channels?.imessage?.cliPath?.trim() || "imsg";
+  const dbPath = cfg.channels?.imessage?.dbPath?.trim();
   const detected = await detectBinary(cliPath);
   if (!detected) {
     return { ok: false, error: `imsg not found (${cliPath})` };

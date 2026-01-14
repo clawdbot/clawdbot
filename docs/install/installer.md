@@ -30,6 +30,7 @@ What it does (high level):
   - `git`: clone/build a source checkout and install a wrapper script
 - On Linux: avoid global npm permission errors by switching npm’s prefix to `~/.npm-global` when needed.
 - If upgrading an existing install: runs `clawdbot doctor --non-interactive` (best effort).
+- For git installs: runs `clawdbot doctor --non-interactive` after install/update (best effort).
 - Mitigates `sharp` native install gotchas by defaulting `SHARP_IGNORE_GLOBAL_LIBVIPS=1` (avoids building against system libvips).
 
 If you *want* `sharp` to link against a globally-installed libvips (or you’re debugging), set:

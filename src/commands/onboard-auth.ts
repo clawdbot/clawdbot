@@ -1,7 +1,14 @@
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
+import {
+  buildSyntheticModelDefinition,
+  SYNTHETIC_BASE_URL,
+  SYNTHETIC_DEFAULT_MODEL_ID,
+  SYNTHETIC_DEFAULT_MODEL_REF,
+  SYNTHETIC_MODEL_CATALOG,
+} from "../agents/synthetic-models.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 
@@ -16,6 +23,10 @@ export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2-0905-preview";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
+export { SYNTHETIC_DEFAULT_MODEL_ID, SYNTHETIC_DEFAULT_MODEL_REF };
+
+const resolveAuthAgentDir = (agentDir?: string) =>
+  agentDir ?? resolveClawdbotAgentDir();
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 const MINIMAX_API_COST = {
   input: 15,
@@ -41,14 +52,12 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
-
 const MINIMAX_MODEL_CATALOG = {
   "MiniMax-M2.1": { name: "MiniMax M2.1", reasoning: false },
   "MiniMax-M2.1-lightning": {
     name: "MiniMax M2.1 Lightning",
     reasoning: false,
   },
-  "MiniMax-M2": { name: "MiniMax M2", reasoning: true },
 } as const;
 
 type MinimaxCatalogId = keyof typeof MINIMAX_MODEL_CATALOG;
@@ -62,11 +71,10 @@ function buildMinimaxModelDefinition(params: {
   maxTokens: number;
 }): ModelDefinitionConfig {
   const catalog = MINIMAX_MODEL_CATALOG[params.id as MinimaxCatalogId];
-  const fallbackReasoning = params.id === "MiniMax-M2";
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
-    reasoning: params.reasoning ?? catalog?.reasoning ?? fallbackReasoning,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? false,
     input: ["text"],
     cost: params.cost,
     contextWindow: params.contextWindow,
@@ -98,11 +106,11 @@ function buildMoonshotModelDefinition(): ModelDefinitionConfig {
 }
 
 export async function writeOAuthCredentials(
-  provider: OAuthProvider,
+  provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
 ): Promise<void> {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: `${provider}:${creds.email ?? "default"}`,
     credential: {
@@ -110,12 +118,12 @@ export async function writeOAuthCredentials(
       provider,
       ...creds,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setAnthropicApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "anthropic:default",
     credential: {
@@ -123,12 +131,12 @@ export async function setAnthropicApiKey(key: string, agentDir?: string) {
       provider: "anthropic",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setGeminiApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "google:default",
     credential: {
@@ -136,12 +144,12 @@ export async function setGeminiApiKey(key: string, agentDir?: string) {
       provider: "google",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setMinimaxApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "minimax:default",
     credential: {
@@ -149,12 +157,12 @@ export async function setMinimaxApiKey(key: string, agentDir?: string) {
       provider: "minimax",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setMoonshotApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "moonshot:default",
     credential: {
@@ -162,7 +170,20 @@ export async function setMoonshotApiKey(key: string, agentDir?: string) {
       provider: "moonshot",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setSyntheticApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "synthetic:default",
+    credential: {
+      type: "api_key",
+      provider: "synthetic",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
@@ -170,7 +191,7 @@ export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "zai:default",
     credential: {
@@ -178,7 +199,7 @@ export async function setZaiApiKey(key: string, agentDir?: string) {
       provider: "zai",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
@@ -190,7 +211,7 @@ export async function setOpenrouterApiKey(key: string, agentDir?: string) {
       provider: "openrouter",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
@@ -337,6 +358,82 @@ export function applyMoonshotConfig(cfg: ClawdbotConfig): ClawdbotConfig {
               }
             : undefined),
           primary: MOONSHOT_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applySyntheticProviderConfig(
+  cfg: ClawdbotConfig,
+): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[SYNTHETIC_DEFAULT_MODEL_REF] = {
+    ...models[SYNTHETIC_DEFAULT_MODEL_REF],
+    alias: models[SYNTHETIC_DEFAULT_MODEL_REF]?.alias ?? "MiniMax M2.1",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.synthetic;
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  const syntheticModels = SYNTHETIC_MODEL_CATALOG.map(
+    buildSyntheticModelDefinition,
+  );
+  const mergedModels = [
+    ...existingModels,
+    ...syntheticModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    (existingProvider ?? {}) as Record<string, unknown> as { apiKey?: string };
+  const resolvedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.synthetic = {
+    ...existingProviderRest,
+    baseUrl: SYNTHETIC_BASE_URL,
+    api: "anthropic-messages",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : syntheticModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applySyntheticConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applySyntheticProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel &&
+          "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] })
+                  .fallbacks,
+              }
+            : undefined),
+          primary: SYNTHETIC_DEFAULT_MODEL_REF,
         },
       },
     },
@@ -620,7 +717,7 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
       provider: "opencode",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 

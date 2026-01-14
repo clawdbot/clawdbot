@@ -7,6 +7,8 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { getChannelDock } from "../../channels/dock.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   buildGroupDisplayName,
@@ -23,8 +25,6 @@ import {
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
-import { getProviderDock } from "../../providers/dock.js";
-import { normalizeProviderId } from "../../providers/registry.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -228,20 +228,20 @@ export async function initSessionState(params: {
     queueDrop: baseEntry?.queueDrop,
     displayName: baseEntry?.displayName,
     chatType: baseEntry?.chatType,
-    provider: baseEntry?.provider,
+    channel: baseEntry?.channel,
     subject: baseEntry?.subject,
     room: baseEntry?.room,
     space: baseEntry?.space,
   };
-  if (groupResolution?.provider) {
-    const provider = groupResolution.provider;
+  if (groupResolution?.channel) {
+    const channel = groupResolution.channel;
     const subject = ctx.GroupSubject?.trim();
     const space = ctx.GroupSpace?.trim();
     const explicitRoom = ctx.GroupRoom?.trim();
-    const normalizedProvider = normalizeProviderId(provider);
+    const normalizedChannel = normalizeChannelId(channel);
     const isRoomProvider = Boolean(
-      normalizedProvider &&
-        getProviderDock(normalizedProvider)?.capabilities.chatTypes.includes(
+      normalizedChannel &&
+        getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes(
           "channel",
         ),
     );
@@ -252,12 +252,12 @@ export async function initSessionState(params: {
         : undefined);
     const nextSubject = nextRoom ? undefined : subject;
     sessionEntry.chatType = groupResolution.chatType ?? "group";
-    sessionEntry.provider = provider;
+    sessionEntry.channel = channel;
     if (nextSubject) sessionEntry.subject = nextSubject;
     if (nextRoom) sessionEntry.room = nextRoom;
     if (space) sessionEntry.space = space;
     sessionEntry.displayName = buildGroupDisplayName({
-      provider: sessionEntry.provider,
+      provider: sessionEntry.channel,
       subject: sessionEntry.subject,
       room: sessionEntry.room,
       space: sessionEntry.space,

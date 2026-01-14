@@ -1,19 +1,19 @@
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
-import {
-  getProviderPlugin,
-  listProviderPlugins,
-} from "../providers/plugins/index.js";
-import type { ProviderAccountSnapshot } from "../providers/plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 
-export type ProviderHealthSummary = {
+export type ChannelHealthSummary = {
   configured?: boolean;
   linked?: boolean;
   authAgeMs?: number | null;
@@ -31,9 +31,9 @@ export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
-  providers: Record<string, ProviderHealthSummary>;
-  providerOrder: string[];
-  providerLabels: Record<string, string>;
+  channels: Record<string, ChannelHealthSummary>;
+  channelOrder: string[];
+  channelLabels: Record<string, string>;
   heartbeatSeconds: number;
   sessions: {
     path: string;
@@ -87,29 +87,27 @@ const formatProbeLine = (probe: unknown): string | null => {
   return label;
 };
 
-export const formatHealthProviderLines = (summary: HealthSummary): string[] => {
-  const providers = summary.providers ?? {};
-  const providerOrder =
-    summary.providerOrder?.length > 0
-      ? summary.providerOrder
-      : Object.keys(providers);
+export const formatHealthChannelLines = (summary: HealthSummary): string[] => {
+  const channels = summary.channels ?? {};
+  const channelOrder =
+    summary.channelOrder?.length > 0
+      ? summary.channelOrder
+      : Object.keys(channels);
 
   const lines: string[] = [];
-  for (const providerId of providerOrder) {
-    const providerSummary = providers[providerId];
-    if (!providerSummary) continue;
-    const plugin = getProviderPlugin(providerId as never);
+  for (const channelId of channelOrder) {
+    const channelSummary = channels[channelId];
+    if (!channelSummary) continue;
+    const plugin = getChannelPlugin(channelId as never);
     const label =
-      summary.providerLabels?.[providerId] ?? plugin?.meta.label ?? providerId;
+      summary.channelLabels?.[channelId] ?? plugin?.meta.label ?? channelId;
     const linked =
-      typeof providerSummary.linked === "boolean"
-        ? providerSummary.linked
-        : null;
+      typeof channelSummary.linked === "boolean" ? channelSummary.linked : null;
     if (linked !== null) {
       if (linked) {
         const authAgeMs =
-          typeof providerSummary.authAgeMs === "number"
-            ? providerSummary.authAgeMs
+          typeof channelSummary.authAgeMs === "number"
+            ? channelSummary.authAgeMs
             : null;
         const authLabel =
           authAgeMs != null
@@ -123,15 +121,15 @@ export const formatHealthProviderLines = (summary: HealthSummary): string[] => {
     }
 
     const configured =
-      typeof providerSummary.configured === "boolean"
-        ? providerSummary.configured
+      typeof channelSummary.configured === "boolean"
+        ? channelSummary.configured
         : null;
     if (configured === false) {
       lines.push(`${label}: not configured`);
       continue;
     }
 
-    const probeLine = formatProbeLine(providerSummary.probe);
+    const probeLine = formatProbeLine(channelSummary.probe);
     if (probeLine) {
       lines.push(`${label}: ${probeLine}`);
       continue;
@@ -168,14 +166,14 @@ export async function getHealthSnapshot(params?: {
   const start = Date.now();
   const cappedTimeout = Math.max(1000, timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const doProbe = params?.probe !== false;
-  const providers: Record<string, ProviderHealthSummary> = {};
-  const providerOrder = listProviderPlugins().map((plugin) => plugin.id);
-  const providerLabels: Record<string, string> = {};
+  const channels: Record<string, ChannelHealthSummary> = {};
+  const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
+  const channelLabels: Record<string, string> = {};
 
-  for (const plugin of listProviderPlugins()) {
-    providerLabels[plugin.id] = plugin.meta.label ?? plugin.id;
+  for (const plugin of listChannelPlugins()) {
+    channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
     const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveProviderDefaultAccountId({
+    const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
       cfg,
       accountIds,
@@ -204,7 +202,7 @@ export async function getHealthSnapshot(params?: {
       }
     }
 
-    const snapshot: ProviderAccountSnapshot = {
+    const snapshot: ChannelAccountSnapshot = {
       accountId: defaultAccountId,
       enabled,
       configured,
@@ -212,8 +210,8 @@ export async function getHealthSnapshot(params?: {
     if (probe !== undefined) snapshot.probe = probe;
     if (lastProbeAt) snapshot.lastProbeAt = lastProbeAt;
 
-    const summary = plugin.status?.buildProviderSummary
-      ? await plugin.status.buildProviderSummary({
+    const summary = plugin.status?.buildChannelSummary
+      ? await plugin.status.buildChannelSummary({
           account,
           cfg,
           defaultAccountId,
@@ -222,26 +220,26 @@ export async function getHealthSnapshot(params?: {
       : undefined;
     const record =
       summary && typeof summary === "object"
-        ? (summary as ProviderHealthSummary)
+        ? (summary as ChannelHealthSummary)
         : ({
             configured,
             probe,
             lastProbeAt,
-          } satisfies ProviderHealthSummary);
+          } satisfies ChannelHealthSummary);
     if (record.configured === undefined) record.configured = configured;
     if (record.lastProbeAt === undefined && lastProbeAt) {
       record.lastProbeAt = lastProbeAt;
     }
-    providers[plugin.id] = record;
+    channels[plugin.id] = record;
   }
 
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
-    providers,
-    providerOrder,
-    providerLabels,
+    channels,
+    channelOrder,
+    channelLabels,
     heartbeatSeconds,
     sessions: {
       path: storePath,
@@ -270,7 +268,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
       }),
   );
-  // Gateway reachability defines success; provider issues are reported but not fatal here.
+  // Gateway reachability defines success; channel issues are reported but not fatal here.
   const fatal = false;
 
   if (opts.json) {
@@ -283,16 +281,16 @@ export async function healthCommand(
         runtime.log(`  ${line}`);
       }
     }
-    for (const line of formatHealthProviderLines(summary)) {
+    for (const line of formatHealthChannelLines(summary)) {
       runtime.log(line);
     }
     const cfg = loadConfig();
-    for (const plugin of listProviderPlugins()) {
-      const providerSummary = summary.providers?.[plugin.id];
-      if (!providerSummary || providerSummary.linked !== true) continue;
+    for (const plugin of listChannelPlugins()) {
+      const channelSummary = summary.channels?.[plugin.id];
+      if (!channelSummary || channelSummary.linked !== true) continue;
       if (!plugin.status?.logSelfId) continue;
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId = resolveProviderDefaultAccountId({
+      const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
         accountIds,
@@ -302,7 +300,7 @@ export async function healthCommand(
         account,
         cfg,
         runtime,
-        includeProviderPrefix: true,
+        includeChannelPrefix: true,
       });
     }
 

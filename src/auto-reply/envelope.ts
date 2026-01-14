@@ -1,5 +1,5 @@
 export type AgentEnvelopeParams = {
-  provider: string;
+  channel: string;
   from?: string;
   timestamp?: number | Date;
   host?: string;
@@ -24,8 +24,8 @@ function formatTimestamp(ts?: number | Date): string | undefined {
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const provider = params.provider?.trim() || "Provider";
-  const parts: string[] = [provider];
+  const channel = params.channel?.trim() || "Channel";
+  const parts: string[] = [channel];
   if (params.from?.trim()) parts.push(params.from.trim());
   if (params.host?.trim()) parts.push(params.host.trim());
   if (params.ip?.trim()) parts.push(params.ip.trim());
@@ -36,13 +36,13 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
 }
 
 export function formatThreadStarterEnvelope(params: {
-  provider: string;
+  channel: string;
   author?: string;
   timestamp?: number | Date;
   body: string;
 }): string {
   return formatAgentEnvelope({
-    provider: params.provider,
+    channel: params.channel,
     from: params.author,
     timestamp: params.timestamp,
     body: params.body,

@@ -42,13 +42,9 @@ npm i -g clawdhub
 pnpm add -g clawdhub
 ```
 
-```bash
-bun add -g clawdhub
-```
-
 ## How it fits into Clawdbot
 
-By default, the CLI installs skills into `./skills` under your current working directory. Clawdbot loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.clawdbot/skills` or bundled skills, workspace skills take precedence.
+By default, the CLI installs skills into `./skills` under your current working directory. If a Clawdbot workspace is configured, `clawdhub` falls back to that workspace unless you override `--workdir` (or `CLAWDHUB_WORKDIR`). Clawdbot loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.clawdbot/skills` or bundled skills, workspace skills take precedence.
 
 For more detail on how skills are loaded, shared, and gated, see
 [Skills](/tools/skills).
@@ -67,7 +63,7 @@ For more detail on how skills are loaded, shared, and gated, see
 
 Global options (apply to all commands):
 
-- `--workdir <dir>`: Working directory (default: current dir).
+- `--workdir <dir>`: Working directory (default: current dir; falls back to Clawdbot workspace).
 - `--dir <dir>`: Skills directory, relative to workdir (default: `skills`).
 - `--site <url>`: Site base URL (browser login).
 - `--registry <url>`: Registry API base URL.
@@ -201,4 +197,5 @@ export CLAWDHUB_DISABLE_TELEMETRY=1
 - `CLAWDHUB_SITE`: Override the site URL.
 - `CLAWDHUB_REGISTRY`: Override the registry API URL.
 - `CLAWDHUB_CONFIG_PATH`: Override where the CLI stores the token/config.
+- `CLAWDHUB_WORKDIR`: Override the default workdir.
 - `CLAWDHUB_DISABLE_TELEMETRY=1`: Disable telemetry on `sync`.

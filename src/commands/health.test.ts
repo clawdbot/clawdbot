@@ -24,13 +24,13 @@ describe("healthCommand", () => {
       ok: true,
       ts: Date.now(),
       durationMs: 5,
-      providers: {
+      channels: {
         whatsapp: { linked: true, authAgeMs: 5000 },
         telegram: { configured: true, probe: { ok: true, elapsedMs: 1 } },
         discord: { configured: false },
       },
-      providerOrder: ["whatsapp", "telegram", "discord"],
-      providerLabels: {
+      channelOrder: ["whatsapp", "telegram", "discord"],
+      channelLabels: {
         whatsapp: "WhatsApp",
         telegram: "Telegram",
         discord: "Discord",
@@ -49,8 +49,8 @@ describe("healthCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
     const logged = runtime.log.mock.calls[0]?.[0] as string;
     const parsed = JSON.parse(logged) as HealthSummary;
-    expect(parsed.providers.whatsapp?.linked).toBe(true);
-    expect(parsed.providers.telegram?.configured).toBe(true);
+    expect(parsed.channels.whatsapp?.linked).toBe(true);
+    expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
   });
 
@@ -59,13 +59,13 @@ describe("healthCommand", () => {
       ok: true,
       ts: Date.now(),
       durationMs: 5,
-      providers: {
+      channels: {
         whatsapp: { linked: false, authAgeMs: null },
         telegram: { configured: false },
         discord: { configured: false },
       },
-      providerOrder: ["whatsapp", "telegram", "discord"],
-      providerLabels: {
+      channelOrder: ["whatsapp", "telegram", "discord"],
+      channelLabels: {
         whatsapp: "WhatsApp",
         telegram: "Telegram",
         discord: "Discord",

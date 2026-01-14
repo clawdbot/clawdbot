@@ -53,7 +53,7 @@ function resolveToken(params: {
       )} source=${params.fallbackSource ?? "unknown"}`,
     );
     throw new Error(
-      `Slack bot token missing for account "${params.accountId}" (set slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
+      `Slack bot token missing for account "${params.accountId}" (set channels.slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
     );
   }
   return fallback;

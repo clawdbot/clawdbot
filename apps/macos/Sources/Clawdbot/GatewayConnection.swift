@@ -5,7 +5,7 @@ import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "com.clawdbot", category: "gateway.connection")
 
-enum GatewayAgentProvider: String, Codable, CaseIterable, Sendable {
+enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case last
     case whatsapp
     case telegram
@@ -18,7 +18,7 @@ enum GatewayAgentProvider: String, Codable, CaseIterable, Sendable {
 
     init(raw: String?) {
         let normalized = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self = GatewayAgentProvider(rawValue: normalized) ?? .last
+        self = GatewayAgentChannel(rawValue: normalized) ?? .last
     }
 
     var isDeliverable: Bool { self != .webchat }
@@ -32,7 +32,7 @@ struct GatewayAgentInvocation: Sendable {
     var thinking: String?
     var deliver: Bool = false
     var to: String?
-    var provider: GatewayAgentProvider = .last
+    var channel: GatewayAgentChannel = .last
     var timeoutSeconds: Int?
     var idempotencyKey: String = UUID().uuidString
 }
@@ -52,7 +52,7 @@ actor GatewayConnection {
         case setHeartbeats = "set-heartbeats"
         case systemEvent = "system-event"
         case health
-        case providersStatus = "providers.status"
+        case channelsStatus = "channels.status"
         case configGet = "config.get"
         case configSet = "config.set"
         case wizardStart = "wizard.start"
@@ -62,7 +62,7 @@ actor GatewayConnection {
         case talkMode = "talk.mode"
         case webLoginStart = "web.login.start"
         case webLoginWait = "web.login.wait"
-        case providersLogout = "providers.logout"
+        case channelsLogout = "channels.logout"
         case modelsList = "models.list"
         case chatHistory = "chat.history"
         case chatSend = "chat.send"
@@ -368,7 +368,7 @@ extension GatewayConnection {
             "thinking": AnyCodable(invocation.thinking ?? "default"),
             "deliver": AnyCodable(invocation.deliver),
             "to": AnyCodable(invocation.to ?? ""),
-            "provider": AnyCodable(invocation.provider.rawValue),
+            "channel": AnyCodable(invocation.channel.rawValue),
             "idempotencyKey": AnyCodable(invocation.idempotencyKey),
         ]
         if let timeout = invocation.timeoutSeconds {
@@ -389,7 +389,7 @@ extension GatewayConnection {
         sessionKey: String,
         deliver: Bool,
         to: String?,
-        provider: GatewayAgentProvider = .last,
+        channel: GatewayAgentChannel = .last,
         timeoutSeconds: Int? = nil,
         idempotencyKey: String = UUID().uuidString) async -> (ok: Bool, error: String?)
     {
@@ -399,7 +399,7 @@ extension GatewayConnection {
             thinking: thinking,
             deliver: deliver,
             to: to,
-            provider: provider,
+            channel: channel,
             timeoutSeconds: timeoutSeconds,
             idempotencyKey: idempotencyKey))
     }

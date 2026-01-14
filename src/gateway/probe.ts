@@ -4,7 +4,7 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 
 export type GatewayProbeAuth = {

@@ -149,6 +149,26 @@ function writeFileLines(targetPath, lines, hadTrailingNewline) {
 
 function applyHunk(lines, hunk, offset) {
   let cursor = hunk.oldStart - 1 + offset;
+  const expected = [];
+  for (const raw of hunk.lines) {
+    const marker = raw[0];
+    if (marker === " " || marker === "+") {
+      expected.push(raw.slice(1));
+    }
+  }
+  if (cursor >= 0 && cursor + expected.length <= lines.length) {
+    let alreadyApplied = true;
+    for (let i = 0; i < expected.length; i += 1) {
+      if (lines[cursor + i] !== expected[i]) {
+        alreadyApplied = false;
+        break;
+      }
+    }
+    if (alreadyApplied) {
+      const delta = hunk.newLines - hunk.oldLines;
+      return offset + delta;
+    }
+  }
 
   for (const raw of hunk.lines) {
     const marker = raw[0];

@@ -20,7 +20,7 @@ You need Node 22+ on the Mac, then install `clawdbot` globally:
 npm install -g clawdbot@<version>
 ```
 
-The macOS app’s **Install CLI** button runs the same flow via npm/pnpm/bun.
+The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun not recommended for Gateway runtime).
 
 ## Launchd (Gateway as LaunchAgent)
 
@@ -51,7 +51,7 @@ incompatible, update the global CLI to match the app version.
 ```bash
 clawdbot --version
 
-CLAWDBOT_SKIP_PROVIDERS=1 \
+CLAWDBOT_SKIP_CHANNELS=1 \
 CLAWDBOT_SKIP_CANVAS_HOST=1 \
 clawdbot gateway --port 18999 --bind loopback
 ```

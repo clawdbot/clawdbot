@@ -1,4 +1,4 @@
-import type { ChatProviderId } from "../providers/registry.js";
+import type { ChatChannelId } from "../channels/registry.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
@@ -8,10 +8,12 @@ export type AuthChoice =
   | "setup-token"
   | "claude-cli"
   | "token"
+  | "chutes"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
   | "moonshot-api-key"
+  | "synthetic-api-key"
   | "codex-cli"
   | "antigravity"
   | "apiKey"
@@ -26,10 +28,12 @@ export type AuthChoice =
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
-export type GatewayBind = "loopback" | "lan" | "tailnet" | "auto";
+export type GatewayBind = "loopback" | "lan" | "auto" | "custom";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
-export type ProviderChoice = ChatProviderId;
+export type ChannelChoice = ChatChannelId;
+// Legacy alias (pre-rename).
+export type ProviderChoice = ChannelChoice;
 
 export type OnboardOptions = {
   mode?: OnboardMode;
@@ -53,6 +57,7 @@ export type OnboardOptions = {
   geminiApiKey?: string;
   zaiApiKey?: string;
   minimaxApiKey?: string;
+  syntheticApiKey?: string;
   opencodeZenApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
@@ -63,6 +68,8 @@ export type OnboardOptions = {
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
+  skipChannels?: boolean;
+  /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
   skipHealth?: boolean;

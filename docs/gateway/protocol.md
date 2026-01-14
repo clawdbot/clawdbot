@@ -81,6 +81,6 @@ Side-effecting methods require **idempotency keys** (see schema).
 
 ## Scope
 
-This protocol exposes the **full gateway API** (status, providers, models,
+This protocol exposes the **full gateway API** (status, channels, models,
 chat, agent, sessions, nodes, etc.). The exact surface is defined by the
 TypeBox schemas in `src/gateway/protocol/schema.ts`.

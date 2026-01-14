@@ -23,9 +23,13 @@ Set `gateway.auth.mode` to control the handshake:
 - `token` (default when `CLAWDBOT_GATEWAY_TOKEN` is set)
 - `password` (shared secret via `CLAWDBOT_GATEWAY_PASSWORD` or config)
 
-When `tailscale.mode = "serve"`, the gateway trusts Tailscale identity headers by
-default unless you force `gateway.auth.mode` to `password` or set
-`gateway.auth.allowTailscale: false`.
+When `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
+valid Serve proxy requests can authenticate via Tailscale identity headers
+(`tailscale-user-login`) without supplying a token/password. Clawdbot only
+treats a request as Serve when it arrives from loopback with Tailscale’s
+`x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` headers.
+To require explicit credentials, set `gateway.auth.allowTailscale: false` or
+force `gateway.auth.mode: "password"`.
 
 ## Config examples
 
@@ -69,6 +73,8 @@ clawdbot gateway --tailscale funnel --auth password
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
 - Set `gateway.tailscale.resetOnExit` if you want Clawdbot to undo `tailscale serve`
   or `tailscale funnel` configuration on shutdown.
+- Serve/Funnel only expose the **Gateway control UI + WS**. Node **bridge** traffic
+  uses the separate bridge port (default `18790`) and is **not** proxied by Serve.
 
 ## Tailscale prerequisites + limits
 

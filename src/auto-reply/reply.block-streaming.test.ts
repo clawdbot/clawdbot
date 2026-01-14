@@ -97,7 +97,7 @@ describe("block streaming", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -156,7 +156,7 @@ describe("block streaming", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          telegram: { allowFrom: ["*"] },
+          channels: { telegram: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -205,7 +205,7 @@ describe("block streaming", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -263,7 +263,7 @@ describe("block streaming", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          telegram: { allowFrom: ["*"] },
+          channels: { telegram: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -305,7 +305,7 @@ describe("block streaming", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          telegram: { allowFrom: ["*"], streamMode: "block" },
+          channels: { telegram: { allowFrom: ["*"], streamMode: "block" } },
           session: { store: path.join(home, "sessions.json") },
         },
       );

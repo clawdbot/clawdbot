@@ -13,7 +13,7 @@ Welcome to the lobster tank! 🦞
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
 - **Shadow** - Discord + Slack subsystem
-  - GitHub: [@4shadowed](https://github.com/4shadowed) · X: [@4shad0wed](https://x.com/4shad0wed)
+  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shad0wed](https://x.com/4shad0wed)
 
 - **Jos** - Telegram, API, Nix mode
   - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)

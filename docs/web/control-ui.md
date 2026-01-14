@@ -30,7 +30,7 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 ## What it can do (today)
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Connections: WhatsApp/Telegram status + QR login + Telegram config (`providers.status`, `web.login.*`, `config.set`)
+- Connections: WhatsApp/Telegram status + QR login + Telegram config (`channels.status`, `web.login.*`, `config.set`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
@@ -77,8 +77,12 @@ clawdbot gateway --tailscale serve
 Open:
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
-By default, the gateway trusts Tailscale identity headers in serve mode. You can still set
-`gateway.auth` (or `CLAWDBOT_GATEWAY_TOKEN`) if you want a shared secret instead.
+By default, Serve requests can authenticate via Tailscale identity headers
+(`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. Clawdbot
+only accepts these when the request hits loopback with Tailscale’s
+`x-forwarded-*` headers. Set `gateway.auth.allowTailscale: false` (or force
+`gateway.auth.mode: "password"`) if you want to require a token/password even
+for Serve traffic.
 
 ### Bind to tailnet + token
 

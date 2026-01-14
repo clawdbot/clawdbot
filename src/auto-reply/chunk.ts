@@ -2,17 +2,17 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
+import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
   parseFenceSpans,
 } from "../markdown/fences.js";
-import type { ProviderId } from "../providers/plugins/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
-export type TextChunkProvider = ProviderId | typeof INTERNAL_MESSAGE_PROVIDER;
+export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
 
 const DEFAULT_CHUNK_LIMIT = 4000;
 
@@ -55,10 +55,12 @@ export function resolveTextChunkLimit(
       ? opts.fallbackLimit
       : DEFAULT_CHUNK_LIMIT;
   const providerOverride = (() => {
-    if (!provider || provider === INTERNAL_MESSAGE_PROVIDER) return undefined;
-    const providerConfig = (cfg as Record<string, unknown> | undefined)?.[
-      provider
-    ] as ProviderChunkConfig | undefined;
+    if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) return undefined;
+    const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
+    const providerConfig = (channelsConfig?.[provider] ??
+      (cfg as Record<string, unknown> | undefined)?.[provider]) as
+      | ProviderChunkConfig
+      | undefined;
     return resolveChunkLimitForProvider(providerConfig, accountId);
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {

@@ -35,8 +35,11 @@ const DEFAULT_CODEX_ARGS = [
 ];
 const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
 
-function randomImageProbeCode(len = 10): string {
-  const alphabet = "2345689ABCEF";
+function randomImageProbeCode(len = 6): string {
+  // Chosen to avoid common OCR confusions in our 5x7 bitmap font.
+  // Notably: 0↔8, B↔8, 6↔9, 3↔B, D↔0.
+  // Must stay within the glyph set in `src/gateway/live-image-probe.ts`.
+  const alphabet = "24567ACEF";
   const bytes = randomBytes(len);
   let out = "";
   for (let i = 0; i < len; i += 1) {
@@ -202,7 +205,7 @@ describeLive("gateway live (cli backend)", () => {
     const previous = {
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
       token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
+      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
       skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
@@ -210,7 +213,7 @@ describeLive("gateway live (cli backend)", () => {
       anthropicApiKeyOld: process.env.ANTHROPIC_API_KEY_OLD,
     };
 
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
@@ -389,7 +392,8 @@ describeLive("gateway live (cli backend)", () => {
       }
 
       if (CLI_IMAGE) {
-        const imageCode = randomImageProbeCode(10);
+        // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
+        const imageCode = randomImageProbeCode();
         const imageBase64 = renderCatNoncePngBase64(imageCode);
         const runIdImage = randomUUID();
 
@@ -444,9 +448,9 @@ describeLive("gateway live (cli backend)", () => {
       if (previous.token === undefined)
         delete process.env.CLAWDBOT_GATEWAY_TOKEN;
       else process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
-      if (previous.skipProviders === undefined)
-        delete process.env.CLAWDBOT_SKIP_PROVIDERS;
-      else process.env.CLAWDBOT_SKIP_PROVIDERS = previous.skipProviders;
+      if (previous.skipChannels === undefined)
+        delete process.env.CLAWDBOT_SKIP_CHANNELS;
+      else process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
       if (previous.skipGmail === undefined)
         delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
       else process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;

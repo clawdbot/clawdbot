@@ -14,7 +14,7 @@ export type ResolvedIMessageAccount = {
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = cfg.imessage?.accounts;
+  const accounts = cfg.channels?.imessage?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
@@ -35,7 +35,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): IMessageAccountConfig | undefined {
-  const accounts = cfg.imessage?.accounts;
+  const accounts = cfg.channels?.imessage?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
   return accounts[accountId] as IMessageAccountConfig | undefined;
 }
@@ -44,7 +44,7 @@ function mergeIMessageAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): IMessageAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.imessage ??
+  const { accounts: _ignored, ...base } = (cfg.channels?.imessage ??
     {}) as IMessageAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
@@ -55,7 +55,7 @@ export function resolveIMessageAccount(params: {
   accountId?: string | null;
 }): ResolvedIMessageAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = params.cfg.imessage?.enabled !== false;
+  const baseEnabled = params.cfg.channels?.imessage?.enabled !== false;
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const configured = Boolean(

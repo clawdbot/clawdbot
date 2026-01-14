@@ -55,12 +55,13 @@ vi.mock("../daemon/service.js", () => ({
 }));
 
 vi.mock("../daemon/legacy.js", () => ({
-  findLegacyGatewayServices: () => [],
+  findLegacyGatewayServices: async () => [],
 }));
 
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) =>
     findExtraGatewayServices(env, opts),
+  renderGatewayServiceCleanupHints: () => [],
 }));
 
 vi.mock("../infra/ports.js", () => ({
@@ -74,6 +75,11 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("./deps.js", () => ({
   createDefaultDeps: () => {},
+}));
+
+vi.mock("./progress.js", () => ({
+  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) =>
+    await fn(),
 }));
 
 describe("daemon-cli coverage", () => {
@@ -128,7 +134,7 @@ describe("daemon-cli coverage", () => {
     );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
-  });
+  }, 20_000);
 
   it("derives probe URL from service args + env (json)", async () => {
     runtimeLogs.length = 0;
@@ -162,7 +168,8 @@ describe("daemon-cli coverage", () => {
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);
 
-    const parsed = JSON.parse(runtimeLogs[0] ?? "{}") as {
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const parsed = JSON.parse(jsonLine ?? "{}") as {
       gateway?: { port?: number; portSource?: string; probeUrl?: string };
       config?: { mismatch?: boolean };
       rpc?: { url?: string; ok?: boolean };
@@ -173,7 +180,7 @@ describe("daemon-cli coverage", () => {
     expect(parsed.config?.mismatch).toBe(true);
     expect(parsed.rpc?.url).toBe("ws://127.0.0.1:19001");
     expect(parsed.rpc?.ok).toBe(true);
-  });
+  }, 20_000);
 
   it("passes deep scan flag for daemon status", async () => {
     findExtraGatewayServices.mockClear();

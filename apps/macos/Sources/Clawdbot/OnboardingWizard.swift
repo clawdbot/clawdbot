@@ -149,8 +149,7 @@ final class OnboardingWizardModel {
             onboardingWizardLogger.error("wizard step decode failed")
         }
         if res.done { self.currentStep = nil }
-        if res.done || status == "done" || status == "cancelled" || status == "error"
-        {
+        if res.done || status == "done" || status == "cancelled" || status == "error" {
             self.sessionId = nil
         }
     }

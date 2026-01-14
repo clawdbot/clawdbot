@@ -13,7 +13,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
   classifySessionKind,
-  deriveProvider,
+  deriveChannel,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -24,7 +24,7 @@ import {
 type SessionListRow = {
   key: string;
   kind: SessionKind;
-  provider: string;
+  channel: string;
   label?: string;
   displayName?: string;
   updatedAt?: number | null;
@@ -37,7 +37,7 @@ type SessionListRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;
-  lastProvider?: string;
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
   transcriptPath?: string;
@@ -178,21 +178,19 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const entryProvider =
-          typeof entry.provider === "string" ? entry.provider : undefined;
-        const lastProvider =
-          typeof entry.lastProvider === "string"
-            ? entry.lastProvider
-            : undefined;
+        const entryChannel =
+          typeof entry.channel === "string" ? entry.channel : undefined;
+        const lastChannel =
+          typeof entry.lastChannel === "string" ? entry.lastChannel : undefined;
         const lastAccountId =
           typeof entry.lastAccountId === "string"
             ? entry.lastAccountId
             : undefined;
-        const derivedProvider = deriveProvider({
+        const derivedChannel = deriveChannel({
           key,
           kind,
-          provider: entryProvider,
-          lastProvider,
+          channel: entryChannel,
+          lastChannel,
         });
 
         const sessionId =
@@ -205,7 +203,7 @@ export function createSessionsListTool(opts?: {
         const row: SessionListRow = {
           key: displayKey,
           kind,
-          provider: derivedProvider,
+          channel: derivedChannel,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName:
             typeof entry.displayName === "string"
@@ -241,7 +239,7 @@ export function createSessionsListTool(opts?: {
               : undefined,
           sendPolicy:
             typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
-          lastProvider,
+          lastChannel,
           lastTo: typeof entry.lastTo === "string" ? entry.lastTo : undefined,
           lastAccountId,
           transcriptPath,

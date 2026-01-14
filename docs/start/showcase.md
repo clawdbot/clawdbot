@@ -9,7 +9,7 @@ summary: "Community-built projects and integrations powered by Clawdbot"
 Real projects from the community. See what people are building with Clawdbot.
 
 <Info>
-**Want to be featured?** Share your project in [#showcase on Discord](https://discord.gg/clawdbot) or [tag @clawdbot on X](https://x.com/clawdbot).
+**Want to be featured?** Share your project in [#showcase on Discord](https://discord.gg/clawd) or [tag @clawdbot on X](https://x.com/clawdbot).
 </Info>
 
 ## 🎥 Clawdbot in Action
@@ -41,6 +41,22 @@ Full setup walkthrough (28m) by VelvetShark.
 ## 🆕 Fresh from Discord
 
 <CardGroup cols={2}>
+
+<Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
+  **@bangnokia** • `review` `github` `telegram`
+
+  OpenCode finishes the change → opens a PR → Clawdbot reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
+
+  <img src="/assets/showcase/pr-review-telegram.jpg" alt="Clawdbot PR review feedback delivered in Telegram" />
+</Card>
+
+<Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
+  **@prades_maxime** • `skills` `local` `csv`
+
+  Asked “Robby” (@clawdbot) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
+
+  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="Clawdbot building a local wine cellar skill from CSV" />
+</Card>
 
 <Card title="Tesco Shop Autopilot" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
   **@marchattonhere** • `automation` `browser` `shopping`
@@ -350,7 +366,7 @@ Have something to share? We'd love to feature it!
 
 <Steps>
   <Step title="Share It">
-    Post in [#showcase on Discord](https://discord.gg/clawdbot) or [tweet @clawdbot](https://x.com/clawdbot)
+    Post in [#showcase on Discord](https://discord.gg/clawd) or [tweet @clawdbot](https://x.com/clawdbot)
   </Step>
   <Step title="Include Details">
     Tell us what it does, link to the repo/demo, share a screenshot if you have one

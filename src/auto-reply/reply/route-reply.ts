@@ -9,9 +9,9 @@
 
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { normalizeProviderId } from "../../providers/registry.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -88,15 +88,15 @@ export async function routeReply(
     return { ok: true };
   }
 
-  if (channel === INTERNAL_MESSAGE_PROVIDER) {
+  if (channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
       error: "Webchat routing not supported for queued replies",
     };
   }
 
-  const provider = normalizeProviderId(channel) ?? null;
-  if (!provider) {
+  const channelId = normalizeChannelId(channel) ?? null;
+  if (!channelId) {
     return { ok: false, error: `Unknown channel: ${String(channel)}` };
   }
   if (abortSignal?.aborted) {
@@ -111,7 +111,7 @@ export async function routeReply(
     );
     const results = await deliverOutboundPayloads({
       cfg,
-      provider,
+      channel: channelId,
       to,
       accountId: accountId ?? undefined,
       payloads: [normalized],
@@ -138,10 +138,7 @@ export async function routeReply(
  */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
-): channel is Exclude<
-  OriginatingChannelType,
-  typeof INTERNAL_MESSAGE_PROVIDER
-> {
-  if (!channel || channel === INTERNAL_MESSAGE_PROVIDER) return false;
-  return normalizeProviderId(channel) !== null;
+): channel is Exclude<OriginatingChannelType, typeof INTERNAL_MESSAGE_CHANNEL> {
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) return false;
+  return normalizeChannelId(channel) !== null;
 }

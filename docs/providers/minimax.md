@@ -72,6 +72,28 @@ Configure via CLI:
 }
 ```
 
+### MiniMax M2.1 as fallback (Opus primary)
+
+**Best for:** keep Opus 4.5 as primary, fail over to MiniMax M2.1.
+
+```json5
+{
+  env: { MINIMAX_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "minimax/MiniMax-M2.1": { alias: "minimax" }
+      },
+      model: {
+        primary: "anthropic/claude-opus-4-5",
+        fallbacks: ["minimax/MiniMax-M2.1"]
+      }
+    }
+  }
+}
+```
+
 ### Optional: Local via LM Studio (manual)
 
 **Best for:** local inference with LM Studio.
@@ -134,5 +156,27 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 - Model refs are `minimax/<model>`.
 - Update pricing values in `models.json` if you need exact cost tracking.
+- Referral link for MiniMax Coding Plan (10% off): https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
 - Use `clawdbot models list` and `clawdbot models set minimax/MiniMax-M2.1` to switch.
+
+## Troubleshooting
+
+### “Unknown model: minimax/MiniMax-M2.1”
+
+This usually means the **MiniMax provider isn’t configured** (no provider entry
+and no MiniMax auth profile/env key found). A fix for this detection is in
+**2026.1.12** (unreleased at the time of writing). Fix by:
+- Upgrading to **2026.1.12** (or run from source `main`), then restarting the gateway.
+- Running `clawdbot configure` and selecting **MiniMax M2.1**, or
+- Adding the `models.providers.minimax` block manually, or
+- Setting `MINIMAX_API_KEY` (or a MiniMax auth profile) so the provider can be injected.
+
+Make sure the model id is **case‑sensitive**:
+- `minimax/MiniMax-M2.1`
+- `minimax/MiniMax-M2.1-lightning`
+
+Then recheck with:
+```bash
+clawdbot models list
+```

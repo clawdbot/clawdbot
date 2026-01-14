@@ -100,7 +100,7 @@ describe("sessions", () => {
     ).toBe("agent:main:group:12345-678@g.us");
   });
 
-  it("updateLastRoute persists provider and target", async () => {
+  it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
@@ -130,14 +130,14 @@ describe("sessions", () => {
     await updateLastRoute({
       storePath,
       sessionKey: mainSessionKey,
-      provider: "telegram",
+      channel: "telegram",
       to: "  12345  ",
     });
 
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.sessionId).toBe("sess-1");
     expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
-    expect(store[mainSessionKey]?.lastProvider).toBe("telegram");
+    expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("12345");
     expect(store[mainSessionKey]?.responseUsage).toBe("on");
     expect(store[mainSessionKey]?.queueDebounceMs).toBe(1234);
@@ -145,6 +145,39 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.elevatedLevel).toBe("on");
     expect(store[mainSessionKey]?.authProfileOverride).toBe("auth-1");
     expect(store[mainSessionKey]?.compactionCount).toBe(2);
+  });
+
+  it("loadSessionStore auto-migrates legacy provider keys to channel keys", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [mainSessionKey]: {
+            sessionId: "sess-legacy",
+            updatedAt: 123,
+            provider: "slack",
+            lastProvider: "telegram",
+            lastTo: "user:U123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const store = loadSessionStore(storePath) as unknown as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const entry = store[mainSessionKey] ?? {};
+    expect(entry.channel).toBe("slack");
+    expect(entry.provider).toBeUndefined();
+    expect(entry.lastChannel).toBe("telegram");
+    expect(entry.lastProvider).toBeUndefined();
   });
 
   it("derives session transcripts dir from CLAWDBOT_STATE_DIR", () => {

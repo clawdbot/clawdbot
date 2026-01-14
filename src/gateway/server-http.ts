@@ -11,15 +11,15 @@ import type { createSubsystemLogger } from "../logging.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   extractHookToken,
-  HOOK_PROVIDER_ERROR,
-  type HookMessageProvider,
+  HOOK_CHANNEL_ERROR,
+  type HookMessageChannel,
   type HooksConfigResolved,
   normalizeAgentPayload,
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
+  resolveHookChannel,
   resolveHookDeliver,
-  resolveHookProvider,
 } from "./hooks.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
@@ -37,7 +37,7 @@ type HookDispatchers = {
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    provider: HookMessageProvider;
+    channel: HookMessageChannel;
     to?: string;
     model?: string;
     thinking?: string;
@@ -168,9 +168,9 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
           }
-          const provider = resolveHookProvider(mapped.action.provider);
-          if (!provider) {
-            sendJson(res, 400, { ok: false, error: HOOK_PROVIDER_ERROR });
+          const channel = resolveHookChannel(mapped.action.channel);
+          if (!channel) {
+            sendJson(res, 400, { ok: false, error: HOOK_CHANNEL_ERROR });
             return true;
           }
           const runId = dispatchAgentHook({
@@ -179,7 +179,7 @@ export function createHooksRequestHandler(
             wakeMode: mapped.action.wakeMode,
             sessionKey: mapped.action.sessionKey ?? "",
             deliver: resolveHookDeliver(mapped.action.deliver),
-            provider,
+            channel,
             to: mapped.action.to,
             model: mapped.action.model,
             thinking: mapped.action.thinking,

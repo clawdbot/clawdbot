@@ -16,7 +16,7 @@ You’re putting an agent in a position to:
 - send messages back out via WhatsApp/Telegram/Discord
 
 Start conservative:
-- Always set `whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
+- Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
 - Heartbeats now default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
 
@@ -68,7 +68,7 @@ If you link your personal WhatsApp to Clawdbot, every message to you becomes “
 1) Pair WhatsApp Web (shows QR; scan with the assistant phone):
 
 ```bash
-clawdbot providers login
+clawdbot channels login
 ```
 
 2) Start the Gateway (leave it running):
@@ -81,9 +81,7 @@ clawdbot gateway --port 18789
 
 ```json5
 {
-  whatsapp: {
-    allowFrom: ["+15555550123"]
-  }
+  channels: { whatsapp: { allowFrom: ["+15555550123"] } }
 }
 ```
 
@@ -146,10 +144,12 @@ Example:
     // Start with 0; enable later.
     heartbeat: { every: "0m" }
   },
-  whatsapp: {
-    allowFrom: ["+15555550123"],
-    groups: {
-      "*": { requireMention: true }
+  channels: {
+    whatsapp: {
+      allowFrom: ["+15555550123"],
+      groups: {
+        "*": { requireMention: true }
+      }
     }
   },
   routing: {

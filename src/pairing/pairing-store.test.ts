@@ -7,8 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveOAuthDir } from "../config/paths.js";
 import {
-  listProviderPairingRequests,
-  upsertProviderPairingRequest,
+  listChannelPairingRequests,
+  upsertChannelPairingRequest,
 } from "./pairing-store.js";
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
@@ -27,19 +27,19 @@ async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
 describe("pairing store", () => {
   it("reuses pending code and reports created=false", async () => {
     await withTempStateDir(async () => {
-      const first = await upsertProviderPairingRequest({
-        provider: "discord",
+      const first = await upsertChannelPairingRequest({
+        channel: "discord",
         id: "u1",
       });
-      const second = await upsertProviderPairingRequest({
-        provider: "discord",
+      const second = await upsertChannelPairingRequest({
+        channel: "discord",
         id: "u1",
       });
       expect(first.created).toBe(true);
       expect(second.created).toBe(false);
       expect(second.code).toBe(first.code);
 
-      const list = await listProviderPairingRequests("discord");
+      const list = await listChannelPairingRequests("discord");
       expect(list).toHaveLength(1);
       expect(list[0]?.code).toBe(first.code);
     });
@@ -47,8 +47,8 @@ describe("pairing store", () => {
 
   it("expires pending requests after TTL", async () => {
     await withTempStateDir(async (stateDir) => {
-      const created = await upsertProviderPairingRequest({
-        provider: "signal",
+      const created = await upsertChannelPairingRequest({
+        channel: "signal",
         id: "+15550001111",
       });
       expect(created.created).toBe(true);
@@ -71,11 +71,11 @@ describe("pairing store", () => {
         "utf8",
       );
 
-      const list = await listProviderPairingRequests("signal");
+      const list = await listChannelPairingRequests("signal");
       expect(list).toHaveLength(0);
 
-      const next = await upsertProviderPairingRequest({
-        provider: "signal",
+      const next = await upsertChannelPairingRequest({
+        channel: "signal",
         id: "+15550001111",
       });
       expect(next.created).toBe(true);
@@ -87,8 +87,8 @@ describe("pairing store", () => {
       const spy = vi.spyOn(crypto, "randomInt");
       try {
         spy.mockReturnValue(0);
-        const first = await upsertProviderPairingRequest({
-          provider: "telegram",
+        const first = await upsertChannelPairingRequest({
+          channel: "telegram",
           id: "123",
         });
         expect(first.code).toBe("AAAAAAAA");
@@ -96,8 +96,8 @@ describe("pairing store", () => {
         const sequence = Array(8).fill(0).concat(Array(8).fill(1));
         let idx = 0;
         spy.mockImplementation(() => sequence[idx++] ?? 1);
-        const second = await upsertProviderPairingRequest({
-          provider: "telegram",
+        const second = await upsertChannelPairingRequest({
+          channel: "telegram",
           id: "456",
         });
         expect(second.code).toBe("BBBBBBBB");
@@ -111,20 +111,20 @@ describe("pairing store", () => {
     await withTempStateDir(async () => {
       const ids = ["+15550000001", "+15550000002", "+15550000003"];
       for (const id of ids) {
-        const created = await upsertProviderPairingRequest({
-          provider: "whatsapp",
+        const created = await upsertChannelPairingRequest({
+          channel: "whatsapp",
           id,
         });
         expect(created.created).toBe(true);
       }
 
-      const blocked = await upsertProviderPairingRequest({
-        provider: "whatsapp",
+      const blocked = await upsertChannelPairingRequest({
+        channel: "whatsapp",
         id: "+15550000004",
       });
       expect(blocked.created).toBe(false);
 
-      const list = await listProviderPairingRequests("whatsapp");
+      const list = await listChannelPairingRequests("whatsapp");
       const listIds = list.map((entry) => entry.id);
       expect(listIds).toHaveLength(3);
       expect(listIds).toContain("+15550000001");

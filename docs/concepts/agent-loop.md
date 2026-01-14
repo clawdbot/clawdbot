@@ -36,7 +36,7 @@ Short, exact flow of one agent run.
 - `assistant`: streamed deltas from pi-agent-core
 - `tool`: streamed tool events from pi-agent-core
 
-## Chat provider handling
+## Chat channel handling
 - Assistant deltas are buffered into chat `delta` messages.
 - A chat `final` is emitted on **lifecycle end/error**.
 

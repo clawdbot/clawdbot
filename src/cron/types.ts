@@ -1,4 +1,4 @@
-import type { ProviderId } from "../providers/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 
 export type CronSchedule =
   | { kind: "at"; atMs: number }
@@ -8,7 +8,7 @@ export type CronSchedule =
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
 
-export type CronMessageProvider = ProviderId | "last";
+export type CronMessageChannel = ChannelId | "last";
 
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
@@ -20,7 +20,7 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       deliver?: boolean;
-      provider?: CronMessageProvider;
+      channel?: CronMessageChannel;
       to?: string;
       bestEffortDeliver?: boolean;
     };
@@ -44,6 +44,7 @@ export type CronJob = {
   name: string;
   description?: string;
   enabled: boolean;
+  deleteAfterRun?: boolean;
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;

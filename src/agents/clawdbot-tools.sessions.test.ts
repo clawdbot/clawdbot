@@ -73,14 +73,14 @@ describe("sessions tools", () => {
               kind: "direct",
               sessionId: "s-main",
               updatedAt: 10,
-              lastProvider: "whatsapp",
+              lastChannel: "whatsapp",
             },
             {
               key: "discord:group:dev",
               kind: "group",
               sessionId: "s-group",
               updatedAt: 11,
-              provider: "discord",
+              channel: "discord",
               displayName: "discord:g-dev",
             },
             {
@@ -120,7 +120,7 @@ describe("sessions tools", () => {
     };
     expect(details.sessions).toHaveLength(3);
     const main = details.sessions?.find((s) => s.key === "main");
-    expect(main?.provider).toBe("whatsapp");
+    expect(main?.channel).toBe("whatsapp");
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
@@ -233,7 +233,7 @@ describe("sessions tools", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: requesterKey,
-      agentProvider: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_send tool");
@@ -275,7 +275,7 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        provider: "webchat",
+        channel: "webchat",
       });
     }
     expect(
@@ -321,7 +321,7 @@ describe("sessions tools", () => {
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "discord:group:target";
-    let sendParams: { to?: string; provider?: string; message?: string } = {};
+    let sendParams: { to?: string; channel?: string; message?: string } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -371,11 +371,11 @@ describe("sessions tools", () => {
       }
       if (request.method === "send") {
         const params = request.params as
-          | { to?: string; provider?: string; message?: string }
+          | { to?: string; channel?: string; message?: string }
           | undefined;
         sendParams = {
           to: params?.to,
-          provider: params?.provider,
+          channel: params?.channel,
           message: params?.message,
         };
         return { messageId: "m-announce" };
@@ -385,7 +385,7 @@ describe("sessions tools", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: requesterKey,
-      agentProvider: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_send tool");
@@ -407,7 +407,7 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        provider: "webchat",
+        channel: "webchat",
       });
     }
 
@@ -423,7 +423,7 @@ describe("sessions tools", () => {
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({
       to: "channel:target",
-      provider: "discord",
+      channel: "discord",
       message: "announce now",
     });
   });

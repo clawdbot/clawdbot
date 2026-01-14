@@ -47,7 +47,9 @@ describe("system events (session routing)", () => {
       isNewSession: false,
       prefixedBodyBase: "hi",
     });
-    expect(discord).toBe("System: Discord reaction added: ✅\n\nhi");
+    expect(discord).toMatch(
+      /^System: \[[^\]]+\] Discord reaction added: ✅\n\nhi$/,
+    );
     expect(peekSystemEvents("discord:group:123")).toEqual([]);
   });
 
