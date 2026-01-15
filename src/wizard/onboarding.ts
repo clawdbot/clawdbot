@@ -60,8 +60,7 @@ async function requireRiskAcknowledgement(params: {
   );
 
   const ok = await params.prompter.confirm({
-    message:
-      "I understand this is powerful and inherently risky. Continue?",
+    message: "I understand this is powerful and inherently risky. Continue?",
     initialValue: false,
   });
   if (!ok) {

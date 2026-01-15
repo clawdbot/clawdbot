@@ -88,4 +88,3 @@ export function registerSecurityCli(program: Command) {
       defaultRuntime.log(lines.join("\n"));
     });
 }
-

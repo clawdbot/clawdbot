@@ -340,8 +340,8 @@ export async function statusAllCommand(
       },
       { Item: "Security", Value: "Run: clawdbot security audit --deep" },
       gatewaySelfLine
-	        ? { Item: "Gateway self", Value: gatewaySelfLine }
-	        : { Item: "Gateway self", Value: "unknown" },
+        ? { Item: "Gateway self", Value: gatewaySelfLine }
+        : { Item: "Gateway self", Value: "unknown" },
       daemon
         ? {
             Item: "Daemon",

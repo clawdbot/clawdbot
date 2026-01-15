@@ -77,7 +77,11 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
 
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
-  if (s.includes('dms: open') || s.includes('grouppolicy="open"') || s.includes('dmpolicy="open"')) {
+  if (
+    s.includes("dms: open") ||
+    s.includes('grouppolicy="open"') ||
+    s.includes('dmpolicy="open"')
+  ) {
     return "critical";
   }
   if (s.includes("allows any") || s.includes("anyone can dm") || s.includes("public")) {
