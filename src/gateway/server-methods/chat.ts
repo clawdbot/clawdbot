@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -356,7 +358,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
   },
-  "chat.inject": ({ params, respond, context }) => {
+  "chat.inject": async ({ params, respond, context }) => {
     if (!validateChatInjectParams(params)) {
       respond(
         false,
@@ -373,24 +375,63 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: string;
       label?: string;
     };
+
+    // Load session to find transcript file
+    const { storePath, entry } = loadSessionEntry(p.sessionKey);
+    const sessionId = entry?.sessionId;
+    if (!sessionId || !storePath) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      return;
+    }
+
+    // Resolve transcript path
+    const transcriptPath = entry?.sessionFile
+      ? entry.sessionFile
+      : path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+    if (!fs.existsSync(transcriptPath)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "transcript file not found"));
+      return;
+    }
+
+    // Build transcript entry
     const now = Date.now();
-    const runId = randomUUID();
-    const labelPrefix = p.label ? `[${p.label}] ` : "";
-    const text = `${labelPrefix}${p.message}`;
-    // Broadcast as a "final" chat event so it shows in the webchat UI
-    const payload = {
-      runId,
+    const messageId = randomUUID().slice(0, 8);
+    const labelPrefix = p.label ? `[${p.label}]\n\n` : "";
+    const messageBody: Record<string, unknown> = {
+      role: "assistant",
+      content: [{ type: "text", text: `${labelPrefix}${p.message}` }],
+      timestamp: now,
+      stopReason: "injected",
+      usage: { input: 0, output: 0, totalTokens: 0 },
+    };
+    const transcriptEntry = {
+      type: "message",
+      id: messageId,
+      timestamp: new Date(now).toISOString(),
+      message: messageBody,
+    };
+
+    // Append to transcript file
+    try {
+      fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+    } catch (err) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `failed to write transcript: ${errMessage}`));
+      return;
+    }
+
+    // Broadcast to webchat for immediate UI update
+    const chatPayload = {
+      runId: `inject-${messageId}`,
       sessionKey: p.sessionKey,
       seq: 0,
       state: "final" as const,
-      message: {
-        role: "system",
-        content: [{ type: "text", text }],
-        timestamp: now,
-      },
+      message: transcriptEntry.message,
     };
-    context.broadcast("chat", payload);
-    context.bridgeSendToSession(p.sessionKey, "chat", payload);
-    respond(true, { ok: true, runId });
+    context.broadcast("chat", chatPayload);
+    context.bridgeSendToSession(p.sessionKey, "chat", chatPayload);
+
+    respond(true, { ok: true, messageId });
   },
 };

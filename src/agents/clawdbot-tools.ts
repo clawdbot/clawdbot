@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
@@ -112,14 +113,20 @@ export function createClawdbotTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
-    createReportBackTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
     ...(memorySearchTool && memoryGetTool ? [memorySearchTool, memoryGetTool] : []),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
   ];
+
+  // Only include report_back for subagent sessions
+  if (options?.agentSessionKey && isSubagentSessionKey(options.agentSessionKey)) {
+    tools.push(
+      createReportBackTool({
+        agentSessionKey: options.agentSessionKey,
+      }),
+    );
+  }
 
   const pluginTools = resolvePluginTools({
     context: {
