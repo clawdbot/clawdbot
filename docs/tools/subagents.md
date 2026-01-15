@@ -45,29 +45,23 @@ Auto-archive:
 
 ## Announce
 
-Sub-agents report back via an announce step:
-- The announce step runs inside the sub-agent session (not the requester session).
-- If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- Otherwise the announce reply is posted to the requester chat channel via the gateway `send` method.
-- Announce messages are normalized to a stable template:
-  - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
-  - `Result:` the summary content from the announce step (or `(not available)` if missing).
-  - `Notes:` error details and other useful context.
-- `Status` is not inferred from model output; it comes from runtime outcome signals.
+When a sub-agent completes, results are announced back to the requester:
+- The sub-agent's final reply is read from its transcript (no extra LLM step).
+- An instructional message is sent to the **main agent** with the findings and stats.
+- The main agent summarizes in its own voice (using SOUL.md, identity, etc.).
+- The main agent can respond with `NO_REPLY` if no announcement is needed.
 
-Announce payloads include a stats line at the end (even when wrapped):
-- Runtime (e.g., `runtime 5m12s`)
-- Token usage (input/output/total)
-- Estimated cost when model pricing is configured (`models.providers.*.models[].cost`)
-- `sessionKey`, `sessionId`, and transcript path (so the main agent can fetch history via `sessions_history` or inspect the file on disk)
+The trigger message to the main agent includes:
+- Status: `completed successfully`, `timed out`, `failed: <error>`, or `finished with unknown status`
+- Findings: the sub-agent's final reply
+- Stats: runtime, token usage (input/output/total), estimated cost when model pricing is configured (`models.providers.*.models[].cost`)
 
 ## Tool Policy (sub-agent tools)
 
-By default, sub-agents get **all tools except session tools**:
-- `sessions_list`
-- `sessions_history`
-- `sessions_send`
-- `sessions_spawn`
+By default, sub-agents get **all tools except**:
+- Session tools: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`
+- System admin: `gateway`, `agents_list`
+- Interactive setup: `whatsapp_login`
 
 Override via config:
 
