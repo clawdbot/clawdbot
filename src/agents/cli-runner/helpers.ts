@@ -43,6 +43,42 @@ export async function cleanupResumeProcesses(
   }
 }
 
+/**
+ * Cleanup suspended Clawdbot CLI processes that have accumulated.
+ * Only cleans up if there are more than the threshold (default: 10).
+ * Uses --session-id pattern to only target Clawdbot processes, not user's Claude Code sessions.
+ */
+export async function cleanupSuspendedCliProcesses(
+  backend: CliBackendConfig,
+  threshold = 10,
+): Promise<void> {
+  if (process.platform === "win32") return;
+  const commandToken = path.basename(backend.command ?? "").trim();
+  if (!commandToken) return;
+
+  // Pattern includes --session-id to only match Clawdbot processes
+  const pattern = `[${commandToken[0]}]${commandToken.slice(1)}.*--session-id`;
+
+  try {
+    // Count suspended Clawdbot processes
+    const { stdout } = await runExec("bash", [
+      "-c",
+      `ps aux | grep -E '${pattern}' | grep -E '\\s+T\\s+' | wc -l`,
+    ]);
+    const count = parseInt(stdout.trim(), 10) || 0;
+
+    if (count > threshold) {
+      // Kill suspended Clawdbot processes only
+      await runExec("bash", [
+        "-c",
+        `ps aux | grep -E '${pattern}' | grep -E '\\s+T\\s+' | awk '{print $2}' | xargs kill -9 2>/dev/null`,
+      ]);
+    }
+  } catch {
+    // ignore errors - best effort cleanup
+  }
+}
+
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
