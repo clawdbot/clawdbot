@@ -25,7 +25,7 @@ export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["clawdbot", "clawdis"];
+const EXTRA_MARKERS = ["clawdbot"];
 const execFileAsync = promisify(execFile);
 
 export function renderGatewayServiceCleanupHints(

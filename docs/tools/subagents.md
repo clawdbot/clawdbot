@@ -49,8 +49,13 @@ Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
 - Otherwise the announce reply is posted to the requester chat channel via the gateway `send` method.
+- Announce messages are normalized to a stable template:
+  - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
+  - `Result:` the summary content from the announce step (or `(not available)` if missing).
+  - `Notes:` error details and other useful context.
+- `Status` is not inferred from model output; it comes from runtime outcome signals.
 
-Announce payloads include a stats line at the end:
+Announce payloads include a stats line at the end (even when wrapped):
 - Runtime (e.g., `runtime 5m12s`)
 - Token usage (input/output/total)
 - Estimated cost when model pricing is configured (`models.providers.*.models[].cost`)

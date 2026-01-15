@@ -65,6 +65,7 @@ export const ClawdbotSchema = z
       .object({
         enabled: z.boolean().optional(),
         controlUrl: z.string().optional(),
+        controlToken: z.string().optional(),
         cdpUrl: z.string().optional(),
         color: z.string().optional(),
         executablePath: z.string().optional(),
@@ -81,6 +82,7 @@ export const ClawdbotSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
+                driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
                 color: HexColorSchema,
               })
               .refine((value) => value.cdpPort || value.cdpUrl, {

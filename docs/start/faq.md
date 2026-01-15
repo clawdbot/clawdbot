@@ -34,6 +34,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
+  - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
 - [Sandboxing and memory](#sandboxing-and-memory)
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
@@ -50,6 +51,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
   - [Why do I need a token on localhost now?](#why-do-i-need-a-token-on-localhost-now)
   - [Do I have to restart after changing config?](#do-i-have-to-restart-after-changing-config)
+  - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
   - [Can the Clawdbot browser run headless?](#can-the-clawdbot-browser-run-headless)
 - [Remote gateways + nodes](#remote-gateways-nodes)
@@ -239,6 +241,10 @@ It also warns if your configured model is unknown or missing auth.
 
 The wizard can run `claude setup-token` on the gateway host (or you run it yourself), then stores the token as an auth profile for the **anthropic** provider. That profile is used for model calls the same way an API key or OAuth profile would be. If you already ran `claude setup-token`, pick **Anthropic token (paste setup-token)** and paste it. More detail: [OAuth](/concepts/oauth).
 
+Clawdbot keeps `auth.profiles["anthropic:claude-cli"].mode` set to `"oauth"` so
+the profile accepts both OAuth and setup-token credentials; older `"token"` mode
+entries auto-migrate.
+
 ### Do you support Claude subscription auth (Claude Code OAuth)?
 
 Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also supports **setup-token**. If you have a Claude subscription, we recommend **setup-token** on the gateway host for the most reliable long‑running setup (requires Claude Pro/Max + the `claude` CLI). OAuth reuse is supported, but avoid logging in separately via Clawdbot and Claude Code to prevent token conflicts. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
@@ -271,7 +277,18 @@ without WhatsApp/Telegram.
 
 ### Telegram: what goes in `allowFrom`?
 
-`channels.telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username. To find your ID, DM `@userinfobot` or read the `from.id` in the gateway log for a DM. See [/channels/telegram](/channels/telegram#access-control-dms--groups).
+`channels.telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username.
+
+Safer (no third-party bot):
+- DM your bot, then run `clawdbot logs --follow` and read `from.id`.
+
+Official Bot API:
+- DM your bot, then call `https://api.telegram.org/bot<bot_token>/getUpdates` and read `message.from.id`.
+
+Third-party (less private):
+- DM `@userinfobot` or `@getidsbot`.
+
+See [/channels/telegram](/channels/telegram#access-control-dms--groups).
 
 ### Can multiple people use one WhatsApp number with different Clawdbots?
 
@@ -394,11 +411,37 @@ clawdhub update --all
 
 ClawdHub installs into `./skills` under your current directory (or falls back to your configured Clawdbot workspace); Clawdbot treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.clawdbot/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawdHub](/tools/clawdhub).
 
+### How do I install the Chrome extension for browser takeover?
+
+Use the built-in installer, then load the unpacked extension in Chrome:
+
+```bash
+clawdbot browser extension install
+clawdbot browser extension path
+```
+
+Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → pick that folder.
+
+Full guide (including remote Gateway via Tailscale + security notes): [Chrome extension](/tools/chrome-extension)
+
+If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
+You still need to click the extension button on the tab you want to control (it doesn’t auto-attach).
+
 ## Sandboxing and memory
 
 ### Is there a dedicated sandboxing doc?
 
 Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).
+
+### Can I keep DMs “personal” but make groups “public/sandboxed” with one agent?
+
+Yes — if your private traffic is **DMs** and your public traffic is **groups**.
+
+Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in Docker, while the main DM session stays on-host. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
+
+Setup walkthrough + example config: [Groups: personal DMs + public groups](/concepts/groups#pattern-personal-dms-public-groups-single-agent)
+
+Key config reference: [Gateway configuration](/gateway/configuration#agentsdefaultssandbox)
 
 ### How do I bind a host folder into the sandbox?
 
@@ -543,6 +586,37 @@ The Gateway watches the config and supports hot‑reload:
 
 - `gateway.reload.mode: "hybrid"` (default): hot‑apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
+
+### How do I enable web search (and web fetch)?
+
+`web_fetch` works without an API key. `web_search` requires a Brave Search API
+key. **Recommended:** run `clawdbot configure --section web` to store it in
+`tools.web.search.apiKey`. Environment alternative: set `BRAVE_API_KEY` for the
+Gateway process.
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        apiKey: "BRAVE_API_KEY_HERE",
+        maxResults: 5
+      },
+      fetch: {
+        enabled: true
+      }
+    }
+  }
+}
+```
+
+Notes:
+- If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
+- `web_fetch` is enabled by default (unless explicitly disabled).
+- Daemons read env vars from `~/.clawdbot/.env` (or the service environment).
+
+Docs: [Web tools](/tools/web).
 
 ### How do I run a central Gateway with specialized workers across devices?
 
@@ -984,6 +1058,21 @@ Z.AI (GLM models):
 
 If you reference a provider/model but the required provider key is missing, you’ll get a runtime auth error (e.g. `No API key found for provider "zai"`).
 
+### “No API key found for provider …” after adding a new agent
+
+This usually means the **new agent** has an empty auth store. Auth is per-agent and
+stored in:
+
+```
+~/.clawdbot/agents/<agentId>/agent/auth-profiles.json
+```
+
+Fix options:
+- Run `clawdbot agents add <id>` and configure auth during the wizard.
+- Or copy `auth-profiles.json` from the main agent’s `agentDir` into the new agent’s `agentDir`.
+
+Do **not** reuse `agentDir` across agents; it causes auth/session collisions.
+
 ## Model failover and “All models failed”
 
 ### How does failover work?
@@ -1017,11 +1106,11 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 
 ### Fix checklist for `No credentials found for profile "anthropic:claude-cli"`
 
-This means the run is pinned to the **Claude CLI** profile, but the Gateway
+This means the run is pinned to the **Claude Code CLI** profile, but the Gateway
 can’t find that profile in its auth store.
 
-- **Sync the Claude CLI token on the gateway host**
-  - Run `clawdbot models status` (it loads + syncs Claude CLI credentials).
+- **Sync the Claude Code CLI token on the gateway host**
+  - Run `clawdbot models status` (it loads + syncs Claude Code CLI credentials).
   - If it still says missing: run `claude setup-token` (or `clawdbot models auth setup-token --provider anthropic`) and retry.
 - **If you want to use an API key instead**
   - Put `ANTHROPIC_API_KEY` in `~/.clawdbot/.env` on the **gateway host**.
@@ -1037,6 +1126,13 @@ can’t find that profile in its auth store.
 If your model config includes Google Gemini as a fallback (or you switched to a Gemini shorthand), Clawdbot will try it during model fallback. If you haven’t configured Google credentials, you’ll see `No API key found for provider "google"`.
 
 Fix: either provide Google auth, or remove/avoid Google models in `agents.defaults.model.fallbacks` / aliases so fallback doesn’t route there.
+
+### “LLM request rejected: messages.*.thinking.signature required (google‑antigravity)”
+
+Cause: the session history contains **thinking blocks without signatures** (often from
+an aborted/partial stream). Google Antigravity requires signatures for thinking blocks.
+
+Fix: start a **new session** or set `/thinking off` for that agent.
 
 ## Auth profiles: what they are and how to manage them
 
@@ -1194,6 +1290,7 @@ Quick setup (recommended):
 - Install a per-profile daemon: `clawdbot --profile <name> daemon install`.
 
 Profiles also suffix service names (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`, `Clawdbot Gateway (<profile>)`).
+Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ### What does “invalid handshake” / code 1008 mean?
 
@@ -1316,6 +1413,7 @@ abort
 esc
 wait
 exit
+interrupt
 ```
 
 These are abort triggers (not slash commands).

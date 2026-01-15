@@ -1,9 +1,7 @@
-import {
-  formatChannelPrimerLine,
-  formatChannelSelectionLine,
-  getChatChannelMeta,
-  listChatChannels,
-} from "../channels/registry.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
+import { listChannelPlugins, getChannelPlugin } from "../channels/plugins/index.js";
+import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,10 +12,25 @@ import {
   getChannelOnboardingAdapter,
   listChannelOnboardingAdapters,
 } from "./onboarding/registry.js";
+import {
+  ensureOnboardingPluginInstalled,
+  reloadOnboardingPluginRegistry,
+} from "./onboarding/plugin-install.js";
 import type { ChannelOnboardingDmPolicy, SetupChannelsOptions } from "./onboarding/types.js";
 
-async function noteChannelPrimer(prompter: WizardPrompter): Promise<void> {
-  const channelLines = listChatChannels().map((meta) => formatChannelPrimerLine(meta));
+async function noteChannelPrimer(
+  prompter: WizardPrompter,
+  channels: Array<{ id: ChannelChoice; blurb: string; label: string }>,
+): Promise<void> {
+  const channelLines = channels.map((channel) =>
+    formatChannelPrimerLine({
+      id: channel.id,
+      label: channel.label,
+      selectionLabel: channel.label,
+      docsPath: "/",
+      blurb: channel.blurb,
+    }),
+  );
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
@@ -101,6 +114,7 @@ export async function setupChannels(
   prompter: WizardPrompter,
   options?: SetupChannelsOptions,
 ): Promise<ClawdbotConfig> {
+  let next = cfg;
   const forceAllowFromChannels = new Set(options?.forceAllowFromChannels ?? []);
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
@@ -109,13 +123,25 @@ export async function setupChannels(
     accountOverrides.whatsapp = options.whatsappAccountId.trim();
   }
 
+  const installedPlugins = listChannelPlugins();
+  const catalogEntries = listChannelPluginCatalogEntries().filter(
+    (entry) => !installedPlugins.some((plugin) => plugin.id === entry.id),
+  );
   const statusEntries = await Promise.all(
     listChannelOnboardingAdapters().map((adapter) =>
       adapter.getStatus({ cfg, options, accountOverrides }),
     ),
   );
-  const statusByChannel = new Map(statusEntries.map((entry) => [entry.channel, entry]));
-  const statusLines = statusEntries.flatMap((entry) => entry.statusLines);
+  const catalogStatuses = catalogEntries.map((entry) => ({
+    channel: entry.id,
+    configured: false,
+    statusLines: [`${entry.meta.label}: install plugin to enable`],
+    selectionHint: "plugin · install",
+    quickstartScore: 0,
+  }));
+  const combinedStatuses = [...statusEntries, ...catalogStatuses];
+  const statusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
+  const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   if (statusLines.length > 0) {
     await prompter.note(statusLines.join("\n"), "Channel status");
   }
@@ -128,13 +154,35 @@ export async function setupChannels(
       });
   if (!shouldConfigure) return cfg;
 
-  await noteChannelPrimer(prompter);
+  const primerChannels = [
+    ...installedPlugins.map((plugin) => ({
+      id: plugin.id as ChannelChoice,
+      label: plugin.meta.label,
+      blurb: plugin.meta.blurb,
+    })),
+    ...catalogEntries.map((entry) => ({
+      id: entry.id as ChannelChoice,
+      label: entry.meta.label,
+      blurb: entry.meta.blurb,
+    })),
+  ];
+  await noteChannelPrimer(prompter, primerChannels);
 
-  const selectionOptions = listChatChannels().map((meta) => {
-    const status = statusByChannel.get(meta.id as ChannelChoice);
+  const selectionOptions = [
+    ...installedPlugins.map((plugin) => ({
+      id: plugin.id as ChannelChoice,
+      meta: plugin.meta,
+    })),
+    ...catalogEntries.map((entry) => ({
+      id: entry.id as ChannelChoice,
+      meta: entry.meta,
+    })),
+  ].map((entry) => {
+    const meta = entry.meta;
+    const status = statusByChannel.get(entry.id);
     return {
       value: meta.id,
-      label: meta.selectionLabel,
+      label: meta.selectionLabel ?? meta.label,
       ...(status?.selectionHint ? { hint: status.selectionHint } : {}),
     };
   });
@@ -166,11 +214,41 @@ export async function setupChannels(
     })) as ChannelChoice[];
   }
 
+  const catalogById = new Map(catalogEntries.map((entry) => [entry.id as ChannelChoice, entry]));
+  if (selection.some((channel) => catalogById.has(channel))) {
+    const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
+    for (const channel of selection) {
+      const entry = catalogById.get(channel);
+      if (!entry) continue;
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: next,
+        entry,
+        prompter,
+        runtime,
+        workspaceDir,
+      });
+      next = result.cfg;
+      if (!result.installed) {
+        selection = selection.filter((id) => id !== channel);
+        continue;
+      }
+      reloadOnboardingPluginRegistry({
+        cfg: next,
+        runtime,
+        workspaceDir,
+      });
+    }
+  }
+
   options?.onSelection?.(selection);
 
-  const selectionNotes = new Map(
-    listChatChannels().map((meta) => [meta.id, formatChannelSelectionLine(meta, formatDocsLink)]),
-  );
+  const selectionNotes = new Map<string, string>();
+  for (const plugin of installedPlugins) {
+    selectionNotes.set(plugin.id, formatChannelSelectionLine(plugin.meta, formatDocsLink));
+  }
+  for (const entry of catalogEntries) {
+    selectionNotes.set(entry.id, formatChannelSelectionLine(entry.meta, formatDocsLink));
+  }
   const selectedLines = selection
     .map((channel) => selectionNotes.get(channel))
     .filter((line): line is string => Boolean(line));
@@ -185,7 +263,6 @@ export async function setupChannels(
     adapter?.onAccountRecorded?.(accountId, options);
   };
 
-  let next = cfg;
   for (const channel of selection) {
     const adapter = getChannelOnboardingAdapter(channel);
     if (!adapter) continue;
@@ -214,9 +291,9 @@ export async function setupChannels(
       if (!status.configured) continue;
       const adapter = getChannelOnboardingAdapter(channelId);
       if (!adapter?.disable) continue;
-      const meta = getChatChannelMeta(channelId);
+      const meta = getChannelPlugin(channelId)?.meta;
       const disable = await prompter.confirm({
-        message: `Disable ${meta.label} channel?`,
+        message: `Disable ${meta?.label ?? channelId} channel?`,
         initialValue: false,
       });
       if (disable) {

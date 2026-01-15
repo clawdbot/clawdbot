@@ -3,6 +3,7 @@ import { Routes } from "discord-api-types/v10";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import type { ReplyToMode } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { DiscordMessageEvent } from "./listeners.js";
@@ -159,6 +160,92 @@ type DiscordReplyDeliveryPlan = {
   replyTarget: string;
   replyReference: ReturnType<typeof createReplyReferencePlanner>;
 };
+
+export type DiscordAutoThreadContext = {
+  createdThreadId: string;
+  From: string;
+  To: string;
+  OriginatingTo: string;
+  SessionKey: string;
+  ParentSessionKey: string;
+};
+
+export function resolveDiscordAutoThreadContext(params: {
+  agentId: string;
+  channel: string;
+  messageChannelId: string;
+  createdThreadId?: string | null;
+}): DiscordAutoThreadContext | null {
+  const createdThreadId = String(params.createdThreadId ?? "").trim();
+  if (!createdThreadId) return null;
+  const messageChannelId = params.messageChannelId.trim();
+  if (!messageChannelId) return null;
+
+  const threadSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: params.channel,
+    peer: { kind: "channel", id: createdThreadId },
+  });
+  const parentSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: params.channel,
+    peer: { kind: "channel", id: messageChannelId },
+  });
+
+  return {
+    createdThreadId,
+    From: `group:${createdThreadId}`,
+    To: `channel:${createdThreadId}`,
+    OriginatingTo: `channel:${createdThreadId}`,
+    SessionKey: threadSessionKey,
+    ParentSessionKey: parentSessionKey,
+  };
+}
+
+export type DiscordAutoThreadReplyPlan = DiscordReplyDeliveryPlan & {
+  createdThreadId?: string;
+  autoThreadContext: DiscordAutoThreadContext | null;
+};
+
+export async function resolveDiscordAutoThreadReplyPlan(params: {
+  client: Client;
+  message: DiscordMessageEvent["message"];
+  isGuildMessage: boolean;
+  channelConfig?: DiscordChannelConfigResolved | null;
+  threadChannel?: DiscordThreadChannel | null;
+  baseText: string;
+  combinedBody: string;
+  replyToMode: ReplyToMode;
+  agentId: string;
+  channel: string;
+}): Promise<DiscordAutoThreadReplyPlan> {
+  const originalReplyTarget = `channel:${params.message.channelId}`;
+  const createdThreadId = await maybeCreateDiscordAutoThread({
+    client: params.client,
+    message: params.message,
+    isGuildMessage: params.isGuildMessage,
+    channelConfig: params.channelConfig,
+    threadChannel: params.threadChannel,
+    baseText: params.baseText,
+    combinedBody: params.combinedBody,
+  });
+  const deliveryPlan = resolveDiscordReplyDeliveryPlan({
+    replyTarget: originalReplyTarget,
+    replyToMode: params.replyToMode,
+    messageId: params.message.id,
+    threadChannel: params.threadChannel,
+    createdThreadId,
+  });
+  const autoThreadContext = params.isGuildMessage
+    ? resolveDiscordAutoThreadContext({
+        agentId: params.agentId,
+        channel: params.channel,
+        messageChannelId: params.message.channelId,
+        createdThreadId,
+      })
+    : null;
+  return { ...deliveryPlan, createdThreadId, autoThreadContext };
+}
 
 export async function maybeCreateDiscordAutoThread(params: {
   client: Client;

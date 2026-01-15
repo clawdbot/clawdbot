@@ -13,70 +13,68 @@ export async function saveDiscordConfig(state: ConnectionsState) {
   state.discordSaving = true;
   state.discordConfigStatus = null;
   try {
-    const base = state.configSnapshot?.config ?? {};
-    const config = { ...base } as Record<string, unknown>;
-    const discord = { ...(config.discord ?? {}) } as Record<string, unknown>;
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.discordConfigStatus = "Config hash missing; reload and retry.";
+      return;
+    }
+    const discord: Record<string, unknown> = {};
     const form = state.discordForm;
 
     if (form.enabled) {
-      delete discord.enabled;
+      discord.enabled = null;
     } else {
       discord.enabled = false;
     }
 
     if (!state.discordTokenLocked) {
       const token = form.token.trim();
-      if (token) discord.token = token;
-      else delete discord.token;
+      discord.token = token || null;
     }
 
     const allowFrom = parseList(form.allowFrom);
     const groupChannels = parseList(form.groupChannels);
-    const dm = { ...(discord.dm ?? {}) } as Record<string, unknown>;
-    if (form.dmEnabled) delete dm.enabled;
-    else dm.enabled = false;
-    if (allowFrom.length > 0) dm.allowFrom = allowFrom;
-    else delete dm.allowFrom;
-    if (form.groupEnabled) dm.groupEnabled = true;
-    else delete dm.groupEnabled;
-    if (groupChannels.length > 0) dm.groupChannels = groupChannels;
-    else delete dm.groupChannels;
-    if (Object.keys(dm).length > 0) discord.dm = dm;
-    else delete discord.dm;
+    const dm: Record<string, unknown> = {
+      enabled: form.dmEnabled ? null : false,
+      allowFrom: allowFrom.length > 0 ? allowFrom : null,
+      groupEnabled: form.groupEnabled ? true : null,
+      groupChannels: groupChannels.length > 0 ? groupChannels : null,
+    };
+    discord.dm = dm;
 
     const mediaMaxMb = Number(form.mediaMaxMb);
     if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
       discord.mediaMaxMb = mediaMaxMb;
     } else {
-      delete discord.mediaMaxMb;
+      discord.mediaMaxMb = null;
     }
 
     const historyLimitRaw = form.historyLimit.trim();
     if (historyLimitRaw.length === 0) {
-      delete discord.historyLimit;
+      discord.historyLimit = null;
     } else {
       const historyLimit = Number(historyLimitRaw);
       if (Number.isFinite(historyLimit) && historyLimit >= 0) {
         discord.historyLimit = historyLimit;
       } else {
-        delete discord.historyLimit;
+        discord.historyLimit = null;
       }
     }
 
     const chunkLimitRaw = form.textChunkLimit.trim();
     if (chunkLimitRaw.length === 0) {
-      delete discord.textChunkLimit;
+      discord.textChunkLimit = null;
     } else {
       const chunkLimit = Number(chunkLimitRaw);
       if (Number.isFinite(chunkLimit) && chunkLimit > 0) {
         discord.textChunkLimit = chunkLimit;
       } else {
-        delete discord.textChunkLimit;
+        discord.textChunkLimit = null;
       }
     }
 
     if (form.replyToMode === "off") {
-      delete discord.replyToMode;
+      discord.replyToMode = null;
     } else {
       discord.replyToMode = form.replyToMode;
     }
@@ -114,7 +112,7 @@ export async function saveDiscordConfig(state: ConnectionsState) {
       guilds[key] = entry;
     });
     if (Object.keys(guilds).length > 0) discord.guilds = guilds;
-    else delete discord.guilds;
+    else discord.guilds = null;
 
     const actions: Partial<DiscordActionForm> = {};
     const applyAction = (key: keyof DiscordActionForm) => {
@@ -139,36 +137,33 @@ export async function saveDiscordConfig(state: ConnectionsState) {
     if (Object.keys(actions).length > 0) {
       discord.actions = actions;
     } else {
-      delete discord.actions;
+      discord.actions = null;
     }
 
     const slash = { ...(discord.slashCommand ?? {}) } as Record<string, unknown>;
     if (form.slashEnabled) {
       slash.enabled = true;
     } else {
-      delete slash.enabled;
+      slash.enabled = null;
     }
     if (form.slashName.trim()) slash.name = form.slashName.trim();
-    else delete slash.name;
+    else slash.name = null;
     if (form.slashSessionPrefix.trim())
       slash.sessionPrefix = form.slashSessionPrefix.trim();
-    else delete slash.sessionPrefix;
+    else slash.sessionPrefix = null;
     if (form.slashEphemeral) {
-      delete slash.ephemeral;
+      slash.ephemeral = null;
     } else {
       slash.ephemeral = false;
     }
-    if (Object.keys(slash).length > 0) discord.slashCommand = slash;
-    else delete discord.slashCommand;
+    discord.slashCommand = Object.keys(slash).length > 0 ? slash : null;
 
-    if (Object.keys(discord).length > 0) {
-      config.discord = discord;
-    } else {
-      delete config.discord;
-    }
-
-    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
-    await state.client.request("config.set", { raw });
+    const raw = `${JSON.stringify(
+      { channels: { discord } },
+      null,
+      2,
+    ).trimEnd()}\n`;
+    await state.client.request("config.patch", { raw, baseHash });
     state.discordConfigStatus = "Saved. Restart gateway if needed.";
   } catch (err) {
     state.discordConfigStatus = String(err);
@@ -176,4 +171,3 @@ export async function saveDiscordConfig(state: ConnectionsState) {
     state.discordSaving = false;
   }
 }
-

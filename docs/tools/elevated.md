@@ -20,6 +20,7 @@ read_when:
 - **Host execution**: elevated runs `exec` on the host (bypasses sandbox).
 - **Unsandboxed agents**: when there is no sandbox to bypass, elevated does not change where `exec` runs.
 - **Tool policy still applies**: if `exec` is denied by tool policy, elevated cannot be used.
+- **Not skill-scoped**: elevated cannot be limited to a specific skill; it only changes `exec` location.
 
 Note:
 - Sandbox on: `/elevated on` runs that `exec` command on the host.

@@ -441,6 +441,20 @@
   background: rgba(0, 0, 0, 0.2);
 }
 
+.list-item-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.list-item-clickable:hover {
+  border-color: var(--border-strong);
+}
+
+.list-item-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
 .list-main {
   display: grid;
   gap: 6px;

@@ -34,7 +34,7 @@ beforeEach(() => {
     durationMs: 0,
   });
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/clawdis.json",
+    path: "/tmp/clawdbot.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -133,7 +133,7 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/clawdis.json",
+  path: "/tmp/clawdbot.json",
   exists: false,
   raw: null,
   parsed: {},
@@ -361,7 +361,7 @@ describe("doctor command", () => {
     expect(written.routing).toBeUndefined();
   });
 
-  it("migrates legacy Clawdis services", async () => {
+  it("migrates legacy gateway services", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",
       exists: true,
@@ -376,7 +376,7 @@ describe("doctor command", () => {
     findLegacyGatewayServices.mockResolvedValueOnce([
       {
         platform: "darwin",
-        label: "com.clawdis.gateway",
+        label: "com.steipete.clawdbot.gateway",
         detail: "loaded",
       },
     ]);

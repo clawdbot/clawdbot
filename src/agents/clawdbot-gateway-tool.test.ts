@@ -6,7 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createClawdbotTools } from "./clawdbot-tools.js";
 
 vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(async () => ({ ok: true })),
+  callGatewayTool: vi.fn(async (method: string) => {
+    if (method === "config.get") {
+      return { hash: "hash-1" };
+    }
+    return { ok: true };
+  }),
 }));
 
 describe("gateway tool", () => {
@@ -71,11 +76,13 @@ describe("gateway tool", () => {
       raw,
     });
 
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
     expect(callGatewayTool).toHaveBeenCalledWith(
       "config.apply",
       expect.any(Object),
       expect.objectContaining({
         raw: raw.trim(),
+        baseHash: "hash-1",
         sessionKey: "agent:main:whatsapp:dm:+15555550123",
       }),
     );

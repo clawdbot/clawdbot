@@ -277,6 +277,16 @@
       "title": "Memory Get",
       "detailKeys": ["path", "from", "lines"]
     },
+    "web_search": {
+      "emoji": "🔎",
+      "title": "Web Search",
+      "detailKeys": ["query", "count"]
+    },
+    "web_fetch": {
+      "emoji": "📄",
+      "title": "Web Fetch",
+      "detailKeys": ["url", "extractMode", "maxChars"]
+    },
     "whatsapp_login": {
       "emoji": "🟢",
       "title": "WhatsApp Login",

@@ -43,6 +43,8 @@ extract_version_section() {
 
 markdown_to_html() {
   local text=$1
+  text=$(echo "$text" | sed 's/^##### \(.*\)$/<h5>\1<\/h5>/')
+  text=$(echo "$text" | sed 's/^#### \(.*\)$/<h4>\1<\/h4>/')
   text=$(echo "$text" | sed 's/^### \(.*\)$/<h3>\1<\/h3>/')
   text=$(echo "$text" | sed 's/^## \(.*\)$/<h2>\1<\/h2>/')
   text=$(echo "$text" | sed 's/^- \*\*\([^*]*\)\*\*\(.*\)$/<li><strong>\1<\/strong>\2<\/li>/')

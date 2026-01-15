@@ -180,6 +180,7 @@ struct ConfigSnapshot: Codable {
     let path: String?
     let exists: Bool?
     let raw: String?
+    let hash: String?
     let parsed: AnyCodable?
     let valid: Bool?
     let config: [String: AnyCodable]?
@@ -307,6 +308,7 @@ final class ConnectionsStore {
     var pollTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
+    var configHash: String?
 
     init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
         self.isPreview = isPreview

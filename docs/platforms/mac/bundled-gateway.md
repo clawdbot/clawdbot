@@ -29,6 +29,7 @@ Label:
 
 Plist location (per‑user):
 - `~/Library/LaunchAgents/com.clawdbot.gateway.plist`
+  (or `~/Library/LaunchAgents/com.clawdbot.<profile>.plist`)
 
 Manager:
 - The macOS app owns LaunchAgent install/update in Local mode.

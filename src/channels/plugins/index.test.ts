@@ -3,12 +3,10 @@ import { CHANNEL_IDS } from "../registry.js";
 import { listChannelPlugins } from "./index.js";
 
 describe("channel plugin registry", () => {
-  it("stays in sync with channel ids", () => {
-    const pluginIds = listChannelPlugins()
-      .map((plugin) => plugin.id)
-      .slice()
-      .sort();
-    const channelIds = [...CHANNEL_IDS].slice().sort();
-    expect(pluginIds).toEqual(channelIds);
+  it("includes the built-in channel ids", () => {
+    const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
+    for (const id of CHANNEL_IDS) {
+      expect(pluginIds).toContain(id);
+    }
   });
 });

@@ -409,3 +409,74 @@ describe("telegram media groups", () => {
     MEDIA_GROUP_TEST_TIMEOUT_MS,
   );
 });
+
+describe("telegram text fragments", () => {
+  beforeEach(() => {
+    // These tests rely on real setTimeout aggregation; guard against leaked fake timers.
+    vi.useRealTimers();
+  });
+
+  const TEXT_FRAGMENT_POLL_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 15_000;
+  const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+
+  const waitForFragmentProcessing = async (
+    replySpy: ReturnType<typeof vi.fn>,
+    expectedCalls: number,
+  ) => {
+    await expect
+      .poll(() => replySpy.mock.calls.length, { timeout: TEXT_FRAGMENT_POLL_TIMEOUT_MS })
+      .toBe(expectedCalls);
+  };
+
+  it(
+    "buffers near-limit text and processes sequential parts as one message",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      createTelegramBot({ token: "tok" });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      const part1 = "A".repeat(4050);
+      const part2 = "B".repeat(50);
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 10,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({}),
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 11,
+          date: 1736380801,
+          text: part2,
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      await waitForFragmentProcessing(replySpy, 1);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0] as { RawBody?: string; Body?: string };
+      expect(payload.RawBody).toContain(part1.slice(0, 32));
+      expect(payload.RawBody).toContain(part2.slice(0, 32));
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+});

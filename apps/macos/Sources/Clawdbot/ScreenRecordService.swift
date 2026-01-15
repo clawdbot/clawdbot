@@ -251,11 +251,11 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
                     if let err = self.writer.error {
                         cont
                             .resume(throwing: ScreenRecordService.ScreenRecordError
-                                .writeFailed(err.localizedDescription))
+                                        .writeFailed(err.localizedDescription))
                     } else if self.writer.status != .completed {
                         cont
                             .resume(throwing: ScreenRecordService.ScreenRecordError
-                                .writeFailed("Failed to finalize video"))
+                                        .writeFailed("Failed to finalize video"))
                     } else {
                         cont.resume()
                     }

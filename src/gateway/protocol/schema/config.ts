@@ -7,6 +7,7 @@ export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: fal
 export const ConfigSetParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
+    baseHash: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -14,9 +15,18 @@ export const ConfigSetParamsSchema = Type.Object(
 export const ConfigApplyParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
+    baseHash: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(Type.String()),
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ConfigPatchParamsSchema = Type.Object(
+  {
+    raw: NonEmptyString,
+    baseHash: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

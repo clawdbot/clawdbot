@@ -1,36 +1,63 @@
+import Foundation
 import Testing
 @testable import Clawdbot
 
-@Suite(.serialized)
-struct GatewayEndpointStoreTests {
-    @Test func resolvesLocalHostFromBindModes() {
-        #expect(GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "loopback",
-            tailscaleIP: "100.64.0.10") == "127.0.0.1")
-        #expect(GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "lan",
-            tailscaleIP: "100.64.0.10") == "127.0.0.1")
-        #expect(GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "tailnet",
-            tailscaleIP: "100.64.0.10") == "100.64.0.10")
-        #expect(GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "tailnet",
-            tailscaleIP: nil) == "127.0.0.1")
-        #expect(GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "auto",
-            tailscaleIP: "100.64.0.10") == "100.64.0.10")
-        #expect(GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "auto",
-            tailscaleIP: nil) == "127.0.0.1")
+@Suite struct GatewayEndpointStoreTests {
+    @Test func resolveGatewayTokenPrefersEnvAndFallsBackToLaunchd() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: ["CLAWDBOT_GATEWAY_TOKEN": "launchd-token"],
+            port: nil,
+            bind: nil,
+            token: "launchd-token",
+            password: nil)
+
+        let envToken = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: [:],
+            env: ["CLAWDBOT_GATEWAY_TOKEN": "env-token"],
+            launchdSnapshot: snapshot)
+        #expect(envToken == "env-token")
+
+        let fallbackToken = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: [:],
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(fallbackToken == "launchd-token")
     }
 
-    @Test func resolvesBindModeFromEnvOrConfig() {
-        let root: [String: Any] = ["gateway": ["bind": "tailnet"]]
-        #expect(GatewayEndpointStore._testResolveGatewayBindMode(
-            root: root,
-            env: [:]) == "tailnet")
-        #expect(GatewayEndpointStore._testResolveGatewayBindMode(
-            root: root,
-            env: ["CLAWDBOT_GATEWAY_BIND": "lan"]) == "lan")
+    @Test func resolveGatewayTokenIgnoresLaunchdInRemoteMode() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: ["CLAWDBOT_GATEWAY_TOKEN": "launchd-token"],
+            port: nil,
+            bind: nil,
+            token: "launchd-token",
+            password: nil)
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: [:],
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == nil)
+    }
+
+    @Test func resolveGatewayPasswordFallsBackToLaunchd() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: ["CLAWDBOT_GATEWAY_PASSWORD": "launchd-pass"],
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: "launchd-pass")
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: [:],
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(password == "launchd-pass")
     }
 }

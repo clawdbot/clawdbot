@@ -48,7 +48,7 @@ Examples:
   clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json
   clawdbot agent --to +15555550123 --message "Summon reply" --deliver
 
-${theme.muted("Docs:")} ${formatDocsLink("/agent-send", "docs.clawd.bot/agent-send")}`,
+${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent")}`,
     )
     .action(async (opts) => {
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
@@ -65,7 +65,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/agent-send", "docs.clawd.bot/agent-se
 
   const agents = program
     .command("agents")
-    .description("Manage isolated agents (workspaces + auth + routing)");
+    .description("Manage isolated agents (workspaces + auth + routing)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.clawd.bot/cli/agents")}\n`,
+    );
 
   agents
     .command("list")

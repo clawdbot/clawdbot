@@ -155,7 +155,7 @@ struct VoiceWakeSettings: View {
                     Label("Add word", systemImage: "plus")
                 }
                 .disabled(self.state.swabbleTriggerWords
-                    .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+                            .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
                 Button("Reset defaults") { self.state.swabbleTriggerWords = defaultVoiceWakeTriggers }
             }
@@ -440,21 +440,21 @@ struct VoiceWakeSettings: View {
                     { idx, localeID in
                         HStack(spacing: 8) {
                             Picker("Extra \(idx + 1)", selection: Binding(
-                                get: { localeID },
-                                set: { newValue in
-                                    guard self.state
-                                        .voiceWakeAdditionalLocaleIDs.indices
-                                        .contains(idx) else { return }
-                                    self.state
-                                        .voiceWakeAdditionalLocaleIDs[idx] =
-                                        newValue
-                                })) {
-                                    ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
-                                        Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
-                                    }
+                                    get: { localeID },
+                                    set: { newValue in
+                                        guard self.state
+                                                .voiceWakeAdditionalLocaleIDs.indices
+                                                .contains(idx) else { return }
+                                        self.state
+                                            .voiceWakeAdditionalLocaleIDs[idx] =
+                                            newValue
+                                    })) {
+                                ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
+                                    Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
                                 }
-                                .labelsHidden()
-                                    .frame(width: 220)
+                            }
+                            .labelsHidden()
+                            .frame(width: 220)
 
                             Button {
                                 guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }

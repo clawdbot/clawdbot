@@ -1,6 +1,8 @@
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createSubsystemLogger } from "../logging.js";
+import type { InlineCodeState } from "../markdown/code-spans.js";
+import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -38,7 +40,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
-    blockState: { thinking: false, final: false },
+    blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     lastStreamedAssistant: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
@@ -72,6 +74,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunker?.reset();
     state.blockState.thinking = false;
     state.blockState.final = false;
+    state.blockState.inlineCode = createInlineCodeState();
     state.lastStreamedAssistant = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
@@ -185,8 +188,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
   };
 
-  const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean }): string => {
+  const stripBlockTags = (
+    text: string,
+    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+  ): string => {
     if (!text) return text;
+
+    const inlineStateStart = state.inlineCode ?? createInlineCodeState();
+    const codeSpans = buildCodeSpanIndex(text, inlineStateStart);
 
     // 1. Handle <think> blocks (stateful, strip content inside)
     let processed = "";
@@ -195,6 +204,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     let inThinking = state.thinking;
     for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
+      if (codeSpans.isInside(idx)) continue;
       if (!inThinking) {
         processed += text.slice(lastIndex, idx);
       }
@@ -211,9 +221,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
+    const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
     if (!params.enforceFinalTag) {
+      state.inlineCode = finalCodeSpans.inlineState;
       FINAL_TAG_SCAN_RE.lastIndex = 0;
-      return processed.replace(FINAL_TAG_SCAN_RE, "");
+      return stripTagsOutsideCodeSpans(processed, FINAL_TAG_SCAN_RE, finalCodeSpans.isInside);
     }
 
     // If enforcement is enabled, only return text that appeared inside a <final> block.
@@ -225,6 +237,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
     for (const match of processed.matchAll(FINAL_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
+      if (finalCodeSpans.isInside(idx)) continue;
       const isClose = match[1] === "/";
 
       if (!inFinal && !isClose) {
@@ -254,7 +267,27 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
     // Hardened Cleanup: Remove any remaining <final> tags that might have been
     // missed (e.g. nested tags or hallucinations) to prevent leakage.
-    return result.replace(FINAL_TAG_SCAN_RE, "");
+    const resultCodeSpans = buildCodeSpanIndex(result, inlineStateStart);
+    state.inlineCode = resultCodeSpans.inlineState;
+    return stripTagsOutsideCodeSpans(result, FINAL_TAG_SCAN_RE, resultCodeSpans.isInside);
+  };
+
+  const stripTagsOutsideCodeSpans = (
+    text: string,
+    pattern: RegExp,
+    isInside: (index: number) => boolean,
+  ) => {
+    let output = "";
+    let lastIndex = 0;
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      const idx = match.index ?? 0;
+      if (isInside(idx)) continue;
+      output += text.slice(lastIndex, idx);
+      lastIndex = idx + match[0].length;
+    }
+    output += text.slice(lastIndex);
+    return output;
   };
 
   const emitBlockChunk = (text: string) => {

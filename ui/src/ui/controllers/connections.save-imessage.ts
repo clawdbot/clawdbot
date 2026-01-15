@@ -7,57 +7,53 @@ export async function saveIMessageConfig(state: ConnectionsState) {
   state.imessageSaving = true;
   state.imessageConfigStatus = null;
   try {
-    const base = state.configSnapshot?.config ?? {};
-    const config = { ...base } as Record<string, unknown>;
-    const imessage = { ...(config.imessage ?? {}) } as Record<string, unknown>;
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.imessageConfigStatus = "Config hash missing; reload and retry.";
+      return;
+    }
+    const imessage: Record<string, unknown> = {};
     const form = state.imessageForm;
 
     if (form.enabled) {
-      delete imessage.enabled;
+      imessage.enabled = null;
     } else {
       imessage.enabled = false;
     }
 
     const cliPath = form.cliPath.trim();
-    if (cliPath) imessage.cliPath = cliPath;
-    else delete imessage.cliPath;
+    imessage.cliPath = cliPath || null;
 
     const dbPath = form.dbPath.trim();
-    if (dbPath) imessage.dbPath = dbPath;
-    else delete imessage.dbPath;
+    imessage.dbPath = dbPath || null;
 
     if (form.service === "auto") {
-      delete imessage.service;
+      imessage.service = null;
     } else {
       imessage.service = form.service;
     }
 
     const region = form.region.trim();
-    if (region) imessage.region = region;
-    else delete imessage.region;
+    imessage.region = region || null;
 
     const allowFrom = parseList(form.allowFrom);
-    if (allowFrom.length > 0) imessage.allowFrom = allowFrom;
-    else delete imessage.allowFrom;
+    imessage.allowFrom = allowFrom.length > 0 ? allowFrom : null;
 
-    if (form.includeAttachments) imessage.includeAttachments = true;
-    else delete imessage.includeAttachments;
+    imessage.includeAttachments = form.includeAttachments ? true : null;
 
     const mediaMaxMb = Number(form.mediaMaxMb);
     if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
       imessage.mediaMaxMb = mediaMaxMb;
     } else {
-      delete imessage.mediaMaxMb;
+      imessage.mediaMaxMb = null;
     }
 
-    if (Object.keys(imessage).length > 0) {
-      config.imessage = imessage;
-    } else {
-      delete config.imessage;
-    }
-
-    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
-    await state.client.request("config.set", { raw });
+    const raw = `${JSON.stringify(
+      { channels: { imessage } },
+      null,
+      2,
+    ).trimEnd()}\n`;
+    await state.client.request("config.patch", { raw, baseHash });
     state.imessageConfigStatus = "Saved. Restart gateway if needed.";
   } catch (err) {
     state.imessageConfigStatus = String(err);
@@ -65,4 +61,3 @@ export async function saveIMessageConfig(state: ConnectionsState) {
     state.imessageSaving = false;
   }
 }
-

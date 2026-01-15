@@ -13,8 +13,7 @@ public actor TranscriptsStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("transcripts.log")
         if let data = try? Data(contentsOf: fileURL),
-           let text = String(data: data, encoding: .utf8)
-        {
+           let text = String(data: data, encoding: .utf8) {
             entries = text.split(separator: "\n").map(String.init).suffix(limit)
         }
     }

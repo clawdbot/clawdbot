@@ -493,10 +493,10 @@ actor VoiceWakeRuntime {
         config: WakeWordGateConfig) -> WakeWordGateMatch?
     {
         guard let command = VoiceWakeTextUtils.textOnlyCommand(
-            transcript: transcript,
-            triggers: triggers,
-            minCommandLength: config.minCommandLength,
-            trimWake: Self.trimmedAfterTrigger)
+                transcript: transcript,
+                triggers: triggers,
+                minCommandLength: config.minCommandLength,
+                trimWake: Self.trimmedAfterTrigger)
         else { return nil }
         return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
     }
@@ -519,9 +519,9 @@ actor VoiceWakeRuntime {
         guard let lastSeenAt, let lastText else { return }
         guard self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText else { return }
         guard let match = self.textOnlyFallbackMatch(
-            transcript: lastText,
-            triggers: triggers,
-            config: gateConfig)
+                transcript: lastText,
+                triggers: triggers,
+                config: gateConfig)
         else { return }
         if let cooldown = self.cooldownUntil, Date() < cooldown {
             return

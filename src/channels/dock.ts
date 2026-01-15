@@ -7,6 +7,7 @@ import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveIMessageGroupRequireMention,
@@ -21,9 +22,10 @@ import type {
   ChannelGroupAdapter,
   ChannelId,
   ChannelMentionAdapter,
+  ChannelPlugin,
   ChannelThreadingAdapter,
 } from "./plugins/types.js";
-import { CHAT_CHANNEL_ORDER } from "./registry.js";
+import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
 export type ChannelDock = {
   id: ChannelId;
@@ -75,7 +77,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\
 // Adding a channel:
 // - add a new entry to `DOCKS`
 // - keep it cheap; push heavy logic into `src/channels/plugins/<id>.ts` or channel modules
-const DOCKS: Record<ChannelId, ChannelDock> = {
+const DOCKS: Record<ChatChannelId, ChannelDock> = {
   telegram: {
     id: "telegram",
     capabilities: {
@@ -101,11 +103,14 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "first",
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const threadId = context.MessageThreadId ?? context.ReplyToId;
+        return {
+          currentChannelId: context.To?.trim() || undefined,
+          currentThreadTs: threadId != null ? String(threadId) : undefined,
+          hasRepliedRef,
+        };
+      },
     },
   },
   whatsapp: {
@@ -311,10 +316,71 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
   },
 };
 
+function buildDockFromPlugin(plugin: ChannelPlugin): ChannelDock {
+  return {
+    id: plugin.id,
+    capabilities: plugin.capabilities,
+    commands: plugin.commands,
+    outbound: plugin.outbound?.textChunkLimit
+      ? { textChunkLimit: plugin.outbound.textChunkLimit }
+      : undefined,
+    streaming: plugin.streaming
+      ? { blockStreamingCoalesceDefaults: plugin.streaming.blockStreamingCoalesceDefaults }
+      : undefined,
+    elevated: plugin.elevated,
+    config: plugin.config
+      ? {
+          resolveAllowFrom: plugin.config.resolveAllowFrom,
+          formatAllowFrom: plugin.config.formatAllowFrom,
+        }
+      : undefined,
+    groups: plugin.groups,
+    mentions: plugin.mentions,
+    threading: plugin.threading,
+  };
+}
+
+function listPluginDockEntries(): Array<{ id: ChannelId; dock: ChannelDock; order?: number }> {
+  const registry = getActivePluginRegistry();
+  if (!registry) return [];
+  const entries: Array<{ id: ChannelId; dock: ChannelDock; order?: number }> = [];
+  const seen = new Set<string>();
+  for (const entry of registry.channels) {
+    const plugin = entry.plugin;
+    const id = String(plugin.id).trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (CHAT_CHANNEL_ORDER.includes(plugin.id as ChatChannelId)) continue;
+    const dock = entry.dock ?? buildDockFromPlugin(plugin);
+    entries.push({ id: plugin.id, dock, order: plugin.meta.order });
+  }
+  return entries;
+}
+
 export function listChannelDocks(): ChannelDock[] {
-  return CHAT_CHANNEL_ORDER.map((id) => DOCKS[id]);
+  const baseEntries = CHAT_CHANNEL_ORDER.map((id) => ({
+    id,
+    dock: DOCKS[id],
+    order: getChatChannelMeta(id).order,
+  }));
+  const pluginEntries = listPluginDockEntries();
+  const combined = [...baseEntries, ...pluginEntries];
+  combined.sort((a, b) => {
+    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
+    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
+    const orderA = a.order ?? (indexA === -1 ? 999 : indexA);
+    const orderB = b.order ?? (indexB === -1 ? 999 : indexB);
+    if (orderA !== orderB) return orderA - orderB;
+    return String(a.id).localeCompare(String(b.id));
+  });
+  return combined.map((entry) => entry.dock);
 }
 
 export function getChannelDock(id: ChannelId): ChannelDock | undefined {
-  return DOCKS[id];
+  const core = DOCKS[id as ChatChannelId];
+  if (core) return core;
+  const registry = getActivePluginRegistry();
+  const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
+  if (!pluginEntry) return undefined;
+  return pluginEntry.dock ?? buildDockFromPlugin(pluginEntry.plugin);
 }

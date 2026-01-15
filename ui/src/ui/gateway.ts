@@ -50,6 +50,9 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+// 4008 = application-defined code (browser rejects 1008 "Policy Violation")
+const CONNECT_FAILED_CLOSE_CODE = 4008;
+
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();
@@ -134,7 +137,7 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch(() => {
-        this.ws?.close(1008, "connect failed");
+        this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
       });
   }
 

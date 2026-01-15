@@ -3,6 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  downgradeGeminiThinkingBlocks,
   downgradeGeminiHistory,
   isCompactionFailureError,
   isGoogleModelApi,
@@ -37,6 +38,17 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
+const OPENAI_TOOL_CALL_ID_APIS = new Set([
+  "openai",
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+]);
+
+function shouldSanitizeToolCallIds(modelApi?: string | null): boolean {
+  if (!modelApi) return false;
+  return isGoogleModelApi(modelApi) || OPENAI_TOOL_CALL_ID_APIS.has(modelApi);
+}
 
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") return [];
@@ -146,15 +158,19 @@ export async function sanitizeSessionHistory(params: {
   sessionId: string;
 }): Promise<AgentMessage[]> {
   const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
-    sanitizeToolCallIds: isGoogleModelApi(params.modelApi),
+    sanitizeToolCallIds: shouldSanitizeToolCallIds(params.modelApi),
     enforceToolCallLast: params.modelApi === "anthropic-messages",
     preserveSignatures: params.modelApi === "google-antigravity" && isAntigravityClaude(params.modelId),
   });
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
+  // Gemini rejects unsigned thinking blocks; downgrade them before send to avoid INVALID_ARGUMENT.
+  const downgradedThinking = isGoogleModelApi(params.modelApi)
+    ? downgradeGeminiThinkingBlocks(repairedTools)
+    : repairedTools;
   // Downgrade Gemini history for native Gemini APIs, but NOT for Antigravity Claude
   const downgraded = isGoogleModelApi(params.modelApi) && !isAntigravityClaude(params.modelId)
-    ? downgradeGeminiHistory(repairedTools)
-    : repairedTools;
+    ? downgradeGeminiHistory(downgradedThinking)
+    : downgradedThinking;
 
   return applyGoogleTurnOrderingFix({
     messages: downgraded,

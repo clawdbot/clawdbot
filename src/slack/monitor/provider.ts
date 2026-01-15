@@ -74,6 +74,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
   const replyToMode = slackCfg.replyToMode ?? "off";
+  const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
+  const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
@@ -122,12 +124,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     allowFrom,
     groupDmEnabled,
     groupDmChannels,
+    defaultRequireMention: slackCfg.requireMention,
     channelsConfig,
     groupPolicy,
     useAccessGroups,
     reactionMode,
     reactionAllowlist,
     replyToMode,
+    threadHistoryScope,
+    threadInheritParent,
     slashCommand,
     textLimit,
     ackReactionScope,

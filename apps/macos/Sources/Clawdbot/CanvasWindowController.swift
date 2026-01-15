@@ -242,8 +242,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         }
 
         guard let url = CanvasScheme.makeURL(
-            session: CanvasWindowController.sanitizeSessionKey(self.sessionKey),
-            path: trimmed)
+                session: CanvasWindowController.sanitizeSessionKey(self.sessionKey),
+                path: trimmed)
         else {
             canvasWindowLogger
                 .error(

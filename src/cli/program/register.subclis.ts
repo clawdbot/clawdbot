@@ -15,6 +15,7 @@ import { registerNodesCli } from "../nodes-cli.js";
 import { registerPairingCli } from "../pairing-cli.js";
 import { registerPluginsCli } from "../plugins-cli.js";
 import { registerSandboxCli } from "../sandbox-cli.js";
+import { registerSecurityCli } from "../security-cli.js";
 import { registerSkillsCli } from "../skills-cli.js";
 import { registerTuiCli } from "../tui-cli.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -35,6 +36,7 @@ export function registerSubCliCommands(program: Command) {
   registerPairingCli(program);
   registerPluginsCli(program);
   registerChannelsCli(program);
+  registerSecurityCli(program);
   registerSkillsCli(program);
   registerUpdateCli(program);
   registerPluginCliCommands(program, loadConfig());

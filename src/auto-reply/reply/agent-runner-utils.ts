@@ -25,15 +25,23 @@ export function buildThreadingToolContext(params: {
   if (!provider) return {};
   const dock = getChannelDock(provider);
   if (!dock?.threading?.buildToolContext) return {};
+  // WhatsApp context isolation keys off conversation id, not the bot's own number.
+  const threadingTo =
+    provider === "whatsapp"
+      ? (sessionCtx.From ?? sessionCtx.To)
+      : provider === "imessage" && sessionCtx.ChatType === "direct"
+        ? (sessionCtx.From ?? sessionCtx.To)
+        : sessionCtx.To;
   return (
     dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {
         Channel: sessionCtx.Provider,
-        To: sessionCtx.To,
+        To: threadingTo,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
+        MessageThreadId: sessionCtx.MessageThreadId,
       },
       hasRepliedRef,
     }) ?? {}

@@ -240,7 +240,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (legacyServices.length > 0) {
-    defaultRuntime.error(errorText("Legacy Clawdis services detected:"));
+    defaultRuntime.error(errorText("Legacy gateway services detected:"));
     for (const svc of legacyServices) {
       defaultRuntime.error(`- ${errorText(svc.label)} (${svc.detail})`);
     }

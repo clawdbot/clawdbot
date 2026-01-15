@@ -8,6 +8,7 @@ import type { ExecElevatedDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 
 type AuthStorage = ReturnType<typeof discoverAuthStorage>;
 type ModelRegistry = ReturnType<typeof discoverModels>;
@@ -65,6 +66,7 @@ export type EmbeddedRunAttemptResult = {
   timedOut: boolean;
   promptError: unknown;
   sessionIdUsed: string;
+  systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;

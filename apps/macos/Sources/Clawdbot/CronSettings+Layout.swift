@@ -26,8 +26,8 @@ extension CronSettings {
                 })
         }
         .alert("Delete cron job?", isPresented: Binding(
-            get: { self.confirmDelete != nil },
-            set: { if !$0 { self.confirmDelete = nil } }))
+                get: { self.confirmDelete != nil },
+                set: { if !$0 { self.confirmDelete = nil } }))
         {
             Button("Cancel", role: .cancel) { self.confirmDelete = nil }
             Button("Delete", role: .destructive) {
@@ -42,9 +42,9 @@ extension CronSettings {
             }
         }
         .onChange(of: self.store.selectedJobId) { _, newValue in
-                guard let newValue else { return }
-                Task { await self.store.refreshRuns(jobId: newValue) }
-            }
+            guard let newValue else { return }
+            Task { await self.store.refreshRuns(jobId: newValue) }
+        }
     }
 
     var schedulerBanner: some View {

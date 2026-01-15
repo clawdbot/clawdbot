@@ -182,12 +182,12 @@ actor BridgeServer {
                 ?? "main"
 
             _ = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
-                message: text,
-                sessionKey: sessionKey,
-                thinking: "low",
-                deliver: false,
-                to: nil,
-                channel: .last))
+                                                            message: text,
+                                                            sessionKey: sessionKey,
+                                                            thinking: "low",
+                                                            deliver: false,
+                                                            to: nil,
+                                                            channel: .last))
 
         case "agent.request":
             guard let json = evt.payloadJSON, let data = json.data(using: .utf8) else {
@@ -208,12 +208,12 @@ actor BridgeServer {
             let channel = GatewayAgentChannel(raw: link.channel)
 
             _ = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
-                message: message,
-                sessionKey: sessionKey,
-                thinking: thinking,
-                deliver: link.deliver,
-                to: to,
-                channel: channel))
+                                                            message: message,
+                                                            sessionKey: sessionKey,
+                                                            thinking: thinking,
+                                                            deliver: link.deliver,
+                                                            to: to,
+                                                            channel: channel))
 
         default:
             break

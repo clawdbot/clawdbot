@@ -6,7 +6,7 @@ struct ChatSheet: View {
     @State private var viewModel: ClawdbotChatViewModel
     private let userAccent: Color?
 
-    init(bridge: BridgeSession, sessionKey: String = "main", userAccent: Color? = nil) {
+    init(bridge: BridgeSession, sessionKey: String, userAccent: Color? = nil) {
         let transport = IOSBridgeChatTransport(bridge: bridge)
         self._viewModel = State(
             initialValue: ClawdbotChatViewModel(

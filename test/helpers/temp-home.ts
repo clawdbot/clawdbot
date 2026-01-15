@@ -10,7 +10,6 @@ type EnvSnapshot = {
   homeDrive: string | undefined;
   homePath: string | undefined;
   stateDir: string | undefined;
-  legacyStateDir: string | undefined;
 };
 
 function snapshotEnv(): EnvSnapshot {
@@ -20,7 +19,6 @@ function snapshotEnv(): EnvSnapshot {
     homeDrive: process.env.HOMEDRIVE,
     homePath: process.env.HOMEPATH,
     stateDir: process.env.CLAWDBOT_STATE_DIR,
-    legacyStateDir: process.env.CLAWDIS_STATE_DIR,
   };
 }
 
@@ -34,7 +32,6 @@ function restoreEnv(snapshot: EnvSnapshot) {
   restoreKey("HOMEDRIVE", snapshot.homeDrive);
   restoreKey("HOMEPATH", snapshot.homePath);
   restoreKey("CLAWDBOT_STATE_DIR", snapshot.stateDir);
-  restoreKey("CLAWDIS_STATE_DIR", snapshot.legacyStateDir);
 }
 
 function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
@@ -54,7 +51,6 @@ function setTempHome(base: string) {
   process.env.HOME = base;
   process.env.USERPROFILE = base;
   process.env.CLAWDBOT_STATE_DIR = path.join(base, ".clawdbot");
-  process.env.CLAWDIS_STATE_DIR = path.join(base, ".clawdbot");
 
   if (process.platform !== "win32") return;
   const match = base.match(/^([A-Za-z]:)(.*)$/);

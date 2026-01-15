@@ -11,6 +11,20 @@ import {
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
+    id: "auth.anthropic-claude-cli-mode-oauth",
+    describe: "Switch anthropic:claude-cli auth profile mode to oauth",
+    apply: (raw, changes) => {
+      const auth = getRecord(raw.auth);
+      const profiles = getRecord(auth?.profiles);
+      if (!profiles) return;
+      const claudeCli = getRecord(profiles["anthropic:claude-cli"]);
+      if (!claudeCli) return;
+      if (claudeCli.mode !== "token") return;
+      claudeCli.mode = "oauth";
+      changes.push('Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".');
+    },
+  },
+  {
     id: "agent.defaults-v2",
     describe: "Move agent config to agents.defaults and tools",
     apply: (raw, changes) => {

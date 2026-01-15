@@ -23,4 +23,5 @@ export const ChannelsSchema = z
     imessage: IMessageConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
   })
+  .catchall(z.unknown())
   .optional();

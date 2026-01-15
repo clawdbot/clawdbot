@@ -48,17 +48,21 @@ export function registerBrowserInspectCommands(
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) => Number(v))
+    .option("--mode <efficient>", "Snapshot preset (efficient)")
+    .option("--efficient", "Use the efficient snapshot preset", false)
     .option("--interactive", "Role snapshot: interactive elements only", false)
     .option("--compact", "Role snapshot: compact output", false)
     .option("--depth <n>", "Role snapshot: max depth", (v: string) => Number(v))
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
     .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
+    .option("--labels", "Include viewport label overlay screenshot", false)
     .option("--out <path>", "Write snapshot to a file")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
+      const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : undefined;
       try {
         const result = await browserSnapshot(baseUrl, {
           format,
@@ -69,6 +73,8 @@ export function registerBrowserInspectCommands(
           depth: Number.isFinite(opts.depth) ? opts.depth : undefined,
           selector: opts.selector?.trim() || undefined,
           frame: opts.frame?.trim() || undefined,
+          labels: Boolean(opts.labels) || undefined,
+          mode,
           profile,
         });
 
@@ -81,9 +87,24 @@ export function registerBrowserInspectCommands(
             await fs.writeFile(opts.out, payload, "utf8");
           }
           if (parent?.json) {
-            defaultRuntime.log(JSON.stringify({ ok: true, out: opts.out }, null, 2));
+            defaultRuntime.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  out: opts.out,
+                  ...(result.format === "ai" && result.imagePath
+                    ? { imagePath: result.imagePath }
+                    : {}),
+                },
+                null,
+                2,
+              ),
+            );
           } else {
             defaultRuntime.log(opts.out);
+            if (result.format === "ai" && result.imagePath) {
+              defaultRuntime.log(`MEDIA:${result.imagePath}`);
+            }
           }
           return;
         }
@@ -95,6 +116,9 @@ export function registerBrowserInspectCommands(
 
         if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
+          if (result.imagePath) {
+            defaultRuntime.log(`MEDIA:${result.imagePath}`);
+          }
           return;
         }
 

@@ -21,6 +21,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.clawdbot.android.bridge.BridgeSession
+import com.clawdbot.android.isCanonicalMainSessionKey
 import com.clawdbot.android.normalizeMainKey
 import java.net.HttpURLConnection
 import java.net.URL
@@ -114,6 +115,13 @@ class TalkModeManager(
   fun attachSession(session: BridgeSession) {
     this.session = session
     chatSubscribedSessionKey = null
+  }
+
+  fun setMainSessionKey(sessionKey: String?) {
+    val trimmed = sessionKey?.trim().orEmpty()
+    if (trimmed.isEmpty()) return
+    if (isCanonicalMainSessionKey(mainSessionKey)) return
+    mainSessionKey = trimmed
   }
 
   fun setEnabled(enabled: Boolean) {
@@ -827,7 +835,9 @@ class TalkModeManager(
       val key = talk?.get("apiKey")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val interrupt = talk?.get("interruptOnSpeech")?.asBooleanOrNull()
 
-      mainSessionKey = mainKey
+      if (!isCanonicalMainSessionKey(mainSessionKey)) {
+        mainSessionKey = mainKey
+      }
       defaultVoiceId = voice ?: envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       voiceAliases = aliases
       if (!voiceOverrideActive) currentVoiceId = defaultVoiceId

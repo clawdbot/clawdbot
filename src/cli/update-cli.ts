@@ -279,7 +279,7 @@ Notes:
   - For global installs: use npm/pnpm/bun to reinstall (see docs/install/updating.md)
   - Skips update if the working directory has uncommitted changes
 
-${theme.muted("Docs:")} ${formatDocsLink("/updating", "docs.clawd.bot/updating")}`,
+${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,
     )
     .action(async (opts) => {
       try {

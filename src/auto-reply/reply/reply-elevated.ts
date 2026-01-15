@@ -1,6 +1,7 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
-import { CHAT_CHANNEL_ORDER, normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import type { AgentElevatedAllowFromConfig, ClawdbotConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";

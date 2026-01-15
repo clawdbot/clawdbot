@@ -2,11 +2,19 @@ import type { AgentElevatedAllowFromConfig } from "./types.base.js";
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+export type ToolPolicyConfig = {
+  allow?: string[];
+  deny?: string[];
+  profile?: ToolProfileId;
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
+  /** Optional tool policy overrides keyed by provider id or "provider/model". */
+  byProvider?: Record<string, ToolPolicyConfig>;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -73,6 +81,36 @@ export type ToolsConfig = {
   profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
+  /** Optional tool policy overrides keyed by provider id or "provider/model". */
+  byProvider?: Record<string, ToolPolicyConfig>;
+  web?: {
+    search?: {
+      /** Enable web search tool (default: true when API key is present). */
+      enabled?: boolean;
+      /** Search provider (currently "brave"). */
+      provider?: "brave";
+      /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
+      apiKey?: string;
+      /** Default search results count (1-10). */
+      maxResults?: number;
+      /** Timeout in seconds for search requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for search results. */
+      cacheTtlMinutes?: number;
+    };
+    fetch?: {
+      /** Enable web fetch tool (default: false). */
+      enabled?: boolean;
+      /** Max characters to return from fetched content. */
+      maxChars?: number;
+      /** Timeout in seconds for fetch requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for fetched content. */
+      cacheTtlMinutes?: number;
+      /** Override User-Agent header for fetch requests. */
+      userAgent?: string;
+    };
+  };
   audio?: {
     transcription?: {
       /** CLI args (template-enabled). */

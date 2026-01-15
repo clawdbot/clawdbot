@@ -130,6 +130,7 @@ describe("google-shared convertTools", () => {
               id: "call_1",
               name: "myTool",
               arguments: { arg: "value" },
+              thoughtSignature: "dGVzdA==",
             },
           ],
           api: "google-gemini-cli",

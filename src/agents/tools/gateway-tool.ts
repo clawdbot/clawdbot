@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -33,6 +35,7 @@ const GatewayToolSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number()),
   // config.apply
   raw: Type.Optional(Type.String()),
+  baseHash: Type.Optional(Type.String()),
   // config.apply, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
@@ -125,6 +128,21 @@ export function createGatewayTool(opts?: {
       }
       if (action === "config.apply") {
         const raw = readStringParam(params, "raw", { required: true });
+        let baseHash = readStringParam(params, "baseHash");
+        if (!baseHash) {
+          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+          if (snapshot && typeof snapshot === "object") {
+            const hash = (snapshot as { hash?: unknown }).hash;
+            if (typeof hash === "string" && hash.trim()) {
+              baseHash = hash.trim();
+            } else {
+              const rawSnapshot = (snapshot as { raw?: unknown }).raw;
+              if (typeof rawSnapshot === "string") {
+                baseHash = crypto.createHash("sha256").update(rawSnapshot).digest("hex");
+              }
+            }
+          }
+        }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
@@ -137,6 +155,7 @@ export function createGatewayTool(opts?: {
             : undefined;
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
+          baseHash,
           sessionKey,
           note,
           restartDelayMs,

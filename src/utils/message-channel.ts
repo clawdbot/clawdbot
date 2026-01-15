@@ -3,6 +3,7 @@ import {
   listChatChannelAliases,
   normalizeChatChannelId,
 } from "../channels/registry.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -11,6 +12,7 @@ import {
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
 } from "../gateway/protocol/client-info.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
@@ -42,34 +44,58 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) return undefined;
   if (normalized === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
-  return normalizeChatChannelId(normalized) ?? normalized;
+  const builtIn = normalizeChatChannelId(normalized);
+  if (builtIn) return builtIn;
+  const registry = getActivePluginRegistry();
+  const pluginMatch = registry?.channels.find((entry) => {
+    if (entry.plugin.id.toLowerCase() === normalized) return true;
+    return (entry.plugin.meta.aliases ?? []).some(
+      (alias) => alias.trim().toLowerCase() === normalized,
+    );
+  });
+  return pluginMatch?.plugin.id ?? normalized;
 }
 
-export const DELIVERABLE_MESSAGE_CHANNELS = CHANNEL_IDS;
+const listPluginChannelIds = (): string[] => {
+  const registry = getActivePluginRegistry();
+  if (!registry) return [];
+  return registry.channels.map((entry) => entry.plugin.id);
+};
 
-export type DeliverableMessageChannel = (typeof DELIVERABLE_MESSAGE_CHANNELS)[number];
+const listPluginChannelAliases = (): string[] => {
+  const registry = getActivePluginRegistry();
+  if (!registry) return [];
+  return registry.channels.flatMap((entry) => entry.plugin.meta.aliases ?? []);
+};
+
+export const listDeliverableMessageChannels = (): ChannelId[] =>
+  Array.from(new Set([...CHANNEL_IDS, ...listPluginChannelIds()]));
+
+export type DeliverableMessageChannel = ChannelId;
 
 export type GatewayMessageChannel = DeliverableMessageChannel | InternalMessageChannel;
 
-export const GATEWAY_MESSAGE_CHANNELS = [
-  ...DELIVERABLE_MESSAGE_CHANNELS,
+export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
+  ...listDeliverableMessageChannels(),
   INTERNAL_MESSAGE_CHANNEL,
-] as const;
+];
 
-export const GATEWAY_AGENT_CHANNEL_ALIASES = listChatChannelAliases();
+export const listGatewayAgentChannelAliases = (): string[] =>
+  Array.from(new Set([...listChatChannelAliases(), ...listPluginChannelAliases()]));
 
 export type GatewayAgentChannelHint = GatewayMessageChannel | "last";
 
-export const GATEWAY_AGENT_CHANNEL_VALUES = Array.from(
-  new Set([...GATEWAY_MESSAGE_CHANNELS, "last", ...GATEWAY_AGENT_CHANNEL_ALIASES]),
-);
+export const listGatewayAgentChannelValues = (): string[] =>
+  Array.from(
+    new Set([...listGatewayMessageChannels(), "last", ...listGatewayAgentChannelAliases()]),
+  );
 
 export function isGatewayMessageChannel(value: string): value is GatewayMessageChannel {
-  return (GATEWAY_MESSAGE_CHANNELS as readonly string[]).includes(value);
+  return listGatewayMessageChannels().includes(value as GatewayMessageChannel);
 }
 
 export function isDeliverableMessageChannel(value: string): value is DeliverableMessageChannel {
-  return (DELIVERABLE_MESSAGE_CHANNELS as readonly string[]).includes(value);
+  return listDeliverableMessageChannels().includes(value as DeliverableMessageChannel);
 }
 
 export function resolveGatewayMessageChannel(

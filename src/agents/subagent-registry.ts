@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -20,6 +20,7 @@ export type SubagentRunRecord = {
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
+  outcome?: SubagentRunOutcome;
   archiveAtMs?: number;
   announceCompletedAt?: number;
   announceHandled: boolean;
@@ -62,6 +63,7 @@ function resumeSubagentRun(runId: string) {
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
       label: entry.label,
+      outcome: entry.outcome,
     });
     void announce.then((didAnnounce) => {
       finalizeSubagentAnnounce(runId, entry.cleanup, didAnnounce);
@@ -176,6 +178,12 @@ function ensureListener() {
     const endedAt =
       typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : Date.now();
     entry.endedAt = endedAt;
+    if (phase === "error") {
+      const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      entry.outcome = { status: "error", error };
+    } else {
+      entry.outcome = { status: "ok" };
+    }
     persistSubagentRuns();
 
     if (!beginSubagentAnnounce(evt.runId)) {
@@ -194,6 +202,7 @@ function ensureListener() {
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
       label: entry.label,
+      outcome: entry.outcome,
     });
     void announce.then((didAnnounce) => {
       finalizeSubagentAnnounce(evt.runId, entry.cleanup, didAnnounce);
@@ -272,7 +281,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
         timeoutMs,
       },
       timeoutMs: timeoutMs + 10_000,
-    })) as { status?: string; startedAt?: number; endedAt?: number };
+    })) as { status?: string; startedAt?: number; endedAt?: number; error?: string };
     if (wait?.status !== "ok" && wait?.status !== "error") return;
     const entry = subagentRuns.get(runId);
     if (!entry) return;
@@ -289,6 +298,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       entry.endedAt = Date.now();
       mutated = true;
     }
+    entry.outcome =
+      wait.status === "error" ? { status: "error", error: wait.error } : { status: "ok" };
+    mutated = true;
     if (mutated) persistSubagentRuns();
     if (!beginSubagentAnnounce(runId)) return;
     const announce = runSubagentAnnounceFlow({
@@ -304,6 +316,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
       label: entry.label,
+      outcome: entry.outcome,
     });
     void announce.then((didAnnounce) => {
       finalizeSubagentAnnounce(runId, entry.cleanup, didAnnounce);

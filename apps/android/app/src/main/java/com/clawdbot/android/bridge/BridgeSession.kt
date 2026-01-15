@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class BridgeSession(
   private val scope: CoroutineScope,
-  private val onConnected: (serverName: String, remoteAddress: String?) -> Unit,
+  private val onConnected: (serverName: String, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: suspend (InvokeRequest) -> InvokeResult,
@@ -64,6 +64,7 @@ class BridgeSession(
   private val writeLock = Mutex()
   private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
   @Volatile private var canvasHostUrl: String? = null
+  @Volatile private var mainSessionKey: String? = null
 
   private var desired: Pair<BridgeEndpoint, Hello>? = null
   private var job: Job? = null
@@ -90,11 +91,13 @@ class BridgeSession(
       job?.cancelAndJoin()
       job = null
       canvasHostUrl = null
+      mainSessionKey = null
       onDisconnected("Offline")
     }
   }
 
   fun currentCanvasHostUrl(): String? = canvasHostUrl
+  fun currentMainSessionKey(): String? = mainSessionKey
 
   suspend fun sendEvent(event: String, payloadJson: String?) {
     val conn = currentConnection ?: return
@@ -212,7 +215,9 @@ class BridgeSession(
           "hello-ok" -> {
             val name = first["serverName"].asStringOrNull() ?: "Bridge"
             val rawCanvasUrl = first["canvasHostUrl"].asStringOrNull()?.trim()?.ifEmpty { null }
+            val rawMainSessionKey = first["mainSessionKey"].asStringOrNull()?.trim()?.ifEmpty { null }
             canvasHostUrl = normalizeCanvasHostUrl(rawCanvasUrl, endpoint)
+            mainSessionKey = rawMainSessionKey
             if (BuildConfig.DEBUG) {
               // Local JVM unit tests use android.jar stubs; Log.d can throw "not mocked".
               runCatching {
@@ -222,7 +227,7 @@ class BridgeSession(
                 )
               }
             }
-            onConnected(name, conn.remoteAddress)
+            onConnected(name, conn.remoteAddress, rawMainSessionKey)
           }
           "error" -> {
             val code = first["code"].asStringOrNull() ?: "UNAVAILABLE"

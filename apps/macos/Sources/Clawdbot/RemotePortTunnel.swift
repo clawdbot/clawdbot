@@ -105,8 +105,8 @@ final class RemotePortTunnel {
                 return
             }
             guard let line = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !line.isEmpty
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !line.isEmpty
             else { return }
             Self.logger.error("ssh tunnel stderr: \(line, privacy: .public)")
         }

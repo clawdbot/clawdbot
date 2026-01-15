@@ -154,4 +154,81 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
+
+  it("mode: oauth config accepts both oauth and token credentials (issue #559)", () => {
+    const now = Date.now();
+    const storeWithBothTypes: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:oauth-cred": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: now + 60_000,
+        },
+        "anthropic:token-cred": {
+          type: "token",
+          provider: "anthropic",
+          token: "just-a-token",
+          expires: now + 60_000,
+        },
+      },
+    };
+
+    const orderOauthCred = resolveAuthProfileOrder({
+      store: storeWithBothTypes,
+      provider: "anthropic",
+      cfg: {
+        auth: {
+          profiles: {
+            "anthropic:oauth-cred": { provider: "anthropic", mode: "oauth" },
+          },
+        },
+      },
+    });
+    expect(orderOauthCred).toContain("anthropic:oauth-cred");
+
+    const orderTokenCred = resolveAuthProfileOrder({
+      store: storeWithBothTypes,
+      provider: "anthropic",
+      cfg: {
+        auth: {
+          profiles: {
+            "anthropic:token-cred": { provider: "anthropic", mode: "oauth" },
+          },
+        },
+      },
+    });
+    expect(orderTokenCred).toContain("anthropic:token-cred");
+  });
+
+  it("mode: token config rejects oauth credentials (issue #559 root cause)", () => {
+    const now = Date.now();
+    const storeWithOauth: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:oauth-cred": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: now + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store: storeWithOauth,
+      provider: "anthropic",
+      cfg: {
+        auth: {
+          profiles: {
+            "anthropic:oauth-cred": { provider: "anthropic", mode: "token" },
+          },
+        },
+      },
+    });
+    expect(order).not.toContain("anthropic:oauth-cred");
+  });
 });

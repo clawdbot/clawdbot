@@ -17,7 +17,8 @@ export function registerDaemonCli(program: Command) {
     .description("Manage the Gateway daemon service (launchd/systemd/schtasks)")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway", "docs.clawd.bot/gateway")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/daemon", "docs.clawd.bot/cli/daemon")}\n`,
     );
 
   daemon

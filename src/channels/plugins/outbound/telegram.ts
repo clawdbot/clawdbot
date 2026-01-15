@@ -1,4 +1,4 @@
-import { chunkMarkdownText } from "../../../auto-reply/chunk.js";
+import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
@@ -8,9 +8,19 @@ function parseReplyToMessageId(replyToId?: string | null) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseThreadId(threadId?: string | number | null) {
+  if (threadId == null) return undefined;
+  if (typeof threadId === "number") {
+    return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
+  }
+  const trimmed = threadId.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkMarkdownText,
+  chunker: markdownToTelegramHtmlChunks,
   textChunkLimit: 4000,
   resolveTarget: ({ to }) => {
     const trimmed = to?.trim();
@@ -25,9 +35,11 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseReplyToMessageId(replyToId);
+    const messageThreadId = parseThreadId(threadId);
     const result = await send(to, text, {
       verbose: false,
-      messageThreadId: threadId ?? undefined,
+      textMode: "html",
+      messageThreadId,
       replyToMessageId,
       accountId: accountId ?? undefined,
     });
@@ -36,10 +48,12 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseReplyToMessageId(replyToId);
+    const messageThreadId = parseThreadId(threadId);
     const result = await send(to, text, {
       verbose: false,
       mediaUrl,
-      messageThreadId: threadId ?? undefined,
+      textMode: "html",
+      messageThreadId,
       replyToMessageId,
       accountId: accountId ?? undefined,
     });

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -8,6 +10,7 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -94,7 +97,15 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  throw new Error(`No API key found for provider "${provider}".`);
+  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
+  const resolvedAgentDir = path.dirname(authStorePath);
+  throw new Error(
+    [
+      `No API key found for provider "${provider}".`,
+      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
+      "Configure auth for this agent (clawdbot agents add <id>) or copy auth-profiles.json from the main agentDir.",
+    ].join(" "),
+  );
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };

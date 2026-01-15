@@ -4,6 +4,7 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { runSecurityAudit } from "../security/audit.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
@@ -61,6 +62,21 @@ export async function statusCommand(
     summary,
   } = scan;
 
+  const securityAudit = await withProgress(
+    {
+      label: "Running security audit…",
+      indeterminate: true,
+      enabled: opts.json !== true,
+    },
+    async () =>
+      await runSecurityAudit({
+        config: cfg,
+        deep: false,
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      }),
+  );
+
   const usage = opts.usage
     ? await withProgress(
         {
@@ -104,6 +120,7 @@ export async function statusCommand(
             error: gatewayProbe?.error ?? null,
           },
           agents: agentStatus,
+          securityAudit,
           ...(health || usage ? { health, usage } : {}),
         },
         null,
@@ -235,6 +252,44 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+
+  runtime.log("");
+  runtime.log(theme.heading("Security audit"));
+  const fmtSummary = (value: { critical: number; warn: number; info: number }) => {
+    const parts = [
+      theme.error(`${value.critical} critical`),
+      theme.warn(`${value.warn} warn`),
+      theme.muted(`${value.info} info`),
+    ];
+    return parts.join(" · ");
+  };
+  runtime.log(theme.muted(`Summary: ${fmtSummary(securityAudit.summary)}`));
+  const importantFindings = securityAudit.findings.filter(
+    (f) => f.severity === "critical" || f.severity === "warn",
+  );
+  if (importantFindings.length === 0) {
+    runtime.log(theme.muted("No critical or warn findings detected."));
+  } else {
+    const severityLabel = (sev: "critical" | "warn" | "info") => {
+      if (sev === "critical") return theme.error("CRITICAL");
+      if (sev === "warn") return theme.warn("WARN");
+      return theme.muted("INFO");
+    };
+    const sevRank = (sev: "critical" | "warn" | "info") =>
+      sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
+    const sorted = [...importantFindings].sort((a, b) => sevRank(a.severity) - sevRank(b.severity));
+    const shown = sorted.slice(0, 6);
+    for (const f of shown) {
+      runtime.log(`  ${severityLabel(f.severity)} ${f.title}`);
+      runtime.log(`    ${shortenText(f.detail.replaceAll("\n", " "), 160)}`);
+      if (f.remediation?.trim()) runtime.log(`    ${theme.muted(`Fix: ${f.remediation.trim()}`)}`);
+    }
+    if (sorted.length > shown.length) {
+      runtime.log(theme.muted(`… +${sorted.length - shown.length} more`));
+    }
+  }
+  runtime.log(theme.muted("Full report: clawdbot security audit"));
+  runtime.log(theme.muted("Deep probe: clawdbot security audit --deep"));
 
   runtime.log("");
   runtime.log(theme.heading("Channels"));

@@ -125,7 +125,7 @@ const VoiceCallToolSchema = Type.Union([
 const voiceCallPlugin = {
   id: "voice-call",
   name: "Voice Call",
-  description: "Voice-call plugin with Telnyx/Twilio providers",
+  description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
   configSchema: voiceCallConfigSchema,
   register(api) {
     const cfg = voiceCallConfigSchema.parse(api.pluginConfig);

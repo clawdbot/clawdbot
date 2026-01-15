@@ -3,6 +3,8 @@ export type BrowserProfileConfig = {
   cdpPort?: number;
   /** CDP URL for this profile (use for remote Chrome). */
   cdpUrl?: string;
+  /** Profile driver (default: clawd). */
+  driver?: "clawd" | "extension";
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
@@ -10,6 +12,13 @@ export type BrowserConfig = {
   enabled?: boolean;
   /** Base URL of the clawd browser control server. Default: http://127.0.0.1:18791 */
   controlUrl?: string;
+  /**
+   * Shared token for the browser control server.
+   * If set, clients must send `Authorization: Bearer <token>`.
+   *
+   * Prefer `CLAWDBOT_BROWSER_CONTROL_TOKEN` env for ephemeral setups; use this for "works after reboot".
+   */
+  controlToken?: string;
   /** Base URL of the CDP endpoint. Default: controlUrl with port + 1. */
   cdpUrl?: string;
   /** Accent color for the clawd browser profile (hex). Default: #FF4500 */
@@ -22,7 +31,7 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
-  /** Default profile to use when profile param is omitted. Default: "clawd" */
+  /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */
   profiles?: Record<string, BrowserProfileConfig>;

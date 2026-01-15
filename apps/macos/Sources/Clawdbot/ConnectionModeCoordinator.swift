@@ -53,8 +53,8 @@ final class ConnectionModeCoordinator {
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 let settings = CommandResolver.connectionSettings()
                 try await ControlChannel.shared.configure(mode: .remote(
-                    target: settings.target,
-                    identity: settings.identity))
+                                                            target: settings.target,
+                                                            identity: settings.identity))
             } catch {
                 self.logger.error("remote tunnel/configure failed: \(error.localizedDescription, privacy: .public)")
             }

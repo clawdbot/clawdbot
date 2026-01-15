@@ -4,7 +4,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
-  CRON_CHANNEL_OPTIONS,
+  getCronChannelOptions,
   parseAtMs,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
@@ -36,7 +36,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
-      .option("--channel <channel>", `Delivery channel (${CRON_CHANNEL_OPTIONS})`)
+      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",

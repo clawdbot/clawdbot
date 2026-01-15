@@ -1,3 +1,5 @@
+import type { ChannelMeta } from "./plugins/types.js";
+
 // Channel docking: add new channels here (order + meta + aliases), then
 // register the plugin in src/channels/plugins/index.ts and keep protocol IDs in sync.
 export const CHAT_CHANNEL_ORDER = [
@@ -16,23 +18,11 @@ export const CHANNEL_IDS = [...CHAT_CHANNEL_ORDER] as const;
 
 export const DEFAULT_CHAT_CHANNEL: ChatChannelId = "whatsapp";
 
-export type ChatChannelMeta = {
-  id: ChatChannelId;
-  label: string;
-  selectionLabel: string;
-  docsPath: string;
-  docsLabel?: string;
-  blurb: string;
-  // Channel docking: selection-line formatting for onboarding prompts.
-  // Keep this data-driven to avoid channel-specific branches in shared code.
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
-};
+export type ChatChannelMeta = ChannelMeta;
 
 const WEBSITE_URL = "https://clawd.bot";
 
-const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
+const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
   telegram: {
     id: "telegram",
     label: "Telegram",

@@ -113,17 +113,17 @@ actor GatewayChannelActor {
         self.task = nil
 
         await self.failPending(NSError(
-            domain: "Gateway",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+                                domain: "Gateway",
+                                code: 0,
+                                userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
         for waiter in waiters {
             waiter.resume(throwing: NSError(
-                domain: "Gateway",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+                            domain: "Gateway",
+                            code: 0,
+                            userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
         }
     }
 

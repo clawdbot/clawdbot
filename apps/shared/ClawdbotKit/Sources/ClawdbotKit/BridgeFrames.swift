@@ -100,11 +100,18 @@ public struct BridgeHelloOk: Codable, Sendable {
     public let type: String
     public let serverName: String
     public let canvasHostUrl: String?
+    public let mainSessionKey: String?
 
-    public init(type: String = "hello-ok", serverName: String, canvasHostUrl: String? = nil) {
+    public init(
+        type: String = "hello-ok",
+        serverName: String,
+        canvasHostUrl: String? = nil,
+        mainSessionKey: String? = nil)
+    {
         self.type = type
         self.serverName = serverName
         self.canvasHostUrl = canvasHostUrl
+        self.mainSessionKey = mainSessionKey
     }
 }
 

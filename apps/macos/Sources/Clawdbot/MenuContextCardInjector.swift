@@ -51,9 +51,9 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
         let initialWidth = self.initialCardWidth(for: menu)
 
         let initial = AnyView(ContextMenuCardView(
-            rows: initialRows,
-            statusText: initialStatusText,
-            isLoading: initialIsLoading))
+                                rows: initialRows,
+                                statusText: initialStatusText,
+                                isLoading: initialIsLoading))
 
         let hosting = NSHostingView(rootView: initial)
         hosting.frame.size.width = max(1, initialWidth)

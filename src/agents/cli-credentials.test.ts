@@ -111,7 +111,7 @@ describe("cli credentials", () => {
     expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
   });
 
-  it("caches Claude CLI credentials within the TTL window", async () => {
+  it("caches Claude Code CLI credentials within the TTL window", async () => {
     execSyncMock.mockImplementation(() =>
       JSON.stringify({
         claudeAiOauth: {
@@ -142,7 +142,7 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes Claude CLI credentials after the TTL window", async () => {
+  it("refreshes Claude Code CLI credentials after the TTL window", async () => {
     execSyncMock.mockImplementation(() =>
       JSON.stringify({
         claudeAiOauth: {

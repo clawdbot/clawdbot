@@ -46,6 +46,13 @@ export type SlackChannelRenamedEvent = {
   event_ts?: string;
 };
 
+export type SlackChannelIdChangedEvent = {
+  type: "channel_id_changed";
+  old_channel_id?: string;
+  new_channel_id?: string;
+  event_ts?: string;
+};
+
 export type SlackPinEvent = {
   type: "pin_added" | "pin_removed";
   channel_id?: string;

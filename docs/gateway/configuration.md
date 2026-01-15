@@ -32,16 +32,41 @@ It writes a restart sentinel and pings the last active session after the Gateway
 
 Params:
 - `raw` (string) — JSON5 payload for the entire config
+- `baseHash` (optional) — config hash from `config.get` (required when a config already exists)
 - `sessionKey` (optional) — last active session key for the wake-up ping
 - `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example (via `gateway call`):
 
 ```bash
+clawdbot gateway call config.get --params '{}' # capture payload.hash
 clawdbot gateway call config.apply --params '{
   "raw": "{\\n  agents: { defaults: { workspace: \\"~/clawd\\" } }\\n}\\n",
+  "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
   "restartDelayMs": 1000
+}'
+```
+
+## Partial updates (RPC)
+
+Use `config.patch` to merge a partial update into the existing config without clobbering
+unrelated keys. It applies JSON merge patch semantics:
+- objects merge recursively
+- `null` deletes a key
+- arrays replace
+
+Params:
+- `raw` (string) — JSON5 payload containing just the keys to change
+- `baseHash` (required) — config hash from `config.get`
+
+Example:
+
+```bash
+clawdbot gateway call config.get --params '{}' # capture payload.hash
+clawdbot gateway call config.patch --params '{
+  "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
+  "baseHash": "<hash-from-config.get>"
 }'
 ```
 
@@ -306,6 +331,10 @@ rotation order used for failover.
 }
 ```
 
+Note: `anthropic:claude-cli` should use `mode: "oauth"` even when the stored
+credential is a setup-token. Clawdbot auto-migrates older configs that used
+`mode: "token"`.
+
 ### `agents.list[].identity`
 
 Optional per-agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
@@ -401,6 +430,22 @@ For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowF
 }
 ```
 
+### `channels.whatsapp.sendReadReceipts`
+
+Controls whether inbound WhatsApp messages are marked as read (blue ticks). Default: `true`.
+
+Self-chat mode always skips read receipts, even when enabled.
+
+Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`.
+
+```json5
+{
+  channels: {
+    whatsapp: { sendReadReceipts: false }
+  }
+}
+```
+
 ### `channels.whatsapp.accounts` (multi-account)
 
 Run multiple WhatsApp accounts in one gateway:
@@ -478,6 +523,30 @@ Group messages default to **require mention** (either metadata mention or regex 
 ```
 
 `messages.groupChat.historyLimit` sets the global default for group history context. Channels can override with `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
+
+#### DM history limits
+
+DM conversations use session-based history managed by the agent. You can limit the number of user turns retained per DM session:
+
+```json5
+{
+  channels: {
+    telegram: {
+      dmHistoryLimit: 30,  // limit DM sessions to 30 user turns
+      dms: {
+        "123456789": { historyLimit: 50 }  // per-user override (user ID)
+      }
+    }
+  }
+}
+```
+
+Resolution order:
+1. Per-DM override: `channels.<provider>.dms[userId].historyLimit`
+2. Provider default: `channels.<provider>.dmHistoryLimit`
+3. No limit (all history retained)
+
+Supported providers: `telegram`, `whatsapp`, `discord`, `slack`, `signal`, `imessage`, `msteams`.
 
 Per-agent override (takes precedence when set, even `[]`):
 ```json5
@@ -780,6 +849,7 @@ Notes:
 - `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<channel>`.
 - `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
 - `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
+- `channels.<provider>.configWrites` gates config mutations initiated by that channel (default: true). This applies to `/config set|unset` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
@@ -810,6 +880,7 @@ Set `web.enabled: false` to keep it off by default.
 Clawdbot starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `channels.telegram.botToken`.
 Set `channels.telegram.enabled: false` to disable automatic startup.
 Multi-account support lives under `channels.telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
+Set `channels.telegram.configWrites: false` to block Telegram-initiated config writes (including supergroup ID migrations and `/config set|unset`).
 
 ```json5
 {
@@ -979,6 +1050,10 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       reactionNotifications: "own", // off | own | all | allowlist
       reactionAllowlist: ["U123"],
       replyToMode: "off",           // off | first | all
+      thread: {
+        historyScope: "thread",     // thread | channel
+        inheritParent: false
+      },
       actions: {
         reactions: true,
         messages: true,
@@ -1002,6 +1077,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 Multi-account support lives under `channels.slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+Set `channels.slack.configWrites: false` to block Slack-initiated config writes (including channel ID migrations and `/config set|unset`).
 
 Bot-authored messages are ignored by default. Enable with `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
 
@@ -1010,6 +1086,10 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `channels.slack.reactionAllowlist` on all messages (empty list disables).
+
+Thread session isolation:
+- `channels.slack.thread.historyScope` controls whether thread history is per-thread (`thread`, default) or shared across the channel (`channel`).
+- `channels.slack.thread.inheritParent` controls whether new thread sessions inherit the parent channel transcript (default: false).
 
 Slack action groups (gate `slack` tool actions):
 | Action group | Default | Notes |
@@ -1152,6 +1232,31 @@ streaming, final replies) across channels unless already present.
 
 If `messages.responsePrefix` is unset, no prefix is applied by default.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
+
+#### Template variables
+
+The `responsePrefix` string can include template variables that resolve dynamically:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{model}` | Short model name | `claude-opus-4-5`, `gpt-4o` |
+| `{modelFull}` | Full model identifier | `anthropic/claude-opus-4-5` |
+| `{provider}` | Provider name | `anthropic`, `openai` |
+| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off` |
+| `{identity.name}` | Agent identity name | (same as `"auto"` mode) |
+
+Variables are case-insensitive (`{MODEL}` = `{model}`). `{think}` is an alias for `{thinkingLevel}`.
+Unresolved variables remain as literal text.
+
+```json5
+{
+  messages: {
+    responsePrefix: "[{model} | think:{thinkingLevel}]"
+  }
+}
+```
+
+Example output: `[claude-opus-4-5 | think:high] Here's my response...`
 
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
 `messages.messagePrefix`). Default stays **unchanged**: `"[clawdbot]"` when
@@ -1444,7 +1549,7 @@ See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 
 #### `agents.defaults.compaction` (reserve headroom + memory flush)
 
-`agents.defaults.compaction.mode` selects the compaction summarization strategy. Defaults to `default`; set `safeguard` to enable chunked summarization for very long histories. See [/compaction](/compaction).
+`agents.defaults.compaction.mode` selects the compaction summarization strategy. Defaults to `default`; set `safeguard` to enable chunked summarization for very long histories. See [/concepts/compaction](/concepts/compaction).
 
 `agents.defaults.compaction.reserveTokensFloor` enforces a minimum `reserveTokens`
 value for Pi compaction (default: `20000`). Set it to `0` to disable the floor.
@@ -1549,6 +1654,18 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 Note: `applyPatch` is only under `tools.exec` (no `tools.bash` alias).
 Legacy: `tools.bash` is still accepted as an alias.
 
+`tools.web` configures web search + fetch tools:
+- `tools.web.search.enabled` (default: true when key is present)
+- `tools.web.search.apiKey` (recommended: set via `clawdbot configure --section web`, or use `BRAVE_API_KEY` env var)
+- `tools.web.search.maxResults` (1–10, default 5)
+- `tools.web.search.timeoutSeconds` (default 30)
+- `tools.web.search.cacheTtlMinutes` (default 15)
+- `tools.web.fetch.enabled` (default false; sandboxed sessions auto-enable unless set to false)
+- `tools.web.fetch.maxChars` (default 50000)
+- `tools.web.fetch.timeoutSeconds` (default 30)
+- `tools.web.fetch.cacheTtlMinutes` (default 15)
+- `tools.web.fetch.userAgent` (optional override)
+
 `agents.defaults.subagents` configures sub-agent defaults:
 - `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.
 - `maxConcurrent`: max concurrent sub-agent runs (default 1)
@@ -1583,6 +1700,37 @@ Example (coding profile, but deny exec/process everywhere):
 }
 ```
 
+`tools.byProvider` lets you **further restrict** tools for specific providers (or a single `provider/model`).
+Per-agent override: `agents.list[].tools.byProvider`.
+
+Order: base profile → provider profile → allow/deny policies.
+Provider keys accept either `provider` (e.g. `google-antigravity`) or `provider/model`
+(e.g. `openai/gpt-5.2`).
+
+Example (keep global coding profile, but minimal tools for Google Antigravity):
+```json5
+{
+  tools: {
+    profile: "coding",
+    byProvider: {
+      "google-antigravity": { profile: "minimal" }
+    }
+  }
+}
+```
+
+Example (provider/model-specific allowlist):
+```json5
+{
+  tools: {
+    allow: ["group:fs", "group:runtime", "sessions_list"],
+    byProvider: {
+      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] }
+    }
+  }
+}
+```
+
 `tools.allow` / `tools.deny` configure a global tool allow/deny policy (deny wins).
 This is applied even when the Docker sandbox is **off**.
 
@@ -1598,6 +1746,7 @@ Tool groups (shorthands) work in **global** and **per-agent** tool policies:
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
+- `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
@@ -2123,7 +2272,7 @@ Example:
 ```json5
 {
   skills: {
-    allowBundled: ["brave-search", "gemini"],
+    allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: [
         "~/Projects/agent-scripts/skills",
@@ -2208,7 +2357,7 @@ Defaults:
     enabled: true,
     controlUrl: "http://127.0.0.1:18791",
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    defaultProfile: "clawd",
+    defaultProfile: "chrome",
     profiles: {
       clawd: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
@@ -2374,6 +2523,7 @@ Convenience flags (CLI):
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
 See [Gateway runbook](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
+See [Multiple gateways](/gateway/multiple-gateways) for browser/CDP port isolation details.
 
 Example:
 ```bash

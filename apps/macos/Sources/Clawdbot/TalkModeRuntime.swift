@@ -354,9 +354,9 @@ actor TalkModeRuntime {
                     "session=\(sessionKey, privacy: .public)")
 
             guard let assistantText = await self.waitForAssistantText(
-                sessionKey: sessionKey,
-                since: startedAt,
-                timeoutSeconds: 45)
+                    sessionKey: sessionKey,
+                    since: startedAt,
+                    timeoutSeconds: 45)
             else {
                 self.logger.warning("talk assistant text missing after timeout")
                 await self.startListening()

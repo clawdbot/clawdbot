@@ -26,7 +26,6 @@ import {
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
-import { maybeMigrateLegacyConfigFile } from "./doctor-legacy-config.js";
 import { noteMacLaunchAgentOverrides } from "./doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
@@ -75,8 +74,6 @@ export async function doctorCommand(
 
   await maybeRepairUiProtocolFreshness(runtime, prompter);
   noteSourceInstallIssues(root);
-
-  await maybeMigrateLegacyConfigFile(runtime);
 
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
@@ -212,10 +209,7 @@ export async function doctorCommand(
     const service = resolveGatewayService();
     let loaded = false;
     try {
-      loaded = await service.isLoaded({
-        env: process.env,
-        profile: process.env.CLAWDBOT_PROFILE,
-      });
+      loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
     } catch {
       loaded = false;
     }

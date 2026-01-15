@@ -12,6 +12,46 @@ Clawdbot is both a product and an experiment: you’re wiring frontier-model beh
 - where the bot is allowed to act
 - what the bot can touch
 
+## Quick check: `clawdbot security audit`
+
+Run this regularly (especially after changing config or exposing network surfaces):
+
+```bash
+clawdbot security audit
+clawdbot security audit --deep
+clawdbot security audit --fix
+```
+
+It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions).
+
+`--fix` applies safe guardrails:
+- Tighten `groupPolicy="open"` to `groupPolicy="allowlist"` (and per-account variants) for common channels.
+- Turn `logging.redactSensitive="off"` back to `"tools"`.
+- Tighten local perms (`~/.clawdbot` → `700`, config file → `600`, plus common state files like `credentials/*.json`, `agents/*/agent/auth-profiles.json`, and `agents/*/sessions/sessions.json`).
+
+### What the audit checks (high level)
+
+- **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
+- **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
+- **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel).
+- **Browser control exposure** (remote controlUrl without token, HTTP, token reuse).
+- **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
+- **Plugins** (extensions exist without an explicit allowlist).
+- **Model hygiene** (warn when configured models look legacy; not a hard block).
+
+If you run `--deep`, Clawdbot also attempts a best-effort live Gateway probe.
+
+## Security Audit Checklist
+
+When the audit prints findings, treat this as a priority order:
+
+1. **Anything “open” + tools enabled**: lock down DMs/groups first (pairing/allowlists), then tighten tool policy/sandboxing.
+2. **Public network exposure** (LAN bind, Funnel, missing auth): fix immediately.
+3. **Browser control remote exposure**: treat it like a remote admin API (token required; HTTPS/tailnet-only).
+4. **Permissions**: make sure state/config/credentials/auth are not group/world-readable.
+5. **Plugins/extensions**: only load what you explicitly trust.
+6. **Model choice**: prefer modern, instruction-hardened models for any bot with tools.
+
 ## The Threat Model
 
 Your AI assistant can:
@@ -42,6 +82,12 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Prefer explicit `plugins.allow` allowlists.
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
+- If you install plugins from npm (`clawdbot plugins install <npm-spec>`), treat it like running untrusted code:
+  - The install path is `~/.clawdbot/extensions/<pluginId>/` (or `$CLAWDBOT_STATE_DIR/extensions/<pluginId>/`).
+  - Clawdbot uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
+  - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
+
+Details: [Plugins](/plugin)
 
 ## DM access model (pairing / allowlist / open / disabled)
 
@@ -85,7 +131,7 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
-- **Model choice matters:** we recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)). Using weaker models increases risk.
+- **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 
 ## Reasoning & verbose output in groups
 
@@ -93,6 +139,23 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 was not meant for a public channel. In group settings, treat them as **debug
 only** and keep them off unless you explicitly need them. If you enable them,
 do so only in trusted DMs or tightly controlled rooms.
+
+## Incident Response (if you suspect compromise)
+
+Assume “compromised” means: someone got into a room that can trigger the bot, or a token leaked, or a plugin/tool did something unexpected.
+
+1. **Stop the blast radius**
+   - Disable elevated tools (or stop the Gateway) until you understand what happened.
+   - Lock down inbound surfaces (DM policy, group allowlists, mention gating).
+2. **Rotate secrets**
+   - Rotate `gateway.auth` token/password.
+   - Rotate `browser.controlToken` and `hooks.token` (if used).
+   - Revoke/rotate model provider credentials (API keys / OAuth).
+3. **Review artifacts**
+   - Check Gateway logs and recent sessions/transcripts for unexpected tool calls.
+   - Review `extensions/` and remove anything you don’t fully trust.
+4. **Re-run audit**
+   - `clawdbot security audit --deep` and confirm the report is clean.
 
 ## Lessons Learned (The Hard Way)
 
@@ -120,6 +183,21 @@ Keep config + state private on the gateway host:
 
 `clawdbot doctor` can warn and offer to tighten these permissions.
 
+### 0.4) Network exposure (bind + port + firewall)
+
+The Gateway multiplexes **WebSocket + HTTP** on a single port:
+- Default: `18789`
+- Config/flags/env: `gateway.port`, `--port`, `CLAWDBOT_GATEWAY_PORT`
+
+Bind mode controls where the Gateway listens:
+- `gateway.bind: "loopback"` (default): only local clients can connect.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"auto"`) expand the attack surface. Only use them with `gateway.auth` enabled and a real firewall.
+
+Rules of thumb:
+- Prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback, and Tailscale handles access).
+- If you must bind to LAN, firewall the port to a tight allowlist of source IPs; do not port-forward it broadly.
+- Never expose the Gateway unauthenticated on `0.0.0.0`.
+
 ### 0.5) Lock down the Gateway WebSocket (local auth)
 
 Gateway auth is **only** enforced when you set `gateway.auth`. If it’s unset,
@@ -145,6 +223,16 @@ Doctor can generate one for you: `clawdbot doctor --generate-gateway-token`.
 Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
 protect local WS access.
 
+Auth modes:
+- `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).
+- `gateway.auth.mode: "password"`: password auth (prefer setting via env: `CLAWDBOT_GATEWAY_PASSWORD`).
+
+Rotation checklist (token/password):
+1. Generate/set a new secret (`gateway.auth.token` or `CLAWDBOT_GATEWAY_PASSWORD`).
+2. Restart the Gateway (or restart the macOS app if it supervises the Gateway).
+3. Update any remote clients (`gateway.remote.token` / `.password` on machines that call into the Gateway).
+4. Verify you can no longer connect with the old credentials.
+
 ### 0.6) Tailscale Serve identity headers
 
 When `gateway.auth.allowTailscale` is `true` (default for Serve), Clawdbot
@@ -158,6 +246,57 @@ you terminate TLS or proxy in front of the gateway, disable
 `gateway.auth.allowTailscale` and use token/password auth instead.
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
+
+### 0.6.1) Browser control server over Tailscale (recommended)
+
+If your Gateway is remote but the browser runs on another machine, you’ll often run a **separate browser control server**
+on the browser machine (see [Browser tool](/tools/browser)). Treat this like an admin API.
+
+Recommended pattern:
+
+```bash
+# on the machine that runs Chrome
+clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
+tailscale serve https / http://127.0.0.1:18791
+```
+
+Then on the Gateway, set:
+- `browser.controlUrl` to the `https://…` Serve URL (MagicDNS/ts.net)
+- and authenticate with the same token (`CLAWDBOT_BROWSER_CONTROL_TOKEN` env preferred)
+
+Avoid:
+- `--bind 0.0.0.0` (LAN-visible surface)
+- Tailscale Funnel for browser control endpoints (public exposure)
+
+### 0.7) Secrets on disk (what’s sensitive)
+
+Assume anything under `~/.clawdbot/` (or `$CLAWDBOT_STATE_DIR/`) may contain secrets or private data:
+
+- `clawdbot.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
+- `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
+- `agents/<agentId>/agent/auth-profiles.json`: API keys + OAuth tokens (imported from legacy `credentials/oauth.json`).
+- `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
+- `extensions/**`: installed plugins (plus their `node_modules/`).
+- `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
+
+Hardening tips:
+- Keep permissions tight (`700` on dirs, `600` on files).
+- Use full-disk encryption on the gateway host.
+- Prefer a dedicated OS user account for the Gateway if the host is shared.
+
+### 0.8) Logs + transcripts (redaction + retention)
+
+Logs and transcripts can leak sensitive info even when access controls are correct:
+- Gateway logs may include tool summaries, errors, and URLs.
+- Session transcripts can include pasted secrets, file contents, command output, and links.
+
+Recommendations:
+- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default).
+- Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
+- When sharing diagnostics, prefer `clawdbot status --all` (pasteable, secrets redacted) over raw logs.
+- Prune old session transcripts and log files if you don’t need long retention.
+
+Details: [Logging](/gateway/logging)
 
 ### 1) DMs: pairing by default
 
@@ -205,6 +344,29 @@ You can already build a read-only profile by combining:
 
 We may add a single `readOnlyMode` flag later to simplify this configuration.
 
+### 5) Secure baseline (copy/paste)
+
+One “safe default” config that keeps the Gateway private, requires DM pairing, and avoids always-on group bots:
+
+```json5
+{
+  gateway: {
+    mode: "local",
+    bind: "loopback",
+    port: 18789,
+    auth: { mode: "token", token: "your-long-random-token" }
+  },
+  channels: {
+    whatsapp: {
+      dmPolicy: "pairing",
+      groups: { "*": { requireMention: true } }
+    }
+  }
+}
+```
+
+If you want “safer by default” tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (example below under “Per-agent access profiles”).
+
 ## Sandboxing (recommended)
 
 Dedicated doc: [Sandboxing](/gateway/sandboxing)
@@ -233,6 +395,12 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Prefer a dedicated profile for the agent (the default `clawd` profile).
 - Avoid pointing the agent at your personal daily-driver profile.
 - Keep host browser control disabled for sandboxed agents unless you trust them.
+- Treat browser downloads as untrusted input; prefer an isolated downloads directory.
+- Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
+- For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
+- Treat `browser.controlUrl` endpoints as an admin API: tailnet-only + token auth. Prefer Tailscale Serve over LAN binds.
+- Keep `browser.controlToken` separate from `gateway.auth.token` (you can reuse it, but that increases blast radius).
+- Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
 
 ## Per-agent access profiles (multi-agent)
 
@@ -301,7 +469,7 @@ Common use cases:
           workspaceAccess: "none"
         },
         tools: {
-          allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status", "whatsapp", "telegram", "slack", "discord", "gateway"],
+          allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status", "whatsapp", "telegram", "slack", "discord"],
           deny: ["read", "write", "edit", "apply_patch", "exec", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
         }
       }
@@ -327,11 +495,56 @@ Include security guidelines in your agent's system prompt:
 
 If your AI does something bad:
 
-1. **Stop it:** stop the macOS app (if it’s supervising the Gateway) or terminate your `clawdbot gateway` process
-2. **Check logs:** `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
-3. **Review session:** Check `~/.clawdbot/agents/<agentId>/sessions/` for what happened
-4. **Rotate secrets:** If credentials were exposed
-5. **Update rules:** Add to your security prompt
+### Contain
+
+1. **Stop it:** stop the macOS app (if it supervises the Gateway) or terminate your `clawdbot gateway` process.
+2. **Close exposure:** set `gateway.bind: "loopback"` (or disable Tailscale Funnel/Serve) until you understand what happened.
+3. **Freeze access:** switch risky DMs/groups to `dmPolicy: "disabled"` / require mentions, and remove `"*"` allow-all entries if you had them.
+
+### Rotate (assume compromise if secrets leaked)
+
+1. Rotate Gateway auth (`gateway.auth.token` / `CLAWDBOT_GATEWAY_PASSWORD`) and restart.
+2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
+3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`).
+
+### Audit
+
+1. Check Gateway logs: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or `logging.file`).
+2. Review the relevant transcript(s): `~/.clawdbot/agents/<agentId>/sessions/*.jsonl`.
+3. Review recent config changes (anything that could have widened access: `gateway.bind`, `gateway.auth`, dm/group policies, `tools.elevated`, plugin changes).
+
+### Collect for a report
+
+- Timestamp, gateway host OS + Clawdbot version
+- The session transcript(s) + a short log tail (after redacting)
+- What the attacker sent + what the agent did
+- Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
+
+## Secret Scanning (detect-secrets)
+
+CI runs `detect-secrets scan --baseline .secrets.baseline` in the `secrets` job.
+If it fails, there are new candidates not yet in the baseline.
+
+### If CI fails
+
+1. Reproduce locally:
+   ```bash
+   detect-secrets scan --baseline .secrets.baseline
+   ```
+2. Understand the tools:
+   - `detect-secrets scan` finds candidates and compares them to the baseline.
+   - `detect-secrets audit` opens an interactive review to mark each baseline
+     item as real or false positive.
+3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
+4. For false positives: run the interactive audit and mark them as false:
+   ```bash
+   detect-secrets audit .secrets.baseline
+   ```
+5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
+   baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
+   file is reference-only; detect-secrets doesn’t read it automatically).
+
+Commit the updated `.secrets.baseline` once it reflects the intended state.
 
 ## The Trust Hierarchy
 

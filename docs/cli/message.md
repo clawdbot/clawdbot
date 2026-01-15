@@ -81,7 +81,7 @@ Target formats (`--to`):
   - Optional: `--channel-id`
 
 - `delete`
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Telegram
   - Required: `--message-id`, `--to` or `--channel-id`
   - Optional: `--channel-id`
 

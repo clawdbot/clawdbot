@@ -1,7 +1,6 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChatChannelId } from "../channels/registry.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -82,7 +81,7 @@ export function applyAgentBindings(
   };
 }
 
-function resolveDefaultAccountId(cfg: ClawdbotConfig, provider: ChatChannelId): string {
+function resolveDefaultAccountId(cfg: ClawdbotConfig, provider: ChannelId): string {
   const plugin = getChannelPlugin(provider);
   if (!plugin) return DEFAULT_ACCOUNT_ID;
   return resolveChannelDefaultAccountId({ plugin, cfg });
@@ -125,7 +124,7 @@ export function parseBindingSpecs(params: {
     const trimmed = raw?.trim();
     if (!trimmed) continue;
     const [channelRaw, accountRaw] = trimmed.split(":", 2);
-    const channel = normalizeChatChannelId(channelRaw);
+    const channel = normalizeChannelId(channelRaw);
     if (!channel) {
       errors.push(`Unknown channel "${channelRaw}".`);
       continue;

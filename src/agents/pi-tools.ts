@@ -111,13 +111,20 @@ export function createClawdbotCodingTools(options?: {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const {
     agentId,
-    policy: effectiveToolsPolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
     profile,
+    providerProfile,
   } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
+  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
@@ -125,7 +132,11 @@ export function createClawdbotCodingTools(options?: {
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicy,
-    effectiveToolsPolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
     sandbox?.tools,
     subagentPolicy,
   ]);
@@ -229,10 +240,24 @@ export function createClawdbotCodingTools(options?: {
     }),
   ];
   const toolsFiltered = profilePolicy ? filterToolsByPolicy(tools, profilePolicy) : tools;
-  const policyFiltered = effectiveToolsPolicy
-    ? filterToolsByPolicy(toolsFiltered, effectiveToolsPolicy)
+  const providerProfileFiltered = providerProfilePolicy
+    ? filterToolsByPolicy(toolsFiltered, providerProfilePolicy)
     : toolsFiltered;
-  const sandboxed = sandbox ? filterToolsByPolicy(policyFiltered, sandbox.tools) : policyFiltered;
+  const globalFiltered = globalPolicy
+    ? filterToolsByPolicy(providerProfileFiltered, globalPolicy)
+    : providerProfileFiltered;
+  const globalProviderFiltered = globalProviderPolicy
+    ? filterToolsByPolicy(globalFiltered, globalProviderPolicy)
+    : globalFiltered;
+  const agentFiltered = agentPolicy
+    ? filterToolsByPolicy(globalProviderFiltered, agentPolicy)
+    : globalProviderFiltered;
+  const agentProviderFiltered = agentProviderPolicy
+    ? filterToolsByPolicy(agentFiltered, agentProviderPolicy)
+    : agentFiltered;
+  const sandboxed = sandbox
+    ? filterToolsByPolicy(agentProviderFiltered, sandbox.tools)
+    : agentProviderFiltered;
   const subagentFiltered = subagentPolicy
     ? filterToolsByPolicy(sandboxed, subagentPolicy)
     : sandboxed;

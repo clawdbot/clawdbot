@@ -22,6 +22,16 @@ export const PresenceEntrySchema = Type.Object(
 
 export const HealthSnapshotSchema = Type.Any();
 
+export const SessionDefaultsSchema = Type.Object(
+  {
+    defaultAgentId: NonEmptyString,
+    mainKey: NonEmptyString,
+    mainSessionKey: NonEmptyString,
+    scope: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const StateVersionSchema = Type.Object(
   {
     presence: Type.Integer({ minimum: 0 }),
@@ -38,6 +48,7 @@ export const SnapshotSchema = Type.Object(
     uptimeMs: Type.Integer({ minimum: 0 }),
     configPath: Type.Optional(NonEmptyString),
     stateDir: Type.Optional(NonEmptyString),
+    sessionDefaults: Type.Optional(SessionDefaultsSchema),
   },
   { additionalProperties: false },
 );

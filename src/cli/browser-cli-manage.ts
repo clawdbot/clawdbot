@@ -382,28 +382,36 @@ export function registerBrowserManageCommands(
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
-    .action(async (opts: { name: string; color?: string; cdpUrl?: string }, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const result = await browserCreateProfile(baseUrl, {
-          name: opts.name,
-          color: opts.color,
-          cdpUrl: opts.cdpUrl,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
+    .option("--driver <driver>", "Profile driver (clawd|extension). Default: clawd")
+    .action(
+      async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
+        const parent = parentOpts(cmd);
+        const baseUrl = resolveBrowserControlUrl(parent?.url);
+        try {
+          const result = await browserCreateProfile(baseUrl, {
+            name: opts.name,
+            color: opts.color,
+            cdpUrl: opts.cdpUrl,
+            driver: opts.driver === "extension" ? "extension" : undefined,
+          });
+          if (parent?.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const loc = result.isRemote ? `  cdpUrl: ${result.cdpUrl}` : `  port: ${result.cdpPort}`;
+          defaultRuntime.log(
+            info(
+              `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${
+                opts.driver === "extension" ? "\n  driver: extension" : ""
+              }`,
+            ),
+          );
+        } catch (err) {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
         }
-        const loc = result.isRemote ? `  cdpUrl: ${result.cdpUrl}` : `  port: ${result.cdpPort}`;
-        defaultRuntime.log(
-          info(`🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}`),
-        );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      },
+    );
 
   browser
     .command("delete-profile")

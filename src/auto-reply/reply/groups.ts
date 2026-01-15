@@ -1,5 +1,5 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { getChatChannelMeta, normalizeChannelId } from "../../channels/registry.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -50,7 +50,7 @@ export function buildGroupIntro(params: {
   const providerLabel = (() => {
     if (!providerKey) return "chat";
     if (isInternalMessageChannel(providerKey)) return "WebChat";
-    if (providerId) return getChatChannelMeta(providerId).label;
+    if (providerId) return getChannelPlugin(providerId)?.meta.label ?? providerId;
     return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
   })();
   const subjectLine = subject

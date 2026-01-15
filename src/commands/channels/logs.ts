@@ -15,12 +15,14 @@ type LogLine = ReturnType<typeof parseLogLine>;
 
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
-const CHANNELS = new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
+
+const getChannelSet = () =>
+  new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
 
 function parseChannelFilter(raw?: string) {
   const trimmed = raw?.trim().toLowerCase();
   if (!trimmed) return "all";
-  return CHANNELS.has(trimmed) ? trimmed : "all";
+  return getChannelSet().has(trimmed) ? trimmed : "all";
 }
 
 function matchesChannel(line: NonNullable<LogLine>, channel: string) {

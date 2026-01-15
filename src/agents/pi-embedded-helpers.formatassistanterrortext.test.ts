@@ -33,4 +33,12 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("suppresses raw error JSON payloads that are not otherwise classified", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an error. Please try again.",
+    );
+  });
 });

@@ -180,7 +180,17 @@ export class IMessageRpcClient {
       this.pending.delete(key);
 
       if (parsed.error) {
-        const msg = parsed.error.message ?? "imsg rpc error";
+        const baseMessage = parsed.error.message ?? "imsg rpc error";
+        const details = parsed.error.data;
+        const code = parsed.error.code;
+        const suffixes = [] as string[];
+        if (typeof code === "number") suffixes.push(`code=${code}`);
+        if (details !== undefined) {
+          const detailText =
+            typeof details === "string" ? details : JSON.stringify(details, null, 2);
+          if (detailText) suffixes.push(detailText);
+        }
+        const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
         pending.reject(new Error(msg));
         return;
       }

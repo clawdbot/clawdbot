@@ -34,7 +34,7 @@ beforeEach(() => {
     durationMs: 0,
   });
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/clawdis.json",
+    path: "/tmp/clawdbot.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -133,7 +133,7 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/clawdis.json",
+  path: "/tmp/clawdbot.json",
   exists: false,
   raw: null,
   parsed: {},
@@ -374,7 +374,7 @@ describe("doctor command", () => {
     ).toBe(true);
   }, 10_000);
 
-  it("warns when legacy workspace directories exist", async () => {
+  it("warns when extra workspace directories exist", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",
       exists: true,
@@ -391,10 +391,14 @@ describe("doctor command", () => {
     note.mockClear();
     const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/Users/steipete");
     const realExists = fs.existsSync;
-    const legacyPath = path.join("/Users/steipete", "clawdis");
+    const legacyPath = path.join("/Users/steipete", "clawdbot");
     const legacyAgentsPath = path.join(legacyPath, "AGENTS.md");
     const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
-      if (value === "/Users/steipete/clawdis" || value === legacyPath || value === legacyAgentsPath)
+      if (
+        value === "/Users/steipete/clawdbot" ||
+        value === legacyPath ||
+        value === legacyAgentsPath
+      )
         return true;
       return realExists(value as never);
     });
@@ -411,9 +415,9 @@ describe("doctor command", () => {
     expect(
       note.mock.calls.some(
         ([message, title]) =>
-          title === "Legacy workspace" &&
+          title === "Extra workspace" &&
           typeof message === "string" &&
-          message.includes("clawdis"),
+          message.includes("clawdbot"),
       ),
     ).toBe(true);
 

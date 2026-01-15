@@ -25,6 +25,7 @@ vi.mock("../commands/configure.js", () => ({
   CONFIGURE_WIZARD_SECTIONS: [
     "workspace",
     "model",
+    "web",
     "gateway",
     "daemon",
     "channels",

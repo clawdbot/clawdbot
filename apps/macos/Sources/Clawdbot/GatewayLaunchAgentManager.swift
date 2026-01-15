@@ -306,6 +306,10 @@ enum GatewayLaunchAgentManager {
             password: snapshot.password)
     }
 
+    static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
+        LaunchAgentPlist.snapshot(url: self.plistURL)
+    }
+
     private static func ensureEnabled() async {
         let result = await Launchctl.run(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
         guard result.status != 0 else { return }

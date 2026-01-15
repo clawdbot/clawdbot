@@ -1,4 +1,12 @@
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
+import {
+  resolveEffectiveMessagesConfig,
+  resolveHumanDelayConfig,
+  resolveIdentityName,
+} from "../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../auto-reply/reply/response-prefix-template.js";
 import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
@@ -310,8 +318,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     let didSendReply = false;
+
+    // Create mutable context for response prefix template interpolation
+    let prefixContext: ResponsePrefixContext = {
+      identityName: resolveIdentityName(deps.cfg, route.agentId),
+    };
+
     const dispatcher = createReplyDispatcher({
       responsePrefix: resolveEffectiveMessagesConfig(deps.cfg, route.agentId).responsePrefix,
+      responsePrefixContextProvider: () => prefixContext,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       deliver: async (payload) => {
         await deps.deliverReplies({
@@ -338,6 +353,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyOptions: {
         disableBlockStreaming:
           typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+        onModelSelected: (ctx) => {
+          // Mutate the object directly instead of reassigning to ensure the closure sees updates
+          prefixContext.provider = ctx.provider;
+          prefixContext.model = extractShortModelName(ctx.model);
+          prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+          prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        },
       },
     });
     if (!queuedFinal) {

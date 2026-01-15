@@ -1,4 +1,4 @@
-import { listChatChannels } from "../channels/registry.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -13,7 +13,9 @@ export async function removeChannelConfigWizard(
   let next = { ...cfg };
 
   const listConfiguredChannels = () =>
-    listChatChannels().filter((meta) => next.channels?.[meta.id] !== undefined);
+    listChannelPlugins()
+      .map((plugin) => plugin.meta)
+      .filter((meta) => next.channels?.[meta.id] !== undefined);
 
   while (true) {
     const configured = listConfiguredChannels();
@@ -45,7 +47,7 @@ export async function removeChannelConfigWizard(
 
     if (channel === "done") return next;
 
-    const label = listChatChannels().find((meta) => meta.id === channel)?.label ?? channel;
+    const label = getChannelPlugin(channel)?.meta.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
         message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,

@@ -6,10 +6,14 @@ settings:
 
 overrides:
   '@sinclair/typebox': 0.34.47
+  hono: 4.11.4
 
 patchedDependencies:
+  '@mariozechner/pi-agent-core@0.45.7':
+    hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
+    path: patches/@mariozechner__pi-agent-core.patch
   '@mariozechner/pi-ai@0.45.7':
-    hash: 899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd
+    hash: e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9
     path: patches/@mariozechner__pi-ai@0.45.7.patch
 
 importers:
@@ -18,7 +22,7 @@ importers:
     dependencies:
       '@buape/carbon':
         specifier: 0.0.0-beta-20260110172854
-        version: 0.0.0-beta-20260110172854(hono@4.11.3)
+        version: 0.0.0-beta-20260110172854(hono@4.11.4)
       '@clack/prompts':
         specifier: ^0.11.0
         version: 0.11.0
@@ -32,17 +36,17 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.45.3
-        version: 0.45.3(ws@8.19.0)(zod@4.3.5)
+        specifier: 0.45.7
+        version: 0.45.7(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
         specifier: 0.45.7
-        version: 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
+        version: 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.45.3
-        version: 0.45.3(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.45.7
+        version: 0.45.7(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.45.3
-        version: 0.45.3
+        specifier: ^0.45.7
+        version: 0.45.7
       '@microsoft/agents-hosting':
         specifier: ^1.1.1
         version: 1.1.1
@@ -103,6 +107,9 @@ importers:
       grammy:
         specifier: ^1.39.2
         version: 1.39.2
+      hono:
+        specifier: 4.11.4
+        version: 4.11.4
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
@@ -230,6 +237,33 @@ importers:
       wireit:
         specifier: ^0.14.12
         version: 0.14.12
+
+  extensions/matrix:
+    dependencies:
+      markdown-it:
+        specifier: 14.1.0
+        version: 14.1.0
+      matrix-js-sdk:
+        specifier: 40.0.0
+        version: 40.0.0
+
+  extensions/voice-call:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.47
+        version: 0.34.47
+      ws:
+        specifier: ^8.19.0
+        version: 8.19.0
+      zod:
+        specifier: ^4.3.5
+        version: 4.3.5
+
+  extensions/zalo:
+    dependencies:
+      undici:
+        specifier: 7.18.2
+        version: 7.18.2
 
   ui:
     dependencies:
@@ -690,7 +724,7 @@ packages:
     resolution: {integrity: sha512-Shz/KjlIeAhfiuE93NDKVdZ7HdBVLQAfdbaXEaoAVO3ic9ibRSLGIQGkcBbFyuLr+7/1D5ZCINM8B+6IvXeMtw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: ^4
+      hono: 4.11.4
 
   '@huggingface/jinja@0.5.3':
     resolution: {integrity: sha512-asqfZ4GQS0hD876Uw4qiUb7Tr/V5Q+JZuo2L+BtdrD4U40QU58nIRq3ZSgAzJgT874VLjhGVacaYfrdpXtEvtA==}
@@ -952,8 +986,8 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.45.3':
-    resolution: {integrity: sha512-yWgIKuhhCOxLdbNUcX5oNELdUSqkvnoYsXWOq6/IDiolvQMag4fWNsabeAd2OqiueH8k9sFx3G5cFR53PtHLEw==}
+  '@mariozechner/pi-agent-core@0.45.7':
+    resolution: {integrity: sha512-AwPwojEyJFBpmUIpgSfXinRh+hbd8TW0uZX2qNpRybyzbP0PnMp0tBthaG0Ao/wAIws4KLZQQEToQiDADpEUhg==}
     engines: {node: '>=20.0.0'}
 
   '@mariozechner/pi-ai@0.45.7':
@@ -961,14 +995,18 @@ packages:
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-coding-agent@0.45.3':
-    resolution: {integrity: sha512-Rt1SLmZ5Z2Ch3s/PjIJXP3VNCjbjm43T8q2cujMO/zRCGjgElcfO66ls2MoLoAxCGyfy/9FA1OrCoCrGsWkWcw==}
+  '@mariozechner/pi-coding-agent@0.45.7':
+    resolution: {integrity: sha512-+2TtZXIF6Iy4WxwpyeK9MXyYdfsuvIcRimotRDzhT7nM6TMLxJkDzHovqrcQF9/fAFd9wNHmRBA52PQIBicTSw==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.45.3':
-    resolution: {integrity: sha512-Z/ThVu1JHLQYDR1TgZdCXlaR9rimZ5wuYUO+dy773Cz0xFOg+E6YSfPDRu7t3TErLt59v/gnBw72cIdfIXoYpw==}
+  '@mariozechner/pi-tui@0.45.7':
+    resolution: {integrity: sha512-c4pMvyuC28PfpAYCsO01E651r+SAiNg216plmc0ej5qnizQm2x7X14C3UfxMfmWAMJ+U9Y0O7PucPdmXeHbjnw==}
     engines: {node: '>=20.0.0'}
+
+  '@matrix-org/matrix-sdk-crypto-wasm@16.0.0':
+    resolution: {integrity: sha512-c+0eu/ckG+ik62CaOFvHAulJlspw2CBKcLrWbiEQsXv4J3PC4xaaDI5VHFAl7FDU+U9Ww2DDNTieszCh4Lk0/Q==}
+    engines: {node: '>= 18'}
 
   '@microsoft/agents-activity@1.1.1':
     resolution: {integrity: sha512-L7PHEHKFge99aIxV9eA7uFY3n9goYKzxcWaqLXGmxq3wMsau8hdsPzZgpV77LOQWQynLO3M5cbD8AavcVZszlQ==}
@@ -1869,6 +1907,9 @@ packages:
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
+  '@types/events@3.0.3':
+    resolution: {integrity: sha512-trOc4AAUThEz9hapPtSd7wf5tiQKvTtu5b371UxXdTuqzIh0ArcRspRP0i0Viu+LXstIQ1z96t1nsPxT9ol01g==}
+
   '@types/express-serve-static-core@4.19.8':
     resolution: {integrity: sha512-02S5fmqeoKzVZCHPZid4b8JH2eM5HzQLZWN2FohQEy/0eXTq8VXZfSN6Pcr3F6N9R/vNrj7cpgbhjie6m/1tCA==}
 
@@ -2067,6 +2108,9 @@ packages:
   alien-signals@2.0.8:
     resolution: {integrity: sha512-844G1VLkk0Pe2SJjY0J8vp8ADI73IM4KliNu2OGlYzWpO28NexEUvjHTcFjFX3VXoiUtwTbHxLNI9ImkcoBqzA==}
 
+  another-json@0.2.0:
+    resolution: {integrity: sha512-/Ndrl68UQLhnCdsAzEXLMFuOR546o2qbYRqCglaNHbjXrwG1ayTcdwr3zkSGOGtGXDyR5X9nCFfnyG2AFJIsqg==}
+
   ansi-escapes@6.2.1:
     resolution: {integrity: sha512-4nJ3yixlEthEJ9Rk4vPcdBRkZvQZlYyu8j4/Mqz5sgIkddmEnH2Yj2ZrnP9S3tQOvSNRUIgVNF/1yPpRAGNRig==}
     engines: {node: '>=14.16'}
@@ -2145,6 +2189,9 @@ packages:
     resolution: {integrity: sha512-vjtV3hiLqYDNRoiAv0zC4QaGAMPomEoq83PRmYIofPswwZurCeWR5LByXm7SyoL0Zh5+2z0+HC7jG8gSZJUh0w==}
     engines: {node: '>= 16'}
 
+  base-x@5.0.1:
+    resolution: {integrity: sha512-M7uio8Zt++eg3jPj+rHMfCC+IuygQHHCOU+IYsVtik6FWjuYpVt/+MRKcgsAMHh8mMFAwnB+Bs+mTrFiXjMzKg==}
+
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
@@ -2181,6 +2228,9 @@ packages:
 
   browser-or-node@3.0.0:
     resolution: {integrity: sha512-iczIdVJzGEYhP5DqQxYM9Hh7Ztpqqi+CXZpSmX8ALFs9ecXkQIeqRyM6TfxEfMVpwhl3dSuDvxdzzo9sUOIVBQ==}
+
+  bs58@6.0.0:
+    resolution: {integrity: sha512-PD0wEnEYg6ijszw/u8s+iI3H17cTymlrwkKhDhPZq+Sokl3AU4htyBFTjAeNAlCCmg0f53g6ih3jATyCKftTfw==}
 
   buffer-equal-constant-time@1.0.1:
     resolution: {integrity: sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==}
@@ -2703,8 +2753,8 @@ packages:
     resolution: {integrity: sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==}
     engines: {node: '>=12.0.0'}
 
-  hono@4.11.3:
-    resolution: {integrity: sha512-PmQi306+M/ct/m5s66Hrg+adPnkD5jiO6IjA7WhWw0gSBSo1EcRegwuI1deZ+wd5pzCGynCcn2DprnE4/yEV4w==}
+  hono@4.11.4:
+    resolution: {integrity: sha512-U7tt8JsyrxSRKspfhtLET79pU8K+tInj5QZXs1jSugO1Vq5dFj3kmZsRldo29mTBfcjDRVRXrEZ6LS63Cog9ZA==}
     engines: {node: '>=16.9.0'}
 
   hookified@1.15.0:
@@ -2783,6 +2833,10 @@ packages:
   is-interactive@2.0.0:
     resolution: {integrity: sha512-qP1vozQRI+BMOPcjFzrjXuQvdak2pHNUMZoeG2eRbiSqyvbEf/wQtEOTOX1guk6E3t36RkaqiSt8A/6YElNxLQ==}
     engines: {node: '>=12'}
+
+  is-network-error@1.3.0:
+    resolution: {integrity: sha512-6oIwpsgRfnDiyEDLMay/GqCl3HoAtH5+RUKW29gYkL0QA+ipzpDLA16yQs7/RHCSu+BwgbJaOUqa4A99qNVQVw==}
+    engines: {node: '>=16'}
 
   is-number@7.0.0:
     resolution: {integrity: sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==}
@@ -2885,6 +2939,10 @@ packages:
 
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
+
+  jwt-decode@4.0.0:
+    resolution: {integrity: sha512-+KJGIyHgkGuIq3IEBNftfhW/LfWhXUIY6OmyVWjliu5KH1y0fw7VQ8YndE2O4qZdMSd9SqbnC8GOcZEy0Om7sA==}
+    engines: {node: '>=18'}
 
   katex@0.16.27:
     resolution: {integrity: sha512-aeQoDkuRWSqQN6nSvVCEFvfXdqo1OQiCmmW1kc9xSdjutPv7BGO7pqY9sQRJpMOGrEdfDgF2TfRXe5eUAD2Waw==}
@@ -3025,6 +3083,10 @@ packages:
     resolution: {integrity: sha512-ja1E3yCr9i/0hmBVaM0bfwDjnGy8I/s6PP4DFp+yP+a+mrHO4Rm7DtmnqROTUkHIkqffC84YY7AeqX6oFk0WFg==}
     engines: {node: '>=18'}
 
+  loglevel@1.9.2:
+    resolution: {integrity: sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg==}
+    engines: {node: '>= 0.6.0'}
+
   long@4.0.0:
     resolution: {integrity: sha512-XsP+KhQif4bjX1kbuSiySJFNAehNxgLb6hPRGJ9QsUr8ajHkuXGdrHmFUTUUXhDwVX2R5bY4JNZEwbUiMhV+MA==}
 
@@ -3087,6 +3149,16 @@ packages:
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
+
+  matrix-events-sdk@0.0.1:
+    resolution: {integrity: sha512-1QEOsXO+bhyCroIe2/A5OwaxHvBm7EsSQ46DEDn8RBIfQwN5HWBpFvyWWR4QY0KHPPnnJdI99wgRiAl7Ad5qaA==}
+
+  matrix-js-sdk@40.0.0:
+    resolution: {integrity: sha512-KQzMJQ7ZzQlgCIYgUOOVT0+dhlyKZS6bq0Gdf1WCt/tIGc4m56aD2h+EqZKv9aNZ3AtPbPUMDMEpHDva0ggYQg==}
+    engines: {node: '>=22.0.0'}
+
+  matrix-widget-api@1.15.0:
+    resolution: {integrity: sha512-Yu9rX9wyF3A1sqviKgiYHz8aGgL3HhJe9OXKi/lccr1eZnNb6y+ELdbshTjs+VLKM4rkTWt6CE3THsw3f/CZhg==}
 
   mdurl@2.0.0:
     resolution: {integrity: sha512-Lf+9+2r+Tdp5wXDXC4PcIBjTDtq4UKjCPMQhKIuzpJNW0b96kVqSwW0bT7FhRSfmAiFYgP+SCRvdrDozfh0U5w==}
@@ -3270,6 +3342,10 @@ packages:
   ogg-opus-decoder@1.7.3:
     resolution: {integrity: sha512-w47tiZpkLgdkpa+34VzYD8mHUj8I9kfWVZa82mBbNwDvB1byfLXSSzW/HxA4fI3e9kVlICSpXGFwMLV1LPdjwg==}
 
+  oidc-client-ts@3.4.1:
+    resolution: {integrity: sha512-jNdst/U28Iasukx/L5MP6b274Vr7ftQs6qAhPBCvz6Wt5rPCA+Q/tUmCzfCHHWweWw5szeMy2Gfrm1rITwUKrw==}
+    engines: {node: '>=18'}
+
   ollama@0.6.3:
     resolution: {integrity: sha512-KEWEhIqE5wtfzEIZbDCLH51VFZ6Z3ZSa6sIOg/E/tBV8S51flyqBOXi+bRxlOYKDf8i327zG9eSTb8IJxvm3Zg==}
 
@@ -3345,6 +3421,10 @@ packages:
   p-retry@4.6.2:
     resolution: {integrity: sha512-312Id396EbJdvRONlngUx0NydfrIQ5lsYu0znKVUzVvArzEIt08V1qhtyESbGVd1FGX7UKtiFp5uwKZdM8wIuQ==}
     engines: {node: '>=8'}
+
+  p-retry@7.1.1:
+    resolution: {integrity: sha512-J5ApzjyRkkf601HpEeykoiCvzHQjWxPAHhyjFcEUP2SWq0+35NKh8TLhpLw+Dkq5TZBFvUM6UigdE9hIVYTl5w==}
+    engines: {node: '>=20'}
 
   p-timeout@3.2.0:
     resolution: {integrity: sha512-rhIwUycgwwKcP9yTOOFK/AKsAopjjCakVqLHePO3CC6Mir1Z99xT+R63jZxAT5lFZLa2inS5h+ZS2GvR99/FBg==}
@@ -3632,6 +3712,10 @@ packages:
 
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
+
+  sdp-transform@3.0.0:
+    resolution: {integrity: sha512-gfYVRGxjHkGF2NPeUWHw5u6T/KGFtS5/drPms73gaSuMaVHKCY3lpLnGDfswVQO0kddeePoti09AwhYP4zA8dQ==}
+    hasBin: true
 
   semver@7.7.3:
     resolution: {integrity: sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q==}
@@ -3926,6 +4010,9 @@ packages:
     resolution: {integrity: sha512-y+8YjDFzWdQlSE9N5nzKMT3g4a5UBX1HKowfdXh0uvAnTaqqwqB92Jt4UXBAeKekDs5IaDKyJFR4X1gYVCgXcw==}
     engines: {node: '>=20.18.1'}
 
+  unhomoglyph@1.0.6:
+    resolution: {integrity: sha512-7uvcWI3hWshSADBu4JpnyYbTVc7YlhF5GDW/oPD5AxIxl34k4wXR3WDkPnzLxkN32LiTCTKMQLtKVZiwki3zGg==}
+
   unicode-properties@1.4.1:
     resolution: {integrity: sha512-CLjCCLQ6UuMxWnbIylkisbRj31qxHPAurvena/0iwSVbQ2G1VY5/HjV0IRabOEbDHlzZlRdCrD4NhB0JtU40Pg==}
 
@@ -3957,6 +4044,10 @@ packages:
 
   uuid@11.1.0:
     resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
+    hasBin: true
+
+  uuid@13.0.0:
+    resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
     hasBin: true
 
   uuid@8.3.2:
@@ -4044,6 +4135,10 @@ packages:
         optional: true
       jsdom:
         optional: true
+
+  wasm-vips@0.0.16:
+    resolution: {integrity: sha512-4/bEq8noAFt7DX3VT+Vt5AgNtnnOLwvmrDbduWfiv9AV+VYkbUU4f9Dam9e6khRqPinyClFHCqiwATTTJEiGwA==}
+    engines: {node: '>=16.4.0'}
 
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
@@ -4639,14 +4734,14 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.0.0-beta-20260110172854(hono@4.11.3)':
+  '@buape/carbon@0.0.0-beta-20260110172854(hono@4.11.4)':
     dependencies:
       '@types/node': 24.10.7
       discord-api-types: 0.38.36
     optionalDependencies:
       '@cloudflare/workers-types': 4.20251205.0
       '@discordjs/voice': 0.19.0
-      '@hono/node-server': 1.19.6(hono@4.11.3)
+      '@hono/node-server': 1.19.6(hono@4.11.4)
       '@types/bun': 1.3.3
       '@types/ws': 8.18.1
       ws: 8.18.3
@@ -4842,9 +4937,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@1.19.6(hono@4.11.3)':
+  '@hono/node-server@1.19.6(hono@4.11.4)':
     dependencies:
-      hono: 4.11.3
+      hono: 4.11.4
     optional: true
 
   '@huggingface/jinja@0.5.3': {}
@@ -5065,10 +5160,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.45.3(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-agent-core@0.45.7(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.45.3
+      '@mariozechner/pi-ai': 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.45.7
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -5078,7 +5173,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@aws-sdk/client-bedrock-runtime': 3.967.0
@@ -5100,13 +5195,13 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.45.3(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-coding-agent@0.45.7(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.2
-      '@mariozechner/pi-agent-core': 0.45.3(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.45.3
+      '@mariozechner/pi-agent-core': 0.45.7(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.45.7
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.3
@@ -5115,7 +5210,7 @@ snapshots:
       marked: 15.0.12
       minimatch: 10.1.1
       proper-lockfile: 4.1.2
-      sharp: 0.34.5
+      wasm-vips: 0.0.16
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -5125,13 +5220,15 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.45.3':
+  '@mariozechner/pi-tui@0.45.7':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
       get-east-asian-width: 1.4.0
       marked: 15.0.12
       mime-types: 3.0.2
+
+  '@matrix-org/matrix-sdk-crypto-wasm@16.0.0': {}
 
   '@microsoft/agents-activity@1.1.1':
     dependencies:
@@ -6055,6 +6152,8 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/events@3.0.3': {}
+
   '@types/express-serve-static-core@4.19.8':
     dependencies:
       '@types/node': 25.0.7
@@ -6325,6 +6424,8 @@ snapshots:
 
   alien-signals@2.0.8: {}
 
+  another-json@0.2.0: {}
+
   ansi-escapes@6.2.1: {}
 
   ansi-regex@5.0.1: {}
@@ -6403,6 +6504,8 @@ snapshots:
 
   balanced-match@3.0.1: {}
 
+  base-x@5.0.1: {}
+
   base64-js@1.5.1: {}
 
   before-after-hook@4.0.0: {}
@@ -6442,6 +6545,10 @@ snapshots:
       fill-range: 7.1.1
 
   browser-or-node@3.0.0: {}
+
+  bs58@6.0.0:
+    dependencies:
+      base-x: 5.0.1
 
   buffer-equal-constant-time@1.0.1: {}
 
@@ -7015,8 +7122,7 @@ snapshots:
 
   highlight.js@11.11.1: {}
 
-  hono@4.11.3:
-    optional: true
+  hono@4.11.4: {}
 
   hookified@1.15.0: {}
 
@@ -7105,6 +7211,8 @@ snapshots:
       is-extglob: 2.1.1
 
   is-interactive@2.0.0: {}
+
+  is-network-error@1.3.0: {}
 
   is-number@7.0.0: {}
 
@@ -7217,6 +7325,8 @@ snapshots:
     dependencies:
       jwa: 2.0.1
       safe-buffer: 5.2.1
+
+  jwt-decode@4.0.0: {}
 
   katex@0.16.27:
     dependencies:
@@ -7336,6 +7446,8 @@ snapshots:
       is-unicode-supported: 2.1.0
       yoctocolors: 2.1.2
 
+  loglevel@1.9.2: {}
+
   long@4.0.0: {}
 
   long@5.3.2: {}
@@ -7391,6 +7503,30 @@ snapshots:
   marked@17.0.1: {}
 
   math-intrinsics@1.1.0: {}
+
+  matrix-events-sdk@0.0.1: {}
+
+  matrix-js-sdk@40.0.0:
+    dependencies:
+      '@babel/runtime': 7.28.6
+      '@matrix-org/matrix-sdk-crypto-wasm': 16.0.0
+      another-json: 0.2.0
+      bs58: 6.0.0
+      content-type: 1.0.5
+      jwt-decode: 4.0.0
+      loglevel: 1.9.2
+      matrix-events-sdk: 0.0.1
+      matrix-widget-api: 1.15.0
+      oidc-client-ts: 3.4.1
+      p-retry: 7.1.1
+      sdp-transform: 3.0.0
+      unhomoglyph: 1.0.6
+      uuid: 13.0.0
+
+  matrix-widget-api@1.15.0:
+    dependencies:
+      '@types/events': 3.0.3
+      events: 3.3.0
 
   mdurl@2.0.0: {}
 
@@ -7596,6 +7732,10 @@ snapshots:
       opus-decoder: 0.7.11
     optional: true
 
+  oidc-client-ts@3.4.1:
+    dependencies:
+      jwt-decode: 4.0.0
+
   ollama@0.6.3:
     dependencies:
       whatwg-fetch: 3.6.20
@@ -7688,6 +7828,10 @@ snapshots:
     dependencies:
       '@types/retry': 0.12.0
       retry: 0.13.1
+
+  p-retry@7.1.1:
+    dependencies:
+      is-network-error: 1.3.0
 
   p-timeout@3.2.0:
     dependencies:
@@ -8025,6 +8169,8 @@ snapshots:
 
   safer-buffer@2.1.2: {}
 
+  sdp-transform@3.0.0: {}
+
   semver@7.7.3: {}
 
   send@1.2.1:
@@ -8346,6 +8492,8 @@ snapshots:
 
   undici@7.18.2: {}
 
+  unhomoglyph@1.0.6: {}
+
   unicode-properties@1.4.1:
     dependencies:
       base64-js: 1.5.1
@@ -8371,6 +8519,8 @@ snapshots:
   util-deprecate@1.0.2: {}
 
   uuid@11.1.0: {}
+
+  uuid@13.0.0: {}
 
   uuid@8.3.2: {}
 
@@ -8431,6 +8581,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  wasm-vips@0.0.16: {}
 
   web-streams-polyfill@3.3.3: {}
 

@@ -102,11 +102,14 @@ struct MenuContent: View {
             }
             if self.state.canvasEnabled {
                 Button {
-                    if self.state.canvasPanelVisible {
-                        CanvasManager.shared.hideAll()
-                    } else {
-                        // Don't force a navigation on re-open: preserve the current web view state.
-                        _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
+                    Task { @MainActor in
+                        if self.state.canvasPanelVisible {
+                            CanvasManager.shared.hideAll()
+                        } else {
+                            let sessionKey = await GatewayConnection.shared.mainSessionKey()
+                            // Don't force a navigation on re-open: preserve the current web view state.
+                            _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
+                        }
                     }
                 } label: {
                     Label(
@@ -313,27 +316,7 @@ struct MenuContent: View {
     private func openDashboard() async {
         do {
             let config = try await GatewayEndpointStore.shared.requireConfig()
-            let wsURL = config.url
-            guard var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false) else {
-                throw NSError(domain: "Dashboard", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "Invalid gateway URL",
-                ])
-            }
-            switch components.scheme?.lowercased() {
-            case "ws":
-                components.scheme = "http"
-            case "wss":
-                components.scheme = "https"
-            default:
-                components.scheme = "http"
-            }
-            components.path = "/"
-            components.query = nil
-            guard let url = components.url else {
-                throw NSError(domain: "Dashboard", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to build dashboard URL",
-                ])
-            }
+            let url = try GatewayEndpointStore.dashboardURL(for: config)
             NSWorkspace.shared.open(url)
         } catch {
             let alert = NSAlert()

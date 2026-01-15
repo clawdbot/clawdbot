@@ -45,5 +45,9 @@ echo "💿 DMG: $DMG"
 "$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
 
 if [[ "$NOTARIZE" == "1" ]]; then
+  if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+    echo "🔏 Signing DMG: $DMG"
+    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+  fi
   "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$DMG"
 fi

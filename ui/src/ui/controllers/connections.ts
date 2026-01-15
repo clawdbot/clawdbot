@@ -165,56 +165,53 @@ export async function saveTelegramConfig(state: ConnectionsState) {
       }
     }
     const base = state.configSnapshot?.config ?? {};
-    const config = { ...base } as Record<string, unknown>;
-    const telegram = { ...(config.telegram ?? {}) } as Record<string, unknown>;
+    const channels = (base.channels ?? {}) as Record<string, unknown>;
+    const telegram = {
+      ...(channels.telegram ?? base.telegram ?? {}),
+    } as Record<string, unknown>;
     if (!state.telegramTokenLocked) {
       const token = state.telegramForm.token.trim();
-      if (token) telegram.botToken = token;
-      else delete telegram.botToken;
+      telegram.botToken = token || null;
     }
-    const groups =
-      telegram.groups && typeof telegram.groups === "object"
-        ? ({ ...(telegram.groups as Record<string, unknown>) } as Record<
-            string,
-            unknown
-          >)
-        : {};
+    const groupsPatch: Record<string, unknown> = {};
     if (state.telegramForm.groupsWildcardEnabled) {
+      const existingGroups = telegram.groups as Record<string, unknown> | undefined;
       const defaultGroup =
-        groups["*"] && typeof groups["*"] === "object"
-          ? ({ ...(groups["*"] as Record<string, unknown>) } as Record<
+        existingGroups?.["*"] && typeof existingGroups["*"] === "object"
+          ? ({ ...(existingGroups["*"] as Record<string, unknown>) } as Record<
               string,
               unknown
             >)
           : {};
       defaultGroup.requireMention = state.telegramForm.requireMention;
-      groups["*"] = defaultGroup;
-      telegram.groups = groups;
-    } else if (groups["*"]) {
-      delete groups["*"];
-      if (Object.keys(groups).length > 0) telegram.groups = groups;
-      else delete telegram.groups;
+      groupsPatch["*"] = defaultGroup;
+    } else {
+      groupsPatch["*"] = null;
     }
-    delete telegram.requireMention;
+    telegram.groups = groupsPatch;
+    telegram.requireMention = null;
     const allowFrom = parseList(state.telegramForm.allowFrom);
-    if (allowFrom.length > 0) telegram.allowFrom = allowFrom;
-    else delete telegram.allowFrom;
+    telegram.allowFrom = allowFrom.length > 0 ? allowFrom : null;
     const proxy = state.telegramForm.proxy.trim();
-    if (proxy) telegram.proxy = proxy;
-    else delete telegram.proxy;
+    telegram.proxy = proxy || null;
     const webhookUrl = state.telegramForm.webhookUrl.trim();
-    if (webhookUrl) telegram.webhookUrl = webhookUrl;
-    else delete telegram.webhookUrl;
+    telegram.webhookUrl = webhookUrl || null;
     const webhookSecret = state.telegramForm.webhookSecret.trim();
-    if (webhookSecret) telegram.webhookSecret = webhookSecret;
-    else delete telegram.webhookSecret;
+    telegram.webhookSecret = webhookSecret || null;
     const webhookPath = state.telegramForm.webhookPath.trim();
-    if (webhookPath) telegram.webhookPath = webhookPath;
-    else delete telegram.webhookPath;
+    telegram.webhookPath = webhookPath || null;
 
-    config.telegram = telegram;
-    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
-    await state.client.request("config.set", { raw });
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.telegramConfigStatus = "Config hash missing; reload and retry.";
+      return;
+    }
+    const raw = `${JSON.stringify(
+      { channels: { telegram } },
+      null,
+      2,
+    ).trimEnd()}\n`;
+    await state.client.request("config.patch", { raw, baseHash });
     state.telegramConfigStatus = "Saved. Restart gateway if needed.";
   } catch (err) {
     state.telegramConfigStatus = String(err);

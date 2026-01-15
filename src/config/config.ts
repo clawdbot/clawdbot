@@ -3,6 +3,7 @@ export {
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
+  resolveConfigSnapshotHash,
   writeConfigFile,
 } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";

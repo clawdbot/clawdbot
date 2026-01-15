@@ -22,6 +22,9 @@ vi.mock("./onboard-helpers.js", () => ({
   detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
   openUrl: mocks.openUrl,
   formatControlUiSshHint: mocks.formatControlUiSshHint,
+}));
+
+vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
 }));
 

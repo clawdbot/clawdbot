@@ -109,8 +109,8 @@ struct AnthropicAuthControls: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(self.busy || self.connectionMode != .local || self.code
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .isEmpty)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .isEmpty)
                 }
             }
 

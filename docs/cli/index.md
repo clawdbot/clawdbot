@@ -9,6 +9,43 @@ read_when:
 
 This page describes the current CLI behavior. If commands change, update this doc.
 
+## Command pages
+
+- [`setup`](/cli/setup)
+- [`onboard`](/cli/onboard)
+- [`configure`](/cli/configure) (alias: `config`)
+- [`doctor`](/cli/doctor)
+- [`dashboard`](/cli/dashboard)
+- [`reset`](/cli/reset)
+- [`uninstall`](/cli/uninstall)
+- [`update`](/cli/update)
+- [`message`](/cli/message)
+- [`agent`](/cli/agent)
+- [`agents`](/cli/agents)
+- [`status`](/cli/status)
+- [`health`](/cli/health)
+- [`sessions`](/cli/sessions)
+- [`gateway`](/cli/gateway)
+- [`daemon`](/cli/daemon)
+- [`logs`](/cli/logs)
+- [`models`](/cli/models)
+- [`memory`](/cli/memory)
+- [`nodes`](/cli/nodes)
+- [`sandbox`](/cli/sandbox)
+- [`tui`](/cli/tui)
+- [`browser`](/cli/browser)
+- [`wake`](/cli/wake)
+- [`cron`](/cli/cron)
+- [`dns`](/cli/dns)
+- [`docs`](/cli/docs)
+- [`hooks`](/cli/hooks)
+- [`pairing`](/cli/pairing)
+- [`plugins`](/cli/plugins) (plugin commands)
+- [`channels`](/cli/channels)
+- [`security`](/cli/security)
+- [`skills`](/cli/skills)
+- [`voicecall`](/cli/voicecall) (plugin; if installed)
+
 ## Global flags
 
 - `--dev`: isolate state under `~/.clawdbot-dev` and shift default ports.
@@ -48,6 +85,8 @@ clawdbot [--dev] [--profile <name>] <command>
   onboard
   configure (alias: config)
   doctor
+  security
+    audit
   reset
   uninstall
   update
@@ -179,6 +218,12 @@ clawdbot [--dev] [--profile <name>] <command>
 ```
 
 Note: plugins can add additional top-level commands (for example `clawdbot voicecall`).
+
+## Security
+
+- `clawdbot security audit` — audit config + local state for common security foot-guns.
+- `clawdbot security audit --deep` — best-effort live Gateway probe.
+- `clawdbot security audit --fix` — tighten safe defaults and chmod state/config.
 
 ## Plugins
 
@@ -579,7 +624,11 @@ Subcommands:
 
 Common RPCs:
 - `config.apply` (validate + write config + restart + wake)
+- `config.patch` (merge a partial update without clobbering unrelated keys)
 - `update.run` (run update + restart + wake)
+
+Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
+`config.get` if a config already exists.
 
 ## Models
 
@@ -736,7 +785,7 @@ Location:
 
 ## Browser
 
-Browser control CLI (dedicated Chrome/Chromium). See [/tools/browser](/tools/browser).
+Browser control CLI (dedicated Chrome/Chromium). See [`clawdbot browser`](/cli/browser) and the [Browser tool](/tools/browser).
 
 Common options:
 - `--url <controlUrl>`

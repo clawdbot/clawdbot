@@ -27,6 +27,12 @@ export type ChannelsAddOptions = {
   httpHost?: string;
   httpPort?: string;
   useEnv?: boolean;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
+  deviceName?: string;
+  initialSyncLimit?: number | string;
 };
 
 export async function channelsAddCommand(
@@ -109,6 +115,12 @@ export async function channelsAddCommand(
     plugin.setup.resolveAccountId?.({ cfg, accountId: opts.account }) ??
     normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
+  const initialSyncLimit =
+    typeof opts.initialSyncLimit === "number"
+      ? opts.initialSyncLimit
+      : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
+        ? Number.parseInt(opts.initialSyncLimit, 10)
+        : undefined;
   const validationError = plugin.setup.validateInput?.({
     cfg,
     accountId,
@@ -127,6 +139,12 @@ export async function channelsAddCommand(
       httpUrl: opts.httpUrl,
       httpHost: opts.httpHost,
       httpPort: opts.httpPort,
+      homeserver: opts.homeserver,
+      userId: opts.userId,
+      accessToken: opts.accessToken,
+      password: opts.password,
+      deviceName: opts.deviceName,
+      initialSyncLimit,
       useEnv,
     },
   });
@@ -154,6 +172,12 @@ export async function channelsAddCommand(
     httpUrl: opts.httpUrl,
     httpHost: opts.httpHost,
     httpPort: opts.httpPort,
+    homeserver: opts.homeserver,
+    userId: opts.userId,
+    accessToken: opts.accessToken,
+    password: opts.password,
+    deviceName: opts.deviceName,
+    initialSyncLimit,
     useEnv,
   });
 

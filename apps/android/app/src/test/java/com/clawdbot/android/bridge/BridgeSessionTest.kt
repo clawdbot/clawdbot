@@ -30,7 +30,7 @@ class BridgeSessionTest {
     val session =
       BridgeSession(
         scope = scope,
-        onConnected = { _, _ -> connected.complete(Unit) },
+        onConnected = { _, _, _ -> connected.complete(Unit) },
         onDisconnected = { /* ignore */ },
         onEvent = { _, _ -> /* ignore */ },
         onInvoke = { BridgeSession.InvokeResult.ok(null) },
@@ -97,7 +97,7 @@ class BridgeSessionTest {
     val session =
       BridgeSession(
         scope = scope,
-        onConnected = { _, _ -> connected.complete(Unit) },
+        onConnected = { _, _, _ -> connected.complete(Unit) },
         onDisconnected = { /* ignore */ },
         onEvent = { _, _ -> /* ignore */ },
         onInvoke = { BridgeSession.InvokeResult.ok(null) },
@@ -167,7 +167,7 @@ class BridgeSessionTest {
     val session =
       BridgeSession(
         scope = scope,
-        onConnected = { _, _ -> connected.complete(Unit) },
+        onConnected = { _, _, _ -> connected.complete(Unit) },
         onDisconnected = { /* ignore */ },
         onEvent = { _, _ -> /* ignore */ },
         onInvoke = { throw IllegalStateException("FOO_BAR: boom") },
@@ -239,7 +239,7 @@ class BridgeSessionTest {
     val session =
       BridgeSession(
         scope = scope,
-        onConnected = { _, _ -> connected.countDown() },
+        onConnected = { _, _, _ -> connected.countDown() },
         onDisconnected = { /* ignore */ },
         onEvent = { _, _ -> /* ignore */ },
         onInvoke = { BridgeSession.InvokeResult.ok(null) },

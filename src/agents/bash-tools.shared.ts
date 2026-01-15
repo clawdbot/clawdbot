@@ -60,7 +60,12 @@ export function buildDockerExecArgs(params: {
   for (const [key, value] of Object.entries(params.env)) {
     args.push("-e", `${key}=${value}`);
   }
-  args.push(params.containerName, "sh", "-lc", params.command);
+  // Login shell (-l) sources /etc/profile which resets PATH to a minimal set,
+  // overriding both Docker ENV and -e PATH=... environment variables.
+  // Prepend custom PATH after profile sourcing to ensure custom tools are accessible
+  // while preserving system paths that /etc/profile may have added.
+  const pathExport = params.env.PATH ? `export PATH="${params.env.PATH}:$PATH"; ` : "";
+  args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
   return args;
 }
 

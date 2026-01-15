@@ -1,7 +1,12 @@
 import type { Page } from "playwright-core";
 import { describe, expect, it, vi } from "vitest";
 
-import { ensurePageState, refLocator } from "./pw-session.js";
+import {
+  ensurePageState,
+  refLocator,
+  rememberRoleRefsForTarget,
+  restoreRoleRefsForTarget,
+} from "./pw-session.js";
 
 function fakePage(): {
   page: Page;
@@ -56,6 +61,36 @@ describe("pw-session refLocator", () => {
     refLocator(page, "e1");
 
     expect(mocks.getByRole).toHaveBeenCalled();
+  });
+
+  it("uses aria-ref locators when refs mode is aria", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefsMode = "aria";
+
+    refLocator(page, "e1");
+
+    expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
+  });
+});
+
+describe("pw-session role refs cache", () => {
+  it("restores refs for a different Page instance (same CDP targetId)", () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = "t1";
+
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "OK" } },
+      frameSelector: "iframe#main",
+    });
+
+    const { page, mocks } = fakePage();
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    refLocator(page, "e1");
+    expect(mocks.frameLocator).toHaveBeenCalledWith("iframe#main");
   });
 });
 

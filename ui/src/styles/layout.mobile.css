@@ -279,11 +279,6 @@
     font-size: 12px;
   }
 
-  /* Hide docs link on mobile - saves space */
-  .docs-link {
-    display: none;
-  }
-
   /* List items */
   .list-item {
     padding: 10px;

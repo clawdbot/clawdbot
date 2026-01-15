@@ -7,6 +7,7 @@ actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
+    private var mainSessionKey: String = "main"
 
     init(
         makeMainActorServices: @escaping () async -> any MacNodeRuntimeMainActorServices = {
@@ -14,6 +15,12 @@ actor MacNodeRuntime {
         })
     {
         self.makeMainActorServices = makeMainActorServices
+    }
+
+    func updateMainSessionKey(_ sessionKey: String) {
+        let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.mainSessionKey = trimmed
     }
 
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -72,28 +79,32 @@ actor MacNodeRuntime {
             let placement = params.placement.map {
                 CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
             }
+            let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.showDetailed(
-                    sessionKey: "main",
+                    sessionKey: sessionKey,
                     target: url,
                     placement: placement)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case ClawdbotCanvasCommand.hide.rawValue:
+            let sessionKey = self.mainSessionKey
             await MainActor.run {
-                CanvasManager.shared.hide(sessionKey: "main")
+                CanvasManager.shared.hide(sessionKey: sessionKey)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case ClawdbotCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(ClawdbotCanvasNavigateParams.self, from: req.paramsJSON)
+            let sessionKey = self.mainSessionKey
             try await MainActor.run {
-                _ = try CanvasManager.shared.show(sessionKey: "main", path: params.url)
+                _ = try CanvasManager.shared.show(sessionKey: sessionKey, path: params.url)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case ClawdbotCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(ClawdbotCanvasEvalParams.self, from: req.paramsJSON)
+            let sessionKey = self.mainSessionKey
             let result = try await CanvasManager.shared.eval(
-                sessionKey: "main",
+                sessionKey: sessionKey,
                 javaScript: params.javaScript)
             let payload = try Self.encodePayload(["result": result] as [String: String])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
@@ -109,7 +120,8 @@ actor MacNodeRuntime {
             }()
             let quality = params?.quality ?? 0.9
 
-            let path = try await CanvasManager.shared.snapshot(sessionKey: "main", outPath: nil)
+            let sessionKey = self.mainSessionKey
+            let path = try await CanvasManager.shared.snapshot(sessionKey: sessionKey, outPath: nil)
             defer { try? FileManager.default.removeItem(atPath: path) }
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
             guard let image = NSImage(data: data) else {
@@ -169,10 +181,10 @@ actor MacNodeRuntime {
                 var height: Int
             }
             let payload = try Self.encodePayload(SnapPayload(
-                format: (params.format ?? .jpg).rawValue,
-                base64: res.data.base64EncodedString(),
-                width: Int(res.size.width),
-                height: Int(res.size.height)))
+                                                    format: (params.format ?? .jpg).rawValue,
+                                                    base64: res.data.base64EncodedString(),
+                                                    width: Int(res.size.width),
+                                                    height: Int(res.size.height)))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case ClawdbotCameraCommand.clip.rawValue:
             let params = (try? Self.decodeParams(ClawdbotCameraClipParams.self, from: req.paramsJSON)) ??
@@ -192,10 +204,10 @@ actor MacNodeRuntime {
                 var hasAudio: Bool
             }
             let payload = try Self.encodePayload(ClipPayload(
-                format: (params.format ?? .mp4).rawValue,
-                base64: data.base64EncodedString(),
-                durationMs: res.durationMs,
-                hasAudio: res.hasAudio))
+                                                    format: (params.format ?? .mp4).rawValue,
+                                                    base64: data.base64EncodedString(),
+                                                    durationMs: res.durationMs,
+                                                    hasAudio: res.hasAudio))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case ClawdbotCameraCommand.list.rawValue:
             let devices = await self.cameraCapture.listDevices()
@@ -300,12 +312,12 @@ actor MacNodeRuntime {
             var hasAudio: Bool
         }
         let payload = try Self.encodePayload(ScreenPayload(
-            format: "mp4",
-            base64: data.base64EncodedString(),
-            durationMs: params.durationMs,
-            fps: params.fps,
-            screenIndex: params.screenIndex,
-            hasAudio: res.hasAudio))
+                                                format: "mp4",
+                                                base64: data.base64EncodedString(),
+                                                durationMs: params.durationMs,
+                                                fps: params.fps,
+                                                screenIndex: params.screenIndex,
+                                                hasAudio: res.hasAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -319,7 +331,8 @@ actor MacNodeRuntime {
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         try await self.ensureA2UIHost()
 
-        let json = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: """
+        let sessionKey = self.mainSessionKey
+        let json = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: """
         (() => {
           if (!globalThis.clawdbotA2UI) return JSON.stringify({ ok: false, error: "missing clawdbotA2UI" });
           return JSON.stringify(globalThis.clawdbotA2UI.reset());
@@ -358,7 +371,8 @@ actor MacNodeRuntime {
           }
         })()
         """
-        let resultJSON = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: js)
+        let sessionKey = self.mainSessionKey
+        let resultJSON = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: js)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
     }
 
@@ -369,8 +383,9 @@ actor MacNodeRuntime {
                 NSLocalizedDescriptionKey: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
             ])
         }
+        let sessionKey = self.mainSessionKey
         _ = try await MainActor.run {
-            try CanvasManager.shared.show(sessionKey: "main", path: a2uiUrl)
+            try CanvasManager.shared.show(sessionKey: sessionKey, path: a2uiUrl)
         }
         if await self.isA2UIReady(poll: true) { return }
         throw NSError(domain: "Canvas", code: 31, userInfo: [
@@ -389,7 +404,8 @@ actor MacNodeRuntime {
         let deadline = poll ? Date().addingTimeInterval(6.0) : Date()
         while true {
             do {
-                let ready = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: """
+                let sessionKey = self.mainSessionKey
+                let ready = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: """
                 (() => String(Boolean(globalThis.clawdbotA2UI)))()
                 """)
                 let trimmed = ready.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -438,12 +454,12 @@ actor MacNodeRuntime {
         }
 
         let payload = try Self.encodePayload(RunPayload(
-            exitCode: result.exitCode,
-            timedOut: result.timedOut,
-            success: result.success,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            error: result.errorMessage))
+                                                exitCode: result.exitCode,
+                                                timedOut: result.timedOut,
+                                                success: result.success,
+                                                stdout: result.stdout,
+                                                stderr: result.stderr,
+                                                error: result.errorMessage))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -560,8 +576,8 @@ actor MacNodeRuntime {
         case .jpeg:
             let clamped = min(1.0, max(0.05, quality))
             guard let data = rep.representation(
-                using: .jpeg,
-                properties: [.compressionFactor: clamped])
+                    using: .jpeg,
+                    properties: [.compressionFactor: clamped])
             else {
                 throw NSError(domain: "Canvas", code: 24, userInfo: [
                     NSLocalizedDescriptionKey: "jpeg encode failed",

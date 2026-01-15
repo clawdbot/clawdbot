@@ -20,10 +20,10 @@ describe("detectLegacyWorkspaceDirs", () => {
     expect(detection.legacyDirs).toEqual([]);
   });
 
-  it("flags ~/clawdis when it contains workspace markers", () => {
+  it("flags ~/clawdbot when it contains workspace markers", () => {
     const home = "/home/user";
     const workspaceDir = "/home/user/clawd";
-    const candidate = path.join(home, "clawdis");
+    const candidate = path.join(home, "clawdbot");
     const agentsPath = path.join(candidate, "AGENTS.md");
 
     const detection = detectLegacyWorkspaceDirs({

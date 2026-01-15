@@ -7,10 +7,13 @@ export {
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
   classifyFailoverReason,
+  formatRawAssistantErrorForUi,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
   isBillingAssistantError,
+  parseApiErrorInfo,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
@@ -18,12 +21,14 @@ export {
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isOverloadedErrorMessage,
+  isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
 } from "./pi-embedded-helpers/errors.js";
 export {
   downgradeGeminiHistory,
+  downgradeGeminiThinkingBlocks,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
 } from "./pi-embedded-helpers/google.js";

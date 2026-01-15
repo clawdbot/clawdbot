@@ -36,8 +36,8 @@ export type FollowupRun = {
   originatingTo?: string;
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
-  /** Telegram forum topic thread id. */
-  originatingThreadId?: number;
+  /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
+  originatingThreadId?: string | number;
   run: {
     agentId: string;
     agentDir: string;

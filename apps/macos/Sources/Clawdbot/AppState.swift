@@ -264,8 +264,8 @@ final class AppState {
         }
         let configRemoteUrl = (configGateway?["remote"] as? [String: Any])?["url"] as? String
         let configHasRemoteUrl = !(configRemoteUrl?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty ?? true)
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty ?? true)
 
         let storedMode = UserDefaults.standard.string(forKey: connectionModeKey)
         let resolvedConnectionMode: ConnectionMode = if let configMode {
@@ -356,8 +356,8 @@ final class AppState {
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = (gateway?["remote"] as? [String: Any])?["url"] as? String
         let hasRemoteUrl = !(remoteUrl?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty ?? true)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .isEmpty ?? true)
 
         let desiredMode: ConnectionMode? = switch modeRaw {
         case "local":

@@ -38,7 +38,7 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { coreGatewayHandlers } from "./server-methods.js";
-import { GATEWAY_EVENTS, GATEWAY_METHODS } from "./server-methods-list.js";
+import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { hasConnectedMobileNode as hasConnectedMobileNodeFromBridge } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
@@ -67,16 +67,9 @@ const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
+const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const canvasRuntime = runtimeForLogger(logCanvas);
-const channelLogs = Object.fromEntries(
-  listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
-) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
-const channelRuntimeEnvs = Object.fromEntries(
-  Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-) as Record<ChannelId, RuntimeEnv>;
-
-const METHODS = GATEWAY_METHODS;
 
 export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
@@ -163,13 +156,22 @@ export async function startGatewayServer(
   await autoMigrateLegacyState({ cfg: cfgAtStart, log });
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
-  const { pluginRegistry, gatewayMethods } = loadGatewayPlugins({
+  const baseMethods = listGatewayMethods();
+  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayPlugins({
     cfg: cfgAtStart,
     workspaceDir: defaultWorkspaceDir,
     log,
     coreGatewayHandlers,
-    baseMethods: METHODS,
+    baseMethods,
   });
+  const channelLogs = Object.fromEntries(
+    listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
+  ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
+  const channelRuntimeEnvs = Object.fromEntries(
+    Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
+  ) as Record<ChannelId, RuntimeEnv>;
+  const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
+  const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
@@ -221,12 +223,14 @@ export async function startGatewayServer(
     openAiChatCompletionsEnabled,
     resolvedAuth,
     hooksConfig: () => hooksConfig,
+    pluginRegistry,
     deps,
     canvasRuntime,
     canvasHostEnabled,
     allowCanvasHostInTests: opts.allowCanvasHostInTests,
     logCanvas,
     logHooks,
+    logPlugins,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: import("../infra/bridge/server.js").NodeBridgeServer | null = null;

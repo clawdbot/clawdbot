@@ -200,6 +200,46 @@ describe("legacy config detection", () => {
       }
     });
   });
+  it("auto-migrates claude-cli auth profile mode to oauth", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            auth: {
+              profiles: {
+                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+        expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("oauth");
+
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          auth?: { profiles?: Record<string, { mode?: string }> };
+        };
+        expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("oauth");
+        expect(
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
   it("auto-migrates legacy provider sections on load and writes back", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");

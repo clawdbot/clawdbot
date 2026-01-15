@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Clawdbot Browser Relay",
+  "version": "0.1.0",
+  "description": "Attach Clawdbot to your existing Chrome tab via a local CDP relay server.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["debugger", "tabs", "activeTab", "storage"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": {
+    "default_title": "Clawdbot Browser Relay (click to attach/detach)",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": true }
+}

@@ -2,13 +2,18 @@
 
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import {
-  buildCommandText,
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
   listNativeCommandSpecsForConfig,
+  parseCommandArgs,
+  resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
+import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { deliverReplies } from "./bot/delivery.js";
+import { buildInlineKeyboard } from "./send.js";
 import {
   buildSenderName,
   buildTelegramGroupFrom,
@@ -159,7 +164,51 @@ export const registerTelegramNativeCommands = ({
             return;
           }
 
-          const prompt = buildCommandText(command.name, ctx.match ?? "");
+          const commandDefinition = findCommandByNativeName(command.name);
+          const rawText = ctx.match?.trim() ?? "";
+          const commandArgs = commandDefinition
+            ? parseCommandArgs(commandDefinition, rawText)
+            : rawText
+              ? ({ raw: rawText } satisfies CommandArgs)
+              : undefined;
+          const prompt = commandDefinition
+            ? buildCommandTextFromArgs(commandDefinition, commandArgs)
+            : rawText
+              ? `/${command.name} ${rawText}`
+              : `/${command.name}`;
+          const menu = commandDefinition
+            ? resolveCommandArgMenu({
+                command: commandDefinition,
+                args: commandArgs,
+                cfg,
+              })
+            : null;
+          if (menu) {
+            const title =
+              menu.title ??
+              `Choose ${menu.arg.description || menu.arg.name} for /${commandDefinition.nativeName ?? commandDefinition.key}.`;
+            const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+            for (let i = 0; i < menu.choices.length; i += 2) {
+              const slice = menu.choices.slice(i, i + 2);
+              rows.push(
+                slice.map((choice) => {
+                  const args: CommandArgs = {
+                    values: { [menu.arg.name]: choice },
+                  };
+                  return {
+                    text: choice,
+                    callback_data: buildCommandTextFromArgs(commandDefinition, args),
+                  };
+                }),
+              );
+            }
+            const replyMarkup = buildInlineKeyboard(rows);
+            await bot.api.sendMessage(chatId, title, {
+              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+              ...(resolvedThreadId != null ? { message_thread_id: resolvedThreadId } : {}),
+            });
+            return;
+          }
           const route = resolveAgentRoute({
             cfg,
             channel: "telegram",
@@ -178,6 +227,7 @@ export const registerTelegramNativeCommands = ({
             systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
           const ctxPayload = {
             Body: prompt,
+            CommandArgs: commandArgs,
             From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
             To: `slash:${senderId || chatId}`,
             ChatType: isGroup ? "group" : "direct",

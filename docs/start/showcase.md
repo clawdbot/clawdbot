@@ -174,18 +174,6 @@ Full setup walkthrough (28m) by VelvetShark.
   A scheduled prompt generates a single "scene" image each morning (weather, tasks, date, favorite post/quote) via a Clawdbot persona.
 </Card>
 
-<Card title="Grocery Autopilot" icon="cart-shopping" href="https://github.com/timkrase/clawdis-picnic-skill">
-  **@timkrase** • `automation` `groceries` `api`
-  
-  Skill built around the Picnic API. Pulls order history, infers preferred brands, maps recipes to cart, completes orders in minutes.
-</Card>
-
-<Card title="German Rail Planning" icon="train" href="https://github.com/timkrase/clawdis-skills/tree/main/db-bahn">
-  **@timkrase** • `automation` `travel` `cli`
-  
-  Go CLI for Deutsche Bahn; skill picks best train connections given time windows and preferences.
-</Card>
-
 <Card title="Padel Court Booking" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
   **@joshp123** • `automation` `booking` `cli`
   

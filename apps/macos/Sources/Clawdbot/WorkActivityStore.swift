@@ -28,8 +28,10 @@ final class WorkActivityStore {
     private var currentSessionKey: String?
     private var toolSeqBySession: [String: Int] = [:]
 
-    private let mainSessionKey = "main"
+    private var mainSessionKeyStorage = "main"
     private let toolResultGrace: TimeInterval = 2.0
+
+    var mainSessionKey: String { self.mainSessionKeyStorage }
 
     func handleJob(sessionKey: String, state: String) {
         let isStart = state.lowercased() == "started" || state.lowercased() == "streaming"
@@ -129,6 +131,17 @@ final class WorkActivityStore {
         self.refreshDerivedState()
     }
 
+    func setMainSessionKey(_ sessionKey: String) {
+        let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard trimmed != self.mainSessionKeyStorage else { return }
+        self.mainSessionKeyStorage = trimmed
+        if let current = self.currentSessionKey, !self.isActive(sessionKey: current) {
+            self.pickNextSession()
+        }
+        self.refreshDerivedState()
+    }
+
     private func clearJob(sessionKey: String) {
         guard self.jobs[sessionKey] != nil else { return }
         self.jobs.removeValue(forKey: sessionKey)
@@ -151,8 +164,8 @@ final class WorkActivityStore {
 
     private func pickNextSession() {
         // Prefer main if present.
-        if self.isActive(sessionKey: self.mainSessionKey) {
-            self.currentSessionKey = self.mainSessionKey
+        if self.isActive(sessionKey: self.mainSessionKeyStorage) {
+            self.currentSessionKey = self.mainSessionKeyStorage
             return
         }
 
@@ -163,7 +176,7 @@ final class WorkActivityStore {
     }
 
     private func role(for sessionKey: String) -> SessionRole {
-        sessionKey == self.mainSessionKey ? .main : .other
+        sessionKey == self.mainSessionKeyStorage ? .main : .other
     }
 
     private func isActive(sessionKey: String) -> Bool {

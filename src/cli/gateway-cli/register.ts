@@ -18,6 +18,29 @@ import {
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
 
+function styleHealthChannelLine(line: string, rich: boolean): string {
+  if (!rich) return line;
+  const colon = line.indexOf(":");
+  if (colon === -1) return line;
+
+  const label = line.slice(0, colon + 1);
+  const detail = line.slice(colon + 1).trimStart();
+  const normalized = detail.toLowerCase();
+
+  const applyPrefix = (prefix: string, color: (value: string) => string) =>
+    `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
+
+  if (normalized.startsWith("failed")) return applyPrefix("failed", theme.error);
+  if (normalized.startsWith("ok")) return applyPrefix("ok", theme.success);
+  if (normalized.startsWith("linked")) return applyPrefix("linked", theme.success);
+  if (normalized.startsWith("configured")) return applyPrefix("configured", theme.success);
+  if (normalized.startsWith("not linked")) return applyPrefix("not linked", theme.warn);
+  if (normalized.startsWith("not configured")) return applyPrefix("not configured", theme.muted);
+  if (normalized.startsWith("unknown")) return applyPrefix("unknown", theme.warn);
+
+  return line;
+}
+
 export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
@@ -25,7 +48,8 @@ export function registerGatewayCli(program: Command) {
       .description("Run the WebSocket Gateway")
       .addHelpText(
         "after",
-        () => `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway", "docs.clawd.bot/gateway")}\n`,
+        () =>
+          `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.clawd.bot/cli/gateway")}\n`,
       ),
   );
 
@@ -34,7 +58,6 @@ export function registerGatewayCli(program: Command) {
     program
       .command("gateway-daemon", { hidden: true })
       .description("Run the WebSocket Gateway as a long-lived daemon"),
-    { legacyTokenEnv: true },
   );
 
   gatewayCallOpts(
@@ -84,7 +107,7 @@ export function registerGatewayCli(program: Command) {
           );
           if (obj.channels && typeof obj.channels === "object") {
             for (const line of formatHealthChannelLines(obj as HealthSummary)) {
-              defaultRuntime.log(line);
+              defaultRuntime.log(styleHealthChannelLine(line, rich));
             }
           }
         } catch (err) {

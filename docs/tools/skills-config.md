@@ -11,7 +11,7 @@ All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.j
 ```json5
 {
   skills: {
-    allowBundled: ["brave-search", "gemini"],
+    allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: [
         "~/Projects/agent-scripts/skills",

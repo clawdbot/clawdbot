@@ -8,6 +8,7 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { theme } from "../terminal/theme.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 
 export type ChannelHealthSummary = {
@@ -78,6 +79,28 @@ const formatProbeLine = (probe: unknown): string | null => {
   if (error) label += ` - ${error}`;
   return label;
 };
+
+function styleHealthChannelLine(line: string): string {
+  const colon = line.indexOf(":");
+  if (colon === -1) return line;
+
+  const label = line.slice(0, colon + 1);
+  const detail = line.slice(colon + 1).trimStart();
+  const normalized = detail.toLowerCase();
+
+  const applyPrefix = (prefix: string, color: (value: string) => string) =>
+    `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
+
+  if (normalized.startsWith("failed")) return applyPrefix("failed", theme.error);
+  if (normalized.startsWith("ok")) return applyPrefix("ok", theme.success);
+  if (normalized.startsWith("linked")) return applyPrefix("linked", theme.success);
+  if (normalized.startsWith("configured")) return applyPrefix("configured", theme.success);
+  if (normalized.startsWith("not linked")) return applyPrefix("not linked", theme.warn);
+  if (normalized.startsWith("not configured")) return applyPrefix("not configured", theme.muted);
+  if (normalized.startsWith("unknown")) return applyPrefix("unknown", theme.warn);
+
+  return line;
+}
 
 export const formatHealthChannelLines = (summary: HealthSummary): string[] => {
   const channels = summary.channels ?? {};
@@ -263,7 +286,7 @@ export async function healthCommand(
       }
     }
     for (const line of formatHealthChannelLines(summary)) {
-      runtime.log(line);
+      runtime.log(styleHealthChannelLine(line));
     }
     const cfg = loadConfig();
     for (const plugin of listChannelPlugins()) {

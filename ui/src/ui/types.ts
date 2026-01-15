@@ -214,6 +214,7 @@ export type ConfigSnapshot = {
   path?: string | null;
   exists?: boolean | null;
   raw?: string | null;
+  hash?: string | null;
   parsed?: unknown;
   valid?: boolean | null;
   config?: Record<string, unknown> | null;

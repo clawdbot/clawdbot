@@ -25,7 +25,7 @@ private enum LaunchdHelper {
             "Label": label,
             "ProgramArguments": [executable, "serve"],
             "RunAtLoad": true,
-            "KeepAlive": true,
+            "KeepAlive": true
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: plistURL)

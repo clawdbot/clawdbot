@@ -5,6 +5,8 @@ import {
   configureCommandWithSections,
 } from "../../commands/configure.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatDocsLink } from "../../terminal/links.js";
+import { theme } from "../../terminal/theme.js";
 
 export function registerConfigureCommand(program: Command) {
   const register = (name: "configure" | "config") => {
@@ -14,6 +16,11 @@ export function registerConfigureCommand(program: Command) {
         name === "config"
           ? "Alias for `clawdbot configure`"
           : "Interactive prompt to set up credentials, devices, and agent defaults",
+      )
+      .addHelpText(
+        "after",
+        () =>
+          `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/configure", "docs.clawd.bot/cli/configure")}\n`,
       )
       .option(
         "--section <section>",

@@ -107,9 +107,9 @@ enum DeviceModelCatalog {
 
     private static func loadMapping(resourceName: String) -> [String: String] {
         guard let url = self.resourceBundle?.url(
-            forResource: resourceName,
-            withExtension: "json",
-            subdirectory: self.resourceSubdirectory)
+                forResource: resourceName,
+                withExtension: "json",
+                subdirectory: self.resourceSubdirectory)
         else { return [:] }
 
         do {

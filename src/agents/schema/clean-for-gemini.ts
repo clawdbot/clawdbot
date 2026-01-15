@@ -2,7 +2,7 @@
 // This module scrubs/normalizes tool schemas to keep Gemini happy.
 
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
-const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
   "$schema",
@@ -254,7 +254,7 @@ function cleanSchemaForGeminiWithDefs(
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
-    if (UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) continue;
+    if (GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) continue;
 
     if (key === "const") {
       cleaned.enum = [value];
@@ -280,8 +280,16 @@ function cleanSchemaForGeminiWithDefs(
           cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
         ]),
       );
-    } else if (key === "items" && value && typeof value === "object") {
-      cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
+    } else if (key === "items" && value) {
+      if (Array.isArray(value)) {
+        cleaned[key] = value.map((entry) =>
+          cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack),
+        );
+      } else if (typeof value === "object") {
+        cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
+      } else {
+        cleaned[key] = value;
+      }
     } else if (key === "anyOf" && Array.isArray(value)) {
       cleaned[key] =
         cleanedAnyOf ??

@@ -111,7 +111,7 @@ async function resolveOAuthToken(params: {
     provider: params.provider,
   });
 
-  // Claude CLI creds are the only Anthropic tokens that reliably include the
+  // Claude Code CLI creds are the only Anthropic tokens that reliably include the
   // `user:profile` scope required for the OAuth usage endpoint.
   const candidates = params.provider === "anthropic" ? [CLAUDE_CLI_PROFILE_ID, ...order] : order;
   const deduped: string[] = [];

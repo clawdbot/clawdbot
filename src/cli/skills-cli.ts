@@ -334,7 +334,8 @@ export function registerSkillsCli(program: Command) {
     .description("List and inspect available skills")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/skills", "docs.clawd.bot/skills")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/skills", "docs.clawd.bot/cli/skills")}\n`,
     );
 
   skills

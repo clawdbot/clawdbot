@@ -36,6 +36,7 @@ export const TelegramAccountSchemaBase = z.object({
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
+  configWrites: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   botToken: z.string().optional(),
   tokenFile: z.string().optional(),
@@ -132,6 +133,7 @@ export const DiscordAccountSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
+  configWrites: z.boolean().optional(),
   token: z.string().optional(),
   allowBots: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -201,14 +203,21 @@ export const SlackChannelSchema = z.object({
   systemPrompt: z.string().optional(),
 });
 
+export const SlackThreadSchema = z.object({
+  historyScope: z.enum(["thread", "channel"]).optional(),
+  inheritParent: z.boolean().optional(),
+});
+
 export const SlackAccountSchema = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
+  configWrites: z.boolean().optional(),
   botToken: z.string().optional(),
   appToken: z.string().optional(),
   allowBots: z.boolean().optional(),
+  requireMention: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
@@ -220,6 +229,7 @@ export const SlackAccountSchema = z.object({
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
   replyToMode: ReplyToModeSchema.optional(),
+  thread: SlackThreadSchema.optional(),
   actions: z
     .object({
       reactions: z.boolean().optional(),
@@ -252,6 +262,7 @@ export const SignalAccountSchemaBase = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   account: z.string().optional(),
   httpUrl: z.string().optional(),
   httpHost: z.string().optional(),
@@ -303,6 +314,7 @@ export const IMessageAccountSchemaBase = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   cliPath: ExecutableTokenSchema.optional(),
   dbPath: z.string().optional(),
   service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
@@ -370,6 +382,7 @@ export const MSTeamsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     capabilities: z.array(z.string()).optional(),
+    configWrites: z.boolean().optional(),
     appId: z.string().optional(),
     appPassword: z.string().optional(),
     tenantId: z.string().optional(),

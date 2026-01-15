@@ -59,13 +59,13 @@ cat ~/.clawdbot/clawdbot.json
 - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
 - Health check + restart prompt.
 - Skills status summary (eligible/missing/blocked).
-- Legacy config migration and normalization.
+- Config normalization for legacy values.
 - OpenCode Zen provider override warnings (`models.providers.opencode`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
-- Legacy workspace dir detection (`~/clawdis`, `~/clawdbot`).
+- Extra workspace dir detection (`~/clawdbot`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
 - Gateway runtime checks (service installed but not running; cached launchd label).
@@ -85,10 +85,10 @@ cat ~/.clawdbot/clawdbot.json
 If this is a git checkout and doctor is running interactively, it offers to
 update (fetch/rebase/build) before running doctor.
 
-### 1) Legacy config file migration
-If `~/.clawdis/clawdis.json` exists and `~/.clawdbot/clawdbot.json` does not,
-doctor migrates the file and normalizes old paths/image names. This prevents
-new installs from silently booting with the wrong schema.
+### 1) Config normalization
+If the config contains legacy value shapes (for example `messages.ackReaction`
+without a channel-specific override), doctor normalizes them into the current
+schema.
 
 ### 2) Legacy config key migrations
 When the config contains deprecated keys, other commands refuse to run and ask
@@ -182,7 +182,7 @@ When sandboxing is enabled, doctor checks Docker images and offers to build or
 switch to legacy names if the current image is missing.
 
 ### 8) Gateway service migrations and cleanup hints
-Doctor detects legacy Clawdis gateway services (launchd/systemd/schtasks) and
+Doctor detects legacy gateway services (launchd/systemd/schtasks) and
 offers to remove them and install the Clawdbot service using the current gateway
 port. It can also scan for extra gateway-like services and print cleanup hints.
 Profile-named Clawdbot gateway services are considered first-class and are not

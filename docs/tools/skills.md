@@ -105,6 +105,13 @@ Fields under `metadata.clawdbot`:
 - `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv).
 
+Note on sandboxing:
+- `requires.bins` is checked on the **host** at skill load time.
+- If an agent is sandboxed, the binary must also exist **inside the container**.
+  Install it via `agents.defaults.sandbox.docker.setupCommand` (or a custom image).
+  Example: the `summarize` skill (`skills/summarize/SKILL.md`) needs the `summarize` CLI
+  in the sandbox container to run there.
+
 Installer example:
 
 ```markdown

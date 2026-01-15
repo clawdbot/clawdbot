@@ -13,6 +13,18 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   const authChoice = opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
   const normalizedOpts = authChoice === opts.authChoice ? opts : { ...opts, authChoice };
 
+  if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
+    runtime.error(
+      [
+        "Non-interactive onboarding requires explicit risk acknowledgement.",
+        "Read: https://docs.clawd.bot/security",
+        "Re-run with: clawdbot onboard --non-interactive --accept-risk ...",
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return;
+  }
+
   if (normalizedOpts.reset) {
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.valid ? snapshot.config : {};

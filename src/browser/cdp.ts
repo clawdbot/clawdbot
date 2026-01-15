@@ -139,7 +139,7 @@ export type AriaSnapshotNode = {
   depth: number;
 };
 
-type RawAXNode = {
+export type RawAXNode = {
   nodeId?: string;
   role?: { value?: string };
   name?: { value?: string };
@@ -159,7 +159,7 @@ function axValue(v: unknown): string {
   return "";
 }
 
-function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
+export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
     if (n.nodeId) byId.set(n.nodeId, n);

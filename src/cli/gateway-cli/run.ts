@@ -48,25 +48,15 @@ type GatewayRunOpts = {
   reset?: boolean;
 };
 
-type GatewayRunParams = {
-  legacyTokenEnv?: boolean;
-};
-
 const gatewayLog = createSubsystemLogger("gateway");
 
-async function runGatewayCommand(opts: GatewayRunOpts, params: GatewayRunParams = {}) {
+async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
     defaultRuntime.exit(1);
     return;
-  }
-  if (params.legacyTokenEnv) {
-    const legacyToken = process.env.CLAWDIS_GATEWAY_TOKEN;
-    if (legacyToken && !process.env.CLAWDBOT_GATEWAY_TOKEN) {
-      process.env.CLAWDBOT_GATEWAY_TOKEN = legacyToken;
-    }
   }
 
   setVerbose(Boolean(opts.verbose));
@@ -306,7 +296,7 @@ async function runGatewayCommand(opts: GatewayRunOpts, params: GatewayRunParams 
   }
 }
 
-export function addGatewayRunCommand(cmd: Command, params: GatewayRunParams = {}): Command {
+export function addGatewayRunCommand(cmd: Command): Command {
   return cmd
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
@@ -348,6 +338,6 @@ export function addGatewayRunCommand(cmd: Command, params: GatewayRunParams = {}
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts) => {
-      await runGatewayCommand(opts, params);
+      await runGatewayCommand(opts);
     });
 }

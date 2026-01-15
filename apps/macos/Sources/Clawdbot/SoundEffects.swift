@@ -54,9 +54,9 @@ enum SoundEffectCatalog {
         var map: [String: URL] = [:]
         for root in Self.searchRoots {
             guard let contents = try? FileManager.default.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles])
+                    at: root,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles])
             else { continue }
 
             for url in contents where Self.allowedExtensions.contains(url.pathExtension.lowercased()) {
@@ -88,9 +88,9 @@ enum SoundEffectPlayer {
     static func sound(from bookmark: Data) -> NSSound? {
         var stale = false
         guard let url = try? URL(
-            resolvingBookmarkData: bookmark,
-            options: [.withoutUI, .withSecurityScope],
-            bookmarkDataIsStale: &stale)
+                resolvingBookmarkData: bookmark,
+                options: [.withoutUI, .withSecurityScope],
+                bookmarkDataIsStale: &stale)
         else { return nil }
 
         let scoped = url.startAccessingSecurityScopedResource()

@@ -5,6 +5,8 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -18,7 +20,14 @@ function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
 }
 
 export function registerMemoryCli(program: Command) {
-  const memory = program.command("memory").description("Memory search tools");
+  const memory = program
+    .command("memory")
+    .description("Memory search tools")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.clawd.bot/cli/memory")}\n`,
+    );
 
   memory
     .command("status")

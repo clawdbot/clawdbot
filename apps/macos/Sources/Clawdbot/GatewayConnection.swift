@@ -55,6 +55,7 @@ actor GatewayConnection {
         case channelsStatus = "channels.status"
         case configGet = "config.get"
         case configSet = "config.set"
+        case configPatch = "config.patch"
         case wizardStart = "wizard.start"
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"
@@ -232,7 +233,18 @@ actor GatewayConnection {
 
     func canvasHostUrl() async -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
-        let trimmed = snapshot.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmed = snapshot.canvashosturl?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func sessionDefaultString(_ defaults: [String: AnyCodable]?, key: String) -> String {
+        (defaults?[key]?.stringValue ?? "")
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    }
+
+    func cachedMainSessionKey() -> String? {
+        guard let snapshot = self.lastSnapshot else { return nil }
+        let trimmed = self.sessionDefaultString(snapshot.snapshot.sessiondefaults, key: "mainSessionKey")
         return trimmed.isEmpty ? nil : trimmed
     }
 
@@ -267,10 +279,33 @@ actor GatewayConnection {
     private func broadcast(_ push: GatewayPush) {
         if case let .snapshot(snapshot) = push {
             self.lastSnapshot = snapshot
+            if let mainSessionKey = self.cachedMainSessionKey() {
+                Task { @MainActor in
+                    WorkActivityStore.shared.setMainSessionKey(mainSessionKey)
+                }
+            }
         }
         for (_, continuation) in self.subscribers {
             continuation.yield(push)
         }
+    }
+
+    private func canonicalizeSessionKey(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        guard let defaults = self.lastSnapshot?.snapshot.sessiondefaults else { return trimmed }
+        let mainSessionKey = self.sessionDefaultString(defaults, key: "mainSessionKey")
+        guard !mainSessionKey.isEmpty else { return trimmed }
+        let mainKey = self.sessionDefaultString(defaults, key: "mainKey")
+        let defaultAgentId = self.sessionDefaultString(defaults, key: "defaultAgentId")
+        let isMainAlias =
+            trimmed == "main" ||
+            (!mainKey.isEmpty && trimmed == mainKey) ||
+            trimmed == mainSessionKey ||
+            (!defaultAgentId.isEmpty &&
+                (trimmed == "agent:\(defaultAgentId):main" ||
+                    (mainKey.isEmpty == false && trimmed == "agent:\(defaultAgentId):\(mainKey)")))
+        return isMainAlias ? mainSessionKey : trimmed
     }
 
     private func configure(url: URL, token: String?, password: String?) async {
@@ -331,6 +366,9 @@ extension GatewayConnection {
     }
 
     func mainSessionKey(timeoutMs: Double = 15000) async -> String {
+        if let cached = self.cachedMainSessionKey() {
+            return cached
+        }
         do {
             let data = try await self.requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
@@ -361,10 +399,11 @@ extension GatewayConnection {
     func sendAgent(_ invocation: GatewayAgentInvocation) async -> (ok: Bool, error: String?) {
         let trimmed = invocation.message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return (false, "message empty") }
+        let sessionKey = self.canonicalizeSessionKey(invocation.sessionKey)
 
         var params: [String: AnyCodable] = [
             "message": AnyCodable(trimmed),
-            "sessionKey": AnyCodable(invocation.sessionKey),
+            "sessionKey": AnyCodable(sessionKey),
             "thinking": AnyCodable(invocation.thinking ?? "default"),
             "deliver": AnyCodable(invocation.deliver),
             "to": AnyCodable(invocation.to ?? ""),
@@ -394,14 +433,14 @@ extension GatewayConnection {
         idempotencyKey: String = UUID().uuidString) async -> (ok: Bool, error: String?)
     {
         await self.sendAgent(GatewayAgentInvocation(
-            message: message,
-            sessionKey: sessionKey,
-            thinking: thinking,
-            deliver: deliver,
-            to: to,
-            channel: channel,
-            timeoutSeconds: timeoutSeconds,
-            idempotencyKey: idempotencyKey))
+                                message: message,
+                                sessionKey: sessionKey,
+                                thinking: thinking,
+                                deliver: deliver,
+                                to: to,
+                                channel: channel,
+                                timeoutSeconds: timeoutSeconds,
+                                idempotencyKey: idempotencyKey))
     }
 
     func sendSystemEvent(_ params: [String: AnyCodable]) async {
@@ -468,7 +507,8 @@ extension GatewayConnection {
         limit: Int? = nil,
         timeoutMs: Int? = nil) async throws -> ClawdbotChatHistoryPayload
     {
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(sessionKey)]
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
+        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
         if let limit { params["limit"] = AnyCodable(limit) }
         let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
@@ -485,8 +525,9 @@ extension GatewayConnection {
         attachments: [ClawdbotChatAttachmentPayload],
         timeoutMs: Int = 30000) async throws -> ClawdbotChatSendResponse
     {
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = [
-            "sessionKey": AnyCodable(sessionKey),
+            "sessionKey": AnyCodable(resolvedKey),
             "message": AnyCodable(message),
             "thinking": AnyCodable(thinking),
             "idempotencyKey": AnyCodable(idempotencyKey),
@@ -512,10 +553,11 @@ extension GatewayConnection {
     }
 
     func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         struct AbortResponse: Decodable { let ok: Bool?; let aborted: Bool? }
         let res: AbortResponse = try await self.requestDecoded(
             method: .chatAbort,
-            params: ["sessionKey": AnyCodable(sessionKey), "runId": AnyCodable(runId)])
+            params: ["sessionKey": AnyCodable(resolvedKey), "runId": AnyCodable(runId)])
         return res.aborted ?? false
     }
 

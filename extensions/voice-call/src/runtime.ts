@@ -4,6 +4,7 @@ import { validateProviderConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
+import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { OpenAITTSProvider } from "./providers/tts-openai.js";
 import { TwilioProvider } from "./providers/twilio.js";
@@ -54,6 +55,18 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           streamPath: config.streaming?.enabled
             ? config.streaming.streamPath
             : undefined,
+        },
+      );
+    case "plivo":
+      return new PlivoProvider(
+        {
+          authId: config.plivo?.authId ?? process.env.PLIVO_AUTH_ID,
+          authToken: config.plivo?.authToken ?? process.env.PLIVO_AUTH_TOKEN,
+        },
+        {
+          publicUrl: config.publicUrl,
+          skipVerification: config.skipSignatureVerification,
+          ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
         },
       );
     case "mock":

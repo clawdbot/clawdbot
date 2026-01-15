@@ -64,7 +64,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 
   if (tokenRaw != null) {
     const token = tokenRaw.trim();
-    if (token && !host.settings.token) {
+    if (token && token !== host.settings.token) {
       applySettings(host, { ...host.settings, token });
     }
     params.delete("token");

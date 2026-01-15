@@ -39,7 +39,34 @@ import { resolveUserPath } from "../utils.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+
+async function requireRiskAcknowledgement(params: {
+  opts: OnboardOptions;
+  prompter: WizardPrompter;
+}) {
+  if (params.opts.acceptRisk === true) return;
+
+  await params.prompter.note(
+    [
+      "Please read: https://docs.clawd.bot/security",
+      "",
+      "Clawdbot agents can run commands, read/write files, and act through any tools you enable. They can only send messages on channels you configure (for example, an account you log in on this machine, or a bot account like Slack/Discord).",
+      "",
+      "If you’re new to this, start with the sandbox and least privilege. It helps limit what an agent can do if it’s tricked or makes a mistake.",
+      "Learn more: https://docs.clawd.bot/sandboxing",
+    ].join("\n"),
+    "Security",
+  );
+
+  const ok = await params.prompter.confirm({
+    message: "I understand this is powerful and inherently risky. Continue?",
+    initialValue: false,
+  });
+  if (!ok) {
+    throw new WizardCancelledError("risk not accepted");
+  }
+}
 
 export async function runOnboardingWizard(
   opts: OnboardOptions,
@@ -48,6 +75,7 @@ export async function runOnboardingWizard(
 ) {
   printWizardHeader(runtime);
   await prompter.intro("Clawdbot onboarding");
+  await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
   let baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};

@@ -1,13 +1,16 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChatChannelId } from "../channels/registry.js";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
-  provider: ChatChannelId;
+  provider: ChannelId;
   accountId: string;
   name?: string;
   state: "linked" | "not linked" | "configured" | "not configured" | "enabled" | "disabled";
@@ -15,16 +18,16 @@ type ProviderAccountStatus = {
   configured?: boolean;
 };
 
-function providerAccountKey(provider: ChatChannelId, accountId?: string) {
+function providerAccountKey(provider: ChannelId, accountId?: string) {
   return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
 }
 
 function formatChannelAccountLabel(params: {
-  provider: ChatChannelId;
+  provider: ChannelId;
   accountId: string;
   name?: string;
 }): string {
-  const label = getChatChannelMeta(params.provider).label;
+  const label = getChannelPlugin(params.provider)?.meta.label ?? params.provider;
   const account = params.name?.trim()
     ? `${params.accountId} (${params.name.trim()})`
     : params.accountId;
@@ -88,7 +91,7 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(cfg: ClawdbotConfig, provider: ChatChannelId): string {
+function resolveDefaultAccountId(cfg: ClawdbotConfig, provider: ChannelId): string {
   const plugin = getChannelPlugin(provider);
   if (!plugin) return DEFAULT_ACCOUNT_ID;
   return resolveChannelDefaultAccountId({ plugin, cfg });
@@ -117,7 +120,7 @@ export function summarizeBindings(cfg: ClawdbotConfig, bindings: AgentBinding[])
   if (bindings.length === 0) return [];
   const seen = new Map<string, string>();
   for (const binding of bindings) {
-    const channel = normalizeChatChannelId(binding.match.channel);
+    const channel = normalizeChannelId(binding.match.channel);
     if (!channel) continue;
     const accountId = binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
     const key = providerAccountKey(channel, accountId);
@@ -143,7 +146,7 @@ export function listProvidersForAgent(params: {
   if (params.bindings.length > 0) {
     const seen = new Set<string>();
     for (const binding of params.bindings) {
-      const channel = normalizeChatChannelId(binding.match.channel);
+      const channel = normalizeChannelId(binding.match.channel);
       if (!channel) continue;
       const accountId = binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
       const key = providerAccountKey(channel, accountId);

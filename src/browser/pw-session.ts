@@ -64,10 +64,19 @@ type PageState = {
   armIdDownload: number;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
-   * These refs are NOT Playwright's `aria-ref` values.
+   * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
+   * Mode "aria" refs are Playwright aria-ref ids and resolved via `aria-ref=...`.
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
+};
+
+type RoleRefs = NonNullable<PageState["roleRefs"]>;
+type RoleRefsCacheEntry = {
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
 };
 
 type ContextState = {
@@ -79,6 +88,11 @@ const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
 
+// Best-effort cache to make role refs stable even if Playwright returns a different Page object
+// for the same CDP target across requests.
+const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
+const MAX_ROLE_REFS_CACHE = 50;
+
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
@@ -88,6 +102,47 @@ let connecting: Promise<ConnectedBrowser> | null = null;
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function roleRefsKey(cdpUrl: string, targetId: string) {
+  return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
+}
+
+export function rememberRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId: string;
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
+}): void {
+  const targetId = opts.targetId.trim();
+  if (!targetId) return;
+  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+    refs: opts.refs,
+    ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
+  });
+  while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
+    const first = roleRefsByTarget.keys().next();
+    if (first.done) break;
+    roleRefsByTarget.delete(first.value);
+  }
+}
+
+export function restoreRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  page: Page;
+}): void {
+  const targetId = opts.targetId?.trim() || "";
+  if (!targetId) return;
+  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  if (!cached) return;
+  const state = ensurePageState(opts.page);
+  if (state.roleRefs) return;
+  state.roleRefs = cached.refs;
+  state.roleRefsFrameSelector = cached.frameSelector;
+  state.roleRefsMode = cached.mode;
 }
 
 export function ensurePageState(page: Page): PageState {
@@ -277,7 +332,13 @@ export async function getPageForTargetId(opts: {
   const first = pages[0];
   if (!opts.targetId) return first;
   const found = await findPageByTargetId(browser, opts.targetId);
-  if (!found) throw new Error("tab not found");
+  if (!found) {
+    // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
+    // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
+    // only exposes a single Page, use it as a best-effort fallback.
+    if (pages.length === 1) return first;
+    throw new Error("tab not found");
+  }
   return found;
 }
 
@@ -290,6 +351,12 @@ export function refLocator(page: Page, ref: string) {
 
   if (/^e\d+$/.test(normalized)) {
     const state = pageStates.get(page);
+    if (state?.roleRefsMode === "aria") {
+      const scope = state.roleRefsFrameSelector
+        ? page.frameLocator(state.roleRefsFrameSelector)
+        : page;
+      return scope.locator(`aria-ref=${normalized}`);
+    }
     const info = state?.roleRefs?.[normalized];
     if (!info) {
       throw new Error(

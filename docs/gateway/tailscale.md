@@ -76,6 +76,36 @@ clawdbot gateway --tailscale funnel --auth password
 - Serve/Funnel only expose the **Gateway control UI + WS**. Node **bridge** traffic
   uses the separate bridge port (default `18790`) and is **not** proxied by Serve.
 
+## Browser control server (remote Gateway + local browser)
+
+If you run the Gateway on one machine but want to drive a browser on another machine, use a **separate browser control server**
+and publish it through Tailscale **Serve** (tailnet-only):
+
+```bash
+# on the machine that runs Chrome
+clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
+tailscale serve https / http://127.0.0.1:18791
+```
+
+Then point the Gateway config at the HTTPS URL:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "https://<magicdns>/"
+  }
+}
+```
+
+And authenticate from the Gateway with the same token (prefer env):
+
+```bash
+export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
+```
+
+Avoid Funnel for browser control endpoints unless you explicitly want public exposure.
+
 ## Tailscale prerequisites + limits
 
 - Serve requires HTTPS enabled for your tailnet; the CLI prompts if it is missing.

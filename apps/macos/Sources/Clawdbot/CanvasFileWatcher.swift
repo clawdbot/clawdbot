@@ -39,13 +39,13 @@ final class CanvasFileWatcher: @unchecked Sendable {
                 kFSEventStreamCreateFlagNoDefer)
 
         guard let stream = FSEventStreamCreate(
-            kCFAllocatorDefault,
-            Self.callback,
-            &context,
-            paths,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.05,
-            flags)
+                kCFAllocatorDefault,
+                Self.callback,
+                &context,
+                paths,
+                FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+                0.05,
+                flags)
         else {
             retainedSelf.release()
             return

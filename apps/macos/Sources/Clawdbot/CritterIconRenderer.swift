@@ -189,20 +189,20 @@ enum CritterIconRenderer {
         canvas.context.setFillColor(NSColor.labelColor.cgColor)
 
         canvas.context.addPath(CGPath(
-            roundedRect: geometry.bodyRect,
-            cornerWidth: geometry.bodyCorner,
-            cornerHeight: geometry.bodyCorner,
-            transform: nil))
+                                roundedRect: geometry.bodyRect,
+                                cornerWidth: geometry.bodyCorner,
+                                cornerHeight: geometry.bodyCorner,
+                                transform: nil))
         canvas.context.addPath(CGPath(
-            roundedRect: geometry.leftEarRect,
-            cornerWidth: geometry.earCorner,
-            cornerHeight: geometry.earCorner,
-            transform: nil))
+                                roundedRect: geometry.leftEarRect,
+                                cornerWidth: geometry.earCorner,
+                                cornerHeight: geometry.earCorner,
+                                transform: nil))
         canvas.context.addPath(CGPath(
-            roundedRect: geometry.rightEarRect,
-            cornerWidth: geometry.earCorner,
-            cornerHeight: geometry.earCorner,
-            transform: nil))
+                                roundedRect: geometry.rightEarRect,
+                                cornerWidth: geometry.earCorner,
+                                cornerHeight: geometry.earCorner,
+                                transform: nil))
 
         for i in 0..<4 {
             let x = geometry.legStartX + CGFloat(i) * (geometry.legW + geometry.legSpacing)
@@ -213,10 +213,10 @@ enum CritterIconRenderer {
                 width: geometry.legW,
                 height: geometry.legH * geometry.legHeightScale)
             canvas.context.addPath(CGPath(
-                roundedRect: rect,
-                cornerWidth: geometry.legW * 0.34,
-                cornerHeight: geometry.legW * 0.34,
-                transform: nil))
+                                    roundedRect: rect,
+                                    cornerWidth: geometry.legW * 0.34,
+                                    cornerHeight: geometry.legW * 0.34,
+                                    transform: nil))
         }
         canvas.context.fillPath()
     }
@@ -252,15 +252,15 @@ enum CritterIconRenderer {
                 height: holeH)
 
             canvas.context.addPath(CGPath(
-                roundedRect: leftHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
+                                    roundedRect: leftHoleRect,
+                                    cornerWidth: holeCorner,
+                                    cornerHeight: holeCorner,
+                                    transform: nil))
             canvas.context.addPath(CGPath(
-                roundedRect: rightHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
+                                    roundedRect: rightHoleRect,
+                                    cornerWidth: holeCorner,
+                                    cornerHeight: holeCorner,
+                                    transform: nil))
         }
 
         if options.eyesClosedLines {
@@ -278,41 +278,41 @@ enum CritterIconRenderer {
                 width: lineW,
                 height: lineH)
             canvas.context.addPath(CGPath(
-                roundedRect: leftRect,
-                cornerWidth: corner,
-                cornerHeight: corner,
-                transform: nil))
+                                    roundedRect: leftRect,
+                                    cornerWidth: corner,
+                                    cornerHeight: corner,
+                                    transform: nil))
             canvas.context.addPath(CGPath(
-                roundedRect: rightRect,
-                cornerWidth: corner,
-                cornerHeight: corner,
-                transform: nil))
+                                    roundedRect: rightRect,
+                                    cornerWidth: corner,
+                                    cornerHeight: corner,
+                                    transform: nil))
         } else {
             let eyeOpen = max(0.05, 1 - options.blink)
             let eyeH = canvas.snapY(geometry.bodyRect.height * 0.26 * eyeOpen)
 
             let left = CGMutablePath()
             left.move(to: CGPoint(
-                x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y - eyeH)))
+                        x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
+                        y: canvas.snapY(leftCenter.y - eyeH)))
             left.addLine(to: CGPoint(
-                x: canvas.snapX(leftCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y)))
+                            x: canvas.snapX(leftCenter.x + geometry.eyeW / 2),
+                            y: canvas.snapY(leftCenter.y)))
             left.addLine(to: CGPoint(
-                x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y + eyeH)))
+                            x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
+                            y: canvas.snapY(leftCenter.y + eyeH)))
             left.closeSubpath()
 
             let right = CGMutablePath()
             right.move(to: CGPoint(
-                x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y - eyeH)))
+                        x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
+                        y: canvas.snapY(rightCenter.y - eyeH)))
             right.addLine(to: CGPoint(
-                x: canvas.snapX(rightCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y)))
+                            x: canvas.snapX(rightCenter.x - geometry.eyeW / 2),
+                            y: canvas.snapY(rightCenter.y)))
             right.addLine(to: CGPoint(
-                x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y + eyeH)))
+                            x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
+                            y: canvas.snapY(rightCenter.y + eyeH)))
             right.closeSubpath()
 
             canvas.context.addPath(left)

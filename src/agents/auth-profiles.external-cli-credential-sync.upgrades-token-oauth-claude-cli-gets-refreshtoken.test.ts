@@ -10,12 +10,12 @@ import {
 } from "./auth-profiles.js";
 
 describe("external CLI credential sync", () => {
-  it("upgrades token to oauth when Claude CLI gets refreshToken", async () => {
+  it("upgrades token to oauth when Claude Code CLI gets refreshToken", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-upgrade-"));
     try {
       await withTempHome(
         async (tempHome) => {
-          // Create Claude CLI credentials with refreshToken
+          // Create Claude Code CLI credentials with refreshToken
           const claudeDir = path.join(tempHome, ".claude");
           fs.mkdirSync(claudeDir, { recursive: true });
           fs.writeFileSync(

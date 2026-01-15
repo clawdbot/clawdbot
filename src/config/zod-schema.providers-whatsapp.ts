@@ -11,7 +11,9 @@ export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
+    configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
+    sendReadReceipts: z.boolean().optional(),
     messagePrefix: z.string().optional(),
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
@@ -60,6 +62,8 @@ export const WhatsAppConfigSchema = z
   .object({
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
     capabilities: z.array(z.string()).optional(),
+    configWrites: z.boolean().optional(),
+    sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     messagePrefix: z.string().optional(),
     selfChatMode: z.boolean().optional(),

@@ -51,7 +51,7 @@ pnpm gateway:watch
 
 Usually unnecessary: one Gateway can serve multiple messaging channels and agents. Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
 
-Supported if you isolate state + config and use unique ports.
+Supported if you isolate state + config and use unique ports. Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 Service names are profile-aware:
 - macOS: `com.clawdbot.<profile>`

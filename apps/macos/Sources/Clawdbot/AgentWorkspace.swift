@@ -307,8 +307,8 @@ enum AgentWorkspace {
         }
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         urls.append(cwd.appendingPathComponent("docs")
-            .appendingPathComponent(self.templateDirname)
-            .appendingPathComponent(named))
+                        .appendingPathComponent(self.templateDirname)
+                        .appendingPathComponent(named))
         return urls
     }
 

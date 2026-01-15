@@ -158,10 +158,10 @@ actor PortGuardian {
                 mode: mode,
                 listeners: listeners)
             reports.append(Self.buildReport(
-                port: port,
-                listeners: listeners,
-                mode: mode,
-                tunnelHealthy: tunnelHealthy))
+                            port: port,
+                            listeners: listeners,
+                            mode: mode,
+                            tunnelHealthy: tunnelHealthy))
         }
 
         return reports

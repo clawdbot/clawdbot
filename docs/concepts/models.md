@@ -152,7 +152,7 @@ JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
-Preferred Anthropic auth is the Claude CLI setup-token (run on the gateway host):
+Preferred Anthropic auth is the Claude Code CLI setup-token (run on the gateway host):
 
 ```bash
 claude setup-token

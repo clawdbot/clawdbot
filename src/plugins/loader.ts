@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverClawdbotPlugins } from "./discovery.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import { setActivePluginRegistry } from "./runtime.js";
 import type {
   ClawdbotPluginConfigSchema,
   ClawdbotPluginDefinition,
@@ -188,9 +189,11 @@ function createPluginRecord(params: {
     enabled: params.enabled,
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
+    channelIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
+    httpHandlers: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
   };
@@ -211,7 +214,10 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      setActivePluginRegistry(cached, cacheKey);
+      return cached;
+    }
   }
 
   const { registry, createApi } = createPluginRegistry({
@@ -359,5 +365,6 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
   }
+  setActivePluginRegistry(registry, cacheKey);
   return registry;
 }

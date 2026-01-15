@@ -92,7 +92,7 @@ beforeEach(() => {
 });
 
 describe("monitorIMessageProvider", () => {
-  it("updates last route with chat_id for direct messages", async () => {
+  it("updates last route with sender handle for direct messages", async () => {
     replyMock.mockResolvedValueOnce({ text: "ok" });
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -118,7 +118,7 @@ describe("monitorIMessageProvider", () => {
     expect(updateLastRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "imessage",
-        to: "chat_id:7",
+        to: "+15550004444",
       }),
     );
   });

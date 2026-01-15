@@ -11,6 +11,8 @@ import {
   listChannelPairingRequests,
   type PairingChannel,
 } from "../pairing/pairing-store.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 const CHANNELS: PairingChannel[] = listPairingChannels();
 
@@ -26,7 +28,12 @@ async function notifyApproved(channel: PairingChannel, id: string) {
 export function registerPairingCli(program: Command) {
   const pairing = program
     .command("pairing")
-    .description("Secure DM pairing (approve inbound requests)");
+    .description("Secure DM pairing (approve inbound requests)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/pairing", "docs.clawd.bot/cli/pairing")}\n`,
+    );
 
   pairing
     .command("list")

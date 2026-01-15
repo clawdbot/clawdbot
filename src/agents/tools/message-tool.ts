@@ -148,7 +148,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     label: "Message",
     name: "message",
     description:
-      "Send messages and channel actions (polls, reactions, pins, threads, etc.) via configured channel plugins.",
+      "Send, delete, and manage messages via channel plugins. Supports actions: send, delete, react, poll, pin, threads, and more.",
     parameters: schema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

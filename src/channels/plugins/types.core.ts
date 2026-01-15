@@ -7,7 +7,7 @@ import type { GatewayClientMode, GatewayClientName } from "../../utils/message-c
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
-export type ChannelId = ChatChannelId;
+export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
@@ -31,6 +31,12 @@ export type ChannelSetupInput = {
   httpHost?: string;
   httpPort?: string;
   useEnv?: boolean;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
+  deviceName?: string;
+  initialSyncLimit?: number;
 };
 
 export type ChannelStatusIssue = {
@@ -62,6 +68,10 @@ export type ChannelMeta = {
   docsLabel?: string;
   blurb: string;
   order?: number;
+  aliases?: string[];
+  selectionDocsPrefix?: string;
+  selectionDocsOmitLabel?: boolean;
+  selectionExtras?: string[];
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
@@ -192,6 +202,7 @@ export type ChannelThreadingContext = {
   To?: string;
   ReplyToId?: string;
   ThreadLabel?: string;
+  MessageThreadId?: string | number;
 };
 
 export type ChannelThreadingToolContext = {

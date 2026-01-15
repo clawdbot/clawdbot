@@ -1,7 +1,14 @@
 import type { ClawdbotConfig } from "../config/types.js";
 import { CHAT_COMMANDS, getNativeCommandSurfaces } from "./commands-registry.data.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type {
   ChatCommandDefinition,
+  CommandArgChoiceContext,
+  CommandArgDefinition,
+  CommandArgMenuSpec,
+  CommandArgValues,
+  CommandArgs,
   CommandDetection,
   CommandNormalizeOptions,
   NativeCommandSpec,
@@ -11,6 +18,11 @@ import type {
 export { CHAT_COMMANDS } from "./commands-registry.data.js";
 export type {
   ChatCommandDefinition,
+  CommandArgChoiceContext,
+  CommandArgDefinition,
+  CommandArgMenuSpec,
+  CommandArgValues,
+  CommandArgs,
   CommandDetection,
   CommandNormalizeOptions,
   CommandScope,
@@ -70,6 +82,7 @@ export function listNativeCommandSpecs(): NativeCommandSpec[] {
       name: command.nativeName ?? command.key,
       description: command.description,
       acceptsArgs: Boolean(command.acceptsArgs),
+      args: command.args,
     }),
   );
 }
@@ -81,6 +94,7 @@ export function listNativeCommandSpecsForConfig(cfg: ClawdbotConfig): NativeComm
       name: command.nativeName ?? command.key,
       description: command.description,
       acceptsArgs: Boolean(command.acceptsArgs),
+      args: command.args,
     }));
 }
 
@@ -94,6 +108,141 @@ export function findCommandByNativeName(name: string): ChatCommandDefinition | u
 export function buildCommandText(commandName: string, args?: string): string {
   const trimmedArgs = args?.trim();
   return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
+}
+
+function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
+  const values: CommandArgValues = {};
+  const trimmed = raw.trim();
+  if (!trimmed) return values;
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  let index = 0;
+  for (const definition of definitions) {
+    if (index >= tokens.length) break;
+    if (definition.captureRemaining) {
+      values[definition.name] = tokens.slice(index).join(" ");
+      index = tokens.length;
+      break;
+    }
+    values[definition.name] = tokens[index];
+    index += 1;
+  }
+  return values;
+}
+
+function formatPositionalArgs(
+  definitions: CommandArgDefinition[],
+  values: CommandArgValues,
+): string | undefined {
+  const parts: string[] = [];
+  for (const definition of definitions) {
+    const value = values[definition.name];
+    if (value == null) continue;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) continue;
+      parts.push(trimmed);
+    } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      parts.push(String(value));
+    }
+    if (definition.captureRemaining) break;
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+export function parseCommandArgs(
+  command: ChatCommandDefinition,
+  raw?: string,
+): CommandArgs | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  if (!command.args || command.argsParsing === "none") {
+    return { raw: trimmed };
+  }
+  return {
+    raw: trimmed,
+    values: parsePositionalArgs(command.args, trimmed),
+  };
+}
+
+export function serializeCommandArgs(
+  command: ChatCommandDefinition,
+  args?: CommandArgs,
+): string | undefined {
+  if (!args) return undefined;
+  const raw = args.raw?.trim();
+  if (raw) return raw;
+  if (!args.values || !command.args) return undefined;
+  if (command.formatArgs) return command.formatArgs(args.values);
+  return formatPositionalArgs(command.args, args.values);
+}
+
+export function buildCommandTextFromArgs(
+  command: ChatCommandDefinition,
+  args?: CommandArgs,
+): string {
+  const commandName = command.nativeName ?? command.key;
+  return buildCommandText(commandName, serializeCommandArgs(command, args));
+}
+
+function resolveDefaultCommandContext(cfg?: ClawdbotConfig): {
+  provider: string;
+  model: string;
+} {
+  const resolved = resolveConfiguredModelRef({
+    cfg: cfg ?? ({} as ClawdbotConfig),
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  return {
+    provider: resolved.provider ?? DEFAULT_PROVIDER,
+    model: resolved.model ?? DEFAULT_MODEL,
+  };
+}
+
+export function resolveCommandArgChoices(params: {
+  command: ChatCommandDefinition;
+  arg: CommandArgDefinition;
+  cfg?: ClawdbotConfig;
+  provider?: string;
+  model?: string;
+}): string[] {
+  const { command, arg, cfg } = params;
+  if (!arg.choices) return [];
+  const provided = arg.choices;
+  if (Array.isArray(provided)) return provided;
+  const defaults = resolveDefaultCommandContext(cfg);
+  const context: CommandArgChoiceContext = {
+    cfg,
+    provider: params.provider ?? defaults.provider,
+    model: params.model ?? defaults.model,
+    command,
+    arg,
+  };
+  return provided(context);
+}
+
+export function resolveCommandArgMenu(params: {
+  command: ChatCommandDefinition;
+  args?: CommandArgs;
+  cfg?: ClawdbotConfig;
+}): { arg: CommandArgDefinition; choices: string[]; title?: string } | null {
+  const { command, args, cfg } = params;
+  if (!command.args || !command.argsMenu) return null;
+  if (command.argsParsing === "none") return null;
+  const argSpec = command.argsMenu;
+  const argName =
+    argSpec === "auto"
+      ? command.args.find((arg) => resolveCommandArgChoices({ command, arg, cfg }).length > 0)?.name
+      : argSpec.arg;
+  if (!argName) return null;
+  if (args?.values && args.values[argName] != null) return null;
+  if (args?.raw && !args.values) return null;
+  const arg = command.args.find((entry) => entry.name === argName);
+  if (!arg) return null;
+  const choices = resolveCommandArgChoices({ command, arg, cfg });
+  if (choices.length === 0) return null;
+  const title = argSpec !== "auto" ? argSpec.title : undefined;
+  return { arg, choices, title };
 }
 
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {

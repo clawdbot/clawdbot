@@ -4,7 +4,12 @@ import path from "node:path";
 
 import type { Page } from "playwright-core";
 
-import { ensurePageState, getPageForTargetId, refLocator } from "./pw-session.js";
+import {
+  ensurePageState,
+  getPageForTargetId,
+  refLocator,
+  restoreRoleRefsForTarget,
+} from "./pw-session.js";
 import {
   bumpDialogArmId,
   bumpDownloadArmId,
@@ -189,6 +194,7 @@ export async function downloadViaPlaywright(opts: {
 }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);

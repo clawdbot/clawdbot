@@ -66,7 +66,7 @@ async function refreshOAuthTokenWithLock(params: {
     };
     saveAuthProfileStore(store, params.agentDir);
 
-    // Sync refreshed credentials back to Claude CLI if this is the claude-cli profile
+    // Sync refreshed credentials back to Claude Code CLI if this is the claude-cli profile
     // This ensures Claude Code continues to work after ClawdBot refreshes the token
     if (params.profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
       writeClaudeCliCredentials(result.newCredentials);

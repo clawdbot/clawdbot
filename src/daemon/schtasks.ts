@@ -4,11 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import {
-  formatGatewayServiceDescription,
-  LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
-  resolveGatewayWindowsTaskName,
-} from "./constants.js";
+import { formatGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
@@ -30,11 +26,6 @@ function resolveTaskScriptPath(env: Record<string, string | undefined>): string 
   const profile = env.CLAWDBOT_PROFILE?.trim();
   const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
   return path.join(home, `.clawdbot${suffix}`, "gateway.cmd");
-}
-
-function resolveLegacyTaskScriptPath(env: Record<string, string | undefined>): string {
-  const home = resolveHomeDir(env);
-  return path.join(home, ".clawdis", "gateway.cmd");
 }
 
 function quoteCmdArg(value: string): string {
@@ -249,6 +240,8 @@ export async function installScheduledTask({
   }
 
   await execSchtasks(["/Run", "/TN", taskName]);
+  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  stdout.write("\n");
   stdout.write(`${formatLine("Installed Scheduled Task", taskName)}\n`);
   stdout.write(`${formatLine("Task script", scriptPath)}\n`);
   return { scriptPath };
@@ -350,78 +343,4 @@ export async function readScheduledTaskRuntime(
     lastRunTime: parsed.lastRunTime,
     lastRunResult: parsed.lastRunResult,
   };
-}
-export type LegacyScheduledTask = {
-  name: string;
-  scriptPath: string;
-  installed: boolean;
-  scriptExists: boolean;
-};
-
-export async function findLegacyScheduledTasks(
-  env: Record<string, string | undefined>,
-): Promise<LegacyScheduledTask[]> {
-  const results: LegacyScheduledTask[] = [];
-  let schtasksAvailable = true;
-  try {
-    await assertSchtasksAvailable();
-  } catch {
-    schtasksAvailable = false;
-  }
-
-  for (const name of LEGACY_GATEWAY_WINDOWS_TASK_NAMES) {
-    const scriptPath = resolveLegacyTaskScriptPath(env);
-    let installed = false;
-    if (schtasksAvailable) {
-      const res = await execSchtasks(["/Query", "/TN", name]);
-      installed = res.code === 0;
-    }
-    let scriptExists = false;
-    try {
-      await fs.access(scriptPath);
-      scriptExists = true;
-    } catch {
-      // ignore
-    }
-    if (installed || scriptExists) {
-      results.push({ name, scriptPath, installed, scriptExists });
-    }
-  }
-
-  return results;
-}
-
-export async function uninstallLegacyScheduledTasks({
-  env,
-  stdout,
-}: {
-  env: Record<string, string | undefined>;
-  stdout: NodeJS.WritableStream;
-}): Promise<LegacyScheduledTask[]> {
-  const tasks = await findLegacyScheduledTasks(env);
-  if (tasks.length === 0) return tasks;
-
-  let schtasksAvailable = true;
-  try {
-    await assertSchtasksAvailable();
-  } catch {
-    schtasksAvailable = false;
-  }
-
-  for (const task of tasks) {
-    if (schtasksAvailable && task.installed) {
-      await execSchtasks(["/Delete", "/F", "/TN", task.name]);
-    } else if (!schtasksAvailable && task.installed) {
-      stdout.write(`schtasks unavailable; unable to remove legacy task: ${task.name}\n`);
-    }
-
-    try {
-      await fs.unlink(task.scriptPath);
-      stdout.write(`${formatLine("Removed legacy task script", task.scriptPath)}\n`);
-    } catch {
-      stdout.write(`Legacy task script not found at ${task.scriptPath}\n`);
-    }
-  }
-
-  return tasks;
 }

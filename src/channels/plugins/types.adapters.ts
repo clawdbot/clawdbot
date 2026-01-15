@@ -73,7 +73,7 @@ export type ChannelOutboundContext = {
   mediaUrl?: string;
   gifPlayback?: boolean;
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: string | number | null;
   accountId?: string | null;
   deps?: OutboundSendDeps;
 };

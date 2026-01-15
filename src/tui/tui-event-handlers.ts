@@ -47,6 +47,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus("streaming");
     }
     if (evt.state === "final") {
+      const stopReason =
+        evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
+          ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
+            ? ((evt.message as Record<string, unknown>).stopReason as string)
+            : ""
+          : "";
       const text = extractTextFromMessage(evt.message, {
         includeThinking: state.showThinking,
       });
@@ -57,7 +63,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.finalizeAssistant(finalText, evt.runId);
       noteFinalizedRun(evt.runId);
       state.activeChatRunId = null;
-      setActivityStatus("idle");
+      setActivityStatus(stopReason === "error" ? "error" : "idle");
     }
     if (evt.state === "aborted") {
       chatLog.addSystem("run aborted");

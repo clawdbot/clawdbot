@@ -54,7 +54,14 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
 }
 
 export function registerPluginsCli(program: Command) {
-  const plugins = program.command("plugins").description("Manage Clawdbot plugins/extensions");
+  const plugins = program
+    .command("plugins")
+    .description("Manage Clawdbot plugins/extensions")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/plugins", "docs.clawd.bot/cli/plugins")}\n`,
+    );
 
   plugins
     .command("list")

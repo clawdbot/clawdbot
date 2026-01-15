@@ -210,6 +210,35 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("skips read receipts when disabled", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      sendReadReceipts: false,
+    });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "rr-off-1", fromMe: false, remoteJid: "222@s.whatsapp.net" },
+          message: { conversation: "read receipts off" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(sock.readMessages).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("lets group messages through even when sender not in allowFrom", async () => {
     mockLoadConfig.mockReturnValue({
       channels: { whatsapp: { allowFrom: ["+1234"], groupPolicy: "open" } },

@@ -5,6 +5,7 @@ import {
   listChatCommandsForConfig,
   normalizeCommandBody,
 } from "./commands-registry.js";
+import { isAbortTrigger } from "./reply/abort.js";
 
 export function hasControlCommand(
   text?: string,
@@ -30,4 +31,17 @@ export function hasControlCommand(
     }
   }
   return false;
+}
+
+export function isControlCommandMessage(
+  text?: string,
+  cfg?: ClawdbotConfig,
+  options?: CommandNormalizeOptions,
+): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (hasControlCommand(trimmed, cfg, options)) return true;
+  const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
+  return isAbortTrigger(normalized);
 }

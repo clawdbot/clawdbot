@@ -26,6 +26,8 @@ export async function monitorWebInbox(options: {
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
   mediaMaxMb?: number;
+  /** Send read receipts for incoming messages (default true). */
+  sendReadReceipts?: boolean;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -139,7 +141,7 @@ export async function monitorWebInbox(options: {
       });
       if (!access.allowed) continue;
 
-      if (id && !access.isSelfChat) {
+      if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
         const participant = msg.key?.participant;
         try {
           await sock.readMessages([{ remoteJid, id, participant, fromMe: false }]);

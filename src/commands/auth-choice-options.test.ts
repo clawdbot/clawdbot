@@ -15,7 +15,7 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(options.find((opt) => opt.value === "github-copilot")).toBeDefined();
   });
-  it("includes Claude CLI option on macOS even when missing", () => {
+  it("includes Claude Code CLI option on macOS even when missing", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({
       store,
@@ -29,7 +29,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(claudeCli?.hint).toBe("requires Keychain access");
   });
 
-  it("skips missing Claude CLI option off macOS", () => {
+  it("skips missing Claude Code CLI option off macOS", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({
       store,
@@ -41,7 +41,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.find((opt) => opt.value === "claude-cli")).toBeUndefined();
   });
 
-  it("uses token hint when Claude CLI credentials exist", () => {
+  it("uses token hint when Claude Code CLI credentials exist", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {

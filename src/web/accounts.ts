@@ -6,11 +6,13 @@ import { resolveOAuthDir } from "../config/paths.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { hasWebCredsSync } from "./auth-store.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
+  sendReadReceipts: boolean;
   messagePrefix?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
@@ -30,6 +32,33 @@ function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   const accounts = cfg.channels?.whatsapp?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
+}
+
+export function listWhatsAppAuthDirs(cfg: ClawdbotConfig): string[] {
+  const oauthDir = resolveOAuthDir();
+  const whatsappDir = path.join(oauthDir, "whatsapp");
+  const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+
+  const accountIds = listConfiguredAccountIds(cfg);
+  for (const accountId of accountIds) {
+    authDirs.add(resolveWhatsAppAuthDir({ cfg, accountId }).authDir);
+  }
+
+  try {
+    const entries = fs.readdirSync(whatsappDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      authDirs.add(path.join(whatsappDir, entry.name));
+    }
+  } catch {
+    // ignore missing dirs
+  }
+
+  return Array.from(authDirs);
+}
+
+export function hasAnyWhatsAppAuth(cfg: ClawdbotConfig): boolean {
+  return listWhatsAppAuthDirs(cfg).some((authDir) => hasWebCredsSync(authDir));
 }
 
 export function listWhatsAppAccountIds(cfg: ClawdbotConfig): string[] {
@@ -97,6 +126,7 @@ export function resolveWhatsAppAccount(params: {
   cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedWhatsAppAccount {
+  const rootCfg = params.cfg.channels?.whatsapp;
   const accountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
   const accountCfg = resolveAccountConfig(params.cfg, accountId);
   const enabled = accountCfg?.enabled !== false;
@@ -108,22 +138,21 @@ export function resolveWhatsAppAccount(params: {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
     enabled,
+    sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
-      accountCfg?.messagePrefix ??
-      params.cfg.channels?.whatsapp?.messagePrefix ??
-      params.cfg.messages?.messagePrefix,
+      accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
     authDir,
     isLegacyAuthDir: isLegacy,
-    selfChatMode: accountCfg?.selfChatMode ?? params.cfg.channels?.whatsapp?.selfChatMode,
-    dmPolicy: accountCfg?.dmPolicy ?? params.cfg.channels?.whatsapp?.dmPolicy,
-    allowFrom: accountCfg?.allowFrom ?? params.cfg.channels?.whatsapp?.allowFrom,
-    groupAllowFrom: accountCfg?.groupAllowFrom ?? params.cfg.channels?.whatsapp?.groupAllowFrom,
-    groupPolicy: accountCfg?.groupPolicy ?? params.cfg.channels?.whatsapp?.groupPolicy,
-    textChunkLimit: accountCfg?.textChunkLimit ?? params.cfg.channels?.whatsapp?.textChunkLimit,
-    mediaMaxMb: accountCfg?.mediaMaxMb ?? params.cfg.channels?.whatsapp?.mediaMaxMb,
-    blockStreaming: accountCfg?.blockStreaming ?? params.cfg.channels?.whatsapp?.blockStreaming,
-    ackReaction: accountCfg?.ackReaction ?? params.cfg.channels?.whatsapp?.ackReaction,
-    groups: accountCfg?.groups ?? params.cfg.channels?.whatsapp?.groups,
+    selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
+    dmPolicy: accountCfg?.dmPolicy ?? rootCfg?.dmPolicy,
+    allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
+    groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
+    groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
+    textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
+    mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
+    blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
+    ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
+    groups: accountCfg?.groups ?? rootCfg?.groups,
   };
 }
 

@@ -384,7 +384,7 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
   },
 
   skills: {
-    allowBundled: ["brave-search", "gemini"],
+    allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"]
     },

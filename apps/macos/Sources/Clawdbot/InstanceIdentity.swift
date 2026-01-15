@@ -13,7 +13,7 @@ enum InstanceIdentity {
         let defaults = Self.defaults
         if let existing = defaults.string(forKey: instanceIdKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-            !existing.isEmpty
+           !existing.isEmpty
         {
             return existing
         }

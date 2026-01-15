@@ -133,12 +133,7 @@ export async function statusAllCommand(
       try {
         const service = resolveGatewayService();
         const [loaded, runtimeInfo, command] = await Promise.all([
-          service
-            .isLoaded({
-              env: process.env,
-              profile: process.env.CLAWDBOT_PROFILE,
-            })
-            .catch(() => false),
+          service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE }).catch(() => false),
           service.readRuntime(process.env).catch(() => undefined),
           service.readCommand(process.env).catch(() => null),
         ]);
@@ -338,6 +333,7 @@ export async function statusAllCommand(
         Item: "Gateway",
         Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
       },
+      { Item: "Security", Value: "Run: clawdbot security audit --deep" },
       gatewaySelfLine
         ? { Item: "Gateway self", Value: gatewaySelfLine }
         : { Item: "Gateway self", Value: "unknown" },

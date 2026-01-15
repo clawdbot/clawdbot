@@ -27,7 +27,7 @@ struct GatewayDiscoveryInlineList: View {
                     ForEach(self.discovery.gateways.prefix(6)) { gateway in
                         let target = self.suggestedSSHTarget(gateway)
                         let selected = (target != nil && self.currentTarget?
-                            .trimmingCharacters(in: .whitespacesAndNewlines) == target)
+                                            .trimmingCharacters(in: .whitespacesAndNewlines) == target)
 
                         Button {
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
@@ -61,8 +61,8 @@ struct GatewayDiscoveryInlineList: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(self.rowBackground(
-                                        selected: selected,
-                                        hovered: self.hoveredGatewayID == gateway.id)))
+                                            selected: selected,
+                                            hovered: self.hoveredGatewayID == gateway.id)))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .strokeBorder(

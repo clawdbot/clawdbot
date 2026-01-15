@@ -36,10 +36,16 @@ export function resolveDefaultSessionStorePath(agentId?: string): string {
 export function resolveSessionTranscriptPath(
   sessionId: string,
   agentId?: string,
-  topicId?: number,
+  topicId?: string | number,
 ): string {
+  const safeTopicId =
+    typeof topicId === "string"
+      ? encodeURIComponent(topicId)
+      : typeof topicId === "number"
+        ? String(topicId)
+        : undefined;
   const fileName =
-    topicId !== undefined ? `${sessionId}-topic-${topicId}.jsonl` : `${sessionId}.jsonl`;
+    safeTopicId !== undefined ? `${sessionId}-topic-${safeTopicId}.jsonl` : `${sessionId}.jsonl`;
   return path.join(resolveAgentSessionsDir(agentId), fileName);
 }
 

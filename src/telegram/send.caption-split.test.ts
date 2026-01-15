@@ -269,9 +269,7 @@ describe("sendMessageTelegram caption splitting", () => {
       message_id: 80,
       chat: { id: chatId },
     });
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValue(new Error("400: Bad Request: chat not found"));
+    const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
     const api = { sendPhoto, sendMessage } as unknown as {
       sendPhoto: typeof sendPhoto;
       sendMessage: typeof sendMessage;
@@ -289,9 +287,7 @@ describe("sendMessageTelegram caption splitting", () => {
         api,
         mediaUrl: "https://example.com/photo.jpg",
       }),
-    ).rejects.toThrow(
-      /Telegram send failed: chat not found \(chat_id=123\)\./,
-    );
+    ).rejects.toThrow(/Telegram send failed: chat not found \(chat_id=123\)\./);
   });
 
   it("does not send follow-up text when caption is empty", async () => {

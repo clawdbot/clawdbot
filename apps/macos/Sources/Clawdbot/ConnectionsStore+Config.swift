@@ -2,6 +2,16 @@ import ClawdbotProtocol
 import Foundation
 
 extension ConnectionsStore {
+    var isTelegramTokenLocked: Bool {
+        self.snapshot?.decodeChannel("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)?
+            .tokenSource == "env"
+    }
+
+    var isDiscordTokenLocked: Bool {
+        self.snapshot?.decodeChannel("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)?
+            .tokenSource == "env"
+    }
+
     func loadConfig() async {
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
@@ -12,6 +22,7 @@ extension ConnectionsStore {
                 ? "Config invalid; fix it in ~/.clawdbot/clawdbot.json."
                 : nil
             self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
+            self.configHash = snap.hash
             self.configLoaded = true
 
             self.applyUIConfig(snap)
@@ -27,17 +38,30 @@ extension ConnectionsStore {
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?[
             "ui",
-        ]?.dictionaryValue
+            ]?.dictionaryValue
         let rawSeam = ui?[
             "seamColor",
-        ]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            ]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
     }
 
+    private func resolveChannelConfig(_ snap: ConfigSnapshot, key: String) -> [String: AnyCodable]? {
+        if let channels = snap.config?["channels"]?.dictionaryValue,
+           let entry = channels[key]?.dictionaryValue
+        {
+            return entry
+        }
+        return snap.config?[key]?.dictionaryValue
+    }
+
     private func applyTelegramConfig(_ snap: ConfigSnapshot) {
-        let telegram = snap.config?["telegram"]?.dictionaryValue
+        let telegram = self.resolveChannelConfig(snap, key: "telegram")
         self.telegramToken = telegram?["botToken"]?.stringValue ?? ""
-        self.telegramRequireMention = telegram?["requireMention"]?.boolValue ?? true
+        let groups = telegram?["groups"]?.dictionaryValue
+        let defaultGroup = groups?["*"]?.dictionaryValue
+        self.telegramRequireMention = defaultGroup?["requireMention"]?.boolValue
+            ?? telegram?["requireMention"]?.boolValue
+            ?? true
         self.telegramAllowFrom = self.stringList(from: telegram?["allowFrom"]?.arrayValue)
         self.telegramProxy = telegram?["proxy"]?.stringValue ?? ""
         self.telegramWebhookUrl = telegram?["webhookUrl"]?.stringValue ?? ""
@@ -46,7 +70,7 @@ extension ConnectionsStore {
     }
 
     private func applyDiscordConfig(_ snap: ConfigSnapshot) {
-        let discord = snap.config?["discord"]?.dictionaryValue
+        let discord = self.resolveChannelConfig(snap, key: "discord")
         self.discordEnabled = discord?["enabled"]?.boolValue ?? true
         self.discordToken = discord?["token"]?.stringValue ?? ""
 
@@ -122,7 +146,7 @@ extension ConnectionsStore {
     }
 
     private func applySignalConfig(_ snap: ConfigSnapshot) {
-        let signal = snap.config?["signal"]?.dictionaryValue
+        let signal = self.resolveChannelConfig(snap, key: "signal")
         self.signalEnabled = signal?["enabled"]?.boolValue ?? true
         self.signalAccount = signal?["account"]?.stringValue ?? ""
         self.signalHttpUrl = signal?["httpUrl"]?.stringValue ?? ""
@@ -139,7 +163,7 @@ extension ConnectionsStore {
     }
 
     private func applyIMessageConfig(_ snap: ConfigSnapshot) {
-        let imessage = snap.config?["imessage"]?.dictionaryValue
+        let imessage = self.resolveChannelConfig(snap, key: "imessage")
         self.imessageEnabled = imessage?["enabled"]?.boolValue ?? true
         self.imessageCliPath = imessage?["cliPath"]?.stringValue ?? ""
         self.imessageDbPath = imessage?["dbPath"]?.stringValue ?? ""
@@ -150,6 +174,15 @@ extension ConnectionsStore {
         self.imessageMediaMaxMb = self.numberString(from: imessage?["mediaMaxMb"])
     }
 
+    private func channelConfigRoot(for key: String) -> [String: Any] {
+        if let channels = self.configRoot["channels"] as? [String: Any],
+           let entry = channels[key] as? [String: Any]
+        {
+            return entry
+        }
+        return self.configRoot[key] as? [String: Any] ?? [:]
+    }
+
     func saveTelegramConfig() async {
         guard !self.isSavingConfig else { return }
         self.isSavingConfig = true
@@ -158,30 +191,24 @@ extension ConnectionsStore {
             await self.loadConfig()
         }
 
-        var telegram: [String: Any] = (self.configRoot["telegram"] as? [String: Any]) ?? [:]
-        let token = self.trimmed(self.telegramToken)
-        if token.isEmpty {
-            telegram.removeValue(forKey: "botToken")
-        } else {
-            telegram["botToken"] = token
+        var telegram: [String: Any] = [:]
+        if !self.isTelegramTokenLocked {
+            self.setPatchString(&telegram, key: "botToken", value: self.telegramToken)
         }
-
-        telegram["requireMention"] = self.telegramRequireMention
-
+        telegram["requireMention"] = NSNull()
+        telegram["groups"] = [
+            "*": [
+                "requireMention": self.telegramRequireMention,
+            ],
+        ]
         let allow = self.splitCsv(self.telegramAllowFrom)
-        if allow.isEmpty {
-            telegram.removeValue(forKey: "allowFrom")
-        } else {
-            telegram["allowFrom"] = allow
-        }
+        self.setPatchList(&telegram, key: "allowFrom", values: allow)
+        self.setPatchString(&telegram, key: "proxy", value: self.telegramProxy)
+        self.setPatchString(&telegram, key: "webhookUrl", value: self.telegramWebhookUrl)
+        self.setPatchString(&telegram, key: "webhookSecret", value: self.telegramWebhookSecret)
+        self.setPatchString(&telegram, key: "webhookPath", value: self.telegramWebhookPath)
 
-        self.setOptionalString(&telegram, key: "proxy", value: self.telegramProxy)
-        self.setOptionalString(&telegram, key: "webhookUrl", value: self.telegramWebhookUrl)
-        self.setOptionalString(&telegram, key: "webhookSecret", value: self.telegramWebhookSecret)
-        self.setOptionalString(&telegram, key: "webhookPath", value: self.telegramWebhookPath)
-
-        self.setSection("telegram", payload: telegram)
-        await self.persistConfig()
+        await self.persistChannelPatch("telegram", payload: telegram)
     }
 
     func saveDiscordConfig() async {
@@ -192,9 +219,9 @@ extension ConnectionsStore {
             await self.loadConfig()
         }
 
-        let discord = self.buildDiscordConfig()
-        self.setSection("discord", payload: discord)
-        await self.persistConfig()
+        let base = self.channelConfigRoot(for: "discord")
+        let discord = self.buildDiscordPatch(base: base)
+        await self.persistChannelPatch("discord", payload: discord)
     }
 
     func saveSignalConfig() async {
@@ -205,42 +232,23 @@ extension ConnectionsStore {
             await self.loadConfig()
         }
 
-        var signal: [String: Any] = (self.configRoot["signal"] as? [String: Any]) ?? [:]
-        if self.signalEnabled {
-            signal.removeValue(forKey: "enabled")
-        } else {
-            signal["enabled"] = false
-        }
-
-        self.setOptionalString(&signal, key: "account", value: self.signalAccount)
-        self.setOptionalString(&signal, key: "httpUrl", value: self.signalHttpUrl)
-        self.setOptionalString(&signal, key: "httpHost", value: self.signalHttpHost)
-        self.setOptionalNumber(&signal, key: "httpPort", value: self.signalHttpPort)
-        self.setOptionalString(&signal, key: "cliPath", value: self.signalCliPath)
-
-        if self.signalAutoStart {
-            signal.removeValue(forKey: "autoStart")
-        } else {
-            signal["autoStart"] = false
-        }
-
-        self.setOptionalString(&signal, key: "receiveMode", value: self.signalReceiveMode)
-
-        self.setOptionalBool(&signal, key: "ignoreAttachments", value: self.signalIgnoreAttachments)
-        self.setOptionalBool(&signal, key: "ignoreStories", value: self.signalIgnoreStories)
-        self.setOptionalBool(&signal, key: "sendReadReceipts", value: self.signalSendReadReceipts)
-
+        var signal: [String: Any] = [:]
+        self.setPatchBool(&signal, key: "enabled", value: self.signalEnabled, defaultValue: true)
+        self.setPatchString(&signal, key: "account", value: self.signalAccount)
+        self.setPatchString(&signal, key: "httpUrl", value: self.signalHttpUrl)
+        self.setPatchString(&signal, key: "httpHost", value: self.signalHttpHost)
+        self.setPatchNumber(&signal, key: "httpPort", value: self.signalHttpPort)
+        self.setPatchString(&signal, key: "cliPath", value: self.signalCliPath)
+        self.setPatchBool(&signal, key: "autoStart", value: self.signalAutoStart, defaultValue: true)
+        self.setPatchString(&signal, key: "receiveMode", value: self.signalReceiveMode)
+        self.setPatchBool(&signal, key: "ignoreAttachments", value: self.signalIgnoreAttachments, defaultValue: false)
+        self.setPatchBool(&signal, key: "ignoreStories", value: self.signalIgnoreStories, defaultValue: false)
+        self.setPatchBool(&signal, key: "sendReadReceipts", value: self.signalSendReadReceipts, defaultValue: false)
         let allow = self.splitCsv(self.signalAllowFrom)
-        if allow.isEmpty {
-            signal.removeValue(forKey: "allowFrom")
-        } else {
-            signal["allowFrom"] = allow
-        }
+        self.setPatchList(&signal, key: "allowFrom", values: allow)
+        self.setPatchNumber(&signal, key: "mediaMaxMb", value: self.signalMediaMaxMb)
 
-        self.setOptionalNumber(&signal, key: "mediaMaxMb", value: self.signalMediaMaxMb)
-
-        self.setSection("signal", payload: signal)
-        await self.persistConfig()
+        await self.persistChannelPatch("signal", payload: signal)
     }
 
     func saveIMessageConfig() async {
@@ -251,147 +259,168 @@ extension ConnectionsStore {
             await self.loadConfig()
         }
 
-        var imessage: [String: Any] = (self.configRoot["imessage"] as? [String: Any]) ?? [:]
-        if self.imessageEnabled {
-            imessage.removeValue(forKey: "enabled")
-        } else {
-            imessage["enabled"] = false
-        }
-
-        self.setOptionalString(&imessage, key: "cliPath", value: self.imessageCliPath)
-        self.setOptionalString(&imessage, key: "dbPath", value: self.imessageDbPath)
+        var imessage: [String: Any] = [:]
+        self.setPatchBool(&imessage, key: "enabled", value: self.imessageEnabled, defaultValue: true)
+        self.setPatchString(&imessage, key: "cliPath", value: self.imessageCliPath)
+        self.setPatchString(&imessage, key: "dbPath", value: self.imessageDbPath)
 
         let service = self.trimmed(self.imessageService)
         if service.isEmpty || service == "auto" {
-            imessage.removeValue(forKey: "service")
+            imessage["service"] = NSNull()
         } else {
             imessage["service"] = service
         }
 
-        self.setOptionalString(&imessage, key: "region", value: self.imessageRegion)
+        self.setPatchString(&imessage, key: "region", value: self.imessageRegion)
 
         let allow = self.splitCsv(self.imessageAllowFrom)
-        if allow.isEmpty {
-            imessage.removeValue(forKey: "allowFrom")
-        } else {
-            imessage["allowFrom"] = allow
-        }
+        self.setPatchList(&imessage, key: "allowFrom", values: allow)
 
-        self.setOptionalBool(&imessage, key: "includeAttachments", value: self.imessageIncludeAttachments)
-        self.setOptionalNumber(&imessage, key: "mediaMaxMb", value: self.imessageMediaMaxMb)
+        self.setPatchBool(
+            &imessage,
+            key: "includeAttachments",
+            value: self.imessageIncludeAttachments,
+            defaultValue: false)
+        self.setPatchNumber(&imessage, key: "mediaMaxMb", value: self.imessageMediaMaxMb)
 
-        self.setSection("imessage", payload: imessage)
-        await self.persistConfig()
+        await self.persistChannelPatch("imessage", payload: imessage)
     }
 
-    private func buildDiscordConfig() -> [String: Any] {
-        var discord: [String: Any] = (self.configRoot["discord"] as? [String: Any]) ?? [:]
-        if self.discordEnabled {
-            discord.removeValue(forKey: "enabled")
-        } else {
-            discord["enabled"] = false
+    private func buildDiscordPatch(base: [String: Any]) -> [String: Any] {
+        var discord: [String: Any] = [:]
+        self.setPatchBool(&discord, key: "enabled", value: self.discordEnabled, defaultValue: true)
+        if !self.isDiscordTokenLocked {
+            self.setPatchString(&discord, key: "token", value: self.discordToken)
         }
-        self.setOptionalString(&discord, key: "token", value: self.discordToken)
 
-        if let dm = self.buildDiscordDmConfig(base: discord["dm"] as? [String: Any] ?? [:]) {
+        if let dm = self.buildDiscordDmPatch() {
             discord["dm"] = dm
         } else {
-            discord.removeValue(forKey: "dm")
+            discord["dm"] = NSNull()
         }
 
-        self.setOptionalNumber(&discord, key: "mediaMaxMb", value: self.discordMediaMaxMb)
-        self.setOptionalInt(&discord, key: "historyLimit", value: self.discordHistoryLimit, allowZero: true)
-        self.setOptionalInt(&discord, key: "textChunkLimit", value: self.discordTextChunkLimit, allowZero: false)
+        self.setPatchNumber(&discord, key: "mediaMaxMb", value: self.discordMediaMaxMb)
+        self.setPatchInt(&discord, key: "historyLimit", value: self.discordHistoryLimit, allowZero: true)
+        self.setPatchInt(&discord, key: "textChunkLimit", value: self.discordTextChunkLimit, allowZero: false)
 
         let replyToMode = self.trimmed(self.discordReplyToMode)
-        if replyToMode.isEmpty || replyToMode == "off" {
-            discord.removeValue(forKey: "replyToMode")
-        } else if ["first", "all"].contains(replyToMode) {
-            discord["replyToMode"] = replyToMode
+        if replyToMode.isEmpty || replyToMode == "off" || !["first", "all"].contains(replyToMode) {
+            discord["replyToMode"] = NSNull()
         } else {
-            discord.removeValue(forKey: "replyToMode")
+            discord["replyToMode"] = replyToMode
         }
 
-        if let guilds = self.buildDiscordGuildsConfig() {
+        let baseGuilds = base["guilds"] as? [String: Any] ?? [:]
+        if let guilds = self.buildDiscordGuildsPatch(base: baseGuilds) {
             discord["guilds"] = guilds
         } else {
-            discord.removeValue(forKey: "guilds")
+            discord["guilds"] = NSNull()
         }
 
-        if let actions = self.buildDiscordActionsConfig(base: discord["actions"] as? [String: Any] ?? [:]) {
+        if let actions = self.buildDiscordActionsPatch() {
             discord["actions"] = actions
         } else {
-            discord.removeValue(forKey: "actions")
+            discord["actions"] = NSNull()
         }
 
-        if let slash = self.buildDiscordSlashConfig(base: discord["slashCommand"] as? [String: Any] ?? [:]) {
+        if let slash = self.buildDiscordSlashPatch() {
             discord["slashCommand"] = slash
         } else {
-            discord.removeValue(forKey: "slashCommand")
+            discord["slashCommand"] = NSNull()
         }
 
         return discord
     }
 
-    private func buildDiscordDmConfig(base: [String: Any]) -> [String: Any]? {
-        var dm = base
-        if self.discordDmEnabled {
-            dm.removeValue(forKey: "enabled")
-        } else {
-            dm["enabled"] = false
-        }
+    private func buildDiscordDmPatch() -> [String: Any]? {
+        var dm: [String: Any] = [:]
+        self.setPatchBool(&dm, key: "enabled", value: self.discordDmEnabled, defaultValue: true)
         let allow = self.splitCsv(self.discordAllowFrom)
-        if allow.isEmpty {
-            dm.removeValue(forKey: "allowFrom")
-        } else {
-            dm["allowFrom"] = allow
-        }
-
-        if self.discordGroupEnabled {
-            dm["groupEnabled"] = true
-        } else {
-            dm.removeValue(forKey: "groupEnabled")
-        }
-
+        self.setPatchList(&dm, key: "allowFrom", values: allow)
+        self.setPatchBool(&dm, key: "groupEnabled", value: self.discordGroupEnabled, defaultValue: false)
         let groupChannels = self.splitCsv(self.discordGroupChannels)
-        if groupChannels.isEmpty {
-            dm.removeValue(forKey: "groupChannels")
-        } else {
-            dm["groupChannels"] = groupChannels
-        }
-
+        self.setPatchList(&dm, key: "groupChannels", values: groupChannels)
         return dm.isEmpty ? nil : dm
     }
 
-    private func buildDiscordGuildsConfig() -> [String: Any]? {
-        let guilds: [String: Any] = self.discordGuilds.reduce(into: [:]) { result, entry in
-            let key = self.trimmed(entry.key)
-            guard !key.isEmpty else { return }
-            var payload: [String: Any] = [:]
-            let slug = self.trimmed(entry.slug)
-            if !slug.isEmpty { payload["slug"] = slug }
-            if entry.requireMention { payload["requireMention"] = true }
-            if ["off", "own", "all", "allowlist"].contains(entry.reactionNotifications) {
-                payload["reactionNotifications"] = entry.reactionNotifications
-            }
-            let users = self.splitCsv(entry.users)
-            if !users.isEmpty { payload["users"] = users }
-            let channels: [String: Any] = entry.channels.reduce(into: [:]) { channelsResult, channel in
-                let channelKey = self.trimmed(channel.key)
-                guard !channelKey.isEmpty else { return }
-                var channelPayload: [String: Any] = [:]
-                if !channel.allow { channelPayload["allow"] = false }
-                if channel.requireMention { channelPayload["requireMention"] = true }
-                channelsResult[channelKey] = channelPayload
-            }
-            if !channels.isEmpty { payload["channels"] = channels }
-            result[key] = payload
+    private func buildDiscordGuildsPatch(base: [String: Any]) -> Any? {
+        if self.discordGuilds.isEmpty {
+            return NSNull()
         }
-        return guilds.isEmpty ? nil : guilds
+        var patch: [String: Any] = [:]
+        let baseKeys = Set(base.keys)
+        var formKeys = Set<String>()
+        for entry in self.discordGuilds {
+            let key = self.trimmed(entry.key)
+            guard !key.isEmpty else { continue }
+            formKeys.insert(key)
+            let baseGuild = base[key] as? [String: Any] ?? [:]
+            patch[key] = self.buildDiscordGuildPatch(entry, base: baseGuild)
+        }
+        for key in baseKeys.subtracting(formKeys) {
+            patch[key] = NSNull()
+        }
+        return patch.isEmpty ? NSNull() : patch
     }
 
-    private func buildDiscordActionsConfig(base: [String: Any]) -> [String: Any]? {
-        var actions = base
+    private func buildDiscordGuildPatch(_ entry: DiscordGuildForm, base: [String: Any]) -> [String: Any] {
+        var payload: [String: Any] = [:]
+        let slug = self.trimmed(entry.slug)
+        if slug.isEmpty {
+            payload["slug"] = NSNull()
+        } else {
+            payload["slug"] = slug
+        }
+        if entry.requireMention {
+            payload["requireMention"] = true
+        } else {
+            payload["requireMention"] = NSNull()
+        }
+        if ["off", "all", "allowlist"].contains(entry.reactionNotifications) {
+            payload["reactionNotifications"] = entry.reactionNotifications
+        } else {
+            payload["reactionNotifications"] = NSNull()
+        }
+        let users = self.splitCsv(entry.users)
+        self.setPatchList(&payload, key: "users", values: users)
+
+        let baseChannels = base["channels"] as? [String: Any] ?? [:]
+        if let channels = self.buildDiscordChannelsPatch(base: baseChannels, forms: entry.channels) {
+            payload["channels"] = channels
+        } else {
+            payload["channels"] = NSNull()
+        }
+        return payload
+    }
+
+    private func buildDiscordChannelsPatch(base: [String: Any], forms: [DiscordGuildChannelForm]) -> Any? {
+        if forms.isEmpty {
+            return NSNull()
+        }
+        var patch: [String: Any] = [:]
+        let baseKeys = Set(base.keys)
+        var formKeys = Set<String>()
+        for channel in forms {
+            let channelKey = self.trimmed(channel.key)
+            guard !channelKey.isEmpty else { continue }
+            formKeys.insert(channelKey)
+            var channelPayload: [String: Any] = [:]
+            self.setPatchBool(&channelPayload, key: "allow", value: channel.allow, defaultValue: true)
+            self.setPatchBool(
+                &channelPayload,
+                key: "requireMention",
+                value: channel.requireMention,
+                defaultValue: false)
+            patch[channelKey] = channelPayload
+        }
+        for key in baseKeys.subtracting(formKeys) {
+            patch[key] = NSNull()
+        }
+        return patch.isEmpty ? NSNull() : patch
+    }
+
+    private func buildDiscordActionsPatch() -> [String: Any]? {
+        var actions: [String: Any] = [:]
         self.setAction(&actions, key: "reactions", value: self.discordActionReactions, defaultValue: true)
         self.setAction(&actions, key: "stickers", value: self.discordActionStickers, defaultValue: true)
         self.setAction(&actions, key: "polls", value: self.discordActionPolls, defaultValue: true)
@@ -410,49 +439,41 @@ extension ConnectionsStore {
         return actions.isEmpty ? nil : actions
     }
 
-    private func buildDiscordSlashConfig(base: [String: Any]) -> [String: Any]? {
-        var slash = base
-        if self.discordSlashEnabled {
-            slash["enabled"] = true
-        } else {
-            slash.removeValue(forKey: "enabled")
-        }
-        self.setOptionalString(&slash, key: "name", value: self.discordSlashName)
-        self.setOptionalString(&slash, key: "sessionPrefix", value: self.discordSlashSessionPrefix)
-        if self.discordSlashEphemeral {
-            slash.removeValue(forKey: "ephemeral")
-        } else {
-            slash["ephemeral"] = false
-        }
+    private func buildDiscordSlashPatch() -> [String: Any]? {
+        var slash: [String: Any] = [:]
+        self.setPatchBool(&slash, key: "enabled", value: self.discordSlashEnabled, defaultValue: false)
+        self.setPatchString(&slash, key: "name", value: self.discordSlashName)
+        self.setPatchString(&slash, key: "sessionPrefix", value: self.discordSlashSessionPrefix)
+        self.setPatchBool(&slash, key: "ephemeral", value: self.discordSlashEphemeral, defaultValue: true)
         return slash.isEmpty ? nil : slash
     }
 
-    private func persistConfig() async {
+    private func persistChannelPatch(_ channelId: String, payload: [String: Any]) async {
         do {
+            guard let baseHash = self.configHash else {
+                self.configStatus = "Config hash missing; reload and retry."
+                return
+            }
             let data = try JSONSerialization.data(
-                withJSONObject: self.configRoot,
+                withJSONObject: ["channels": [channelId: payload]],
                 options: [.prettyPrinted, .sortedKeys])
             guard let raw = String(data: data, encoding: .utf8) else {
                 self.configStatus = "Failed to encode config."
                 return
             }
-            let params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
+            let params: [String: AnyCodable] = [
+                "raw": AnyCodable(raw),
+                "baseHash": AnyCodable(baseHash),
+            ]
             _ = try await GatewayConnection.shared.requestRaw(
-                method: .configSet,
+                method: .configPatch,
                 params: params,
                 timeoutMs: 10000)
             self.configStatus = "Saved to ~/.clawdbot/clawdbot.json."
+            await self.loadConfig()
             await self.refresh(probe: true)
         } catch {
             self.configStatus = error.localizedDescription
-        }
-    }
-
-    private func setSection(_ key: String, payload: [String: Any]) {
-        if payload.isEmpty {
-            self.configRoot.removeValue(forKey: key)
-        } else {
-            self.configRoot[key] = payload
         }
     }
 
@@ -492,25 +513,29 @@ extension ConnectionsStore {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func setOptionalString(_ target: inout [String: Any], key: String, value: String) {
+    private func setPatchString(_ target: inout [String: Any], key: String, value: String) {
         let trimmed = self.trimmed(value)
         if trimmed.isEmpty {
-            target.removeValue(forKey: key)
+            target[key] = NSNull()
         } else {
             target[key] = trimmed
         }
     }
 
-    private func setOptionalNumber(_ target: inout [String: Any], key: String, value: String) {
+    private func setPatchNumber(_ target: inout [String: Any], key: String, value: String) {
         let trimmed = self.trimmed(value)
         if trimmed.isEmpty {
-            target.removeValue(forKey: key)
-        } else if let number = Double(trimmed) {
+            target[key] = NSNull()
+            return
+        }
+        if let number = Double(trimmed) {
             target[key] = number
+        } else {
+            target[key] = NSNull()
         }
     }
 
-    private func setOptionalInt(
+    private func setPatchInt(
         _ target: inout [String: Any],
         key: String,
         value: String,
@@ -518,26 +543,39 @@ extension ConnectionsStore {
     {
         let trimmed = self.trimmed(value)
         if trimmed.isEmpty {
-            target.removeValue(forKey: key)
+            target[key] = NSNull()
             return
         }
         guard let number = Int(trimmed) else {
-            target.removeValue(forKey: key)
+            target[key] = NSNull()
             return
         }
         let isValid = allowZero ? number >= 0 : number > 0
         guard isValid else {
-            target.removeValue(forKey: key)
+            target[key] = NSNull()
             return
         }
         target[key] = number
     }
 
-    private func setOptionalBool(_ target: inout [String: Any], key: String, value: Bool) {
-        if value {
-            target[key] = true
+    private func setPatchBool(
+        _ target: inout [String: Any],
+        key: String,
+        value: Bool,
+        defaultValue: Bool)
+    {
+        if value == defaultValue {
+            target[key] = NSNull()
         } else {
-            target.removeValue(forKey: key)
+            target[key] = value
+        }
+    }
+
+    private func setPatchList(_ target: inout [String: Any], key: String, values: [String]) {
+        if values.isEmpty {
+            target[key] = NSNull()
+        } else {
+            target[key] = values
         }
     }
 
@@ -548,7 +586,7 @@ extension ConnectionsStore {
         defaultValue: Bool)
     {
         if value == defaultValue {
-            actions.removeValue(forKey: key)
+            actions[key] = NSNull()
         } else {
             actions[key] = value
         }

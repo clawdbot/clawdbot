@@ -83,7 +83,7 @@ export async function modelsAuthSetupTokenCommand(
   const synced = store.profiles[CLAUDE_CLI_PROFILE_ID];
   if (!synced) {
     throw new Error(
-      `No Claude CLI credentials found after setup-token. Expected auth profile ${CLAUDE_CLI_PROFILE_ID}.`,
+      `No Claude Code CLI credentials found after setup-token. Expected auth profile ${CLAUDE_CLI_PROFILE_ID}.`,
     );
   }
 
@@ -91,12 +91,12 @@ export async function modelsAuthSetupTokenCommand(
     applyAuthProfileConfig(cfg, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "token",
+      mode: "oauth",
     }),
   );
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  runtime.log(`Auth profile: ${CLAUDE_CLI_PROFILE_ID} (anthropic/token)`);
+  runtime.log(`Auth profile: ${CLAUDE_CLI_PROFILE_ID} (anthropic/oauth)`);
 }
 
 export async function modelsAuthPasteTokenCommand(

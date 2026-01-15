@@ -59,11 +59,11 @@ export async function maybeMigrateLegacyGatewayService(
 
   note(
     legacyServices.map((svc) => `- ${svc.label} (${svc.platform}, ${svc.detail})`).join("\n"),
-    "Legacy Clawdis services detected",
+    "Legacy gateway services detected",
   );
 
   const migrate = await prompter.confirmSkipInNonInteractive({
-    message: "Migrate legacy Clawdis services to Clawdbot now?",
+    message: "Migrate legacy gateway services to Clawdbot now?",
     initialValue: true,
   });
   if (!migrate) return;
@@ -89,10 +89,7 @@ export async function maybeMigrateLegacyGatewayService(
   }
 
   const service = resolveGatewayService();
-  const loaded = await service.isLoaded({
-    env: process.env,
-    profile: process.env.CLAWDBOT_PROFILE,
-  });
+  const loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
   if (loaded) {
     note(`Clawdbot ${service.label} already ${service.loadedText}.`, "Gateway");
     return;

@@ -33,9 +33,9 @@ describe("markdownToSlackMrkdwn", () => {
     expect(res).toBe("```\nconst x = 1;\n```");
   });
 
-  it("renders links with URL in parentheses", () => {
+  it("renders links with Slack mrkdwn syntax", () => {
     const res = markdownToSlackMrkdwn("see [docs](https://example.com)");
-    expect(res).toBe("see docs (https://example.com)");
+    expect(res).toBe("see <https://example.com|docs>");
   });
 
   it("does not duplicate bare URLs", () => {
@@ -94,7 +94,7 @@ describe("markdownToSlackMrkdwn", () => {
       "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
     );
     expect(res).toBe(
-      "*Important:* Check the _docs_ at link (https://example.com)\n\n• first\n• second",
+      "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
     );
   });
 });

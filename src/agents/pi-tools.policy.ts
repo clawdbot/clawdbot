@@ -41,24 +41,87 @@ export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolP
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+type ToolPolicyConfig = {
+  allow?: string[];
+  deny?: string[];
+  profile?: string;
+};
+
+function pickToolPolicy(config?: ToolPolicyConfig): SandboxToolPolicy | undefined {
+  if (!config) return undefined;
+  const allow = Array.isArray(config.allow) ? config.allow : undefined;
+  const deny = Array.isArray(config.deny) ? config.deny : undefined;
+  if (!allow && !deny) return undefined;
+  return { allow, deny };
+}
+
+function normalizeProviderKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function resolveProviderToolPolicy(params: {
+  byProvider?: Record<string, ToolPolicyConfig>;
+  modelProvider?: string;
+  modelId?: string;
+}): ToolPolicyConfig | undefined {
+  const provider = params.modelProvider?.trim();
+  if (!provider || !params.byProvider) return undefined;
+
+  const entries = Object.entries(params.byProvider);
+  if (entries.length === 0) return undefined;
+
+  const lookup = new Map<string, ToolPolicyConfig>();
+  for (const [key, value] of entries) {
+    const normalized = normalizeProviderKey(key);
+    if (!normalized) continue;
+    lookup.set(normalized, value);
+  }
+
+  const normalizedProvider = normalizeProviderKey(provider);
+  const rawModelId = params.modelId?.trim().toLowerCase();
+  const fullModelId =
+    rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
+
+  const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
+
+  for (const key of candidates) {
+    const match = lookup.get(key);
+    if (match) return match;
+  }
+  return undefined;
+}
+
 export function resolveEffectiveToolPolicy(params: {
   config?: ClawdbotConfig;
   sessionKey?: string;
+  modelProvider?: string;
+  modelId?: string;
 }) {
   const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   const agentTools = agentConfig?.tools;
-  const hasAgentToolPolicy =
-    Array.isArray(agentTools?.allow) ||
-    Array.isArray(agentTools?.deny) ||
-    typeof agentTools?.profile === "string";
   const globalTools = params.config?.tools;
+
   const profile = agentTools?.profile ?? globalTools?.profile;
+  const providerPolicy = resolveProviderToolPolicy({
+    byProvider: globalTools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const agentProviderPolicy = resolveProviderToolPolicy({
+    byProvider: agentTools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
   return {
     agentId,
-    policy: hasAgentToolPolicy ? agentTools : globalTools,
+    globalPolicy: pickToolPolicy(globalTools),
+    globalProviderPolicy: pickToolPolicy(providerPolicy),
+    agentPolicy: pickToolPolicy(agentTools),
+    agentProviderPolicy: pickToolPolicy(agentProviderPolicy),
     profile,
+    providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
   };
 }
 

@@ -33,6 +33,12 @@ export type PluginUiMetadata = {
   >;
 };
 
+export type ChannelUiMetadata = {
+  id: string;
+  label?: string;
+  description?: string;
+};
+
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
   logging: "Logging",
@@ -95,8 +101,21 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.audio.transcription.timeoutSeconds": "Audio Transcription Timeout (sec)",
   "tools.profile": "Tool Profile",
   "agents.list[].tools.profile": "Agent Tool Profile",
+  "tools.byProvider": "Tool Policy by Provider",
+  "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
+  "tools.web.search.enabled": "Enable Web Search Tool",
+  "tools.web.search.provider": "Web Search Provider",
+  "tools.web.search.apiKey": "Brave Search API Key",
+  "tools.web.search.maxResults": "Web Search Max Results",
+  "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
+  "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
+  "tools.web.fetch.enabled": "Enable Web Fetch Tool",
+  "tools.web.fetch.maxChars": "Web Fetch Max Chars",
+  "tools.web.fetch.timeoutSeconds": "Web Fetch Timeout (sec)",
+  "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
+  "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
@@ -183,6 +202,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.token": "Discord Bot Token",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",
+  "channels.slack.thread.historyScope": "Slack Thread History Scope",
+  "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
   "plugins.enabled": "Enable Plugins",
@@ -211,8 +232,23 @@ const FIELD_HELP: Record<string, string> = {
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+  "tools.web.search.enabled": "Enable the web_search tool (requires Brave API key).",
+  "tools.web.search.provider": 'Search provider (only "brave" supported today).',
+  "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+  "tools.web.search.maxResults": "Default number of results to return (1-10).",
+  "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
+  "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
+  "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
+  "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
+  "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
+  "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
+  "channels.slack.thread.historyScope":
+    'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
+  "channels.slack.thread.inheritParent":
+    "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "auth.cooldowns.billingBackoffHours":
@@ -269,6 +305,20 @@ const FIELD_HELP: Record<string, string> = {
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
+  "channels.telegram.configWrites":
+    "Allow Telegram to write config in response to channel events/commands (default: true).",
+  "channels.slack.configWrites":
+    "Allow Slack to write config in response to channel events/commands (default: true).",
+  "channels.discord.configWrites":
+    "Allow Discord to write config in response to channel events/commands (default: true).",
+  "channels.whatsapp.configWrites":
+    "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+  "channels.signal.configWrites":
+    "Allow Signal to write config in response to channel events/commands (default: true).",
+  "channels.imessage.configWrites":
+    "Allow iMessage to write config in response to channel events/commands (default: true).",
+  "channels.msteams.configWrites":
+    "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
@@ -399,6 +449,24 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
   return next;
 }
 
+function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]): ConfigUiHints {
+  const next: ConfigUiHints = { ...hints };
+  for (const channel of channels) {
+    const id = channel.id.trim();
+    if (!id) continue;
+    const basePath = `channels.${id}`;
+    const current = next[basePath] ?? {};
+    const label = channel.label?.trim();
+    const help = channel.description?.trim();
+    next[basePath] = {
+      ...current,
+      ...(label ? { label } : {}),
+      ...(help ? { help } : {}),
+    };
+  }
+  return next;
+}
+
 let cachedBase: ConfigSchemaResponse | null = null;
 
 function buildBaseConfigSchema(): ConfigSchemaResponse {
@@ -419,11 +487,17 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: { plugins?: PluginUiMetadata[] }): ConfigSchemaResponse {
+export function buildConfigSchema(params?: {
+  plugins?: PluginUiMetadata[];
+  channels?: ChannelUiMetadata[];
+}): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
   const plugins = params?.plugins ?? [];
-  if (plugins.length === 0) return base;
-  const merged = applySensitiveHints(applyPluginHints(base.uiHints, plugins));
+  const channels = params?.channels ?? [];
+  if (plugins.length === 0 && channels.length === 0) return base;
+  const merged = applySensitiveHints(
+    applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
+  );
   return {
     ...base,
     uiHints: merged,

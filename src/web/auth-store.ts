@@ -24,6 +24,15 @@ export function resolveWebCredsBackupPath(authDir: string): string {
   return path.join(authDir, "creds.json.bak");
 }
 
+export function hasWebCredsSync(authDir: string): boolean {
+  try {
+    const stats = fsSync.statSync(resolveWebCredsPath(authDir));
+    return stats.isFile() && stats.size > 1;
+  } catch {
+    return false;
+  }
+}
+
 function readCredsJsonRaw(filePath: string): string | null {
   try {
     if (!fsSync.existsSync(filePath)) return null;

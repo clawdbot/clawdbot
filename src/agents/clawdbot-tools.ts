@@ -17,6 +17,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 
 export function createClawdbotTools(options?: {
   browserControlUrl?: string;
@@ -55,6 +56,14 @@ export function createClawdbotTools(options?: {
   const memoryGetTool = createMemoryGetTool({
     config: options?.config,
     agentSessionKey: options?.agentSessionKey,
+  });
+  const webSearchTool = createWebSearchTool({
+    config: options?.config,
+    sandboxed: options?.sandboxed,
+  });
+  const webFetchTool = createWebFetchTool({
+    config: options?.config,
+    sandboxed: options?.sandboxed,
   });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
@@ -103,6 +112,8 @@ export function createClawdbotTools(options?: {
       config: options?.config,
     }),
     ...(memorySearchTool && memoryGetTool ? [memorySearchTool, memoryGetTool] : []),
+    ...(webSearchTool ? [webSearchTool] : []),
+    ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
   ];
 

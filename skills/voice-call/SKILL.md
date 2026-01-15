@@ -6,7 +6,7 @@ metadata: {"clawdbot":{"emoji":"📞","skillKey":"voice-call","requires":{"confi
 
 # Voice Call
 
-Use the voice-call plugin to start or inspect calls (Twilio, Telnyx, or mock).
+Use the voice-call plugin to start or inspect calls (Twilio, Telnyx, Plivo, or mock).
 
 ## CLI
 
@@ -31,4 +31,5 @@ Notes:
 - Plugin config lives under `plugins.entries.voice-call.config`.
 - Twilio config: `provider: "twilio"` + `twilio.accountSid/authToken` + `fromNumber`.
 - Telnyx config: `provider: "telnyx"` + `telnyx.apiKey/connectionId` + `fromNumber`.
+- Plivo config: `provider: "plivo"` + `plivo.authId/authToken` + `fromNumber`.
 - Dev fallback: `provider: "mock"` (no network).

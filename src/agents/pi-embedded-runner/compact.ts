@@ -113,6 +113,7 @@ export async function compactEmbeddedPiSession(params: {
         const apiKeyInfo = await getApiKeyForModel({
           model,
           cfg: params.config,
+          agentDir,
         });
 
         if (model.provider === "github-copilot") {

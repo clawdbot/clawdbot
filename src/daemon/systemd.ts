@@ -238,6 +238,8 @@ export async function installSystemdService({
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
 
+  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  stdout.write("\n");
   stdout.write(`${formatLine("Installed systemd service", unitPath)}\n`);
   return { unitPath };
 }

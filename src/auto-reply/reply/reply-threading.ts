@@ -1,5 +1,5 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";

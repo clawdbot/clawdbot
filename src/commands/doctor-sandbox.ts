@@ -11,7 +11,6 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { replaceModernName } from "./doctor-legacy-config.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type SandboxScriptInfo = {
@@ -164,19 +163,6 @@ async function handleMissingSandboxImage(
   }
 
   if (built) return;
-
-  const legacyImage = replaceModernName(params.image);
-  if (!legacyImage || legacyImage === params.image) return;
-  const legacyExists = await dockerImageExists(legacyImage);
-  if (!legacyExists) return;
-
-  const fallback = await prompter.confirmSkipInNonInteractive({
-    message: `Switch config to legacy image ${legacyImage}?`,
-    initialValue: false,
-  });
-  if (!fallback) return;
-
-  params.updateConfig(legacyImage);
 }
 
 export async function maybeRepairSandboxImages(

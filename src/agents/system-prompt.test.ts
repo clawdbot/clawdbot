@@ -34,6 +34,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
+  it("includes a CLI quick reference section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+    });
+
+    expect(prompt).toContain("## Clawdbot CLI Quick Reference");
+    expect(prompt).toContain("clawdbot daemon restart");
+    expect(prompt).toContain("Do not invent commands");
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
@@ -69,7 +79,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "Time: assume UTC unless stated. User TZ=America/Chicago. Current user time (converted)=Monday 2026-01-05 15:26.",
+      "Time: assume UTC unless stated. User time zone: America/Chicago. Current user time (local, 24-hour): Monday 2026-01-05 15:26 (America/Chicago).",
     );
   });
 

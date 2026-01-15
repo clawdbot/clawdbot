@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { isAbortTrigger } from "./abort.js";
+import { isAbortTrigger, tryFastAbortFromMessage } from "./abort.js";
 import { initSessionState } from "./session.js";
 
 describe("abort detection", () => {
@@ -35,8 +35,30 @@ describe("abort detection", () => {
     expect(isAbortTrigger("abort")).toBe(true);
     expect(isAbortTrigger("wait")).toBe(true);
     expect(isAbortTrigger("exit")).toBe(true);
+    expect(isAbortTrigger("interrupt")).toBe(true);
     expect(isAbortTrigger("hello")).toBe(false);
     // /stop is NOT matched by isAbortTrigger - it's handled separately
     expect(isAbortTrigger("/stop")).toBe(false);
+  });
+
+  it("fast-aborts even when text commands are disabled", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-abort-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath }, commands: { text: false } } as ClawdbotConfig;
+
+    const result = await tryFastAbortFromMessage({
+      ctx: {
+        CommandBody: "/stop",
+        RawBody: "/stop",
+        SessionKey: "telegram:123",
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:123",
+        To: "telegram:123",
+      },
+      cfg,
+    });
+
+    expect(result.handled).toBe(true);
   });
 });

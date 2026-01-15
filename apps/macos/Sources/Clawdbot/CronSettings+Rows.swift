@@ -69,8 +69,8 @@ extension CronSettings {
             Spacer()
             HStack(spacing: 8) {
                 Toggle("Enabled", isOn: Binding(
-                    get: { job.enabled },
-                    set: { enabled in Task { await self.store.setJobEnabled(id: job.id, enabled: enabled) } }))
+                        get: { job.enabled },
+                        set: { enabled in Task { await self.store.setJobEnabled(id: job.id, enabled: enabled) } }))
                     .toggleStyle(.switch)
                     .labelsHidden()
                 Button("Run") { Task { await self.store.runJob(id: job.id, force: true) } }

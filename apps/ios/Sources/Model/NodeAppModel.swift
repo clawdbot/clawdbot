@@ -109,7 +109,7 @@ final class NodeAppModel {
         let host = UserDefaults.standard.string(forKey: "node.displayName") ?? UIDevice.current.name
         let instanceId = (UserDefaults.standard.string(forKey: "node.instanceId") ?? "ios-node").lowercased()
         let contextJSON = ClawdbotCanvasA2UIAction.compactJSON(userAction["context"])
-        let sessionKey = "main"
+        let sessionKey = self.mainSessionKey
 
         let messageContext = ClawdbotCanvasA2UIAction.AgentMessageContext(
             actionName: name,
@@ -232,11 +232,14 @@ final class NodeAppModel {
                     try await self.bridge.connect(
                         endpoint: endpoint,
                         hello: hello,
-                        onConnected: { [weak self] serverName in
+                        onConnected: { [weak self] serverName, mainSessionKey in
                             guard let self else { return }
                             await MainActor.run {
                                 self.bridgeStatusText = "Connected"
                                 self.bridgeServerName = serverName
+                            }
+                            await MainActor.run {
+                                self.applyMainSessionKey(mainSessionKey)
                             }
                             if let addr = await self.bridge.currentRemoteAddress() {
                                 await MainActor.run {
@@ -286,7 +289,10 @@ final class NodeAppModel {
                 self.bridgeRemoteAddress = nil
                 self.connectedBridgeID = nil
                 self.seamColorHex = nil
-                self.mainSessionKey = "main"
+                if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
+                    self.mainSessionKey = "main"
+                    self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                }
                 self.showLocalCanvasOnDisconnect()
             }
         }
@@ -303,8 +309,21 @@ final class NodeAppModel {
         self.bridgeRemoteAddress = nil
         self.connectedBridgeID = nil
         self.seamColorHex = nil
-        self.mainSessionKey = "main"
+        if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
+            self.mainSessionKey = "main"
+            self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        }
         self.showLocalCanvasOnDisconnect()
+    }
+
+    private func applyMainSessionKey(_ key: String?) {
+        let trimmed = (key ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let current = self.mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if SessionKey.isCanonicalMainSessionKey(current) { return }
+        if trimmed == current { return }
+        self.mainSessionKey = trimmed
+        self.talkMode.updateMainSessionKey(trimmed)
     }
 
     var seamColor: Color {
@@ -335,7 +354,10 @@ final class NodeAppModel {
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             await MainActor.run {
                 self.seamColorHex = raw.isEmpty ? nil : raw
-                self.mainSessionKey = mainKey
+                if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
+                    self.mainSessionKey = mainKey
+                    self.talkMode.updateMainSessionKey(mainKey)
+                }
             }
         } catch {
             // ignore

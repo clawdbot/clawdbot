@@ -3,7 +3,8 @@ import express from "express";
 
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
-import { resolveBrowserConfig, shouldStartLocalBrowserServer } from "./config.js";
+import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 
@@ -50,6 +51,16 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     resolved,
     profiles: new Map(),
   };
+
+  // If any profile uses the Chrome extension relay, start the local relay server eagerly
+  // so the extension can connect before the first browser action.
+  for (const name of Object.keys(resolved.profiles)) {
+    const profile = resolveProfile(resolved, name);
+    if (!profile || profile.driver !== "extension") continue;
+    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
+      logServer.warn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
+    });
+  }
 
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/`);
   return state;

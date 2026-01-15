@@ -52,8 +52,8 @@ export function loadSessionStore(storePath: string): Record<string, SessionEntry
     if (cached && isSessionStoreCacheValid(cached)) {
       const currentMtimeMs = getFileMtimeMs(storePath);
       if (currentMtimeMs === cached.mtimeMs) {
-        // Return a shallow copy to prevent external mutations affecting cache
-        return { ...cached.store };
+        // Return a deep copy to prevent external mutations affecting cache
+        return structuredClone(cached.store);
       }
       invalidateSessionStoreCache(storePath);
     }
@@ -90,14 +90,14 @@ export function loadSessionStore(storePath: string): Record<string, SessionEntry
   // Cache the result if caching is enabled
   if (isSessionStoreCacheEnabled()) {
     SESSION_STORE_CACHE.set(storePath, {
-      store: { ...store }, // Store a copy to prevent external mutations
+      store: structuredClone(store), // Store a copy to prevent external mutations
       loadedAt: Date.now(),
       storePath,
       mtimeMs,
     });
   }
 
-  return store;
+  return structuredClone(store);
 }
 
 async function saveSessionStoreUnlocked(

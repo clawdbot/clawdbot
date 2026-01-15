@@ -78,7 +78,7 @@ class NodeRuntime(context: Context) {
           payloadJson =
             buildJsonObject {
               put("message", JsonPrimitive(command))
-              put("sessionKey", JsonPrimitive(mainSessionKey.value))
+              put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
               put("thinking", JsonPrimitive(chatThinkingLevel.value))
               put("deliver", JsonPrimitive(false))
             }.toString(),
@@ -142,12 +142,13 @@ class NodeRuntime(context: Context) {
   private val session =
     BridgeSession(
       scope = scope,
-      onConnected = { name, remote ->
+      onConnected = { name, remote, mainSessionKey ->
         _statusText.value = "Connected"
         _serverName.value = name
         _remoteAddress.value = remote
         _isConnected.value = true
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+        applyMainSessionKey(mainSessionKey)
         scope.launch { refreshBrandingFromGateway() }
         scope.launch { refreshWakeWordsFromGateway() }
         maybeNavigateToA2uiOnConnect()
@@ -172,9 +173,29 @@ class NodeRuntime(context: Context) {
     _remoteAddress.value = null
     _isConnected.value = false
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-    _mainSessionKey.value = "main"
+    if (!isCanonicalMainSessionKey(_mainSessionKey.value)) {
+      _mainSessionKey.value = "main"
+    }
+    val mainKey = resolveMainSessionKey()
+    talkMode.setMainSessionKey(mainKey)
+    chat.applyMainSessionKey(mainKey)
     chat.onDisconnected(message)
     showLocalCanvasOnDisconnect()
+  }
+
+  private fun applyMainSessionKey(candidate: String?) {
+    val trimmed = candidate?.trim().orEmpty()
+    if (trimmed.isEmpty()) return
+    if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
+    if (_mainSessionKey.value == trimmed) return
+    _mainSessionKey.value = trimmed
+    talkMode.setMainSessionKey(trimmed)
+    chat.applyMainSessionKey(trimmed)
+  }
+
+  private fun resolveMainSessionKey(): String {
+    val trimmed = _mainSessionKey.value.trim()
+    return if (trimmed.isEmpty()) "main" else trimmed
   }
 
   private fun maybeNavigateToA2uiOnConnect() {
@@ -559,7 +580,7 @@ class NodeRuntime(context: Context) {
         (userActionObj["sourceComponentId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "-" }
       val contextJson = (userActionObj["context"] as? JsonObject)?.toString()
 
-      val sessionKey = "main"
+      val sessionKey = resolveMainSessionKey()
       val message =
         ClawdbotCanvasA2UIAction.formatAgentMessage(
           actionName = name,
@@ -607,8 +628,9 @@ class NodeRuntime(context: Context) {
     }
   }
 
-  fun loadChat(sessionKey: String = "main") {
-    chat.load(sessionKey)
+  fun loadChat(sessionKey: String) {
+    val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
+    chat.load(key)
   }
 
   fun refreshChat() {
@@ -701,7 +723,7 @@ class NodeRuntime(context: Context) {
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
       val sessionCfg = config?.get("session").asObjectOrNull()
       val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
-      _mainSessionKey.value = mainKey
+      applyMainSessionKey(mainKey)
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB

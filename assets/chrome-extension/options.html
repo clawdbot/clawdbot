@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawdbot Browser Relay</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --accent: #ff5a36;
+        --panel: color-mix(in oklab, canvas 92%, canvasText 8%);
+        --border: color-mix(in oklab, canvasText 18%, transparent);
+        --muted: color-mix(in oklab, canvasText 70%, transparent);
+        --shadow: 0 10px 30px color-mix(in oklab, canvasText 18%, transparent);
+        font-family: ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Rounded",
+          "SF Pro Display", "Segoe UI", sans-serif;
+        line-height: 1.4;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(1000px 500px at 10% 0%, color-mix(in oklab, var(--accent) 30%, transparent), transparent 70%),
+          radial-gradient(900px 450px at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 75%),
+          canvas;
+        color: canvasText;
+      }
+      .wrap {
+        max-width: 820px;
+        margin: 36px auto;
+        padding: 0 24px 48px 24px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .logo {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        background: color-mix(in oklab, var(--accent) 18%, transparent);
+        border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+        box-shadow: var(--shadow);
+        display: grid;
+        place-items: center;
+      }
+      .logo img {
+        width: 28px;
+        height: 28px;
+        image-rendering: pixelated;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      .subtitle {
+        margin: 2px 0 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: var(--shadow);
+      }
+      .card h2 {
+        margin: 0 0 10px 0;
+        font-size: 14px;
+        letter-spacing: 0.01em;
+      }
+      .card p {
+        margin: 8px 0 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      input {
+        width: 160px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: color-mix(in oklab, canvas 92%, canvasText 8%);
+        color: canvasText;
+        outline: none;
+      }
+      input:focus {
+        border-color: color-mix(in oklab, var(--accent) 70%, transparent);
+        box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 20%, transparent);
+      }
+      button {
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid color-mix(in oklab, var(--accent) 55%, transparent);
+        background: linear-gradient(
+          180deg,
+          color-mix(in oklab, var(--accent) 80%, white 20%),
+          var(--accent)
+        );
+        color: white;
+        font-weight: 650;
+        letter-spacing: 0.01em;
+        cursor: pointer;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      .hint {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      code {
+        font-family: ui-monospace, Menlo, Monaco, Consolas, "SF Mono", monospace;
+        font-size: 12px;
+      }
+      a {
+        color: color-mix(in oklab, var(--accent) 85%, canvasText 15%);
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: color-mix(in oklab, var(--accent) 70%, canvasText 30%);
+        min-height: 16px;
+      }
+      .status[data-kind='ok'] {
+        color: color-mix(in oklab, #16a34a 75%, canvasText 25%);
+      }
+      .status[data-kind='error'] {
+        color: color-mix(in oklab, #ef4444 75%, canvasText 25%);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="logo" aria-hidden="true">
+          <img src="icons/icon128.png" alt="" />
+        </div>
+        <div>
+          <h1>Clawdbot Browser Relay</h1>
+          <p class="subtitle">Click the toolbar button on a tab to attach / detach.</p>
+        </div>
+      </header>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Getting started</h2>
+          <p>
+            If you see a red <code>!</code> badge on the extension icon, the relay server is not reachable.
+            Start Clawdbot’s browser relay on this machine (Gateway or <code>clawdbot browser serve</code>),
+            then click the toolbar button again.
+          </p>
+          <p>
+            Full guide (install, remote Gateway, security): <a href="https://docs.clawd.bot/tools/chrome-extension" target="_blank" rel="noreferrer">docs.clawd.bot/tools/chrome-extension</a>
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Relay port</h2>
+          <label for="port">Port</label>
+          <div class="row">
+            <input id="port" inputmode="numeric" pattern="[0-9]*" />
+            <button id="save" type="button">Save</button>
+          </div>
+          <div class="hint">
+            Default: <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
+            Only change this if your Clawdbot profile uses a different <code>cdpUrl</code> port.
+          </div>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+
+      <script type="module" src="options.js"></script>
+    </div>
+  </body>
+</html>

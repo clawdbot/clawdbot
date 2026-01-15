@@ -53,6 +53,13 @@ final class TalkModeManager: NSObject {
         self.bridge = bridge
     }
 
+    func updateMainSessionKey(_ sessionKey: String?) {
+        let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) { return }
+        self.mainSessionKey = trimmed
+    }
+
     func setEnabled(_ enabled: Bool) {
         self.isEnabled = enabled
         if enabled {
@@ -649,7 +656,10 @@ final class TalkModeManager: NSObject {
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]
             let session = config["session"] as? [String: Any]
-            self.mainSessionKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
+            let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
+            if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
+                self.mainSessionKey = mainKey
+            }
             self.defaultVoiceId = (talk?["voiceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let aliases = talk?["voiceAliases"] as? [String: Any] {
                 var resolved: [String: String] = [:]

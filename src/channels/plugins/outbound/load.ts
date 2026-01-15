@@ -1,4 +1,6 @@
 import type { ChannelId, ChannelOutboundAdapter } from "../types.js";
+import type { ChatChannelId } from "../../registry.js";
+import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 
 type OutboundLoader = () => Promise<ChannelOutboundAdapter>;
 
@@ -7,7 +9,7 @@ type OutboundLoader = () => Promise<ChannelOutboundAdapter>;
 // The full channel plugins (src/channels/plugins/*.ts) pull in status,
 // onboarding, gateway monitors, etc. Outbound delivery only needs chunking +
 // send primitives, so we keep a dedicated, lightweight loader here.
-const LOADERS: Record<ChannelId, OutboundLoader> = {
+const LOADERS: Record<ChatChannelId, OutboundLoader> = {
   telegram: async () => (await import("./telegram.js")).telegramOutbound,
   whatsapp: async () => (await import("./whatsapp.js")).whatsappOutbound,
   discord: async () => (await import("./discord.js")).discordOutbound,
@@ -24,9 +26,16 @@ export async function loadChannelOutboundAdapter(
 ): Promise<ChannelOutboundAdapter | undefined> {
   const cached = cache.get(id);
   if (cached) return cached;
-  const loader = LOADERS[id];
+  const registry = getActivePluginRegistry();
+  const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
+  const outbound = pluginEntry?.plugin.outbound;
+  if (outbound) {
+    cache.set(id, outbound);
+    return outbound;
+  }
+  const loader = LOADERS[id as ChatChannelId];
   if (!loader) return undefined;
-  const outbound = await loader();
-  cache.set(id, outbound);
-  return outbound;
+  const loaded = await loader();
+  cache.set(id, loaded);
+  return loaded;
 }

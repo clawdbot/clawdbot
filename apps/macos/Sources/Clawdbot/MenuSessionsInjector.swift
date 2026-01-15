@@ -103,6 +103,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
 extension MenuSessionsInjector {
     // MARK: - Injection
+    private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
 
     private func inject(into menu: NSMenu) {
         // Remove any previous injected items.
@@ -120,13 +121,15 @@ extension MenuSessionsInjector {
 
         if let snapshot = self.cachedSnapshot {
             let now = Date()
+            let mainKey = self.mainSessionKey
             let rows = snapshot.rows.filter { row in
-                if row.key == "main" { return true }
+                if row.key == "main", mainKey != "main" { return false }
+                if row.key == mainKey { return true }
                 guard let updatedAt = row.updatedAt else { return false }
                 return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
             }.sorted { lhs, rhs in
-                if lhs.key == "main" { return true }
-                if rhs.key == "main" { return false }
+                if lhs.key == mainKey { return true }
+                if rhs.key == mainKey { return false }
                 return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
             }
 
@@ -135,8 +138,8 @@ extension MenuSessionsInjector {
             headerItem.isEnabled = false
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
-                    count: rows.count,
-                    statusText: isConnected ? nil : self.controlChannelStatusText(for: channelState))),
+                                    count: rows.count,
+                                    statusText: isConnected ? nil : self.controlChannelStatusText(for: channelState))),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
@@ -172,8 +175,8 @@ extension MenuSessionsInjector {
                 : self.controlChannelStatusText(for: channelState)
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
-                    count: 0,
-                    statusText: statusText)),
+                                    count: 0,
+                                    statusText: statusText)),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
@@ -296,7 +299,7 @@ extension MenuSessionsInjector {
         headerItem.isEnabled = false
         headerItem.view = self.makeHostedView(
             rootView: AnyView(MenuUsageHeaderView(
-                count: rows.count)),
+                                count: rows.count)),
             width: width,
             highlighted: false)
         menu.insertItem(headerItem, at: cursor)
@@ -469,11 +472,11 @@ extension MenuSessionsInjector {
         item.tag = self.tag
         item.isEnabled = false
         let view = AnyView(SessionMenuPreviewView(
-            sessionKey: sessionKey,
-            width: width,
-            maxItems: 10,
-            maxLines: maxLines,
-            title: title))
+                            sessionKey: sessionKey,
+                            width: width,
+                            maxItems: 10,
+                            maxLines: maxLines,
+                            title: title))
         item.view = self.makeHostedView(rootView: view, width: width, highlighted: false)
         return item
     }
@@ -593,10 +596,10 @@ extension MenuSessionsInjector {
         let width = self.submenuWidth()
 
         menu.addItem(self.makeSessionPreviewItem(
-            sessionKey: row.key,
-            title: "Recent messages (last 10)",
-            width: width,
-            maxLines: 3))
+                        sessionKey: row.key,
+                        title: "Recent messages (last 10)",
+                        width: width,
+                        maxLines: 3))
 
         let morePreview = NSMenuItem(title: "More preview…", action: nil, keyEquivalent: "")
         morePreview.submenu = self.buildPreviewSubmenu(sessionKey: row.key, width: width)
@@ -645,7 +648,7 @@ extension MenuSessionsInjector {
         compact.representedObject = row.key
         menu.addItem(compact)
 
-        if row.key != "main", row.key != "global" {
+        if row.key != self.mainSessionKey, row.key != "global" {
             let del = NSMenuItem(title: "Delete Session", action: #selector(self.deleteSession(_:)), keyEquivalent: "")
             del.target = self
             del.representedObject = row.key
@@ -700,10 +703,10 @@ extension MenuSessionsInjector {
     private func buildPreviewSubmenu(sessionKey: String, width: CGFloat) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(self.makeSessionPreviewItem(
-            sessionKey: sessionKey,
-            title: "Recent messages (expanded)",
-            width: width,
-            maxLines: 8))
+                        sessionKey: sessionKey,
+                        title: "Recent messages (expanded)",
+                        width: width,
+                        maxLines: 8))
         return menu
     }
 
@@ -760,9 +763,9 @@ extension MenuSessionsInjector {
            !commands.isEmpty
         {
             menu.addItem(self.makeNodeMultilineItem(
-                label: "Commands",
-                value: commands.joined(separator: ", "),
-                width: width))
+                            label: "Commands",
+                            value: commands.joined(separator: ", "),
+                            width: width))
         }
 
         return menu
@@ -852,9 +855,9 @@ extension MenuSessionsInjector {
         guard let key = sender.representedObject as? String else { return }
         Task { @MainActor in
             guard SessionActions.confirmDestructiveAction(
-                title: "Reset session?",
-                message: "Starts a new session id for “\(key)”.",
-                action: "Reset")
+                    title: "Reset session?",
+                    message: "Starts a new session id for “\(key)”.",
+                    action: "Reset")
             else { return }
 
             do {
@@ -871,9 +874,9 @@ extension MenuSessionsInjector {
         guard let key = sender.representedObject as? String else { return }
         Task { @MainActor in
             guard SessionActions.confirmDestructiveAction(
-                title: "Compact session log?",
-                message: "Keeps the last 400 lines; archives the old file.",
-                action: "Compact")
+                    title: "Compact session log?",
+                    message: "Keeps the last 400 lines; archives the old file.",
+                    action: "Compact")
             else { return }
 
             do {
@@ -890,9 +893,9 @@ extension MenuSessionsInjector {
         guard let key = sender.representedObject as? String else { return }
         Task { @MainActor in
             guard SessionActions.confirmDestructiveAction(
-                title: "Delete session?",
-                message: "Deletes the “\(key)” entry and archives its transcript.",
-                action: "Delete")
+                    title: "Delete session?",
+                    message: "Deletes the “\(key)” entry and archives its transcript.",
+                    action: "Delete")
             else { return }
 
             do {

@@ -19,7 +19,7 @@ class SessionFiltersTest {
         ChatSessionEntry(key = "recent-2", updatedAtMs = recent2),
       )
 
-    val result = resolveSessionChoices("main", sessions, nowMs = now).map { it.key }
+    val result = resolveSessionChoices("main", sessions, mainSessionKey = "main", nowMs = now).map { it.key }
     assertEquals(listOf("main", "recent-1", "recent-2"), result)
   }
 
@@ -29,7 +29,7 @@ class SessionFiltersTest {
     val recent = now - 10 * 60 * 1000L
     val sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = recent))
 
-    val result = resolveSessionChoices("custom", sessions, nowMs = now).map { it.key }
+    val result = resolveSessionChoices("custom", sessions, mainSessionKey = "main", nowMs = now).map { it.key }
     assertEquals(listOf("main", "custom"), result)
   }
 }

@@ -23,7 +23,10 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   if (!peerId) return null;
   const sessionKey = ctx.SessionKey?.trim() ?? "";
   const accountId = ctx.AccountId?.trim() ?? "";
-  const threadId = typeof ctx.MessageThreadId === "number" ? String(ctx.MessageThreadId) : "";
+  const threadId =
+    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
+      ? String(ctx.MessageThreadId)
+      : "";
   return [provider, accountId, sessionKey, peerId, threadId, messageId].filter(Boolean).join("|");
 }
 

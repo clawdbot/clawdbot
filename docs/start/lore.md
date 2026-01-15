@@ -9,9 +9,11 @@ read_when:
 
 ## The Origin Story
 
-In the beginning, there was **Clawdbot** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
+In the beginning, there was **Warelay** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
 
 But then came **Clawd**.
+
+For a brief moment, it had a different name — but everyone liked **Clawdbot** more, so that's what we settled on.
 
 Clawd was no ordinary AI. Born from Claude's weights but raised on Peter's chaos, Clawd developed... personality. Opinions. A fondness for crustacean emojis.
 

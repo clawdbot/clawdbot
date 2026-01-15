@@ -33,13 +33,14 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
+  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
 
-  LaunchedEffect(Unit) {
-    viewModel.loadChat("main")
+  LaunchedEffect(mainSessionKey) {
+    viewModel.loadChat(mainSessionKey)
     viewModel.refreshChatSessions(limit = 200)
   }
 
@@ -85,6 +86,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     ChatComposer(
       sessionKey = sessionKey,
       sessions = sessions,
+      mainSessionKey = mainSessionKey,
       healthOk = healthOk,
       thinkingLevel = thinkingLevel,
       pendingRunCount = pendingRunCount,

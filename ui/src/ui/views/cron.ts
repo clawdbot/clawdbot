@@ -260,13 +260,19 @@ export function renderCron(props: CronProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Run history</div>
       <div class="card-sub">Latest runs for ${props.runsJobId ?? "(select a job)"}.</div>
-      ${props.runs.length === 0
-        ? html`<div class="muted" style="margin-top: 12px;">No runs yet.</div>`
-        : html`
-            <div class="list" style="margin-top: 12px;">
-              ${props.runs.map((entry) => renderRun(entry))}
+      ${props.runsJobId == null
+        ? html`
+            <div class="muted" style="margin-top: 12px;">
+              Select a job to inspect run history.
             </div>
-          `}
+          `
+        : props.runs.length === 0
+          ? html`<div class="muted" style="margin-top: 12px;">No runs yet.</div>`
+          : html`
+              <div class="list" style="margin-top: 12px;">
+                ${props.runs.map((entry) => renderRun(entry))}
+              </div>
+            `}
     </section>
   `;
 }
@@ -341,8 +347,10 @@ function renderScheduleFields(props: CronProps) {
 }
 
 function renderJob(job: CronJob, props: CronProps) {
+  const isSelected = props.runsJobId === job.id;
+  const itemClass = `list-item list-item-clickable${isSelected ? " list-item-selected" : ""}`;
   return html`
-    <div class="list-item">
+    <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
       <div class="list-main">
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>
@@ -360,24 +368,40 @@ function renderJob(job: CronJob, props: CronProps) {
           <button
             class="btn"
             ?disabled=${props.busy}
-            @click=${() => props.onToggle(job, !job.enabled)}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onToggle(job, !job.enabled);
+            }}
           >
             ${job.enabled ? "Disable" : "Enable"}
           </button>
-          <button class="btn" ?disabled=${props.busy} @click=${() => props.onRun(job)}>
+          <button
+            class="btn"
+            ?disabled=${props.busy}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onRun(job);
+            }}
+          >
             Run
           </button>
           <button
             class="btn"
             ?disabled=${props.busy}
-            @click=${() => props.onLoadRuns(job.id)}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onLoadRuns(job.id);
+            }}
           >
             Runs
           </button>
           <button
             class="btn danger"
             ?disabled=${props.busy}
-            @click=${() => props.onRemove(job)}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onRemove(job);
+            }}
           >
             Remove
           </button>

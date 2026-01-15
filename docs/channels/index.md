@@ -18,6 +18,8 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
 - [iMessage](/channels/imessage) — macOS only; native integration.
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support.
+- [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
+- [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 
 ## Notes

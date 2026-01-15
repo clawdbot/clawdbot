@@ -12,6 +12,8 @@ export type { BrowserTab };
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
+  lastTargetId?: string | null;
 };
 
 export type BrowserServerState = {

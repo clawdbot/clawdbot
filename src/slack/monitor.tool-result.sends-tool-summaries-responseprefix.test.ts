@@ -327,6 +327,81 @@ describe("monitorSlackProvider tool results", () => {
     expect(capturedCtx.CommandBody).toBe("second");
   });
 
+  it("scopes thread history to the thread by default", async () => {
+    config = {
+      messages: { ackReactionScope: "group-mentions" },
+      channels: {
+        slack: {
+          historyLimit: 5,
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: false } },
+        },
+      },
+    };
+
+    const capturedCtx: Array<{ Body?: string }> = [];
+    replyMock.mockImplementation(async (ctx) => {
+      capturedCtx.push(ctx ?? {});
+      return undefined;
+    });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "thread-a-one",
+        ts: "200",
+        thread_ts: "100",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "thread-a-two",
+        ts: "201",
+        thread_ts: "100",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U2",
+        text: "thread-b-one",
+        ts: "301",
+        thread_ts: "300",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(3);
+    expect(capturedCtx[1]?.Body).toContain("thread-a-one");
+    expect(capturedCtx[2]?.Body).not.toContain("thread-a-one");
+    expect(capturedCtx[2]?.Body).not.toContain("thread-a-two");
+  });
+
   it("updates assistant thread status when replies start", async () => {
     replyMock.mockImplementation(async (_ctx, opts) => {
       await opts?.onReplyStart?.();
@@ -421,6 +496,49 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+  });
+
+  it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {
+    config = {
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "hi" });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "123",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(false);
+    expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
   it("treats control commands as mentions for group bypass", async () => {

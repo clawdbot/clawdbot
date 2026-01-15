@@ -44,8 +44,21 @@ export type MessagesConfig = {
   messagePrefix?: string;
   /**
    * Prefix auto-added to all outbound replies.
-   * - string: explicit prefix
+   *
+   * - string: explicit prefix (may include template variables)
    * - special value: `"auto"` derives `[{agents.list[].identity.name}]` for the routed agent (when set)
+   *
+   * Supported template variables (case-insensitive):
+   * - `{model}` - short model name (e.g., `claude-opus-4-5`, `gpt-4o`)
+   * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-5`)
+   * - `{provider}` - provider name (e.g., `anthropic`, `openai`)
+   * - `{thinkingLevel}` or `{think}` - current thinking level (`high`, `low`, `off`)
+   * - `{identity.name}` or `{identityName}` - agent identity name
+   *
+   * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-5 | think:high]"`
+   *
+   * Unresolved variables remain as literal text (e.g., `{model}` if context unavailable).
+   *
    * Default: none
    */
   responsePrefix?: string;

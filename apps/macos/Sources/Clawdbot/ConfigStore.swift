@@ -19,6 +19,7 @@ enum ConfigStore {
     }
 
     private static let overrideStore = OverrideStore()
+    @MainActor private static var lastHash: String?
 
     private static func isRemoteMode() async -> Bool {
         let overrides = await self.overrideStore.overrides
@@ -75,6 +76,7 @@ enum ConfigStore {
                 method: .configGet,
                 params: nil,
                 timeoutMs: 8000)
+            self.lastHash = snap.hash
             return snap.config?.mapValues { $0.foundationValue } ?? [:]
         } catch {
             return nil
@@ -83,17 +85,24 @@ enum ConfigStore {
 
     @MainActor
     private static func saveToGateway(_ root: [String: Any]) async throws {
+        if self.lastHash == nil {
+            _ = await self.loadFromGateway()
+        }
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         guard let raw = String(data: data, encoding: .utf8) else {
             throw NSError(domain: "ConfigStore", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Failed to encode config.",
             ])
         }
-        let params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
+        var params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
+        if let baseHash = self.lastHash {
+            params["baseHash"] = AnyCodable(baseHash)
+        }
         _ = try await GatewayConnection.shared.requestRaw(
             method: .configSet,
             params: params,
             timeoutMs: 10000)
+        _ = await self.loadFromGateway()
     }
 
     #if DEBUG

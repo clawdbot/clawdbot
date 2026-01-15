@@ -1,6 +1,7 @@
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
@@ -33,6 +34,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
+  /** Static context for response prefix template interpolation. */
+  responsePrefixContext?: ResponsePrefixContext;
+  /** Dynamic context provider for response prefix template interpolation.
+   * Called at normalization time, after model selection is complete. */
+  responsePrefixContextProvider?: () => ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   onIdle?: () => void;
   onError?: ReplyDispatchErrorHandler;
@@ -61,10 +67,20 @@ export type ReplyDispatcher = {
 
 function normalizeReplyPayloadInternal(
   payload: ReplyPayload,
-  opts: Pick<ReplyDispatcherOptions, "responsePrefix" | "onHeartbeatStrip">,
+  opts: Pick<
+    ReplyDispatcherOptions,
+    | "responsePrefix"
+    | "responsePrefixContext"
+    | "responsePrefixContextProvider"
+    | "onHeartbeatStrip"
+  >,
 ): ReplyPayload | null {
+  // Prefer dynamic context provider over static context
+  const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
+
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
+    responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
   });
 }

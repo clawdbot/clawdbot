@@ -16,10 +16,12 @@ const sessionMocks = vi.hoisted(() => ({
     return currentPage;
   }),
   ensurePageState: vi.fn(() => pageState),
+  restoreRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) throw new Error("missing locator");
     return currentRefLocator;
   }),
+  rememberRoleRefsForTarget: vi.fn(() => {}),
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);

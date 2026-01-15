@@ -76,6 +76,32 @@ describe("Session Store Cache", () => {
     readSpy.mockRestore();
   });
 
+  it("should not allow cached session mutations to leak across loads", async () => {
+    const testStore: Record<string, SessionEntry> = {
+      "session:1": {
+        sessionId: "id-1",
+        updatedAt: Date.now(),
+        cliSessionIds: { openai: "sess-1" },
+        skillsSnapshot: {
+          prompt: "skills",
+          skills: [{ name: "alpha" }],
+        },
+      },
+    };
+
+    await saveSessionStore(storePath, testStore);
+
+    const loaded1 = loadSessionStore(storePath);
+    loaded1["session:1"].cliSessionIds = { openai: "mutated" };
+    if (loaded1["session:1"].skillsSnapshot?.skills?.length) {
+      loaded1["session:1"].skillsSnapshot!.skills[0].name = "mutated";
+    }
+
+    const loaded2 = loadSessionStore(storePath);
+    expect(loaded2["session:1"].cliSessionIds?.openai).toBe("sess-1");
+    expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
+  });
+
   it("should refresh cache when store file changes on disk", async () => {
     const testStore: Record<string, SessionEntry> = {
       "session:1": {

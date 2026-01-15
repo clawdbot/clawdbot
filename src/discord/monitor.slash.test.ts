@@ -9,11 +9,15 @@ vi.mock("@buape/carbon", () => ({
     ContextMenuCommand: 2,
     Default: 0,
   },
+  Button: class {},
   Command: class {},
   Client: class {},
   MessageCreateListener: class {},
   MessageReactionAddListener: class {},
   MessageReactionRemoveListener: class {},
+  Row: class {
+    constructor(_components: unknown[]) {}
+  },
 }));
 
 vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({

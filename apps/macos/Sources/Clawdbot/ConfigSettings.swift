@@ -10,7 +10,7 @@ struct ConfigSettings: View {
         "When enabled, the browser server will only connect if the clawd browser is already running."
     private static let browserProfileNote =
         "Clawd uses a separate Chrome profile and ports (default 18791/18792) "
-            + "so it won’t interfere with your daily browser."
+        + "so it won’t interfere with your daily browser."
     @State private var configModel: String = ""
     @State private var configSaving = false
     @State private var hasLoaded = false
@@ -97,8 +97,8 @@ extension ConfigSettings {
         Text("Clawdbot CLI config")
             .font(.title3.weight(.semibold))
         Text(self.isNixMode
-            ? "This tab is read-only in Nix mode. Edit config via Nix and rebuild."
-            : "Edit ~/.clawdbot/clawdbot.json (agent / session / routing / messages).")
+                ? "This tab is read-only in Nix mode. Edit config via Nix and rebuild."
+                : "Edit ~/.clawdbot/clawdbot.json (agent / session / routing / messages).")
             .font(.callout)
             .foregroundStyle(.secondary)
     }
@@ -753,9 +753,9 @@ extension ConfigSettings {
         do {
             let res: ModelsListResult =
                 try await GatewayConnection.shared
-                    .requestDecoded(
-                        method: .modelsList,
-                        timeoutMs: 15000)
+                .requestDecoded(
+                    method: .modelsList,
+                    timeoutMs: 15000)
             self.models = res.models
             self.modelsSourceLabel = "gateway"
         } catch {
@@ -792,8 +792,8 @@ extension ConfigSettings {
                 choice.provider,
                 self.modelRef(for: choice),
             ]
-                .joined(separator: " ")
-                .lowercased()
+            .joined(separator: " ")
+            .lowercased()
             return tokens.allSatisfy { haystack.contains($0) }
         }
     }

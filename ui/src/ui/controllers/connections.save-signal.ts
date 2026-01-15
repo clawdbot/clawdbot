@@ -7,42 +7,41 @@ export async function saveSignalConfig(state: ConnectionsState) {
   state.signalSaving = true;
   state.signalConfigStatus = null;
   try {
-    const base = state.configSnapshot?.config ?? {};
-    const config = { ...base } as Record<string, unknown>;
-    const signal = { ...(config.signal ?? {}) } as Record<string, unknown>;
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.signalConfigStatus = "Config hash missing; reload and retry.";
+      return;
+    }
+    const signal: Record<string, unknown> = {};
     const form = state.signalForm;
 
     if (form.enabled) {
-      delete signal.enabled;
+      signal.enabled = null;
     } else {
       signal.enabled = false;
     }
 
     const account = form.account.trim();
-    if (account) signal.account = account;
-    else delete signal.account;
+    signal.account = account || null;
 
     const httpUrl = form.httpUrl.trim();
-    if (httpUrl) signal.httpUrl = httpUrl;
-    else delete signal.httpUrl;
+    signal.httpUrl = httpUrl || null;
 
     const httpHost = form.httpHost.trim();
-    if (httpHost) signal.httpHost = httpHost;
-    else delete signal.httpHost;
+    signal.httpHost = httpHost || null;
 
     const httpPort = Number(form.httpPort);
     if (Number.isFinite(httpPort) && httpPort > 0) {
       signal.httpPort = httpPort;
     } else {
-      delete signal.httpPort;
+      signal.httpPort = null;
     }
 
     const cliPath = form.cliPath.trim();
-    if (cliPath) signal.cliPath = cliPath;
-    else delete signal.cliPath;
+    signal.cliPath = cliPath || null;
 
     if (form.autoStart) {
-      delete signal.autoStart;
+      signal.autoStart = null;
     } else {
       signal.autoStart = false;
     }
@@ -50,35 +49,29 @@ export async function saveSignalConfig(state: ConnectionsState) {
     if (form.receiveMode === "on-start" || form.receiveMode === "manual") {
       signal.receiveMode = form.receiveMode;
     } else {
-      delete signal.receiveMode;
+      signal.receiveMode = null;
     }
 
-    if (form.ignoreAttachments) signal.ignoreAttachments = true;
-    else delete signal.ignoreAttachments;
-    if (form.ignoreStories) signal.ignoreStories = true;
-    else delete signal.ignoreStories;
-    if (form.sendReadReceipts) signal.sendReadReceipts = true;
-    else delete signal.sendReadReceipts;
+    signal.ignoreAttachments = form.ignoreAttachments ? true : null;
+    signal.ignoreStories = form.ignoreStories ? true : null;
+    signal.sendReadReceipts = form.sendReadReceipts ? true : null;
 
     const allowFrom = parseList(form.allowFrom);
-    if (allowFrom.length > 0) signal.allowFrom = allowFrom;
-    else delete signal.allowFrom;
+    signal.allowFrom = allowFrom.length > 0 ? allowFrom : null;
 
     const mediaMaxMb = Number(form.mediaMaxMb);
     if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
       signal.mediaMaxMb = mediaMaxMb;
     } else {
-      delete signal.mediaMaxMb;
+      signal.mediaMaxMb = null;
     }
 
-    if (Object.keys(signal).length > 0) {
-      config.signal = signal;
-    } else {
-      delete config.signal;
-    }
-
-    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
-    await state.client.request("config.set", { raw });
+    const raw = `${JSON.stringify(
+      { channels: { signal } },
+      null,
+      2,
+    ).trimEnd()}\n`;
+    await state.client.request("config.patch", { raw, baseHash });
     state.signalConfigStatus = "Saved. Restart gateway if needed.";
   } catch (err) {
     state.signalConfigStatus = String(err);
@@ -86,4 +79,3 @@ export async function saveSignalConfig(state: ConnectionsState) {
     state.signalSaving = false;
   }
 }
-

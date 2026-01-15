@@ -125,13 +125,13 @@ enum CommandResolver {
 
         // fnm
         bins.append(contentsOf: self.versionedNodeBinPaths(
-            base: home.appendingPathComponent(".local/share/fnm/node-versions"),
-            suffix: "installation/bin"))
+                        base: home.appendingPathComponent(".local/share/fnm/node-versions"),
+                        suffix: "installation/bin"))
 
         // nvm
         bins.append(contentsOf: self.versionedNodeBinPaths(
-            base: home.appendingPathComponent(".nvm/versions/node"),
-            suffix: "bin"))
+                        base: home.appendingPathComponent(".nvm/versions/node"),
+                        suffix: "bin"))
 
         return bins
     }

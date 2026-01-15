@@ -113,4 +113,8 @@ describe("commands registry", () => {
       "/help@otherbot",
     );
   });
+
+  it("normalizes dock command aliases", () => {
+    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
+  });
 });

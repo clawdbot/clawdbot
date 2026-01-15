@@ -5,6 +5,7 @@ Official Voice Call plugin for **Clawdbot**.
 Providers:
 - **Twilio** (Programmable Voice + Media Streams)
 - **Telnyx** (Call Control v2)
+- **Plivo** (Voice API + XML transfer + GetInput speech)
 - **Mock** (dev/no network)
 
 Docs: `https://docs.clawd.bot/plugins/voice-call`
@@ -34,12 +35,17 @@ Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio", // or "telnyx" | "mock"
+  provider: "twilio", // or "telnyx" | "plivo" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
 
   twilio: {
     accountSid: "ACxxxxxxxx",
+    authToken: "your_token"
+  },
+
+  plivo: {
+    authId: "MAxxxxxxxxxxxxxxxxxxxx",
     authToken: "your_token"
   },
 
@@ -66,7 +72,7 @@ Put under `plugins.entries.voice-call.config`:
 ```
 
 Notes:
-- Twilio/Telnyx require a **publicly reachable** webhook URL.
+- Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 
 ## CLI
@@ -102,6 +108,6 @@ Actions:
 
 ## Notes
 
-- Uses webhook signature verification for Twilio/Telnyx.
+- Uses webhook signature verification for Twilio/Telnyx/Plivo.
 - `responseModel` / `responseSystemPrompt` control AI auto-responses.
 - Media streaming requires `ws` and OpenAI Realtime API key.

@@ -93,6 +93,7 @@ export type ConfigFileSnapshot = {
   parsed: unknown;
   valid: boolean;
   config: ClawdbotConfig;
+  hash?: string;
   issues: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];
 };

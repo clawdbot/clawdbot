@@ -24,8 +24,7 @@ public struct WakeWordGateConfig: Sendable, Equatable {
     public init(
         triggers: [String],
         minPostTriggerGap: TimeInterval = 0.45,
-        minCommandLength: Int = 1)
-    {
+        minCommandLength: Int = 1) {
         self.triggers = triggers
         self.minPostTriggerGap = minPostTriggerGap
         self.minCommandLength = minCommandLength
@@ -57,6 +56,12 @@ public enum WakeWordGate {
         let tokens: [String]
     }
 
+    private struct MatchCandidate {
+        let index: Int
+        let triggerEnd: TimeInterval
+        let gap: TimeInterval
+    }
+
     public static func match(
         transcript: String,
         segments: [WakeWordSegment],
@@ -68,7 +73,7 @@ public enum WakeWordGate {
         let tokens = normalizeSegments(segments)
         guard !tokens.isEmpty else { return nil }
 
-        var best: (index: Int, triggerEnd: TimeInterval, gap: TimeInterval)?
+        var best: MatchCandidate?
 
         for trigger in triggerTokens {
             let count = trigger.tokens.count
@@ -84,7 +89,7 @@ public enum WakeWordGate {
 
                 if let best, i <= best.index { continue }
 
-                best = (i, triggerEnd, gap)
+                best = MatchCandidate(index: i, triggerEnd: triggerEnd, gap: gap)
             }
         }
 

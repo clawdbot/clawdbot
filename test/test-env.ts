@@ -61,6 +61,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
     { key: "CLAWDBOT_STATE_DIR", value: process.env.CLAWDBOT_STATE_DIR },
+    { key: "CLAWDBOT_CONFIG_PATH", value: process.env.CLAWDBOT_CONFIG_PATH },
     { key: "CLAWDBOT_TEST_HOME", value: process.env.CLAWDBOT_TEST_HOME },
   ];
 
@@ -69,6 +70,11 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
   process.env.CLAWDBOT_TEST_HOME = tempHome;
+
+  // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
+  delete process.env.CLAWDBOT_CONFIG_PATH;
+  // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
+  delete process.env.CLAWDBOT_STATE_DIR;
 
   // Windows: prefer the legacy default state dir so auth/profile tests match real paths.
   if (process.platform === "win32") {

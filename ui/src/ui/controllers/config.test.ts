@@ -133,10 +133,12 @@ describe("applyConfigSnapshot", () => {
     const state = createState();
     applyConfigSnapshot(state, {
       config: {
-        telegram: {},
-        discord: {},
-        signal: {},
-        imessage: {},
+        channels: {
+          telegram: {},
+          discord: {},
+          signal: {},
+          imessage: {},
+        },
       },
       valid: true,
       issues: [],
@@ -171,7 +173,7 @@ describe("updateConfigFormValue", () => {
   it("seeds from snapshot when form is null", () => {
     const state = createState();
     state.configSnapshot = {
-      config: { telegram: { botToken: "t" }, gateway: { mode: "local" } },
+      config: { channels: { telegram: { botToken: "t" } }, gateway: { mode: "local" } },
       valid: true,
       issues: [],
       raw: "{}",
@@ -181,7 +183,7 @@ describe("updateConfigFormValue", () => {
 
     expect(state.configFormDirty).toBe(true);
     expect(state.configForm).toEqual({
-      telegram: { botToken: "t" },
+      channels: { telegram: { botToken: "t" } },
       gateway: { mode: "local", port: 18789 },
     });
   });
@@ -212,11 +214,15 @@ describe("applyConfig", () => {
     state.applySessionKey = "agent:main:whatsapp:dm:+15555550123";
     state.configFormMode = "raw";
     state.configRaw = "{\n  agent: { workspace: \"~/clawd\" }\n}\n";
+    state.configSnapshot = {
+      hash: "hash-123",
+    };
 
     await applyConfig(state);
 
     expect(request).toHaveBeenCalledWith("config.apply", {
       raw: "{\n  agent: { workspace: \"~/clawd\" }\n}\n",
+      baseHash: "hash-123",
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
   });

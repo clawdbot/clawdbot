@@ -4,7 +4,12 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
-import { formatAssistantErrorText } from "../../pi-embedded-helpers.js";
+import {
+  formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
+  isRawApiErrorPayload,
+  normalizeTextForComparison,
+} from "../../pi-embedded-helpers.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -42,12 +47,22 @@ export function buildEmbeddedRunPayloads(params: {
     replyToCurrent?: boolean;
   }> = [];
 
+  const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText = params.lastAssistant
     ? formatAssistantErrorText(params.lastAssistant, {
         cfg: params.config,
         sessionKey: params.sessionKey,
       })
     : undefined;
+  const rawErrorMessage = lastAssistantErrored
+    ? params.lastAssistant?.errorMessage?.trim() || undefined
+    : undefined;
+  const rawErrorFingerprint = rawErrorMessage
+    ? getApiErrorPayloadFingerprint(rawErrorMessage)
+    : null;
+  const normalizedRawErrorText = rawErrorMessage
+    ? normalizeTextForComparison(rawErrorMessage)
+    : null;
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =
@@ -83,11 +98,28 @@ export function buildEmbeddedRunPayloads(params: {
   if (reasoningText) replyItems.push({ text: reasoningText });
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
-  const answerTexts = params.assistantTexts.length
-    ? params.assistantTexts
-    : fallbackAnswerText
-      ? [fallbackAnswerText]
-      : [];
+  const shouldSuppressRawErrorText = (text: string) => {
+    if (!lastAssistantErrored) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    if (rawErrorMessage && trimmed === rawErrorMessage) return true;
+    if (normalizedRawErrorText) {
+      const normalized = normalizeTextForComparison(trimmed);
+      if (normalized && normalized === normalizedRawErrorText) return true;
+    }
+    if (rawErrorFingerprint) {
+      const fingerprint = getApiErrorPayloadFingerprint(trimmed);
+      if (fingerprint && fingerprint === rawErrorFingerprint) return true;
+    }
+    return isRawApiErrorPayload(trimmed);
+  };
+  const answerTexts = (
+    params.assistantTexts.length
+      ? params.assistantTexts
+      : fallbackAnswerText
+        ? [fallbackAnswerText]
+        : []
+  ).filter((text) => !shouldSuppressRawErrorText(text));
 
   for (const text of answerTexts) {
     const {

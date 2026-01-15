@@ -9,7 +9,7 @@ export function noteWorkspaceStatus(cfg: ClawdbotConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
-    note(formatLegacyWorkspaceWarning(legacyWorkspace), "Legacy workspace");
+    note(formatLegacyWorkspaceWarning(legacyWorkspace), "Extra workspace");
   }
 
   const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });

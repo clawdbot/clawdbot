@@ -1,4 +1,8 @@
-import { createActionGate, readStringParam } from "../../../agents/tools/common.js";
+import {
+  createActionGate,
+  readStringOrNumberParam,
+  readStringParam,
+} from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
@@ -35,6 +39,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const gate = createActionGate(cfg.channels?.telegram?.actions);
     const actions = new Set<ChannelMessageActionName>(["send"]);
     if (gate("reactions")) actions.add("react");
+    if (gate("deleteMessage")) actions.add("delete");
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => hasTelegramInlineButtons(cfg),
@@ -86,6 +91,25 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageId,
           emoji,
           remove,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "delete") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "to", { required: true });
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+      });
+      return await handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId,
+          messageId: Number(messageId),
           accountId: accountId ?? undefined,
         },
         cfg,

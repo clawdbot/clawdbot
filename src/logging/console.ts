@@ -89,7 +89,8 @@ function shouldSuppressConsoleMessage(message: string): boolean {
 }
 
 function isEpipeError(err: unknown): boolean {
-  return Boolean((err as { code?: string })?.code === "EPIPE");
+  const code = (err as { code?: string })?.code;
+  return code === "EPIPE" || code === "EIO";
 }
 
 /**

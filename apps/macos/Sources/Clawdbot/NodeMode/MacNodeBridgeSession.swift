@@ -36,10 +36,10 @@ actor MacNodeBridgeSession {
     func connect(
         endpoint: NWEndpoint,
         hello: BridgeHello,
-        onConnected: (@Sendable (String) async -> Void)? = nil,
+        onConnected: (@Sendable (String, String?) async -> Void)? = nil,
         onDisconnected: (@Sendable (String) async -> Void)? = nil,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)
-        async throws
+    async throws
     {
         await self.disconnect()
         self.disconnectHandler = onDisconnected
@@ -77,15 +77,15 @@ actor MacNodeBridgeSession {
             })
 
         guard let line = try await AsyncTimeout.withTimeout(
-            seconds: 6,
-            onTimeout: {
-                TimeoutError(message: "operation timed out")
-            },
-            operation: {
-                try await self.receiveLine()
-            }),
-            let data = line.data(using: .utf8),
-            let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
+                seconds: 6,
+                onTimeout: {
+                    TimeoutError(message: "operation timed out")
+                },
+                operation: {
+                    try await self.receiveLine()
+                }),
+              let data = line.data(using: .utf8),
+              let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
         else {
             self.logger.error("node bridge hello failed (unexpected response)")
             await self.disconnect()
@@ -98,7 +98,8 @@ actor MacNodeBridgeSession {
             let ok = try self.decoder.decode(BridgeHelloOk.self, from: data)
             self.state = .connected(serverName: ok.serverName)
             self.startPingLoop()
-            await onConnected?(ok.serverName)
+            let mainKey = ok.mainSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            await onConnected?(ok.serverName, mainKey?.isEmpty == false ? mainKey : nil)
         } else if base.type == "error" {
             let err = try self.decoder.decode(BridgeErrorFrame.self, from: data)
             self.state = .failed(message: "\(err.code): \(err.message)")

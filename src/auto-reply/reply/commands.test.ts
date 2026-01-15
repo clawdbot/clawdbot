@@ -142,3 +142,41 @@ describe("handleCommands identity", () => {
     expect(result.reply?.text).toContain("AllowFrom: 12345");
   });
 });
+
+describe("handleCommands context", () => {
+  it("returns context help for /context", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/context", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("/context list");
+    expect(result.reply?.text).toContain("Inline shortcut");
+  });
+
+  it("returns a per-file breakdown for /context list", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/context list", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Injected workspace files:");
+    expect(result.reply?.text).toContain("AGENTS.md");
+  });
+
+  it("returns a detailed breakdown for /context detail", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/context detail", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Context breakdown (detailed)");
+    expect(result.reply?.text).toContain("Top tools (schema size):");
+  });
+});

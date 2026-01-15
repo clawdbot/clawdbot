@@ -9,11 +9,11 @@ import {
 } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { normalizeCommandBody, shouldHandleTextCommands } from "../commands-registry.js";
+import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
-const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
+const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 
 export function isAbortTrigger(text?: string): boolean {
@@ -57,14 +57,6 @@ export async function tryFastAbortFromMessage(params: {
   cfg: ClawdbotConfig;
 }): Promise<{ handled: boolean; aborted: boolean }> {
   const { ctx, cfg } = params;
-  const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface,
-    commandSource: ctx.CommandSource,
-  });
-  if (!allowTextCommands) return { handled: false, aborted: false };
-
   const commandAuthorized = ctx.CommandAuthorized ?? true;
   const auth = resolveCommandAuthorization({
     ctx,

@@ -6,13 +6,13 @@ import { withTempHome } from "../../test/helpers/temp-home.js";
 import { CLAUDE_CLI_PROFILE_ID, ensureAuthProfileStore } from "./auth-profiles.js";
 
 describe("external CLI credential sync", () => {
-  it("syncs Claude CLI OAuth credentials into anthropic:claude-cli", async () => {
+  it("syncs Claude Code CLI OAuth credentials into anthropic:claude-cli", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-sync-"));
     try {
-      // Create a temp home with Claude CLI credentials
+      // Create a temp home with Claude Code CLI credentials
       await withTempHome(
         async (tempHome) => {
-          // Create Claude CLI credentials with refreshToken (OAuth)
+          // Create Claude Code CLI credentials with refreshToken (OAuth)
           const claudeDir = path.join(tempHome, ".claude");
           fs.mkdirSync(claudeDir, { recursive: true });
           const claudeCreds = {
@@ -59,12 +59,12 @@ describe("external CLI credential sync", () => {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
-  it("syncs Claude CLI credentials without refreshToken as token type", async () => {
+  it("syncs Claude Code CLI credentials without refreshToken as token type", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-token-sync-"));
     try {
       await withTempHome(
         async (tempHome) => {
-          // Create Claude CLI credentials WITHOUT refreshToken (fallback to token type)
+          // Create Claude Code CLI credentials WITHOUT refreshToken (fallback to token type)
           const claudeDir = path.join(tempHome, ".claude");
           fs.mkdirSync(claudeDir, { recursive: true });
           const claudeCreds = {

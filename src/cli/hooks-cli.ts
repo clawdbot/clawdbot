@@ -18,9 +18,18 @@ import {
   runGmailSetup,
 } from "../hooks/gmail-ops.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 export function registerHooksCli(program: Command) {
-  const hooks = program.command("hooks").description("Webhook helpers and hook-based integrations");
+  const hooks = program
+    .command("hooks")
+    .description("Webhook helpers and hook-based integrations")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.clawd.bot/cli/hooks")}\n`,
+    );
 
   const gmail = hooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");
 

@@ -26,6 +26,11 @@ export function resolveIdentityNamePrefix(
   return `[${name}]`;
 }
 
+/** Returns just the identity name (without brackets) for template context. */
+export function resolveIdentityName(cfg: ClawdbotConfig, agentId: string): string | undefined {
+  return resolveAgentIdentity(cfg, agentId)?.name?.trim() || undefined;
+}
+
 export function resolveMessagePrefix(
   cfg: ClawdbotConfig,
   agentId: string,

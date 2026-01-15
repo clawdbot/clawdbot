@@ -27,6 +27,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val remoteAddress: StateFlow<String?> = runtime.remoteAddress
   val isForeground: StateFlow<Boolean> = runtime.isForeground
   val seamColorArgb: StateFlow<Long> = runtime.seamColorArgb
+  val mainSessionKey: StateFlow<String> = runtime.mainSessionKey
 
   val cameraHud: StateFlow<CameraHudState?> = runtime.cameraHud
   val cameraFlashToken: StateFlow<Long> = runtime.cameraFlashToken
@@ -138,7 +139,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.handleCanvasA2UIActionFromWebView(payloadJson)
   }
 
-  fun loadChat(sessionKey: String = "main") {
+  fun loadChat(sessionKey: String) {
     runtime.loadChat(sessionKey)
   }
 

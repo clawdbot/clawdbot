@@ -32,6 +32,37 @@ const mocks = vi.hoisted(() => ({
     configSnapshot: null,
   }),
   callGateway: vi.fn().mockResolvedValue({}),
+  runSecurityAudit: vi.fn().mockResolvedValue({
+    ts: 0,
+    summary: { critical: 1, warn: 1, info: 2 },
+    findings: [
+      {
+        checkId: "test.critical",
+        severity: "critical",
+        title: "Test critical finding",
+        detail: "Something is very wrong\nbut on two lines",
+        remediation: "Do the thing",
+      },
+      {
+        checkId: "test.warn",
+        severity: "warn",
+        title: "Test warning finding",
+        detail: "Something is maybe wrong",
+      },
+      {
+        checkId: "test.info",
+        severity: "info",
+        title: "Test info finding",
+        detail: "FYI only",
+      },
+      {
+        checkId: "test.info2",
+        severity: "info",
+        title: "Another info finding",
+        detail: "More FYI",
+      },
+    ],
+  }),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -185,6 +216,9 @@ vi.mock("../daemon/service.js", () => ({
     }),
   }),
 }));
+vi.mock("../security/audit.js", () => ({
+  runSecurityAudit: mocks.runSecurityAudit,
+}));
 
 import { statusCommand } from "./status.js";
 
@@ -206,6 +240,8 @@ describe("statusCommand", () => {
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
     expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
     expect(payload.sessions.recent[0].flags).toContain("verbose:on");
+    expect(payload.securityAudit.summary.critical).toBe(1);
+    expect(payload.securityAudit.summary.warn).toBe(1);
   });
 
   it("prints formatted lines otherwise", async () => {
@@ -214,6 +250,9 @@ describe("statusCommand", () => {
     const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
     expect(logs.some((l) => l.includes("Clawdbot status"))).toBe(true);
     expect(logs.some((l) => l.includes("Overview"))).toBe(true);
+    expect(logs.some((l) => l.includes("Security audit"))).toBe(true);
+    expect(logs.some((l) => l.includes("Summary:"))).toBe(true);
+    expect(logs.some((l) => l.includes("CRITICAL"))).toBe(true);
     expect(logs.some((l) => l.includes("Dashboard"))).toBe(true);
     expect(logs.some((l) => l.includes("macos 14.0 (arm64)"))).toBe(true);
     expect(logs.some((l) => l.includes("Channels"))).toBe(true);

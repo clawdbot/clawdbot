@@ -107,18 +107,18 @@ public enum CanvasA2UICommand: String, Codable, Sendable {
 
 public enum Request: Sendable {
     case notify(
-        title: String,
-        body: String,
-        sound: String?,
-        priority: NotificationPriority?,
-        delivery: NotificationDelivery?)
+            title: String,
+            body: String,
+            sound: String?,
+            priority: NotificationPriority?,
+            delivery: NotificationDelivery?)
     case ensurePermissions([Capability], interactive: Bool)
     case runShell(
-        command: [String],
-        cwd: String?,
-        env: [String: String]?,
-        timeoutSec: Double?,
-        needsScreenRecording: Bool)
+            command: [String],
+            cwd: String?,
+            env: [String: String]?,
+            timeoutSec: Double?,
+            needsScreenRecording: Bool)
     case status
     case agent(message: String, thinking: String?, session: String?, deliver: Bool, to: String?)
     case rpcStatus
@@ -410,6 +410,6 @@ extension Request: Codable {
 // Shared transport settings
 public let controlSocketPath =
     FileManager.default
-        .homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/clawdbot/control.sock")
-        .path
+    .homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/clawdbot/control.sock")
+    .path

@@ -42,7 +42,10 @@ export function registerVoiceCallCli(params: {
   logger: Logger;
 }) {
   const { program, config, ensureRuntime, logger } = params;
-  const root = program.command("voicecall").description("Voice call utilities");
+  const root = program
+    .command("voicecall")
+    .description("Voice call utilities")
+    .addHelpText("after", () => `\nDocs: https://docs.clawd.bot/cli/voicecall\n`);
 
   root
     .command("call")

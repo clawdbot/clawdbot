@@ -7,6 +7,7 @@ import { note } from "../terminal/note.js";
 
 export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   const warnings: string[] = [];
+  const auditHint = `- Run: clawdbot security audit --deep`;
 
   const warnDmPolicy = async (params: {
     label: string;
@@ -100,7 +101,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
     }
   }
 
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Security");
-  }
+  const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
+  lines.push(auditHint);
+  note(lines.join("\n"), "Security");
 }

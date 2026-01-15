@@ -11,7 +11,7 @@ describe("external CLI credential sync", () => {
     try {
       await withTempHome(
         async (tempHome) => {
-          // Create Claude CLI credentials
+          // Create Claude Code CLI credentials
           const claudeDir = path.join(tempHome, ".claude");
           fs.mkdirSync(claudeDir, { recursive: true });
           const claudeCreds = {

@@ -1,23 +1,24 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { CHANNEL_IDS, normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  listDeliverableMessageChannels,
+} from "../../utils/message-channel.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
-const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
-  ...CHANNEL_IDS,
-  INTERNAL_MESSAGE_CHANNEL,
-]);
+const getBlockChunkProviders = () =>
+  new Set<TextChunkProvider>([...listDeliverableMessageChannels(), INTERNAL_MESSAGE_CHANNEL]);
 
 function normalizeChunkProvider(provider?: string): TextChunkProvider | undefined {
   if (!provider) return undefined;
   const cleaned = provider.trim().toLowerCase();
-  return BLOCK_CHUNK_PROVIDERS.has(cleaned as TextChunkProvider)
+  return getBlockChunkProviders().has(cleaned as TextChunkProvider)
     ? (cleaned as TextChunkProvider)
     : undefined;
 }

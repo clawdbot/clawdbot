@@ -47,8 +47,7 @@ function resolveLaunchAgentPlistPathForLabel(
 }
 
 export function resolveLaunchAgentPlistPath(env: Record<string, string | undefined>): string {
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const label = resolveLaunchAgentLabel({ env });
   return resolveLaunchAgentPlistPathForLabel(env, label);
 }
 
@@ -58,7 +57,7 @@ export function resolveGatewayLogPaths(env: Record<string, string | undefined>):
   stderrPath: string;
 } {
   const home = resolveHomeDir(env);
-  const stateOverride = env.CLAWDBOT_STATE_DIR?.trim() || env.CLAWDIS_STATE_DIR?.trim();
+  const stateOverride = env.CLAWDBOT_STATE_DIR?.trim();
   const profile = env.CLAWDBOT_PROFILE?.trim();
   const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
   const defaultStateDir = path.join(home, `.clawdbot${suffix}`);
@@ -127,6 +126,7 @@ async function execLaunchctl(
   try {
     const { stdout, stderr } = await execFileAsync("launchctl", args, {
       encoding: "utf8",
+      shell: process.platform === "win32",
     });
     return {
       stdout: String(stdout ?? ""),
@@ -205,8 +205,7 @@ export async function readLaunchAgentRuntime(
   env: Record<string, string | undefined>,
 ): Promise<GatewayServiceRuntime> {
   const domain = resolveGuiDomain();
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
     return {
@@ -308,6 +307,7 @@ export async function uninstallLaunchAgent({
   stdout: NodeJS.WritableStream;
 }): Promise<void> {
   const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
@@ -321,8 +321,6 @@ export async function uninstallLaunchAgent({
 
   const home = resolveHomeDir(env);
   const trashDir = path.join(home, ".Trash");
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
   const dest = path.join(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
@@ -377,8 +375,7 @@ export async function installLaunchAgent({
   await fs.mkdir(logDir, { recursive: true });
 
   const domain = resolveGuiDomain();
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const label = resolveLaunchAgentLabel({ env });
   for (const legacyLabel of LEGACY_GATEWAY_LAUNCH_AGENT_LABELS) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
@@ -410,13 +407,16 @@ export async function installLaunchAgent({
 
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
+  // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     throw new Error(`launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim());
   }
-  await execLaunchctl(["enable", `${domain}/${label}`]);
   await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
 
+  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  stdout.write("\n");
   stdout.write(`${formatLine("Installed LaunchAgent", plistPath)}\n`);
   stdout.write(`${formatLine("Logs", stdoutPath)}\n`);
   return { plistPath };

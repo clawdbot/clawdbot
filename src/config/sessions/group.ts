@@ -1,8 +1,8 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { CHANNEL_IDS } from "../../channels/registry.js";
+import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 
-const GROUP_SURFACES = new Set<string>([...CHANNEL_IDS, "webchat"]);
+const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
 function normalizeGroupLabel(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
@@ -76,7 +76,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   };
 
   const parseParts = (parts: string[]) => {
-    if (parts.length >= 2 && GROUP_SURFACES.has(parts[0])) {
+    if (parts.length >= 2 && getGroupSurfaces().has(parts[0])) {
       provider = parts[0];
       if (parts.length >= 3) {
         const kindCandidate = parts[1];

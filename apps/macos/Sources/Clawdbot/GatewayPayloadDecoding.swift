@@ -8,7 +8,7 @@ enum GatewayPayloadDecoding {
     }
 
     static func decodeIfPresent<T: Decodable>(_ payload: ClawdbotProtocol.AnyCodable?, as _: T.Type = T.self) throws
-        -> T?
+    -> T?
     {
         guard let payload else { return nil }
         return try self.decode(payload, as: T.self)

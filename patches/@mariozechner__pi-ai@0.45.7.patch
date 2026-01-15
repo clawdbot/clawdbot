@@ -79,3 +79,55 @@ index 5f9a17e..48631a7 100644
 -//# sourceMappingURL=openai-responses.js.map
 \ No newline at end of file
 +//# sourceMappingURL=openai-responses.js.map
+diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+index 47dc045..706157a 100644
+--- a/dist/providers/google-shared.js
++++ b/dist/providers/google-shared.js
+@@ -130,18 +130,30 @@
+                     }
+                 }
+                 else if (block.type === "toolCall") {
+-                    const part = {
+-                        functionCall: {
+-                            name: block.name,
+-                            args: block.arguments,
+-                            ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+-                        },
+-                    };
+                     const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature);
+-                    if (thoughtSignature) {
+-                        part.thoughtSignature = thoughtSignature;
++                    // Gemini 3 requires thoughtSignature on all function calls when thinking mode is enabled.
++                    // When switching from a provider that doesn't support signatures (e.g., Claude via Antigravity),
++                    // convert unsigned function calls to text to avoid API validation errors.
++                    const isGemini3 = model.id.toLowerCase().includes("gemini-3");
++                    if (isGemini3 && !thoughtSignature) {
++                        const argsStr = JSON.stringify(block.arguments, null, 2);
++                        parts.push({
++                            text: `[Tool Call: ${block.name}]\nArguments: ${argsStr}`,
++                        });
++                    }
++                    else {
++                        const part = {
++                            functionCall: {
++                                name: block.name,
++                                args: block.arguments,
++                                ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
++                            },
++                        };
++                        if (thoughtSignature) {
++                            part.thoughtSignature = thoughtSignature;
++                        }
++                        parts.push(part);
+                     }
+-                    parts.push(part);
+                 }
+             }
+             if (parts.length === 0)
+@@ -280,4 +292,4 @@
+             return "error";
+     }
+ }
+-//# sourceMappingURL=google-shared.js.map
+\ No newline at end of file
++//# sourceMappingURL=google-shared.js.map

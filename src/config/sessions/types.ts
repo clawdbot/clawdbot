@@ -61,6 +61,7 @@ export type SessionEntry = {
   lastTo?: string;
   lastAccountId?: string;
   skillsSnapshot?: SessionSkillSnapshot;
+  systemPromptReport?: SessionSystemPromptReport;
 };
 
 export function mergeSessionEntry(
@@ -85,6 +86,48 @@ export type SessionSkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string }>;
   resolvedSkills?: Skill[];
+};
+
+export type SessionSystemPromptReport = {
+  source: "run" | "estimate";
+  generatedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
+  provider?: string;
+  model?: string;
+  workspaceDir?: string;
+  bootstrapMaxChars?: number;
+  sandbox?: {
+    mode?: string;
+    sandboxed?: boolean;
+  };
+  systemPrompt: {
+    chars: number;
+    projectContextChars: number;
+    nonProjectContextChars: number;
+  };
+  injectedWorkspaceFiles: Array<{
+    name: string;
+    path: string;
+    missing: boolean;
+    rawChars: number;
+    injectedChars: number;
+    truncated: boolean;
+  }>;
+  skills: {
+    promptChars: number;
+    entries: Array<{ name: string; blockChars: number }>;
+  };
+  tools: {
+    listChars: number;
+    schemaChars: number;
+    entries: Array<{
+      name: string;
+      summaryChars: number;
+      schemaChars: number;
+      propertiesCount?: number | null;
+    }>;
+  };
 };
 
 export const DEFAULT_RESET_TRIGGER = "/new";

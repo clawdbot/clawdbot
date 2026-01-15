@@ -121,12 +121,12 @@ extension CritterStatusLabel {
         }
 
         return Image(nsImage: CritterIconRenderer.makeIcon(
-            blink: self.blinkAmount,
-            legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
-            earWiggle: self.earWiggle,
-            earScale: self.earBoostActive ? 1.9 : 1.0,
-            earHoles: self.earBoostActive,
-            badge: badge))
+                        blink: self.blinkAmount,
+                        legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
+                        earWiggle: self.earWiggle,
+                        earScale: self.earBoostActive ? 1.9 : 1.0,
+                        earHoles: self.earBoostActive,
+                        badge: badge))
     }
 
     private func resetMotion() {

@@ -21,6 +21,7 @@ export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
   port?: number;
+  authToken?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
@@ -28,6 +29,15 @@ export async function startBrowserBridgeServer(params: {
 
   const app = express();
   app.use(express.json({ limit: "1mb" }));
+
+  const authToken = params.authToken?.trim();
+  if (authToken) {
+    app.use((req, res, next) => {
+      const auth = String(req.headers.authorization ?? "").trim();
+      if (auth === `Bearer ${authToken}`) return next();
+      res.status(401).send("Unauthorized");
+    });
+  }
 
   const state: BrowserServerState = {
     server: null as unknown as Server,

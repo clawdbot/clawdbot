@@ -21,6 +21,7 @@ import {
   embeddedRunMock,
   piSdkMock,
   sessionStoreSaveDelayMs,
+  setTestConfigRoot,
   testIsNixMode,
   testState,
   testTailnetIPv4,
@@ -28,6 +29,7 @@ import {
 
 let previousHome: string | undefined;
 let tempHome: string | undefined;
+let tempConfigRoot: string | undefined;
 
 export function installGatewayTestHooks() {
   beforeEach(async () => {
@@ -35,6 +37,8 @@ export function installGatewayTestHooks() {
     previousHome = process.env.HOME;
     tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gateway-home-"));
     process.env.HOME = tempHome;
+    tempConfigRoot = path.join(tempHome, ".clawdbot-test");
+    setTestConfigRoot(tempConfigRoot);
     sessionStoreSaveDelayMs.value = 0;
     testTailnetIPv4.value = undefined;
     testState.gatewayBind = undefined;
@@ -81,6 +85,7 @@ export function installGatewayTestHooks() {
       });
       tempHome = undefined;
     }
+    tempConfigRoot = undefined;
   });
 }
 

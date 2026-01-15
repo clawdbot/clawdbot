@@ -7,7 +7,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
-  CRON_CHANNEL_OPTIONS,
+  getCronChannelOptions,
   parseAtMs,
   parseDurationMs,
   printCronList,
@@ -81,7 +81,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
-      .option("--channel <channel>", `Delivery channel (${CRON_CHANNEL_OPTIONS})`, "last")
+      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",

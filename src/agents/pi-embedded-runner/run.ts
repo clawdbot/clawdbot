@@ -133,6 +133,7 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           profileId: candidate,
           store: authStore,
+          agentDir,
         });
       };
 
@@ -250,6 +251,7 @@ export async function runEmbeddedPiAgent(
                     provider,
                     model: model.id,
                   },
+                  systemPromptReport: attempt.systemPromptReport,
                   error: { kind, message: errorText },
                 },
               };
@@ -404,6 +406,7 @@ export async function runEmbeddedPiAgent(
               durationMs: Date.now() - started,
               agentMeta,
               aborted,
+              systemPromptReport: attempt.systemPromptReport,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             messagingToolSentTexts: attempt.messagingToolSentTexts,

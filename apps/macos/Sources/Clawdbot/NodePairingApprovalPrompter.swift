@@ -454,7 +454,7 @@ final class NodePairingApprovalPrompter {
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized ||
-            settings.authorizationStatus == .provisional
+                settings.authorizationStatus == .provisional
         else {
             return
         }
@@ -547,7 +547,7 @@ final class NodePairingApprovalPrompter {
         let gateway = model.gateways.first { $0.stableID == preferred } ?? model.gateways.first
         guard let gateway else { return nil }
         let host = (gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ??
-            gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+                        gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
         guard let host, !host.isEmpty else { return nil }
         let port = gateway.sshPort > 0 ? gateway.sshPort : 22
         return SSHTarget(host: host, port: port)

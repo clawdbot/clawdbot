@@ -283,7 +283,7 @@ const main = async () => {
   const keychain = readClaudeCliKeychain();
   if (keychain) {
     console.log(
-      `Claude CLI keychain: accessToken=${opts.reveal ? keychain.accessToken : mask(keychain.accessToken)} scopes=${keychain.scopes?.join(",") ?? "(unknown)"}`,
+      `Claude Code CLI keychain: accessToken=${opts.reveal ? keychain.accessToken : mask(keychain.accessToken)} scopes=${keychain.scopes?.join(",") ?? "(unknown)"}`,
     );
     const oauth = await fetchAnthropicOAuthUsage(keychain.accessToken);
     console.log(
@@ -291,7 +291,7 @@ const main = async () => {
     );
     console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
   } else {
-    console.log("Claude CLI keychain: missing/unreadable");
+    console.log("Claude Code CLI keychain: missing/unreadable");
   }
 
   const anthropic = pickAnthropicTokens(store);

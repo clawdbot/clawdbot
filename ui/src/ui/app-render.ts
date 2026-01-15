@@ -144,6 +144,23 @@ export function renderApp(state: AppViewState) {
             </div>
           `;
         })}
+        <div class="nav-group nav-group--links">
+          <div class="nav-label nav-label--static">
+            <span class="nav-label__text">Resources</span>
+          </div>
+          <div class="nav-group__items">
+            <a
+              class="nav-item nav-item--external"
+              href="https://docs.clawd.bot"
+              target="_blank"
+              rel="noreferrer"
+              title="Docs (opens in new tab)"
+            >
+              <span class="nav-item__icon" aria-hidden="true">📚</span>
+              <span class="nav-item__text">Docs</span>
+            </a>
+          </div>
+        </div>
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         <section class="content-header">
@@ -449,14 +466,6 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
-      <a
-        class="docs-link"
-        href="https://docs.clawd.bot"
-        target="_blank"
-        rel="noreferrer"
-      >
-        Docs
-      </a>
     </div>
   `;
 }

@@ -28,6 +28,8 @@ type TelegramSendOpts = {
   maxBytes?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
+  textMode?: "markdown" | "html";
+  plainText?: string;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   asVoice?: boolean;
   /** Message ID to reply to (for threading) */
@@ -101,12 +103,12 @@ function normalizeMessageId(raw: string | number): number {
   if (typeof raw === "string") {
     const value = raw.trim();
     if (!value) {
-      throw new Error("Message id is required for Telegram reactions");
+      throw new Error("Message id is required for Telegram actions");
     }
     const parsed = Number.parseInt(value, 10);
     if (Number.isFinite(parsed)) return parsed;
   }
-  throw new Error("Message id is required for Telegram reactions");
+  throw new Error("Message id is required for Telegram actions");
 }
 
 export function buildInlineKeyboard(
@@ -308,7 +310,8 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const htmlText = markdownToTelegramHtml(text);
+  const textMode = opts.textMode ?? "markdown";
+  const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const textParams = hasThreadParams
     ? {
         parse_mode: "HTML" as const,
@@ -335,11 +338,12 @@ export async function sendMessageTelegram(
                 ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
               }
             : undefined;
+        const fallbackText = opts.plainText ?? text;
         return await request(
           () =>
             plainParams
-              ? api.sendMessage(chatId, text, plainParams)
-              : api.sendMessage(chatId, text),
+              ? api.sendMessage(chatId, fallbackText, plainParams)
+              : api.sendMessage(chatId, fallbackText),
           "message-plain",
         ).catch((err2) => {
           throw wrapChatNotFound(err2);
@@ -393,6 +397,42 @@ export async function reactMessageTelegram(
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
   await request(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
+  return { ok: true };
+}
+
+type TelegramDeleteOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+};
+
+export async function deleteMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true }> {
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const messageId = normalizeMessageId(messageIdInput);
+  const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  await request(() => api.deleteMessage(chatId, messageId), "deleteMessage");
+  logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
   return { ok: true };
 }
 

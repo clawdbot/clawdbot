@@ -183,6 +183,85 @@ export function buildSubagentSystemPrompt(params: {
   return lines.join("\n");
 }
 
+export type SubagentRunOutcome = {
+  status: "ok" | "error" | "timeout" | "unknown";
+  error?: string;
+};
+
+const ANNOUNCE_SECTION_RE = /^\s*[-*]?\s*(?:\*\*)?(status|result|notes)(?:\*\*)?\s*:\s*(.*)$/i;
+
+function parseAnnounceSections(announce: string) {
+  const sections = {
+    status: [] as string[],
+    result: [] as string[],
+    notes: [] as string[],
+  };
+  let current: keyof typeof sections | null = null;
+  let sawSection = false;
+
+  for (const line of announce.split(/\r?\n/)) {
+    const match = line.match(ANNOUNCE_SECTION_RE);
+    if (match) {
+      const key = match[1]?.toLowerCase() as keyof typeof sections;
+      current = key;
+      sawSection = true;
+      const rest = match[2]?.trim();
+      if (rest) sections[key].push(rest);
+      continue;
+    }
+    if (current) sections[current].push(line);
+  }
+
+  const normalize = (lines: string[]) => {
+    const joined = lines.join("\n").trim();
+    return joined.length > 0 ? joined : undefined;
+  };
+
+  return {
+    sawSection,
+    status: normalize(sections.status),
+    result: normalize(sections.result),
+    notes: normalize(sections.notes),
+  };
+}
+
+function normalizeAnnounceBody(params: {
+  outcome: SubagentRunOutcome;
+  announceReply: string;
+  statsLine?: string;
+}) {
+  const announce = params.announceReply.trim();
+  const statsLine = params.statsLine?.trim();
+
+  const statusLabel =
+    params.outcome.status === "ok"
+      ? "success"
+      : params.outcome.status === "timeout"
+        ? "timeout"
+        : params.outcome.status === "unknown"
+          ? "unknown"
+          : "error";
+
+  const parsed = parseAnnounceSections(announce);
+  const resultText = parsed.result ?? (announce || "(not available)");
+  const notesParts: string[] = [];
+  if (parsed.notes) notesParts.push(parsed.notes);
+  if (params.outcome.error) notesParts.push(`- Error: ${params.outcome.error}`);
+  const notesBlock = notesParts.length ? notesParts.join("\n") : "- (none)";
+
+  const message = [
+    `Status: ${statusLabel}`,
+    "",
+    "Result:",
+    resultText,
+    "",
+    "Notes:",
+    notesBlock,
+  ].join("\n");
+
+  return statsLine ? `${message}\n\n${statsLine}` : message;
+}
+
 function buildSubagentAnnouncePrompt(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -202,6 +281,10 @@ function buildSubagentAnnouncePrompt(params: {
     "",
     "**You MUST announce your result.** The requester is waiting for your response.",
     "Provide a brief, useful summary of what you accomplished.",
+    "Reply with Result and Notes only (no Status line; status is added by the system).",
+    "Format:",
+    "Result: <summary>",
+    "Notes: <extra context>",
     'Only reply "ANNOUNCE_SKIP" if the task completely failed with no useful output.',
     "Your reply will be posted to the requester chat.",
   ].filter(Boolean);
@@ -222,10 +305,12 @@ export async function runSubagentAnnounceFlow(params: {
   startedAt?: number;
   endedAt?: number;
   label?: string;
+  outcome?: SubagentRunOutcome;
 }): Promise<boolean> {
   let didAnnounce = false;
   try {
     let reply = params.roundOneReply;
+    let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
       const waitMs = Math.min(params.timeoutMs, 60_000);
       const wait = (await callGateway({
@@ -235,8 +320,30 @@ export async function runSubagentAnnounceFlow(params: {
           timeoutMs: waitMs,
         },
         timeoutMs: waitMs + 2000,
-      })) as { status?: string };
-      if (wait?.status !== "ok") return false;
+      })) as {
+        status?: string;
+        error?: string;
+        startedAt?: number;
+        endedAt?: number;
+      };
+      if (wait?.status === "timeout") {
+        outcome = { status: "timeout" };
+      } else if (wait?.status === "error") {
+        outcome = { status: "error", error: wait.error };
+      } else if (wait?.status === "ok") {
+        outcome = { status: "ok" };
+      }
+      if (typeof wait?.startedAt === "number" && !params.startedAt) {
+        params.startedAt = wait.startedAt;
+      }
+      if (typeof wait?.endedAt === "number" && !params.endedAt) {
+        params.endedAt = wait.endedAt;
+      }
+      if (wait?.status === "timeout") {
+        // No lifecycle end seen before timeout. Still attempt an announce so
+        // requesters are not left hanging.
+        if (!outcome) outcome = { status: "timeout" };
+      }
       reply = await readLatestAssistantReply({
         sessionKey: params.childSessionKey,
       });
@@ -247,6 +354,8 @@ export async function runSubagentAnnounceFlow(params: {
         sessionKey: params.childSessionKey,
       });
     }
+
+    if (!outcome) outcome = { status: "unknown" };
 
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.requesterSessionKey,
@@ -278,7 +387,11 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
-    const message = statsLine ? `${announceReply.trim()}\n\n${statsLine}` : announceReply.trim();
+    const message = normalizeAnnounceBody({
+      outcome,
+      announceReply,
+      statsLine,
+    });
 
     await callGateway({
       method: "send",

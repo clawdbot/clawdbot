@@ -1,13 +1,14 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { CONFIG_PATH_CLAWDBOT, resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { sleep } from "../../utils.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { healthCommand } from "../health.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
+  resolveControlUiLinks,
+  waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 
@@ -88,8 +89,17 @@ export async function runNonInteractiveOnboardingLocal(params: {
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!opts.skipHealth) {
-    await sleep(1000);
-    // Health check runs against the gateway; small delay avoids flakiness during install/start.
+    const links = resolveControlUiLinks({
+      bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom",
+      port: gatewayResult.port,
+      customBindHost: nextConfig.gateway?.customBindHost,
+      basePath: undefined,
+    });
+    await waitForGatewayReachable({
+      url: links.wsUrl,
+      token: gatewayResult.gatewayToken,
+      deadlineMs: 15_000,
+    });
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
   }
 
@@ -110,4 +120,10 @@ export async function runNonInteractiveOnboardingLocal(params: {
     skipSkills: Boolean(opts.skipSkills),
     skipHealth: Boolean(opts.skipHealth),
   });
+
+  if (!opts.json) {
+    runtime.log(
+      "Tip: run `clawdbot configure --section web` to store your Brave API key for web_search. Docs: https://docs.clawd.bot/tools/web",
+    );
+  }
 }

@@ -238,7 +238,7 @@ struct GeneralSettings: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(self.remoteStatus == .checking || self.state.remoteTarget
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             GatewayDiscoveryInlineList(
@@ -627,8 +627,8 @@ extension GeneralSettings {
         let originalMode = AppStateStore.shared.connectionMode
         do {
             try await ControlChannel.shared.configure(mode: .remote(
-                target: settings.target,
-                identity: settings.identity))
+                                                        target: settings.target,
+                                                        identity: settings.identity))
             let data = try await ControlChannel.shared.health(timeout: 10)
             if decodeHealthSnapshot(from: data) != nil {
                 self.remoteStatus = .ok

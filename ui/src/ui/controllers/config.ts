@@ -115,11 +115,12 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
   const config = snapshot.config ?? {};
-  const telegram = (config.telegram ?? {}) as Record<string, unknown>;
-  const discord = (config.discord ?? {}) as Record<string, unknown>;
-  const slack = (config.slack ?? {}) as Record<string, unknown>;
-  const signal = (config.signal ?? {}) as Record<string, unknown>;
-  const imessage = (config.imessage ?? {}) as Record<string, unknown>;
+  const channels = (config.channels ?? {}) as Record<string, unknown>;
+  const telegram = (channels.telegram ?? config.telegram ?? {}) as Record<string, unknown>;
+  const discord = (channels.discord ?? config.discord ?? {}) as Record<string, unknown>;
+  const slack = (channels.slack ?? config.slack ?? {}) as Record<string, unknown>;
+  const signal = (channels.signal ?? config.signal ?? {}) as Record<string, unknown>;
+  const imessage = (channels.imessage ?? config.imessage ?? {}) as Record<string, unknown>;
   const toList = (value: unknown) =>
     Array.isArray(value)
       ? value
@@ -406,7 +407,12 @@ export async function saveConfig(state: ConfigState) {
       state.configFormMode === "form" && state.configForm
         ? serializeConfigForm(state.configForm)
         : state.configRaw;
-    await state.client.request("config.set", { raw });
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.lastError = "Config hash missing; reload and retry.";
+      return;
+    }
+    await state.client.request("config.set", { raw, baseHash });
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
@@ -425,8 +431,14 @@ export async function applyConfig(state: ConfigState) {
       state.configFormMode === "form" && state.configForm
         ? serializeConfigForm(state.configForm)
         : state.configRaw;
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.lastError = "Config hash missing; reload and retry.";
+      return;
+    }
     await state.client.request("config.apply", {
       raw,
+      baseHash,
       sessionKey: state.applySessionKey,
     });
     state.configFormDirty = false;

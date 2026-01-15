@@ -1,5 +1,13 @@
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -30,6 +38,15 @@ type AgentsAddOptions = {
   nonInteractive?: boolean;
   json?: boolean;
 };
+
+async function fileExists(pathname: string): Promise<boolean> {
+  try {
+    await fs.stat(pathname);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
@@ -204,6 +221,29 @@ export async function agentsAddCommand(
       workspace: workspaceDir,
       agentDir,
     });
+
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    if (defaultAgentId !== agentId) {
+      const sourceAuthPath = resolveAuthStorePath(resolveAgentDir(cfg, defaultAgentId));
+      const destAuthPath = resolveAuthStorePath(agentDir);
+      const sameAuthPath =
+        path.resolve(sourceAuthPath).toLowerCase() === path.resolve(destAuthPath).toLowerCase();
+      if (
+        !sameAuthPath &&
+        (await fileExists(sourceAuthPath)) &&
+        !(await fileExists(destAuthPath))
+      ) {
+        const shouldCopy = await prompter.confirm({
+          message: `Copy auth profiles from "${defaultAgentId}"?`,
+          initialValue: false,
+        });
+        if (shouldCopy) {
+          await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
+          await fs.copyFile(sourceAuthPath, destAuthPath);
+          await prompter.note(`Copied auth profiles from "${defaultAgentId}".`, "Auth profiles");
+        }
+      }
+    }
 
     const wantsAuth = await prompter.confirm({
       message: "Configure model/auth for this agent now?",

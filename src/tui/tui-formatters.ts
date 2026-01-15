@@ -1,4 +1,5 @@
 import { formatTokenCount } from "../utils/usage-format.js";
+import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
@@ -38,7 +39,14 @@ export function extractTextFromMessage(
 ): string {
   if (!message || typeof message !== "object") return "";
   const record = message as Record<string, unknown>;
-  return extractTextBlocks(record.content, opts);
+  const text = extractTextBlocks(record.content, opts);
+  if (text) return text;
+
+  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
+  if (stopReason !== "error") return "";
+
+  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
+  return formatRawAssistantErrorForUi(errorMessage);
 }
 
 export function formatTokens(total?: number | null, context?: number | null) {

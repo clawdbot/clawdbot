@@ -87,7 +87,8 @@ export function registerSandboxCli(program: Command) {
     .addHelpText("after", EXAMPLES.main)
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/sandbox", "docs.clawd.bot/sandbox")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sandbox", "docs.clawd.bot/cli/sandbox")}\n`,
     )
     .action(() => {
       sandbox.help({ error: true });

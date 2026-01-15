@@ -1,6 +1,9 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Command } from "commander";
 
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ChannelDock } from "../channels/dock.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 
@@ -56,6 +59,11 @@ export type ClawdbotPluginGatewayMethod = {
   handler: GatewayRequestHandler;
 };
 
+export type ClawdbotPluginHttpHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<boolean> | boolean;
+
 export type ClawdbotPluginCliContext = {
   program: Command;
   config: ClawdbotConfig;
@@ -76,6 +84,11 @@ export type ClawdbotPluginService = {
   id: string;
   start: (ctx: ClawdbotPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: ClawdbotPluginServiceContext) => void | Promise<void>;
+};
+
+export type ClawdbotPluginChannelRegistration = {
+  plugin: ChannelPlugin;
+  dock?: ChannelDock;
 };
 
 export type ClawdbotPluginDefinition = {
@@ -105,6 +118,8 @@ export type ClawdbotPluginApi = {
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
     opts?: { name?: string; names?: string[] },
   ) => void;
+  registerHttpHandler: (handler: ClawdbotPluginHttpHandler) => void;
+  registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: ClawdbotPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: ClawdbotPluginService) => void;

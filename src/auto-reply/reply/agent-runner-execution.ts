@@ -125,6 +125,14 @@ export async function runAgentTurnWithFallback(params: {
           resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
         ),
         run: (provider, model) => {
+          // Notify that model selection is complete (including after fallback).
+          // This allows responsePrefix template interpolation with the actual model.
+          params.opts?.onModelSelected?.({
+            provider,
+            model,
+            thinkLevel: params.followupRun.run.thinkLevel,
+          });
+
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
             emitAgentEvent({

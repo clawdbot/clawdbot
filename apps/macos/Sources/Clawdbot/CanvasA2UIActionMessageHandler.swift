@@ -55,7 +55,7 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
         guard let name = ClawdbotCanvasA2UIAction.extractActionName(userAction) else { return }
         let actionId =
             (userAction["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-                ?? UUID().uuidString
+            ?? UUID().uuidString
 
         canvasWindowLogger.info("A2UI action \(name, privacy: .public) session=\(self.sessionKey, privacy: .public)")
 

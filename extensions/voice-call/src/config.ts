@@ -53,6 +53,14 @@ export const TwilioConfigSchema = z.object({
 });
 export type TwilioConfig = z.infer<typeof TwilioConfigSchema>;
 
+export const PlivoConfigSchema = z.object({
+  /** Plivo Auth ID (starts with MA/SA) */
+  authId: z.string().min(1).optional(),
+  /** Plivo Auth Token */
+  authToken: z.string().min(1).optional(),
+});
+export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
+
 // -----------------------------------------------------------------------------
 // STT/TTS Configuration
 // -----------------------------------------------------------------------------
@@ -219,14 +227,17 @@ export const VoiceCallConfigSchema = z.object({
   /** Enable voice call functionality */
   enabled: z.boolean().default(false),
 
-  /** Active provider (telnyx, twilio, or mock) */
-  provider: z.enum(["telnyx", "twilio", "mock"]).optional(),
+  /** Active provider (telnyx, twilio, plivo, or mock) */
+  provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
 
   /** Telnyx-specific configuration */
   telnyx: TelnyxConfigSchema.optional(),
 
   /** Twilio-specific configuration */
   twilio: TwilioConfigSchema.optional(),
+
+  /** Plivo-specific configuration */
+  plivo: PlivoConfigSchema.optional(),
 
   /** Phone number to call from (E.164) */
   fromNumber: E164Schema.optional(),
@@ -347,6 +358,19 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     if (!config.twilio?.authToken) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
+      );
+    }
+  }
+
+  if (config.provider === "plivo") {
+    if (!config.plivo?.authId) {
+      errors.push(
+        "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
+      );
+    }
+    if (!config.plivo?.authToken) {
+      errors.push(
+        "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
       );
     }
   }

@@ -129,6 +129,73 @@ describe("resolveHeartbeatIntervalMs", () => {
     }
   });
 
+  it("does not regress updatedAt when restoring heartbeat sessions", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const originalUpdatedAt = 1000;
+      const bumpedUpdatedAt = 2000;
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            main: {
+              sessionId: "sid",
+              updatedAt: originalUpdatedAt,
+              lastProvider: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              to: "+1555",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+
+      replySpy.mockImplementationOnce(async () => {
+        const raw = await fs.readFile(storePath, "utf-8");
+        const parsed = JSON.parse(raw) as { main?: { updatedAt?: number } };
+        if (parsed.main) {
+          parsed.main.updatedAt = bumpedUpdatedAt;
+        }
+        await fs.writeFile(storePath, JSON.stringify(parsed, null, 2));
+        return { text: "" };
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        main?: { updatedAt?: number };
+      };
+      expect(finalStore.main?.updatedAt).toBe(bumpedUpdatedAt);
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips WhatsApp delivery when not linked or running", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");

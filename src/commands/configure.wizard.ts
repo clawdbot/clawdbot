@@ -9,7 +9,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath, sleep } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
@@ -21,7 +21,14 @@ import type {
   ConfigureWizardParams,
   WizardSection,
 } from "./configure.shared.js";
-import { CONFIGURE_SECTION_OPTIONS, intro, outro, select, text } from "./configure.shared.js";
+import {
+  CONFIGURE_SECTION_OPTIONS,
+  confirm,
+  intro,
+  outro,
+  select,
+  text,
+} from "./configure.shared.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -34,6 +41,7 @@ import {
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
+  waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
@@ -81,6 +89,87 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
     }),
     runtime,
   ) as ChannelsWizardMode;
+}
+
+async function promptWebToolsConfig(
+  nextConfig: ClawdbotConfig,
+  runtime: RuntimeEnv,
+): Promise<ClawdbotConfig> {
+  const existingSearch = nextConfig.tools?.web?.search;
+  const existingFetch = nextConfig.tools?.web?.fetch;
+  const hasSearchKey = Boolean(existingSearch?.apiKey);
+
+  note(
+    [
+      "Web search lets your agent look things up online using the `web_search` tool.",
+      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Docs: https://docs.clawd.bot/tools/web",
+    ].join("\n"),
+    "Web search",
+  );
+
+  const enableSearch = guardCancel(
+    await confirm({
+      message: "Enable web_search (Brave Search)?",
+      initialValue: existingSearch?.enabled ?? hasSearchKey,
+    }),
+    runtime,
+  );
+
+  let nextSearch = {
+    ...existingSearch,
+    enabled: enableSearch,
+  };
+
+  if (enableSearch) {
+    const keyInput = guardCancel(
+      await text({
+        message: hasSearchKey
+          ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
+          : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
+        placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
+      }),
+      runtime,
+    );
+    const key = String(keyInput ?? "").trim();
+    if (key) {
+      nextSearch = { ...nextSearch, apiKey: key };
+    } else if (!hasSearchKey) {
+      note(
+        [
+          "No key stored yet, so web_search will stay unavailable.",
+          "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
+          "Docs: https://docs.clawd.bot/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+  }
+
+  const enableFetch = guardCancel(
+    await confirm({
+      message: "Enable web_fetch (keyless HTTP fetch)?",
+      initialValue: existingFetch?.enabled ?? true,
+    }),
+    runtime,
+  );
+
+  const nextFetch = {
+    ...existingFetch,
+    enabled: enableFetch,
+  };
+
+  return {
+    ...nextConfig,
+    tools: {
+      ...nextConfig.tools,
+      web: {
+        ...nextConfig.tools?.web,
+        search: nextSearch,
+        fetch: nextFetch,
+      },
+    },
+  };
 }
 
 export async function runConfigureWizard(
@@ -219,6 +308,10 @@ export async function runConfigureWizard(
         nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
       }
 
+      if (selected.includes("web")) {
+        nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+      }
+
       if (selected.includes("gateway")) {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -262,7 +355,24 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("health")) {
-        await sleep(1000);
+        const localLinks = resolveControlUiLinks({
+          bind: nextConfig.gateway?.bind ?? "loopback",
+          port: gatewayPort,
+          customBindHost: nextConfig.gateway?.customBindHost,
+          basePath: undefined,
+        });
+        const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
+        const wsUrl =
+          nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
+        const token = nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+        const password =
+          nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+        await waitForGatewayReachable({
+          url: wsUrl,
+          token,
+          password,
+          deadlineMs: 15_000,
+        });
         try {
           await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
         } catch (err) {
@@ -314,6 +424,11 @@ export async function runConfigureWizard(
           await persistConfig();
         }
 
+        if (choice === "web") {
+          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          await persistConfig();
+        }
+
         if (choice === "gateway") {
           const gateway = await promptGatewayConfig(nextConfig, runtime);
           nextConfig = gateway.config;
@@ -362,7 +477,24 @@ export async function runConfigureWizard(
         }
 
         if (choice === "health") {
-          await sleep(1000);
+          const localLinks = resolveControlUiLinks({
+            bind: nextConfig.gateway?.bind ?? "loopback",
+            port: gatewayPort,
+            customBindHost: nextConfig.gateway?.customBindHost,
+            basePath: undefined,
+          });
+          const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
+          const wsUrl =
+            nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
+          const token = nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+          const password =
+            nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+          await waitForGatewayReachable({
+            url: wsUrl,
+            token,
+            password,
+            deadlineMs: 15_000,
+          });
           try {
             await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
           } catch (err) {

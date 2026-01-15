@@ -44,6 +44,7 @@ import com.clawdbot.android.chat.ChatSessionEntry
 fun ChatComposer(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
@@ -61,7 +62,7 @@ fun ChatComposer(
   var showThinkingMenu by remember { mutableStateOf(false) }
   var showSessionMenu by remember { mutableStateOf(false) }
 
-  val sessionOptions = resolveSessionChoices(sessionKey, sessions)
+  val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
   val currentSessionLabel =
     sessionOptions.firstOrNull { it.key == sessionKey }?.displayName ?: sessionKey
 

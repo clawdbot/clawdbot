@@ -41,12 +41,12 @@ enum WideAreaGatewayDiscovery {
         }
 
         guard let ips = collectTailnetIPv4s(
-            statusJson: context.tailscaleStatus()).nonEmpty else { return [] }
+                statusJson: context.tailscaleStatus()).nonEmpty else { return [] }
         var candidates = Array(ips.prefix(self.maxCandidates))
         guard let nameserver = findNameserver(
-            candidates: &candidates,
-            remaining: remaining,
-            dig: context.dig)
+                candidates: &candidates,
+                remaining: remaining,
+                dig: context.dig)
         else {
             return []
         }
@@ -55,9 +55,9 @@ enum WideAreaGatewayDiscovery {
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let probeName = "_clawdbot-bridge._tcp.\(domainTrimmed)"
         guard let ptrLines = context.dig(
-            ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
-            min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
-            !ptrLines.isEmpty
+                ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
+                min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
+              !ptrLines.isEmpty
         else {
             return []
         }
@@ -74,8 +74,8 @@ enum WideAreaGatewayDiscovery {
             let instanceName = self.decodeDnsSdEscapes(rawInstanceName)
 
             guard let srv = context.dig(
-                ["+short", "+time=1", "+tries=1", "@\(nameserver)", ptrName, "SRV"],
-                min(defaultTimeoutSeconds, remaining()))
+                    ["+short", "+time=1", "+tries=1", "@\(nameserver)", ptrName, "SRV"],
+                    min(defaultTimeoutSeconds, remaining()))
             else { continue }
             guard let (host, port) = parseSrv(srv) else { continue }
 
@@ -198,7 +198,7 @@ enum WideAreaGatewayDiscovery {
                     if let stdout = dig(
                         ["+short", "+time=1", "+tries=1", "@\(ip)", probeName, "PTR"],
                         min(defaultTimeoutSeconds, budget)),
-                        stdout.split(whereSeparator: \.isNewline).isEmpty == false
+                       stdout.split(whereSeparator: \.isNewline).isEmpty == false
                     {
                         state.lock.lock()
                         if state.found == nil {

@@ -175,14 +175,6 @@ describe("sessions", () => {
     expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
   });
 
-  it("falls back to CLAWDIS_STATE_DIR for session transcripts dir", () => {
-    const dir = resolveSessionTranscriptsDir(
-      { CLAWDIS_STATE_DIR: "/legacy/state" } as NodeJS.ProcessEnv,
-      () => "/home/ignored",
-    );
-    expect(dir).toBe(path.join(path.resolve("/legacy/state"), "agents", "main", "sessions"));
-  });
-
   it("includes topic ids in session transcript filenames", () => {
     const prev = process.env.CLAWDBOT_STATE_DIR;
     process.env.CLAWDBOT_STATE_DIR = "/custom/state";

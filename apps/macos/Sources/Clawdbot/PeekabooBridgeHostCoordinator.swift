@@ -77,10 +77,10 @@ final class PeekabooBridgeHostCoordinator {
 
         var infoCF: CFDictionary?
         guard SecCodeCopySigningInformation(
-            staticCode,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &infoCF) == errSecSuccess,
-            let info = infoCF as? [String: Any]
+                staticCode,
+                SecCSFlags(rawValue: kSecCSSigningInformation),
+                &infoCF) == errSecSuccess,
+              let info = infoCF as? [String: Any]
         else {
             return nil
         }
@@ -106,9 +106,9 @@ private final class ClawdbotPeekabooBridgeServices: PeekabooBridgeServiceProvidi
         let feedbackClient: any AutomationFeedbackClient = NoopAutomationFeedbackClient()
 
         let snapshots = InMemorySnapshotManager(options: .init(
-            snapshotValidityWindow: 600,
-            maxSnapshots: 50,
-            deleteArtifactsOnCleanup: false))
+                                                    snapshotValidityWindow: 600,
+                                                    maxSnapshots: 50,
+                                                    deleteArtifactsOnCleanup: false))
         let applications = ApplicationService(feedbackClient: feedbackClient)
 
         let screenCapture = ScreenCaptureService(loggingService: logging)

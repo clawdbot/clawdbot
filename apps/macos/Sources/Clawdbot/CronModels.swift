@@ -70,13 +70,13 @@ enum CronSchedule: Codable, Equatable {
 enum CronPayload: Codable, Equatable {
     case systemEvent(text: String)
     case agentTurn(
-        message: String,
-        thinking: String?,
-        timeoutSeconds: Int?,
-        deliver: Bool?,
-        channel: String?,
-        to: String?,
-        bestEffortDeliver: Bool?)
+            message: String,
+            thinking: String?,
+            timeoutSeconds: Int?,
+            deliver: Bool?,
+            channel: String?,
+            to: String?,
+            bestEffortDeliver: Bool?)
 
     enum CodingKeys: String, CodingKey {
         case kind, text, message, thinking, timeoutSeconds, deliver, channel, provider, to, bestEffortDeliver

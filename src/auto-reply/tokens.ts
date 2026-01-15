@@ -10,6 +10,9 @@ export function isSilentReplyText(
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
   if (!text) return false;
-  const re = new RegExp(`^\\s*${escapeRegExp(token)}(?=$|\\W)`);
-  return re.test(text);
+  const escaped = escapeRegExp(token);
+  const prefix = new RegExp(`^\\s*${escaped}(?=$|\\W)`);
+  if (prefix.test(text)) return true;
+  const suffix = new RegExp(`\\b${escaped}\\b\\W*$`);
+  return suffix.test(text);
 }

@@ -8,60 +8,58 @@ export async function saveSlackConfig(state: ConnectionsState) {
   state.slackSaving = true;
   state.slackConfigStatus = null;
   try {
-    const base = state.configSnapshot?.config ?? {};
-    const config = { ...base } as Record<string, unknown>;
-    const slack = { ...(config.slack ?? {}) } as Record<string, unknown>;
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.slackConfigStatus = "Config hash missing; reload and retry.";
+      return;
+    }
+    const slack: Record<string, unknown> = {};
     const form = state.slackForm;
 
     if (form.enabled) {
-      delete slack.enabled;
+      slack.enabled = null;
     } else {
       slack.enabled = false;
     }
 
     if (!state.slackTokenLocked) {
       const token = form.botToken.trim();
-      if (token) slack.botToken = token;
-      else delete slack.botToken;
+      slack.botToken = token || null;
     }
     if (!state.slackAppTokenLocked) {
       const token = form.appToken.trim();
-      if (token) slack.appToken = token;
-      else delete slack.appToken;
+      slack.appToken = token || null;
     }
 
-    const dm = { ...(slack.dm ?? {}) } as Record<string, unknown>;
+    const dm: Record<string, unknown> = {};
     dm.enabled = form.dmEnabled;
     const allowFrom = parseList(form.allowFrom);
-    if (allowFrom.length > 0) dm.allowFrom = allowFrom;
-    else delete dm.allowFrom;
+    dm.allowFrom = allowFrom.length > 0 ? allowFrom : null;
     if (form.groupEnabled) {
       dm.groupEnabled = true;
     } else {
-      delete dm.groupEnabled;
+      dm.groupEnabled = null;
     }
     const groupChannels = parseList(form.groupChannels);
-    if (groupChannels.length > 0) dm.groupChannels = groupChannels;
-    else delete dm.groupChannels;
-    if (Object.keys(dm).length > 0) slack.dm = dm;
-    else delete slack.dm;
+    dm.groupChannels = groupChannels.length > 0 ? groupChannels : null;
+    slack.dm = dm;
 
     const mediaMaxMb = Number.parseFloat(form.mediaMaxMb);
     if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
       slack.mediaMaxMb = mediaMaxMb;
     } else {
-      delete slack.mediaMaxMb;
+      slack.mediaMaxMb = null;
     }
 
     const textChunkLimit = Number.parseInt(form.textChunkLimit, 10);
     if (Number.isFinite(textChunkLimit) && textChunkLimit > 0) {
       slack.textChunkLimit = textChunkLimit;
     } else {
-      delete slack.textChunkLimit;
+      slack.textChunkLimit = null;
     }
 
     if (form.reactionNotifications === "own") {
-      delete slack.reactionNotifications;
+      slack.reactionNotifications = null;
     } else {
       slack.reactionNotifications = form.reactionNotifications;
     }
@@ -69,27 +67,26 @@ export async function saveSlackConfig(state: ConnectionsState) {
     if (reactionAllowlist.length > 0) {
       slack.reactionAllowlist = reactionAllowlist;
     } else {
-      delete slack.reactionAllowlist;
+      slack.reactionAllowlist = null;
     }
 
-    const slash = { ...(slack.slashCommand ?? {}) } as Record<string, unknown>;
+    const slash: Record<string, unknown> = {};
     if (form.slashEnabled) {
       slash.enabled = true;
     } else {
-      delete slash.enabled;
+      slash.enabled = null;
     }
     if (form.slashName.trim()) slash.name = form.slashName.trim();
-    else delete slash.name;
+    else slash.name = null;
     if (form.slashSessionPrefix.trim())
       slash.sessionPrefix = form.slashSessionPrefix.trim();
-    else delete slash.sessionPrefix;
+    else slash.sessionPrefix = null;
     if (form.slashEphemeral) {
-      delete slash.ephemeral;
+      slash.ephemeral = null;
     } else {
       slash.ephemeral = false;
     }
-    if (Object.keys(slash).length > 0) slack.slashCommand = slash;
-    else delete slack.slashCommand;
+    slack.slashCommand = slash;
 
     const actions: Partial<SlackActionForm> = {};
     const applyAction = (key: keyof SlackActionForm) => {
@@ -104,7 +101,7 @@ export async function saveSlackConfig(state: ConnectionsState) {
     if (Object.keys(actions).length > 0) {
       slack.actions = actions;
     } else {
-      delete slack.actions;
+      slack.actions = null;
     }
 
     const channels = form.channels
@@ -123,17 +120,15 @@ export async function saveSlackConfig(state: ConnectionsState) {
     if (channels.length > 0) {
       slack.channels = Object.fromEntries(channels);
     } else {
-      delete slack.channels;
+      slack.channels = null;
     }
 
-    if (Object.keys(slack).length > 0) {
-      config.slack = slack;
-    } else {
-      delete config.slack;
-    }
-
-    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
-    await state.client.request("config.set", { raw });
+    const raw = `${JSON.stringify(
+      { channels: { slack } },
+      null,
+      2,
+    ).trimEnd()}\n`;
+    await state.client.request("config.patch", { raw, baseHash });
     state.slackConfigStatus = "Saved. Restart gateway if needed.";
   } catch (err) {
     state.slackConfigStatus = String(err);

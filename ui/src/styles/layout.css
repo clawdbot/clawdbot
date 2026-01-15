@@ -221,6 +221,14 @@
   opacity: 1;
 }
 
+.nav-label--static {
+  cursor: default;
+}
+
+.nav-label--static:hover {
+  opacity: 0.7;
+}
+
 .nav-label__text {
   flex: 1;
 }
@@ -303,31 +311,6 @@
 
 .shell--chat .content {
   /* No-op: keep chat layout consistent with other tabs */
-}
-
-.docs-link {
-  position: fixed;
-  right: calc(var(--shell-pad) + 4px);
-  bottom: calc(var(--shell-pad) + 4px);
-  z-index: 30;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text);
-  font-size: 12px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
-  transition: transform 140ms ease, border-color 140ms ease,
-    background 140ms ease, color 140ms ease;
-}
-
-.docs-link:hover {
-  transform: translateY(-2px);
-  border-color: rgba(245, 159, 74, 0.5);
-  background: rgba(245, 159, 74, 0.18);
-  color: var(--text);
 }
 
 .content-header {

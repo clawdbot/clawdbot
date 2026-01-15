@@ -1,5 +1,5 @@
 import { type Bot, InputFile } from "grammy";
-import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import { markdownToTelegramChunks, markdownToTelegramHtml } from "../format.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import { danger, logVerbose } from "../../globals.js";
@@ -10,7 +10,6 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
-import { markdownToTelegramHtml } from "../format.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
@@ -42,11 +41,14 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     if (mediaList.length === 0) {
-      for (const chunk of chunkMarkdownText(reply.text || "", textLimit)) {
-        await sendTelegramText(bot, chatId, chunk, runtime, {
+      const chunks = markdownToTelegramChunks(reply.text || "", textLimit);
+      for (const chunk of chunks) {
+        await sendTelegramText(bot, chatId, chunk.html, runtime, {
           replyToMessageId:
             replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
           messageThreadId,
+          textMode: "html",
+          plainText: chunk.text,
         });
         if (replyToId && !hasReplied) {
           hasReplied = true;
@@ -155,7 +157,12 @@ async function sendTelegramText(
   chatId: string,
   text: string,
   runtime: RuntimeEnv,
-  opts?: { replyToMessageId?: number; messageThreadId?: number },
+  opts?: {
+    replyToMessageId?: number;
+    messageThreadId?: number;
+    textMode?: "markdown" | "html";
+    plainText?: string;
+  },
 ): Promise<number | undefined> {
   const threadParams = buildTelegramThreadParams(opts?.messageThreadId);
   const baseParams: Record<string, unknown> = {
@@ -164,7 +171,8 @@ async function sendTelegramText(
   if (threadParams) {
     baseParams.message_thread_id = threadParams.message_thread_id;
   }
-  const htmlText = markdownToTelegramHtml(text);
+  const textMode = opts?.textMode ?? "markdown";
+  const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   try {
     const res = await bot.api.sendMessage(chatId, htmlText, {
       parse_mode: "HTML",
@@ -175,7 +183,8 @@ async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
-      const res = await bot.api.sendMessage(chatId, text, {
+      const fallbackText = opts?.plainText ?? text;
+      const res = await bot.api.sendMessage(chatId, fallbackText, {
         ...baseParams,
       });
       return res.message_id;

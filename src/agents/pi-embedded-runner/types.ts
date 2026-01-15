@@ -1,4 +1,5 @@
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -17,6 +18,7 @@ export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
+  systemPromptReport?: SessionSystemPromptReport;
   error?: {
     kind: "context_overflow" | "compaction_failure";
     message: string;

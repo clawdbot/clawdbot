@@ -360,10 +360,10 @@ final class VoiceWakeTester {
         config: WakeWordGateConfig) -> WakeWordGateMatch?
     {
         guard let command = VoiceWakeTextUtils.textOnlyCommand(
-            transcript: transcript,
-            triggers: triggers,
-            minCommandLength: config.minCommandLength,
-            trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
+                transcript: transcript,
+                triggers: triggers,
+                minCommandLength: config.minCommandLength,
+                trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
         else { return nil }
         return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
     }
@@ -408,9 +408,9 @@ final class VoiceWakeTester {
             guard let lastSeenAt, let lastText else { return }
             guard self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText else { return }
             guard let match = self.textOnlyFallbackMatch(
-                transcript: lastText,
-                triggers: triggers,
-                config: WakeWordGateConfig(triggers: triggers)) else { return }
+                    transcript: lastText,
+                    triggers: triggers,
+                    config: WakeWordGateConfig(triggers: triggers)) else { return }
             self.holdingAfterDetect = true
             self.detectedText = match.command
             self.logger.info("voice wake detected (test, silence) (len=\(match.command.count))")

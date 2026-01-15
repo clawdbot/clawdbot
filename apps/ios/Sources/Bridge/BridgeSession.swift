@@ -26,6 +26,7 @@ actor BridgeSession {
 
     private(set) var state: State = .idle
     private var canvasHostUrl: String?
+    private var mainSessionKey: String?
 
     func currentCanvasHostUrl() -> String? {
         self.canvasHostUrl
@@ -68,7 +69,7 @@ actor BridgeSession {
     func connect(
         endpoint: NWEndpoint,
         hello: BridgeHello,
-        onConnected: (@Sendable (String) async -> Void)? = nil,
+        onConnected: (@Sendable (String, String?) async -> Void)? = nil,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)
         async throws
     {
@@ -107,7 +108,9 @@ actor BridgeSession {
             let ok = try self.decoder.decode(BridgeHelloOk.self, from: data)
             self.state = .connected(serverName: ok.serverName)
             self.canvasHostUrl = ok.canvasHostUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
-            await onConnected?(ok.serverName)
+            let mainKey = ok.mainSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.mainSessionKey = (mainKey?.isEmpty == false) ? mainKey : nil
+            await onConnected?(ok.serverName, self.mainSessionKey)
         } else if base.type == "error" {
             let err = try self.decoder.decode(BridgeErrorFrame.self, from: data)
             self.state = .failed(message: "\(err.code): \(err.message)")
@@ -217,6 +220,7 @@ actor BridgeSession {
         self.queue = nil
         self.buffer = Data()
         self.canvasHostUrl = nil
+        self.mainSessionKey = nil
 
         let pending = self.pendingRPC.values
         self.pendingRPC.removeAll()
@@ -232,6 +236,10 @@ actor BridgeSession {
         self.serverEventSubscribers.removeAll()
 
         self.state = .idle
+    }
+
+    func currentMainSessionKey() -> String? {
+        self.mainSessionKey
     }
 
     private func beginRPC(

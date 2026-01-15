@@ -10,6 +10,22 @@ import {
   type JsonSchema,
 } from "./config-form.shared";
 
+const META_KEYS = new Set(["title", "description", "default", "nullable"]);
+
+function isAnySchema(schema: JsonSchema): boolean {
+  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
+  return keys.length === 0;
+}
+
+function jsonValue(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function renderNode(params: {
   schema: JsonSchema;
   value: unknown;
@@ -81,6 +97,34 @@ export function renderNode(params: {
         </label>
       `;
     }
+  }
+
+  if (schema.enum) {
+    const options = schema.enum;
+    const currentIndex = options.findIndex(
+      (opt) => opt === value || String(opt) === String(value),
+    );
+    const unset = "__unset__";
+    return html`
+      <label class="field">
+        ${showLabel ? html`<span>${label}</span>` : nothing}
+        ${help ? html`<div class="muted">${help}</div>` : nothing}
+        <select
+          .value=${currentIndex >= 0 ? String(currentIndex) : unset}
+          ?disabled=${disabled}
+          @change=${(e: Event) => {
+            const idx = (e.target as HTMLSelectElement).value;
+            onPatch(path, idx === unset ? undefined : options[Number(idx)]);
+          }}
+        >
+          <option value=${unset}>Select…</option>
+          ${options.map(
+            (opt, idx) =>
+              html`<option value=${String(idx)}>${String(opt)}</option>`,
+          )}
+        </select>
+      </label>
+    `;
   }
 
   if (type === "object") {
@@ -262,6 +306,7 @@ function renderMapField(params: {
 }): TemplateResult {
   const { schema, value, path, hints, unsupported, disabled, reservedKeys, onPatch } =
     params;
+  const anySchema = isAnySchema(schema);
   const entries = Object.entries(value ?? {}).filter(
     ([key]) => !reservedKeys.has(key),
   );
@@ -280,7 +325,7 @@ function renderMapField(params: {
               index += 1;
               key = `new-${index}`;
             }
-            next[key] = defaultValue(schema);
+            next[key] = anySchema ? {} : defaultValue(schema);
             onPatch(path, next);
           }}
         >
@@ -291,6 +336,7 @@ function renderMapField(params: {
         ? html`<div class="muted">No entries yet.</div>`
         : entries.map(([key, entryValue]) => {
             const valuePath = [...path, key];
+            const fallback = jsonValue(entryValue);
             return html`<div class="array-item" style="gap: 8px;">
               <input
                 class="mono"
@@ -308,16 +354,39 @@ function renderMapField(params: {
                 }}
               />
               <div style="flex: 1;">
-                ${renderNode({
-                  schema,
-                  value: entryValue,
-                  path: valuePath,
-                  hints,
-                  unsupported,
-                  disabled,
-                  showLabel: false,
-                  onPatch,
-                })}
+                ${anySchema
+                  ? html`<label class="field" style="margin: 0;">
+                      <div class="muted">JSON value</div>
+                      <textarea
+                        class="mono"
+                        rows="5"
+                        .value=${fallback}
+                        ?disabled=${disabled}
+                        @change=${(e: Event) => {
+                          const target = e.target as HTMLTextAreaElement;
+                          const raw = target.value.trim();
+                          if (!raw) {
+                            onPatch(valuePath, undefined);
+                            return;
+                          }
+                          try {
+                            onPatch(valuePath, JSON.parse(raw));
+                          } catch {
+                            target.value = fallback;
+                          }
+                        }}
+                      ></textarea>
+                    </label>`
+                  : renderNode({
+                      schema,
+                      value: entryValue,
+                      path: valuePath,
+                      hints,
+                      unsupported,
+                      disabled,
+                      showLabel: false,
+                      onPatch,
+                    })}
               </div>
               <button
                 class="btn danger"
@@ -335,4 +404,3 @@ function renderMapField(params: {
     </div>
   `;
 }
-

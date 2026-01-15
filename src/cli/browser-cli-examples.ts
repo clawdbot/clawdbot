@@ -11,6 +11,8 @@ export const browserCoreExamples = [
   "clawdbot browser screenshot --ref 12",
   "clawdbot browser snapshot",
   "clawdbot browser snapshot --format aria --limit 200",
+  "clawdbot browser snapshot --efficient",
+  "clawdbot browser snapshot --labels",
 ];
 
 export const browserActionExamples = [

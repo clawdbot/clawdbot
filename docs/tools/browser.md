@@ -30,10 +30,10 @@ agent automation and verification.
 ## Quick start
 
 ```bash
-clawdbot browser status
-clawdbot browser start
-clawdbot browser open https://example.com
-clawdbot browser snapshot
+clawdbot browser --browser-profile clawd status
+clawdbot browser --browser-profile clawd start
+clawdbot browser --browser-profile clawd open https://example.com
+clawdbot browser --browser-profile clawd snapshot
 ```
 
 If you get “Browser disabled”, enable it in config (see below) and restart the
@@ -49,7 +49,7 @@ Browser settings live in `~/.clawdbot/clawdbot.json`.
     enabled: true,                    // default: true
     controlUrl: "http://127.0.0.1:18791",
     cdpUrl: "http://127.0.0.1:18792", // defaults to controlUrl + 1
-    defaultProfile: "clawd",
+    defaultProfile: "chrome",
     color: "#FF4500",
     headless: false,
     noSandbox: false,
@@ -106,19 +106,161 @@ Example:
 Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
 directly to a Chrome instance without a remote control server.
 
+### Running the control server on the browser machine
+
+Run a standalone browser control server (recommended when your Gateway is remote):
+
+```bash
+# on the machine that runs Chrome
+clawdbot browser serve --bind <browser-host> --port 18791 --token <token>
+```
+
+Then point your Gateway at it:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://<browser-host>:18791",
+
+    // Option A (recommended): keep token in env on the Gateway
+    // (avoid writing secrets into config files)
+    // controlToken: "<token>"
+  }
+}
+```
+
+And set the auth token in the Gateway environment:
+
+```bash
+export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
+```
+
+Option B: store the token in the Gateway config instead (same shared token):
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://<browser-host>:18791",
+    controlToken: "<token>"
+  }
+}
+```
+
+## Security
+
+This section covers the **browser control server** (`browser.controlUrl`) used for agent browser automation.
+
+Key ideas:
+- Treat the browser control server like an admin API: **private network only**.
+- Use **token auth** always when the server is reachable off-machine.
+- Prefer **Tailnet-only** connectivity over LAN exposure.
+
+### Tokens (what is shared with what?)
+
+- `browser.controlToken` / `CLAWDBOT_BROWSER_CONTROL_TOKEN` is **only** for authenticating browser control HTTP requests to `browser.controlUrl`.
+- It is **not** the Gateway token (`gateway.auth.token`) and **not** a node pairing token.
+- You *can* reuse the same string value, but it’s better to keep them separate to reduce blast radius.
+
+### Binding (don’t expose to your LAN by accident)
+
+Recommended:
+- Keep `clawdbot browser serve` bound to loopback (`127.0.0.1`) and publish it via Tailscale.
+- Or bind to a Tailnet IP only (never `0.0.0.0`) and require a token.
+
+Avoid:
+- `--bind 0.0.0.0` (LAN-visible). Even with token auth, traffic is plain HTTP unless you also add TLS.
+
+### TLS / HTTPS (recommended approach: terminate in front)
+
+Best practice here: keep `clawdbot browser serve` on HTTP and terminate TLS in front.
+
+If you’re already using Tailscale, you have two good options:
+
+1) **Tailnet-only, still HTTP** (transport is encrypted by Tailscale):
+- Keep `controlUrl` as `http://…` but ensure it’s only reachable over your tailnet.
+
+2) **Serve HTTPS via Tailscale** (nice UX: `https://…` URL):
+
+```bash
+# on the browser machine
+clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
+tailscale serve https / http://127.0.0.1:18791
+```
+
+Then set your Gateway config `browser.controlUrl` to the HTTPS URL (MagicDNS/ts.net) and keep using the same token.
+
+Notes:
+- Do **not** use Tailscale Funnel for this unless you explicitly want to make the endpoint public.
+- For Tailnet setup/background, see [Gateway web surfaces](/web/index) and the [Gateway CLI](/cli/gateway).
+
 ## Profiles (multi-browser)
 
-Clawdbot supports multiple named profiles. Each profile has its own:
-- user data directory
-- CDP port (local) or CDP URL (remote)
-- accent color
+Clawdbot supports multiple named profiles (routing configs). Profiles can be:
+- **clawd-managed**: a dedicated Chrome instance with its own user data directory + CDP port
+- **remote**: an explicit CDP URL (Chrome running elsewhere)
+- **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
 
 Defaults:
 - The `clawd` profile is auto-created if missing.
+- The `chrome` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
 All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`.
+
+## Chrome extension relay (use your existing Chrome)
+
+Clawdbot can also drive **your existing Chrome tabs** (no separate “clawd” Chrome instance) via a local CDP relay + a Chrome extension.
+
+Full guide: [Chrome extension](/tools/chrome-extension)
+
+Flow:
+- You run a **browser control server** (Gateway on the same machine, or `clawdbot browser serve`).
+- A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
+- You click the **Clawdbot Browser Relay** extension icon on a tab to attach (it does not auto-attach).
+- The agent controls that tab via the normal `browser` tool, by selecting the right profile.
+
+If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
+Use `browser serve` only when the Gateway runs elsewhere (remote mode).
+
+### Sandboxed sessions
+
+If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
+Chrome extension relay takeover requires host browser control, so either:
+- run the session unsandboxed, or
+- set `agents.defaults.sandbox.browser.allowHostControl: true` and use `target="host"` when calling the tool.
+
+### Setup
+
+1) Load the extension (dev/unpacked):
+
+```bash
+clawdbot browser extension install
+```
+
+- Chrome → `chrome://extensions` → enable “Developer mode”
+- “Load unpacked” → select the directory printed by `clawdbot browser extension path`
+- Pin the extension, then click it on the tab you want to control (badge shows `ON`).
+
+2) Use it:
+- CLI: `clawdbot browser --browser-profile chrome tabs`
+- Agent tool: `browser` with `profile="chrome"`
+
+Optional: if you want a different name or relay port, create your own profile:
+
+```bash
+clawdbot browser create-profile \
+  --name my-chrome \
+  --driver extension \
+  --cdp-url http://127.0.0.1:18792 \
+  --color "#00AA00"
+```
+
+Notes:
+- This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
+- Detach by clicking the extension icon again.
 
 ## Isolation guarantees
 
@@ -164,7 +306,8 @@ All endpoints accept `?profile=<name>`.
 
 Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
 Playwright. If Playwright isn’t installed, those endpoints return a clear 501
-error. ARIA snapshots and basic screenshots still work.
+error. ARIA snapshots and basic screenshots still work for clawd-managed Chrome.
+For the Chrome extension relay driver, ARIA snapshots and screenshots require Playwright.
 
 ## How it works (internal)
 
@@ -204,6 +347,8 @@ Inspection:
 - `clawdbot browser snapshot`
 - `clawdbot browser snapshot --format aria --limit 200`
 - `clawdbot browser snapshot --interactive --compact --depth 6`
+- `clawdbot browser snapshot --efficient`
+- `clawdbot browser snapshot --labels`
 - `clawdbot browser snapshot --selector "#main" --interactive`
 - `clawdbot browser snapshot --frame "iframe#main" --interactive`
 - `clawdbot browser console --level error`
@@ -260,9 +405,11 @@ Notes:
 - `snapshot`:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
   - `--format aria`: returns the accessibility tree (no refs; inspection only).
+  - `--efficient` (or `--mode efficient`): compact role snapshot preset (interactive + compact + depth + lower maxChars).
   - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
+  - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 
@@ -279,6 +426,7 @@ Clawdbot supports two “snapshot” styles:
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `clawdbot browser click e12`, `clawdbot browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
+  - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
 
 Ref behavior:
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.

@@ -36,6 +36,12 @@ export function applyChannelAccountConfig(params: {
   httpHost?: string;
   httpPort?: string;
   useEnv?: boolean;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
+  deviceName?: string;
+  initialSyncLimit?: number;
 }): ClawdbotConfig {
   const accountId = normalizeAccountId(params.accountId);
   const plugin = getChannelPlugin(params.channel);
@@ -57,6 +63,12 @@ export function applyChannelAccountConfig(params: {
     httpHost: params.httpHost,
     httpPort: params.httpPort,
     useEnv: params.useEnv,
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accessToken: params.accessToken,
+    password: params.password,
+    deviceName: params.deviceName,
+    initialSyncLimit: params.initialSyncLimit,
   };
   return apply({ cfg: params.cfg, accountId, input });
 }

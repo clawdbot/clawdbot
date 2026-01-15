@@ -102,4 +102,68 @@ describe("loadClawdbotPlugins", () => {
     expect(registry.plugins[0]?.status).toBe("error");
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
   });
+
+  it("registers channel plugins", () => {
+    const plugin = writePlugin({
+      id: "channel-demo",
+      body: `export default function (api) {
+  api.registerChannel({
+    plugin: {
+      id: "demo",
+      meta: {
+        id: "demo",
+        label: "Demo",
+        selectionLabel: "Demo",
+        docsPath: "/channels/demo",
+        blurb: "demo channel"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+};`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["channel-demo"],
+        },
+      },
+    });
+
+    expect(registry.channels.length).toBe(1);
+    expect(registry.channels[0]?.plugin.id).toBe("demo");
+  });
+
+  it("registers http handlers", () => {
+    const plugin = writePlugin({
+      id: "http-demo",
+      body: `export default function (api) {
+  api.registerHttpHandler(async () => false);
+};`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["http-demo"],
+        },
+      },
+    });
+
+    expect(registry.httpHandlers.length).toBe(1);
+    expect(registry.httpHandlers[0]?.pluginId).toBe("http-demo");
+    expect(registry.plugins[0]?.httpHandlers).toBe(1);
+  });
 });

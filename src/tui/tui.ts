@@ -1,7 +1,7 @@
 import {
   CombinedAutocompleteProvider,
-  type Component,
   Container,
+  Loader,
   ProcessTerminal,
   Text,
   TUI,
@@ -22,6 +22,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
+import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type {
   AgentSummary,
@@ -59,6 +60,9 @@ export async function runTui(opts: TuiOptions) {
   let activityStatus = "idle";
   let connectionStatus = "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
+  let statusTimer: NodeJS.Timeout | null = null;
+  let statusStartedAt: number | null = null;
+  let lastActivityStatus = activityStatus;
 
   const state: TuiStateAccess = {
     get agentDefaultId() {
@@ -184,16 +188,14 @@ export async function runTui(opts: TuiOptions) {
   });
 
   const header = new Text("", 1, 0);
-  const status = new Text("", 1, 0);
+  const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(editorTheme);
-  const overlay = new Container();
   const root = new Container();
   root.addChild(header);
-  root.addChild(overlay);
   root.addChild(chatLog);
-  root.addChild(status);
+  root.addChild(statusContainer);
   root.addChild(footer);
   root.addChild(editor);
 
@@ -250,13 +252,79 @@ export async function runTui(opts: TuiOptions) {
     );
   };
 
-  const setStatus = (text: string) => {
-    status.setText(theme.dim(text));
+  const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
+  let statusText: Text | null = null;
+  let statusLoader: Loader | null = null;
+
+  const formatElapsed = (startMs: number) => {
+    const totalSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}m ${seconds}s`;
+  };
+
+  const ensureStatusText = () => {
+    if (statusText) return;
+    statusContainer.clear();
+    statusLoader?.stop();
+    statusLoader = null;
+    statusText = new Text("", 1, 0);
+    statusContainer.addChild(statusText);
+  };
+
+  const ensureStatusLoader = () => {
+    if (statusLoader) return;
+    statusContainer.clear();
+    statusText = null;
+    statusLoader = new Loader(
+      tui,
+      (spinner) => theme.accent(spinner),
+      (text) => theme.bold(theme.accentSoft(text)),
+      "",
+    );
+    statusContainer.addChild(statusLoader);
+  };
+
+  const updateBusyStatusMessage = () => {
+    if (!statusLoader || !statusStartedAt) return;
+    const elapsed = formatElapsed(statusStartedAt);
+    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
+  };
+
+  const startStatusTimer = () => {
+    if (statusTimer) return;
+    statusTimer = setInterval(() => {
+      if (!busyStates.has(activityStatus)) return;
+      updateBusyStatusMessage();
+    }, 1000);
+  };
+
+  const stopStatusTimer = () => {
+    if (!statusTimer) return;
+    clearInterval(statusTimer);
+    statusTimer = null;
   };
 
   const renderStatus = () => {
-    const text = activityStatus ? `${connectionStatus} | ${activityStatus}` : connectionStatus;
-    setStatus(text);
+    const isBusy = busyStates.has(activityStatus);
+    if (isBusy) {
+      if (!statusStartedAt || lastActivityStatus !== activityStatus) {
+        statusStartedAt = Date.now();
+      }
+      ensureStatusLoader();
+      updateBusyStatusMessage();
+      startStatusTimer();
+    } else {
+      statusStartedAt = null;
+      stopStatusTimer();
+      statusLoader?.stop();
+      statusLoader = null;
+      ensureStatusText();
+      const text = activityStatus ? `${connectionStatus} | ${activityStatus}` : connectionStatus;
+      statusText?.setText(theme.dim(text));
+    }
+    lastActivityStatus = activityStatus;
   };
 
   const setConnectionStatus = (text: string, ttlMs?: number) => {
@@ -300,16 +368,7 @@ export async function runTui(opts: TuiOptions) {
     );
   };
 
-  const closeOverlay = () => {
-    overlay.clear();
-    tui.setFocus(editor);
-  };
-
-  const openOverlay = (component: Component) => {
-    overlay.clear();
-    overlay.addChild(component);
-    tui.setFocus(component);
-  };
+  const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) return null;

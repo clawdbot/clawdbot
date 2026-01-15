@@ -58,6 +58,13 @@ final class OnboardingWizardModel {
     func startIfNeeded(mode: AppState.ConnectionMode, workspace: String? = nil) async {
         guard self.sessionId == nil, !self.isStarting else { return }
         guard mode == .local else { return }
+        if self.shouldSkipWizard() {
+            self.sessionId = nil
+            self.currentStep = nil
+            self.status = "done"
+            self.errorMessage = nil
+            return
+        }
         self.isStarting = true
         self.errorMessage = nil
         self.lastStartMode = mode
@@ -176,6 +183,33 @@ final class OnboardingWizardModel {
         self.errorMessage = "Wizard session lost. Restarting…"
         Task { await self.startIfNeeded(mode: mode, workspace: self.lastStartWorkspace) }
         return true
+    }
+
+    private func shouldSkipWizard() -> Bool {
+        let root = ClawdbotConfigFile.loadDict()
+        if let wizard = root["wizard"] as? [String: Any], !wizard.isEmpty {
+            return true
+        }
+        if let gateway = root["gateway"] as? [String: Any],
+           let auth = gateway["auth"] as? [String: Any]
+        {
+            if let mode = auth["mode"] as? String,
+               !mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return true
+            }
+            if let token = auth["token"] as? String,
+               !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return true
+            }
+            if let password = auth["password"] as? String,
+               !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return true
+            }
+        }
+        return false
     }
 }
 

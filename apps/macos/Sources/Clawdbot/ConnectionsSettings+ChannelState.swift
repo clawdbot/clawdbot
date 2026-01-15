@@ -377,18 +377,18 @@ extension ConnectionsSettings {
         case .telegram:
             return self
                 .date(fromMs: self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)?
-                    .lastProbeAt)
+                        .lastProbeAt)
         case .discord:
             return self
                 .date(fromMs: self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)?
-                    .lastProbeAt)
+                        .lastProbeAt)
         case .signal:
             return self
                 .date(fromMs: self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)?.lastProbeAt)
         case .imessage:
             return self
                 .date(fromMs: self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)?
-                    .lastProbeAt)
+                        .lastProbeAt)
         }
     }
 

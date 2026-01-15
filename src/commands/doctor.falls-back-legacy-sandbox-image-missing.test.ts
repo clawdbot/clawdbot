@@ -34,7 +34,7 @@ beforeEach(() => {
     durationMs: 0,
   });
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/clawdis.json",
+    path: "/tmp/clawdbot.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -133,7 +133,7 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/clawdis.json",
+  path: "/tmp/clawdbot.json",
   exists: false,
   raw: null,
   parsed: {},
@@ -317,86 +317,6 @@ vi.mock("./doctor-state-migrations.js", () => ({
 }));
 
 describe("doctor command", () => {
-  it("falls back to legacy sandbox image when missing", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/clawdbot.json",
-      exists: true,
-      raw: "{}",
-      parsed: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "non-main",
-              docker: {
-                image: "clawdbot-sandbox-common:bookworm-slim",
-              },
-            },
-          },
-        },
-      },
-      valid: true,
-      config: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "non-main",
-              docker: {
-                image: "clawdbot-sandbox-common:bookworm-slim",
-              },
-            },
-          },
-        },
-      },
-      issues: [],
-      legacyIssues: [],
-    });
-
-    runExec.mockImplementation((command: string, args: string[]) => {
-      if (command !== "docker") {
-        return Promise.resolve({ stdout: "", stderr: "" });
-      }
-      if (args[0] === "version") {
-        return Promise.resolve({ stdout: "1", stderr: "" });
-      }
-      if (args[0] === "image" && args[1] === "inspect") {
-        const image = args[2];
-        if (image === "clawdbot-sandbox-common:bookworm-slim") {
-          return Promise.reject(new Error("missing"));
-        }
-        if (image === "clawdis-sandbox-common:bookworm-slim") {
-          return Promise.resolve({ stdout: "ok", stderr: "" });
-        }
-      }
-      return Promise.resolve({ stdout: "", stderr: "" });
-    });
-
-    confirm
-      .mockResolvedValueOnce(false) // skip gateway token prompt
-      .mockResolvedValueOnce(false) // skip build
-      .mockResolvedValueOnce(true); // accept legacy fallback
-
-    const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    await doctorCommand(runtime);
-
-    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    const agents = written.agents as Record<string, unknown>;
-    const defaults = agents.defaults as Record<string, unknown>;
-    const sandbox = defaults.sandbox as Record<string, unknown>;
-    const docker = sandbox.docker as Record<string, unknown>;
-
-    expect(docker.image).toBe("clawdis-sandbox-common:bookworm-slim");
-    const defaultsCalls = runCommandWithTimeout.mock.calls.filter(
-      ([args]) => Array.isArray(args) && args[0] === "/usr/bin/defaults",
-    );
-    expect(defaultsCalls.length).toBe(runCommandWithTimeout.mock.calls.length);
-  }, 20_000);
-
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",

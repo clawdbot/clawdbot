@@ -73,6 +73,11 @@ describe("createClawdbotCodingTools", () => {
     expect(schema.type).toBe("object");
     expect(schema.anyOf).toBeUndefined();
   });
+  it("mentions Chrome extension relay in browser tool description", () => {
+    const browser = createBrowserTool();
+    expect(browser.description).toMatch(/Chrome extension/i);
+    expect(browser.description).toMatch(/profile="chrome"/i);
+  });
   it("keeps browser tool schema properties after normalization", () => {
     const tools = createClawdbotCodingTools();
     const browser = tools.find((tool) => tool.name === "browser");
@@ -155,6 +160,30 @@ describe("createClawdbotCodingTools", () => {
       type: "string",
       enum: ["a", "b"],
     });
+  });
+  it("cleans tuple items schemas", () => {
+    const cleaned = __testing.cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        tuples: {
+          type: "array",
+          items: [
+            { type: "string", format: "uuid" },
+            { type: "number", minimum: 1 },
+          ],
+        },
+      },
+    }) as {
+      properties?: Record<string, unknown>;
+    };
+
+    const tuples = cleaned.properties?.tuples as { items?: unknown } | undefined;
+    const items = Array.isArray(tuples?.items) ? tuples?.items : [];
+    const first = items[0] as { format?: unknown } | undefined;
+    const second = items[1] as { minimum?: unknown } | undefined;
+
+    expect(first?.format).toBeUndefined();
+    expect(second?.minimum).toBeUndefined();
   });
   it("drops null-only union variants without flattening other unions", () => {
     const cleaned = __testing.cleanToolSchemaForGemini({

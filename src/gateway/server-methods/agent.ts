@@ -111,14 +111,15 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const rawChannel = typeof request.channel === "string" ? request.channel.trim() : "";
     if (rawChannel) {
+      const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
       const normalized = normalizeMessageChannel(rawChannel);
-      if (normalized && normalized !== "last" && !isGatewayMessageChannel(normalized)) {
+      if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown channel: ${normalized}`,
+            `invalid agent params: unknown channel: ${String(normalized)}`,
           ),
         );
         return;

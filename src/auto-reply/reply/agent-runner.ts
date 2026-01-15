@@ -216,9 +216,11 @@ export async function runReplyAgent(params: {
       abortedLastRun: false,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const topicId =
-      typeof sessionCtx.MessageThreadId === "number" ? sessionCtx.MessageThreadId : undefined;
-    const nextSessionFile = resolveSessionTranscriptPath(nextSessionId, agentId, topicId);
+    const nextSessionFile = resolveSessionTranscriptPath(
+      nextSessionId,
+      agentId,
+      sessionCtx.MessageThreadId,
+    );
     nextEntry.sessionFile = nextSessionFile;
     activeSessionStore[sessionKey] = nextEntry;
     try {
@@ -351,6 +353,7 @@ export async function runReplyAgent(params: {
                 modelProvider: providerUsed,
                 model: modelUsed,
                 contextTokens: contextTokensUsed ?? entry.contextTokens,
+                systemPromptReport: runResult.meta.systemPromptReport ?? entry.systemPromptReport,
                 updatedAt: Date.now(),
               };
               if (cliSessionId) {
@@ -378,6 +381,7 @@ export async function runReplyAgent(params: {
                 modelProvider: providerUsed ?? entry.modelProvider,
                 model: modelUsed ?? entry.model,
                 contextTokens: contextTokensUsed ?? entry.contextTokens,
+                systemPromptReport: runResult.meta.systemPromptReport ?? entry.systemPromptReport,
                 updatedAt: Date.now(),
               };
               if (cliSessionId) {

@@ -24,7 +24,7 @@ enum CLIRegistry {
             subcommands: [
                 descriptor(for: ServiceInstall.self),
                 descriptor(for: ServiceUninstall.self),
-                descriptor(for: ServiceStatus.self),
+                descriptor(for: ServiceStatus.self)
             ])
         let doctorDesc = descriptor(for: DoctorCommand.self)
         let setupDesc = descriptor(for: SetupCommand.self)
@@ -54,7 +54,7 @@ enum CLIRegistry {
                 startDesc,
                 stopDesc,
                 restartDesc,
-                statusDesc,
+                statusDesc
             ])
         return [root]
     }

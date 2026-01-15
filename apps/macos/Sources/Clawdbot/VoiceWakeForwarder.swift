@@ -48,12 +48,12 @@ enum VoiceWakeForwarder {
         let payload = Self.prefixedTranscript(transcript)
         let deliver = options.channel.shouldDeliver(options.deliver)
         let result = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
-            message: payload,
-            sessionKey: options.sessionKey,
-            thinking: options.thinking,
-            deliver: deliver,
-            to: options.to,
-            channel: options.channel))
+                                                                message: payload,
+                                                                sessionKey: options.sessionKey,
+                                                                thinking: options.thinking,
+                                                                deliver: deliver,
+                                                                to: options.to,
+                                                                channel: options.channel))
 
         if result.ok {
             self.logger.info("voice wake forward ok")

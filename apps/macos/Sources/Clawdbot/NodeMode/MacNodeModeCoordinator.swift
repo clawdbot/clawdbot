@@ -67,8 +67,11 @@ final class MacNodeModeCoordinator {
                 try await self.session.connect(
                     endpoint: endpoint,
                     hello: hello,
-                    onConnected: { [weak self] serverName in
+                    onConnected: { [weak self] serverName, mainSessionKey in
                         self?.logger.info("mac node connected to \(serverName, privacy: .public)")
+                        if let mainSessionKey {
+                            await self?.runtime.updateMainSessionKey(mainSessionKey)
+                        }
                     },
                     onDisconnected: { reason in
                         await MacNodeModeCoordinator.handleBridgeDisconnect(reason: reason)
@@ -386,10 +389,10 @@ final class MacNodeModeCoordinator {
                     let preferred = BridgeDiscoveryPreferences.preferredStableID()
                     if let preferred,
                        let match = results.first(where: {
-                           if case .service = $0.endpoint {
-                               return BridgeEndpointID.stableID($0.endpoint) == preferred
-                           }
-                           return false
+                        if case .service = $0.endpoint {
+                            return BridgeEndpointID.stableID($0.endpoint) == preferred
+                        }
+                        return false
                        })
                     {
                         state.finish(match.endpoint)

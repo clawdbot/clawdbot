@@ -5,14 +5,20 @@ import { GatewayBrowserClient } from "./gateway";
 import type { EventLogEntry } from "./app-events";
 import type { PresenceEntry, HealthSnapshot, StatusSummary } from "./types";
 import type { Tab } from "./navigation";
+import type { UiSettings } from "./storage";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream";
 import { flushChatQueueForEvent } from "./app-chat";
-import { loadCron, refreshActiveTab, setLastActiveSessionKey } from "./app-settings";
+import {
+  applySettings,
+  loadCron,
+  refreshActiveTab,
+  setLastActiveSessionKey,
+} from "./app-settings";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat";
 import type { ClawdbotApp } from "./app";
 
 type GatewayHost = {
-  settings: { gatewayUrl: string; token: string };
+  settings: UiSettings;
   password: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -28,6 +34,60 @@ type GatewayHost = {
   sessionKey: string;
   chatRunId: string | null;
 };
+
+type SessionDefaultsSnapshot = {
+  defaultAgentId?: string;
+  mainKey?: string;
+  mainSessionKey?: string;
+  scope?: string;
+};
+
+function normalizeSessionKeyForDefaults(
+  value: string | undefined,
+  defaults: SessionDefaultsSnapshot,
+): string {
+  const raw = (value ?? "").trim();
+  const mainSessionKey = defaults.mainSessionKey?.trim();
+  if (!mainSessionKey) return raw;
+  if (!raw) return mainSessionKey;
+  const mainKey = defaults.mainKey?.trim() || "main";
+  const defaultAgentId = defaults.defaultAgentId?.trim();
+  const isAlias =
+    raw === "main" ||
+    raw === mainKey ||
+    (defaultAgentId &&
+      (raw === `agent:${defaultAgentId}:main` ||
+        raw === `agent:${defaultAgentId}:${mainKey}`));
+  return isAlias ? mainSessionKey : raw;
+}
+
+function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnapshot) {
+  if (!defaults?.mainSessionKey) return;
+  const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
+  const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
+    host.settings.sessionKey,
+    defaults,
+  );
+  const resolvedLastActiveSessionKey = normalizeSessionKeyForDefaults(
+    host.settings.lastActiveSessionKey,
+    defaults,
+  );
+  const nextSessionKey = resolvedSessionKey || resolvedSettingsSessionKey || host.sessionKey;
+  const nextSettings = {
+    ...host.settings,
+    sessionKey: resolvedSettingsSessionKey || nextSessionKey,
+    lastActiveSessionKey: resolvedLastActiveSessionKey || nextSessionKey,
+  };
+  const shouldUpdateSettings =
+    nextSettings.sessionKey !== host.settings.sessionKey ||
+    nextSettings.lastActiveSessionKey !== host.settings.lastActiveSessionKey;
+  if (nextSessionKey !== host.sessionKey) {
+    host.sessionKey = nextSessionKey;
+  }
+  if (shouldUpdateSettings) {
+    applySettings(host as unknown as Parameters<typeof applySettings>[0], nextSettings);
+  }
+}
 
 export function connectGateway(host: GatewayHost) {
   host.lastError = null;
@@ -113,12 +173,19 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
 
 export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   const snapshot = hello.snapshot as
-    | { presence?: PresenceEntry[]; health?: HealthSnapshot }
+    | {
+        presence?: PresenceEntry[];
+        health?: HealthSnapshot;
+        sessionDefaults?: SessionDefaultsSnapshot;
+      }
     | undefined;
   if (snapshot?.presence && Array.isArray(snapshot.presence)) {
     host.presenceEntries = snapshot.presence;
   }
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
+  }
+  if (snapshot?.sessionDefaults) {
+    applySessionDefaults(host, snapshot.sessionDefaults);
   }
 }

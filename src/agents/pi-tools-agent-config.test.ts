@@ -129,6 +129,59 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("edit");
   });
 
+  it("should apply provider-specific tool policy", () => {
+    const cfg: ClawdbotConfig = {
+      tools: {
+        allow: ["read", "write", "exec"],
+        byProvider: {
+          "google-antigravity": {
+            allow: ["read"],
+          },
+        },
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-provider",
+      agentDir: "/tmp/agent-provider",
+      modelProvider: "google-antigravity",
+      modelId: "claude-opus-4-5-thinking",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("read");
+    expect(toolNames).not.toContain("exec");
+    expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("apply_patch");
+  });
+
+  it("should apply provider-specific tool profile overrides", () => {
+    const cfg: ClawdbotConfig = {
+      tools: {
+        profile: "coding",
+        byProvider: {
+          "google-antigravity": {
+            profile: "minimal",
+          },
+        },
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-provider-profile",
+      agentDir: "/tmp/agent-provider-profile",
+      modelProvider: "google-antigravity",
+      modelId: "claude-opus-4-5-thinking",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toEqual(["session_status"]);
+  });
+
   it("should allow different tool policies for different agents", () => {
     const cfg: ClawdbotConfig = {
       agents: {
@@ -178,7 +231,7 @@ describe("Agent-specific tool filtering", () => {
     expect(familyToolNames).not.toContain("apply_patch");
   });
 
-  it("should prefer agent-specific tool policy over global", () => {
+  it("should apply global tool policy before agent-specific policy", () => {
     const cfg: ClawdbotConfig = {
       tools: {
         deny: ["browser"], // Global deny
@@ -204,8 +257,8 @@ describe("Agent-specific tool filtering", () => {
     });
 
     const toolNames = tools.map((t) => t.name);
-    // Agent policy overrides global: browser is allowed again
-    expect(toolNames).toContain("browser");
+    // Global policy still applies; agent policy further restricts
+    expect(toolNames).not.toContain("browser");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("process");
     expect(toolNames).not.toContain("apply_patch");

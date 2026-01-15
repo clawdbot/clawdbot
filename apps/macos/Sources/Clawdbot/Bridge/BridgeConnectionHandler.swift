@@ -282,7 +282,12 @@ actor BridgeConnectionHandler {
             do {
                 try await self.send(BridgePairOk(type: "pair-ok", token: token))
                 self.isAuthenticated = true
-                try await self.send(BridgeHelloOk(type: "hello-ok", serverName: serverName))
+                let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
+                try await self.send(
+                    BridgeHelloOk(
+                        type: "hello-ok",
+                        serverName: serverName,
+                        mainSessionKey: mainSessionKey))
             } catch {
                 self.logger.error("bridge send pair-ok failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -298,7 +303,12 @@ actor BridgeConnectionHandler {
         case .ok:
             self.isAuthenticated = true
             do {
-                try await self.send(BridgeHelloOk(type: "hello-ok", serverName: serverName))
+                let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
+                try await self.send(
+                    BridgeHelloOk(
+                        type: "hello-ok",
+                        serverName: serverName,
+                        mainSessionKey: mainSessionKey))
             } catch {
                 self.logger.error("bridge send hello-ok failed: \(error.localizedDescription, privacy: .public)")
             }

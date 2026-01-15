@@ -68,6 +68,59 @@ Example (global coding profile, messaging-only support agent):
 }
 ```
 
+## Provider-specific tool policy
+
+Use `tools.byProvider` to **further restrict** tools for specific providers
+(or a single `provider/model`) without changing your global defaults.
+Per-agent override: `agents.list[].tools.byProvider`.
+
+This is applied **after** the base tool profile and **before** allow/deny lists,
+so it can only narrow the tool set.
+Provider keys accept either `provider` (e.g. `google-antigravity`) or
+`provider/model` (e.g. `openai/gpt-5.2`).
+
+Example (keep global coding profile, but minimal tools for Google Antigravity):
+```json5
+{
+  tools: {
+    profile: "coding",
+    byProvider: {
+      "google-antigravity": { profile: "minimal" }
+    }
+  }
+}
+```
+
+Example (provider/model-specific allowlist for a flaky endpoint):
+```json5
+{
+  tools: {
+    allow: ["group:fs", "group:runtime", "sessions_list"],
+    byProvider: {
+      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] }
+    }
+  }
+}
+```
+
+Example (agent-specific override for a single provider):
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "support",
+        tools: {
+          byProvider: {
+            "google-antigravity": { allow: ["message", "sessions_list"] }
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
 ## Tool groups (shorthands)
 
 Tool policies (global, agent, sandbox) support `group:*` entries that expand to multiple tools.
@@ -78,6 +131,7 @@ Available groups:
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
+- `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
@@ -135,6 +189,33 @@ Notes:
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 - `process` is scoped per agent; sessions from other agents are not visible.
 
+### `web_search`
+Search the web using Brave Search API.
+
+Core parameters:
+- `query` (required)
+- `count` (1–10; default from `tools.web.search.maxResults`)
+
+Notes:
+- Requires a Brave API key (recommended: `clawdbot configure --section web`, or set `BRAVE_API_KEY`).
+- Enable via `tools.web.search.enabled`.
+- Responses are cached (default 15 min).
+- See [Web tools](/tools/web) for setup.
+
+### `web_fetch`
+Fetch and extract readable content from a URL (HTML → markdown/text).
+
+Core parameters:
+- `url` (required)
+- `extractMode` (`markdown` | `text`)
+- `maxChars` (truncate long pages)
+
+Notes:
+- Enable via `tools.web.fetch.enabled`.
+- Responses are cached (default 15 min).
+- For JS-heavy sites, prefer the browser tool.
+- See [Web tools](/tools/web) for setup.
+
 ### `browser`
 Control the dedicated clawd browser.
 
@@ -158,7 +239,7 @@ Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - Uses `browser.controlUrl` unless `controlUrl` is passed explicitly.
 - All actions accept optional `profile` parameter for multi-instance support.
-- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "clawd").
+- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "chrome").
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).

@@ -2,23 +2,23 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { DmPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type { ChatChannelId } from "../registry.js";
+import type { ChannelId } from "./types.js";
 
 export type SetupChannelsOptions = {
   allowDisable?: boolean;
   allowSignalInstall?: boolean;
-  onSelection?: (selection: ChatChannelId[]) => void;
-  accountIds?: Partial<Record<ChatChannelId, string>>;
-  onAccountId?: (channel: ChatChannelId, accountId: string) => void;
+  onSelection?: (selection: ChannelId[]) => void;
+  accountIds?: Partial<Record<ChannelId, string>>;
+  onAccountId?: (channel: ChannelId, accountId: string) => void;
   promptAccountIds?: boolean;
   whatsappAccountId?: string;
   promptWhatsAppAccountId?: boolean;
   onWhatsAppAccountId?: (accountId: string) => void;
-  forceAllowFromChannels?: ChatChannelId[];
+  forceAllowFromChannels?: ChannelId[];
   skipDmPolicyPrompt?: boolean;
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
-  initialSelection?: ChatChannelId[];
+  initialSelection?: ChannelId[];
 };
 
 export type PromptAccountIdParams = {
@@ -33,7 +33,7 @@ export type PromptAccountIdParams = {
 export type PromptAccountId = (params: PromptAccountIdParams) => Promise<string>;
 
 export type ChannelOnboardingStatus = {
-  channel: ChatChannelId;
+  channel: ChannelId;
   configured: boolean;
   statusLines: string[];
   selectionHint?: string;
@@ -43,7 +43,7 @@ export type ChannelOnboardingStatus = {
 export type ChannelOnboardingStatusContext = {
   cfg: ClawdbotConfig;
   options?: SetupChannelsOptions;
-  accountOverrides: Partial<Record<ChatChannelId, string>>;
+  accountOverrides: Partial<Record<ChannelId, string>>;
 };
 
 export type ChannelOnboardingConfigureContext = {
@@ -51,7 +51,7 @@ export type ChannelOnboardingConfigureContext = {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   options?: SetupChannelsOptions;
-  accountOverrides: Partial<Record<ChatChannelId, string>>;
+  accountOverrides: Partial<Record<ChannelId, string>>;
   shouldPromptAccountIds: boolean;
   forceAllowFrom: boolean;
 };
@@ -63,7 +63,7 @@ export type ChannelOnboardingResult = {
 
 export type ChannelOnboardingDmPolicy = {
   label: string;
-  channel: ChatChannelId;
+  channel: ChannelId;
   policyKey: string;
   allowFromKey: string;
   getCurrent: (cfg: ClawdbotConfig) => DmPolicy;
@@ -71,7 +71,7 @@ export type ChannelOnboardingDmPolicy = {
 };
 
 export type ChannelOnboardingAdapter = {
-  channel: ChatChannelId;
+  channel: ChannelId;
   getStatus: (ctx: ChannelOnboardingStatusContext) => Promise<ChannelOnboardingStatus>;
   configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
   dmPolicy?: ChannelOnboardingDmPolicy;

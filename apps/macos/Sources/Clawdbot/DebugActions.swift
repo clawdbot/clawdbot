@@ -102,8 +102,8 @@ enum DebugActions {
                     _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
                     let settings = CommandResolver.connectionSettings()
                     try await ControlChannel.shared.configure(mode: .remote(
-                        target: settings.target,
-                        identity: settings.identity))
+                                                                target: settings.target,
+                                                                identity: settings.identity))
                 } catch {
                     // ControlChannel will surface a degraded state; also refresh health to update the menu text.
                     Task { await HealthStore.shared.refresh(onDemand: true) }
@@ -127,8 +127,8 @@ enum DebugActions {
             _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
             let settings = CommandResolver.connectionSettings()
             try await ControlChannel.shared.configure(mode: .remote(
-                target: settings.target,
-                identity: settings.identity))
+                                                        target: settings.target,
+                                                        identity: settings.identity))
             await HealthStore.shared.refresh(onDemand: true)
             return .success("SSH tunnel reset.")
         } catch {

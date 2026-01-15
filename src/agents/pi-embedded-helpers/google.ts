@@ -32,6 +32,59 @@ type GeminiToolCallBlock = {
   input?: unknown;
 };
 
+type GeminiThinkingBlock = {
+  type?: unknown;
+  thinking?: unknown;
+  thinkingSignature?: unknown;
+};
+
+export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    // Gemini rejects thinking blocks that lack a signature; downgrade to text for safety.
+    let hasDowngraded = false;
+    type AssistantContentBlock = (typeof assistantMsg.content)[number];
+    const nextContent = assistantMsg.content.flatMap((block): AssistantContentBlock[] => {
+      if (!block || typeof block !== "object") return [block as AssistantContentBlock];
+      const record = block as GeminiThinkingBlock;
+      if (record.type !== "thinking") return [block];
+      const signature =
+        typeof record.thinkingSignature === "string" ? record.thinkingSignature.trim() : "";
+      if (signature.length > 0) return [block];
+      const thinking = typeof record.thinking === "string" ? record.thinking : "";
+      const trimmed = thinking.trim();
+      hasDowngraded = true;
+      if (!trimmed) return [];
+      return [{ type: "text" as const, text: thinking }];
+    });
+
+    if (!hasDowngraded) {
+      out.push(msg);
+      continue;
+    }
+    if (nextContent.length === 0) {
+      continue;
+    }
+    out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+  }
+  return out;
+}
+
 export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[] {
   const downgradedIds = new Set<string>();
   const out: AgentMessage[] = [];

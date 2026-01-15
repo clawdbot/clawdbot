@@ -92,8 +92,8 @@ struct MacGatewayChatTransport: ClawdbotChatTransport, Sendable {
         switch push {
         case let .snapshot(hello):
             let ok = (try? JSONDecoder().decode(
-                ClawdbotGatewayHealthOK.self,
-                from: JSONEncoder().encode(hello.snapshot.health)))?.ok ?? true
+                        ClawdbotGatewayHealthOK.self,
+                        from: JSONEncoder().encode(hello.snapshot.health)))?.ok ?? true
             return .health(ok: ok)
 
         case let .event(evt):
@@ -101,16 +101,16 @@ struct MacGatewayChatTransport: ClawdbotChatTransport, Sendable {
             case "health":
                 guard let payload = evt.payload else { return nil }
                 let ok = (try? JSONDecoder().decode(
-                    ClawdbotGatewayHealthOK.self,
-                    from: JSONEncoder().encode(payload)))?.ok ?? true
+                            ClawdbotGatewayHealthOK.self,
+                            from: JSONEncoder().encode(payload)))?.ok ?? true
                 return .health(ok: ok)
             case "tick":
                 return .tick
             case "chat":
                 guard let payload = evt.payload else { return nil }
                 guard let chat = try? JSONDecoder().decode(
-                    ClawdbotChatEventPayload.self,
-                    from: JSONEncoder().encode(payload))
+                        ClawdbotChatEventPayload.self,
+                        from: JSONEncoder().encode(payload))
                 else {
                     return nil
                 }
@@ -118,8 +118,8 @@ struct MacGatewayChatTransport: ClawdbotChatTransport, Sendable {
             case "agent":
                 guard let payload = evt.payload else { return nil }
                 guard let agent = try? JSONDecoder().decode(
-                    ClawdbotAgentEventPayload.self,
-                    from: JSONEncoder().encode(payload))
+                        ClawdbotAgentEventPayload.self,
+                        from: JSONEncoder().encode(payload))
                 else {
                     return nil
                 }
@@ -157,9 +157,9 @@ final class WebChatSwiftUIWindowController {
         let vm = ClawdbotChatViewModel(sessionKey: sessionKey, transport: transport)
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: ClawdbotChatView(
-            viewModel: vm,
-            showsSessionSwitcher: true,
-            userAccent: accent))
+                                            viewModel: vm,
+                                            showsSessionSwitcher: true,
+                                            userAccent: accent))
         self.contentController = Self.makeContentController(for: presentation, hosting: self.hosting)
         self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
     }

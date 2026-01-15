@@ -8,17 +8,20 @@ const sendMessageTelegram = vi.fn(async () => ({
   messageId: "789",
   chatId: "123",
 }));
+const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
+  deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
   beforeEach(() => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
+    deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -175,6 +178,43 @@ describe("handleTelegramAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/Telegram sendMessage is disabled/);
+  });
+
+  it("deletes a message", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+    expect(deleteMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("respects deleteMessage gating", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", actions: { deleteMessage: false } },
+      },
+    } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId: "123",
+          messageId: 456,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram deleteMessage is disabled/);
   });
 
   it("throws on missing bot token for sendMessage", async () => {

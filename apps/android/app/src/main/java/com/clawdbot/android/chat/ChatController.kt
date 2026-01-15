@@ -71,9 +71,18 @@ class ChatController(
     _sessionId.value = null
   }
 
-  fun load(sessionKey: String = "main") {
+  fun load(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { "main" }
     _sessionKey.value = key
+    scope.launch { bootstrap(forceHealth = true) }
+  }
+
+  fun applyMainSessionKey(mainSessionKey: String) {
+    val trimmed = mainSessionKey.trim()
+    if (trimmed.isEmpty()) return
+    if (_sessionKey.value == trimmed) return
+    if (_sessionKey.value != "main") return
+    _sessionKey.value = trimmed
     scope.launch { bootstrap(forceHealth = true) }
   }
 

@@ -49,7 +49,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env, profile });
+    loaded = await service.isLoaded({ profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);

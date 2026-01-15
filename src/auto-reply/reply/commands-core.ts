@@ -6,6 +6,7 @@ import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import {
   handleCommandsListCommand,
+  handleContextCommand,
   handleHelpCommand,
   handleStatusCommand,
   handleWhoamiCommand,
@@ -31,6 +32,7 @@ const HANDLERS: CommandHandler[] = [
   handleHelpCommand,
   handleCommandsListCommand,
   handleStatusCommand,
+  handleContextCommand,
   handleWhoamiCommand,
   handleConfigCommand,
   handleDebugCommand,

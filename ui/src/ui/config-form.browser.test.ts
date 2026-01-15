@@ -253,6 +253,28 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).not.toContain("note");
   });
 
+  it("ignores untyped additionalProperties schemas", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            whatsapp: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+              },
+            },
+          },
+          additionalProperties: {},
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("channels");
+  });
+
   it("flags additionalProperties true", () => {
     const schema = {
       type: "object",

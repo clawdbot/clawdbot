@@ -25,7 +25,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/etc.)? See [Chann
 ## Provider docs
 
 - [OpenAI (API + Codex)](/providers/openai)
-- [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
 - [Moonshot AI (Kimi)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)

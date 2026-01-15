@@ -136,18 +136,18 @@ export type HookAgentPayload = {
   timeoutSeconds?: number;
 };
 
-const HOOK_CHANNEL_VALUES = ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
+const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId | "last";
 
-const hookChannelSet = new Set<string>(HOOK_CHANNEL_VALUES);
-export const HOOK_CHANNEL_ERROR = `channel must be ${HOOK_CHANNEL_VALUES.join("|")}`;
+const getHookChannelSet = () => new Set<string>(listHookChannelValues());
+export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
 export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
   if (raw === undefined) return "last";
   if (typeof raw !== "string") return null;
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !hookChannelSet.has(normalized)) return null;
+  if (!normalized || !getHookChannelSet().has(normalized)) return null;
   return normalized as HookMessageChannel;
 }
 
@@ -176,7 +176,7 @@ export function normalizeAgentPayload(
       ? sessionKeyRaw.trim()
       : `hook:${idFactory()}`;
   const channel = resolveHookChannel(payload.channel);
-  if (!channel) return { ok: false, error: HOOK_CHANNEL_ERROR };
+  if (!channel) return { ok: false, error: getHookChannelError() };
   const toRaw = payload.to;
   const to = typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
   const modelRaw = payload.model;

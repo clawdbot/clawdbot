@@ -251,6 +251,21 @@ describe("createTelegramBot", () => {
         update: { message: { chat: { id: 555 } } },
       }),
     ).toBe("telegram:555");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123 }, text: "/stop" },
+      }),
+    ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123 }, text: "/status" },
+      }),
+    ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123 }, text: "stop" },
+      }),
+    ).toBe("telegram:123:control");
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     onSpy.mockReset();

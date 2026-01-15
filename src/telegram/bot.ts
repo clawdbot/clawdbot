@@ -4,6 +4,7 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import {
@@ -66,6 +67,15 @@ export function getTelegramSequentialKey(ctx: {
     ctx.update?.edited_message ??
     ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const rawText = msg?.text ?? msg?.caption;
+  const botUsername = (ctx as { me?: { username?: string } }).me?.username;
+  if (
+    rawText &&
+    isControlCommandMessage(rawText, undefined, botUsername ? { botUsername } : undefined)
+  ) {
+    if (typeof chatId === "number") return `telegram:${chatId}:control`;
+    return "telegram:control";
+  }
   const isForum = (msg?.chat as { is_forum?: boolean } | undefined)?.is_forum;
   const threadId = resolveTelegramForumThreadId({
     isForum,
@@ -282,6 +292,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   registerTelegramHandlers({
+    cfg,
+    accountId: account.accountId,
     bot,
     opts,
     runtime,

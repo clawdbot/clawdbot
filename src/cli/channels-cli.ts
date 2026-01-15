@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { listChatChannels } from "../channels/registry.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
   channelsAddCommand,
   channelsListCommand,
@@ -32,15 +32,20 @@ const optionNamesAdd = [
   "httpHost",
   "httpPort",
   "useEnv",
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceName",
+  "initialSyncLimit",
 ] as const;
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 
-const channelNames = listChatChannels()
-  .map((meta) => meta.id)
-  .join("|");
-
 export function registerChannelsCli(program: Command) {
+  const channelNames = listChannelPlugins()
+    .map((plugin) => plugin.id)
+    .join("|");
   const channels = program
     .command("channels")
     .description("Manage chat channel accounts")
@@ -48,8 +53,8 @@ export function registerChannelsCli(program: Command) {
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/configuration",
-          "docs.clawd.bot/configuration",
+          "/cli/channels",
+          "docs.clawd.bot/cli/channels",
         )}\n`,
     );
 
@@ -116,6 +121,12 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
+    .option("--homeserver <url>", "Matrix homeserver URL")
+    .option("--user-id <id>", "Matrix user ID")
+    .option("--access-token <token>", "Matrix access token")
+    .option("--password <password>", "Matrix password")
+    .option("--device-name <name>", "Matrix device name")
+    .option("--initial-sync-limit <n>", "Matrix initial sync limit")
     .option("--use-env", "Use env token (default account only)", false)
     .action(async (opts, command) => {
       try {

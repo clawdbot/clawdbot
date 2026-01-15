@@ -126,7 +126,7 @@ export async function fetchClaudeUsage(
       // ignore parse errors
     }
 
-    // Claude CLI setup-token yields tokens that can be used for inference, but may not
+    // Claude Code CLI setup-token yields tokens that can be used for inference, but may not
     // include user:profile scope required by the OAuth usage endpoint. When a claude.ai
     // browser sessionKey is available, fall back to the web API.
     if (res.status === 403 && message?.includes("scope requirement user:profile")) {

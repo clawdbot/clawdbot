@@ -17,6 +17,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { createInlineCodeState } from "../markdown/code-spans.js";
 
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
@@ -103,6 +104,7 @@ export function handleMessageUpdate(
     .stripBlockTags(ctx.state.deltaBuffer, {
       thinking: false,
       final: false,
+      inlineCode: createInlineCodeState(),
     })
     .trim();
   if (next && next !== ctx.state.lastStreamedAssistant) {
@@ -240,5 +242,6 @@ export function handleMessageEnd(
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
+  ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
 }

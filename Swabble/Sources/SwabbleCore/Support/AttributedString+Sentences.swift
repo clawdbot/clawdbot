@@ -34,8 +34,7 @@ extension AttributedString {
             var ranges: [Range<AttributedString.Index>] = []
             for wordRange in wordRanges {
                 if let lastRange = ranges.last,
-                   self[lastRange].characters.count + self[wordRange].characters.count <= maxLength
-                {
+                   self[lastRange].characters.count + self[wordRange].characters.count <= maxLength {
                     ranges[ranges.count - 1] = lastRange.lowerBound..<wordRange.upperBound
                 } else {
                     ranges.append(wordRange)
