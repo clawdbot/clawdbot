@@ -3,7 +3,6 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -50,7 +49,7 @@ export function createReportBackTool(opts?: {
       const label = opts?.label ? `Subagent "${opts.label}"` : "Subagent";
 
       try {
-        // 1. Broadcast to webchat UI via chat.inject
+        // 1. Inject into main session transcript via chat.inject (shows in webchat)
         await callGateway({
           method: "chat.inject",
           params: {
@@ -61,14 +60,20 @@ export function createReportBackTool(opts?: {
           timeoutMs: 10_000,
         });
 
-        // 2. Inject into main session context so main agent sees it in next turn
-        enqueueSystemEvent(`${label} reported: ${message}`, {
-          sessionKey: mainSessionKey,
+        // 2. Trigger main agent to respond (it will see the report in transcript)
+        await callGateway({
+          method: "agent",
+          params: {
+            sessionKey: mainSessionKey,
+            message: `[Subagent completed${opts?.label ? `: ${opts.label}` : ""}]`,
+            deliver: true,
+          },
+          timeoutMs: 60_000,
         });
 
         return jsonResult({
           status: "ok",
-          message: "Report sent to main session",
+          message: "Report sent and main agent notified",
         });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
