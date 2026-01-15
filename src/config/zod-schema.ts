@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
-import { HookMappingSchema, HooksGmailSchema } from "./zod-schema.hooks.js";
+import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
@@ -148,6 +148,7 @@ export const ClawdbotSchema = z
         transformsDir: z.string().optional(),
         mappings: z.array(HookMappingSchema).optional(),
         gmail: HooksGmailSchema,
+        internal: InternalHooksSchema,
       })
       .optional(),
     web: z
