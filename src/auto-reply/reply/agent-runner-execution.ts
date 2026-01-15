@@ -399,8 +399,8 @@ export async function runAgentTurnWithFallback(params: {
             }
           }
 
-          // Remove session entry from store
-          delete params.activeSessionStore[params.sessionKey];
+          // Remove session entry from store (use undefined to signal deletion for merge-safe save)
+          (params.activeSessionStore as Record<string, unknown>)[params.sessionKey] = undefined;
           await saveSessionStore(params.storePath, params.activeSessionStore);
         } catch (cleanupErr) {
           defaultRuntime.error(

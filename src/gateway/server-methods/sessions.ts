@@ -246,7 +246,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    if (existed) delete store[primaryKey];
+    // Use undefined to signal deletion for merge-safe save
+    if (existed) (store as Record<string, unknown>)[primaryKey] = undefined;
     await saveSessionStore(storePath, store);
 
     const archived: string[] = [];

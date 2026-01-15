@@ -169,6 +169,12 @@ export async function saveSessionStore(
     // concurrent writers that aren't in the incoming store.
     const current = loadSessionStore(storePath);
     const merged = { ...current, ...store };
+    // Handle explicit deletions: if incoming store has undefined/null values, remove those keys
+    for (const key of Object.keys(store)) {
+      if (store[key] === undefined || store[key] === null) {
+        delete merged[key];
+      }
+    }
     await saveSessionStoreUnlocked(storePath, merged);
   });
 }

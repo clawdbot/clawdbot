@@ -164,7 +164,8 @@ export async function initSessionState(params: {
     const legacyEntry = sessionStore[groupResolution.legacyKey];
     if (legacyEntry && !sessionStore[sessionKey]) {
       sessionStore[sessionKey] = legacyEntry;
-      delete sessionStore[groupResolution.legacyKey];
+      // Use undefined to signal deletion for merge-safe save
+      (sessionStore as Record<string, unknown>)[groupResolution.legacyKey] = undefined;
     }
   }
   const entry = sessionStore[sessionKey];
