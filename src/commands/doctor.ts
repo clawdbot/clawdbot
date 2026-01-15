@@ -209,7 +209,7 @@ export async function doctorCommand(
     const service = resolveGatewayService();
     let loaded = false;
     try {
-      loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
+      loaded = await service.isLoaded({ env: process.env });
     } catch {
       loaded = false;
     }

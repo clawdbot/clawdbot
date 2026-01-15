@@ -21,7 +21,7 @@ function resolveHomeDir(env: Record<string, string | undefined>): string {
   return home;
 }
 
-function resolveTaskScriptPath(env: Record<string, string | undefined>): string {
+export function resolveTaskScriptPath(env: Record<string, string | undefined>): string {
   const home = resolveHomeDir(env);
   const profile = env.CLAWDBOT_PROFILE?.trim();
   const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
@@ -274,13 +274,13 @@ function isTaskNotRunning(res: { stdout: string; stderr: string; code: number })
 
 export async function stopScheduledTask({
   stdout,
-  profile,
+  env,
 }: {
   stdout: NodeJS.WritableStream;
-  profile?: string;
+  env?: Record<string, string | undefined>;
 }): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(profile);
+  const taskName = resolveGatewayWindowsTaskName(env?.CLAWDBOT_PROFILE);
   const res = await execSchtasks(["/End", "/TN", taskName]);
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
@@ -290,13 +290,13 @@ export async function stopScheduledTask({
 
 export async function restartScheduledTask({
   stdout,
-  profile,
+  env,
 }: {
   stdout: NodeJS.WritableStream;
-  profile?: string;
+  env?: Record<string, string | undefined>;
 }): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(profile);
+  const taskName = resolveGatewayWindowsTaskName(env?.CLAWDBOT_PROFILE);
   await execSchtasks(["/End", "/TN", taskName]);
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
@@ -305,9 +305,11 @@ export async function restartScheduledTask({
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
 }
 
-export async function isScheduledTaskInstalled(profile?: string): Promise<boolean> {
+export async function isScheduledTaskInstalled(args: {
+  env?: Record<string, string | undefined>;
+}): Promise<boolean> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(profile);
+  const taskName = resolveGatewayWindowsTaskName(args.env?.CLAWDBOT_PROFILE);
   const res = await execSchtasks(["/Query", "/TN", taskName]);
   return res.code === 0;
 }

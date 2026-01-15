@@ -55,10 +55,9 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
     return false;
   }
   const service = resolveGatewayService();
-  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     runtime.error(`Gateway service check failed: ${String(err)}`);
     return false;
@@ -68,7 +67,7 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
     return true;
   }
   try {
-    await service.stop({ profile, stdout: process.stdout });
+    await service.stop({ env: process.env, stdout: process.stdout });
   } catch (err) {
     runtime.error(`Gateway stop failed: ${String(err)}`);
   }

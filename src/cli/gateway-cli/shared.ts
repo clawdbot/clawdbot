@@ -89,7 +89,7 @@ export async function maybeExplainGatewayServiceStop() {
   const service = resolveGatewayService();
   let loaded: boolean | null = null;
   try {
-    loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
+    loaded = await service.isLoaded({ env: process.env });
   } catch {
     loaded = null;
   }

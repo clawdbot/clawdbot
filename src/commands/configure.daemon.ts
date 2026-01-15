@@ -27,7 +27,7 @@ export async function maybeInstallDaemon(params: {
   daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
-  const loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
+  const loaded = await service.isLoaded({ env: process.env });
   let shouldCheckLinger = false;
   let shouldInstall = true;
   let daemonRuntime = params.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
@@ -49,7 +49,7 @@ export async function maybeInstallDaemon(params: {
         async (progress) => {
           progress.setLabel("Restarting Gateway daemon…");
           await service.restart({
-            profile: process.env.CLAWDBOT_PROFILE,
+            env: process.env,
             stdout: process.stdout,
           });
           progress.setLabel("Gateway daemon restarted.");

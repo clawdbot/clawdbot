@@ -46,10 +46,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const service = resolveGatewayService();
-  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -85,7 +84,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     port,
     token: opts.token || cfg.gateway?.auth?.token || process.env.CLAWDBOT_GATEWAY_TOKEN,
     launchdLabel:
-      process.platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined,
+      process.platform === "darwin"
+        ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
+        : undefined,
   });
 
   try {

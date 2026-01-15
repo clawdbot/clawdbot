@@ -32,7 +32,9 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
     hints.push("Another process is listening on this port.");
   }
   if (listeners.length > 1) {
-    hints.push("Multiple listeners detected; ensure only one gateway/tunnel.");
+    hints.push(
+      "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
+    );
   }
   return hints;
 }

@@ -183,7 +183,7 @@ export async function gatewayStatusCommand(
     warnings.push({
       code: "multiple_gateways",
       message:
-        "Unconventional setup: multiple reachable gateways detected. Usually only one gateway should exist on a network.",
+        "Unconventional setup: multiple reachable gateways detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a recovery bot (see docs: /gateway#multiple-gateways-same-host).",
       targetIds: reachable.map((p) => p.target.id),
     });
   }

@@ -38,17 +38,16 @@ const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
 async function stopGatewayIfRunning(runtime: RuntimeEnv) {
   if (isNixMode) return;
   const service = resolveGatewayService();
-  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     runtime.error(`Gateway service check failed: ${String(err)}`);
     return;
   }
   if (!loaded) return;
   try {
-    await service.stop({ profile, stdout: process.stdout });
+    await service.stop({ env: process.env, stdout: process.stdout });
   } catch (err) {
     runtime.error(`Gateway stop failed: ${String(err)}`);
   }

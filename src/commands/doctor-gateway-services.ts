@@ -89,7 +89,7 @@ export async function maybeMigrateLegacyGatewayService(
   }
 
   const service = resolveGatewayService();
-  const loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
+  const loaded = await service.isLoaded({ env: process.env });
   if (loaded) {
     note(`Clawdbot ${service.label} already ${service.loadedText}.`, "Gateway");
     return;
@@ -280,9 +280,9 @@ export async function maybeScanExtraGatewayServices(options: DoctorOptions) {
 
   note(
     [
-      "Recommendation: run a single gateway per machine.",
+      "Recommendation: run a single gateway per machine for most setups.",
       "One gateway supports multiple agents.",
-      "If you need multiple gateways, isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
+      "If you need multiple gateways (e.g., a recovery bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
     ].join("\n"),
     "Gateway recommendation",
   );
