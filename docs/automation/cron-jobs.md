@@ -78,6 +78,7 @@ Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
 
 Key behaviors:
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
+- Each run starts a **fresh session id** (no prior conversation carry-over).
 - A summary is posted to the main session (prefix `Cron`, configurable).
 - `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
 - If `payload.deliver: true`, output is delivered to a channel; otherwise it stays internal.

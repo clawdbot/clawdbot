@@ -3,6 +3,7 @@ import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
+  ChannelDirectoryAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
@@ -51,6 +52,7 @@ export type ChannelPlugin<ResolvedAccount = any> = {
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;
+  directory?: ChannelDirectoryAdapter;
   actions?: ChannelMessageActionAdapter;
   heartbeat?: ChannelHeartbeatAdapter;
   // Channel-owned agent tools (login flows, etc.).

@@ -29,6 +29,7 @@
 - UI: show gateway auth guidance + doc link on unauthorized Control UI connections.
 - Security: warn on weak model tiers (Haiku, below GPT-5, below Claude 4.5) in `clawdbot security audit`.
 - Apps: store node auth tokens encrypted (Keychain/SecurePrefs).
+- Cron: isolated cron jobs now start a fresh session id on every run to prevent context buildup.
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
@@ -52,6 +53,7 @@
 - Telegram: allow custom commands in the bot menu (merged with native; conflicts ignored). (#860) — thanks @nachoiacovino.
 - Discord: allow allowlisted guilds without channel lists to receive messages when `groupPolicy="allowlist"`. — thanks @thewilloftheshadow.
 - Discord: allow emoji/sticker uploads + channel actions in config defaults. (#870) — thanks @JDIVE.
+- Channels/Plugins: add Zalo Personal plugin (`@clawdbot/zalouser`) via zca-cli. (#1032) — thanks @suminhthanh.
 
 ### Fixes
 - Messages: make `/stop` clear queued followups and pending session lane work for a hard abort.

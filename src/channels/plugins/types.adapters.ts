@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
+  ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelHeartbeatDeps,
   ChannelLogSink,
@@ -217,6 +218,35 @@ export type ChannelHeartbeatAdapter = {
     recipients: string[];
     source: string;
   };
+};
+
+export type ChannelDirectoryAdapter = {
+  self?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry | null>;
+  listPeers?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listGroups?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listGroupMembers?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    groupId: string;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
 };
 
 export type ChannelElevatedAdapter = {

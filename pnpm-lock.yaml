@@ -272,6 +272,12 @@ importers:
         specifier: 7.18.2
         version: 7.18.2
 
+  extensions/zalouser:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.47
+        version: 0.34.47
+
   ui:
     dependencies:
       dompurify:

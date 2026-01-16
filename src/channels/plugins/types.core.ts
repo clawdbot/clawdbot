@@ -216,6 +216,17 @@ export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
 };
 
+export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
+
+export type ChannelDirectoryEntry = {
+  kind: ChannelDirectoryEntryKind;
+  id: string;
+  name?: string;
+  handle?: string;
+  avatarUrl?: string;
+  raw?: unknown;
+};
+
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 export type ChannelMessageActionContext = {

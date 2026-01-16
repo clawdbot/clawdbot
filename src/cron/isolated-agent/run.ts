@@ -206,8 +206,10 @@ export async function runCronIsolatedAgentTurn(params: {
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
   const commandBody = base;
 
-  const needsSkillsSnapshot = cronSession.isNewSession || !cronSession.sessionEntry.skillsSnapshot;
+  const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  const needsSkillsSnapshot =
+    !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
   const skillsSnapshot = needsSkillsSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,

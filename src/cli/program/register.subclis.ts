@@ -5,6 +5,7 @@ import { registerChannelsCli } from "../channels-cli.js";
 import { registerCronCli } from "../cron-cli.js";
 import { registerDaemonCli } from "../daemon-cli.js";
 import { registerDnsCli } from "../dns-cli.js";
+import { registerDirectoryCli } from "../directory-cli.js";
 import { registerDocsCli } from "../docs-cli.js";
 import { registerGatewayCli } from "../gateway-cli.js";
 import { registerHooksCli } from "../hooks-cli.js";
@@ -36,6 +37,7 @@ export function registerSubCliCommands(program: Command) {
   registerPairingCli(program);
   registerPluginsCli(program);
   registerChannelsCli(program);
+  registerDirectoryCli(program);
   registerSecurityCli(program);
   registerSkillsCli(program);
   registerUpdateCli(program);

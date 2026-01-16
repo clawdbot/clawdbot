@@ -792,6 +792,7 @@
           "cli/health",
           "cli/sessions",
           "cli/channels",
+          "cli/directory",
           "cli/skills",
           "cli/plugins",
           "cli/memory",
@@ -907,6 +908,7 @@
           "channels/msteams",
           "channels/matrix",
           "channels/zalo",
+          "channels/zalouser",
           "broadcast-groups",
           "channels/troubleshooting",
           "channels/location"
@@ -945,6 +947,7 @@
           "tools",
           "plugin",
           "plugins/voice-call",
+          "plugins/zalouser",
           "tools/exec",
           "tools/web",
           "tools/apply-patch",

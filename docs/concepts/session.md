@@ -57,6 +57,7 @@ the workspace is writable. See [Memory](/concepts/memory) and
 - Idle expiry: `session.idleMinutes` (default 60). After the timeout a new `sessionId` is minted on the next message.
 - Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. If `/new` or `/reset` is sent alone, Clawdbot runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: delete specific keys from the store or remove the JSONL transcript; the next message recreates them.
+- Isolated cron jobs always mint a fresh `sessionId` per run (no idle reuse).
 
 ## Send policy (optional)
 Block delivery for specific session types without listing individual ids.

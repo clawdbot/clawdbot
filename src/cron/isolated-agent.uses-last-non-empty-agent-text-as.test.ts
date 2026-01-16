@@ -48,6 +48,12 @@ async function writeSessionStore(home: string) {
   return storePath;
 }
 
+async function readSessionEntry(storePath: string, key: string) {
+  const raw = await fs.readFile(storePath, "utf-8");
+  const store = JSON.parse(raw) as Record<string, { sessionId?: string }>;
+  return store[key];
+}
+
 function makeCfg(
   home: string,
   storePath: string,
@@ -464,6 +470,53 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.summary).toBe("hello");
       expect(String(res.error ?? "")).toMatch(/requires a recipient/i);
       expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("starts a fresh session id for each cron run", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home, storePath);
+      const job = makeJob({ kind: "agentTurn", message: "ping", deliver: false });
+
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "ping",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+      const first = await readSessionEntry(storePath, "agent:main:cron:job-1");
+
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "ping",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+      const second = await readSessionEntry(storePath, "agent:main:cron:job-1");
+
+      expect(first?.sessionId).toBeDefined();
+      expect(second?.sessionId).toBeDefined();
+      expect(second?.sessionId).not.toBe(first?.sessionId);
     });
   });
 });
