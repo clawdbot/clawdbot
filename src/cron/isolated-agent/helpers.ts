@@ -25,6 +25,14 @@ export function pickSummaryFromPayloads(payloads: Array<{ text?: string | undefi
   return undefined;
 }
 
+export function pickLastNonEmptyTextFromPayloads(payloads: Array<{ text?: string | undefined }>) {
+  for (let i = payloads.length - 1; i >= 0; i--) {
+    const clean = (payloads[i]?.text ?? "").trim();
+    if (clean) return clean;
+  }
+  return undefined;
+}
+
 /**
  * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
  * Returns true if delivery should be skipped because there's no real content.

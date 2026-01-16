@@ -100,7 +100,9 @@ Common `agentTurn` fields:
 - `bestEffortDeliver`: avoid failing the job if delivery fails.
 
 Isolation options (only for `session=isolated`):
-- `postToMainPrefix` (CLI: `--post-prefix`): prefix for the summary system event in main.
+- `postToMainPrefix` (CLI: `--post-prefix`): prefix for the system event in main.
+- `postToMainMode`: `summary` (default) or `full`.
+- `postToMainMaxChars`: max chars when `postToMainMode=full` (default 8000).
 
 ### Model and thinking overrides
 Isolated jobs (`agentTurn`) can override the model and thinking level:

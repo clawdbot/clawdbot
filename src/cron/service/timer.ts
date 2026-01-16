@@ -66,7 +66,12 @@ export async function executeJob(
 
   let deleted = false;
 
-  const finish = async (status: "ok" | "error" | "skipped", err?: string, summary?: string) => {
+  const finish = async (
+    status: "ok" | "error" | "skipped",
+    err?: string,
+    summary?: string,
+    outputText?: string,
+  ) => {
     const endedAt = state.deps.nowMs();
     job.state.runningAtMs = undefined;
     job.state.lastRunAtMs = startedAt;
@@ -108,7 +113,19 @@ export async function executeJob(
 
     if (job.sessionTarget === "isolated") {
       const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
-      const body = (summary ?? err ?? status).trim();
+      const mode = job.isolation?.postToMainMode ?? "summary";
+
+      let body = (summary ?? err ?? status).trim();
+      if (mode === "full") {
+        // Prefer full agent output if available; fall back to summary.
+        const maxCharsRaw = job.isolation?.postToMainMaxChars;
+        const maxChars = Number.isFinite(maxCharsRaw) ? Math.max(0, maxCharsRaw as number) : 8000;
+        const fullText = (outputText ?? "").trim();
+        if (fullText) {
+          body = fullText.length > maxChars ? `${fullText.slice(0, maxChars)}…` : fullText;
+        }
+      }
+
       const statusPrefix = status === "ok" ? prefix : `${prefix} (${status})`;
       state.deps.enqueueSystemEvent(`${statusPrefix}: ${body}`, {
         agentId: job.agentId,
@@ -182,9 +199,9 @@ export async function executeJob(
       job,
       message: job.payload.message,
     });
-    if (res.status === "ok") await finish("ok", undefined, res.summary);
-    else if (res.status === "skipped") await finish("skipped", undefined, res.summary);
-    else await finish("error", res.error ?? "cron job failed", res.summary);
+    if (res.status === "ok") await finish("ok", undefined, res.summary, res.outputText);
+    else if (res.status === "skipped") await finish("skipped", undefined, res.summary, res.outputText);
+    else await finish("error", res.error ?? "cron job failed", res.summary, res.outputText);
   } catch (err) {
     await finish("error", String(err));
   } finally {

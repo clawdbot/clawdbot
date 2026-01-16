@@ -52,6 +52,11 @@ export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
+    deliveryMirror: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     ackReaction: z.string().optional(),

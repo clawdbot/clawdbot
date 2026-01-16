@@ -11,6 +11,8 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -119,6 +121,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 
 type MessageToolOptions = {
   agentAccountId?: string;
+  agentSessionKey?: string;
   config?: ClawdbotConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -188,6 +191,26 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         gateway,
         toolContext,
       });
+
+      // Optional: mirror successful sends back into the session transcript so the agent
+      // "remembers" what it delivered to the channel.
+      if (
+        action === "send" &&
+        cfg.messages?.deliveryMirror?.enabled &&
+        options?.agentSessionKey &&
+        result.kind === "send" &&
+        !result.dryRun
+      ) {
+        const text = typeof params.message === "string" ? params.message : "";
+        if (text.trim()) {
+          const agentId = resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg });
+          await appendAssistantMessageToSessionTranscript({
+            agentId,
+            sessionKey: options.agentSessionKey,
+            text,
+          });
+        }
+      }
 
       if (result.toolResult) return result.toolResult;
       return jsonResult(result.payload);

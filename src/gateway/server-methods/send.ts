@@ -2,7 +2,9 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { loadConfig } from "../../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
@@ -37,6 +39,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
+      sessionKey?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -95,6 +98,14 @@ export const sendHandlers: GatewayRequestHandlers = {
         payloads: [{ text: message, mediaUrl: request.mediaUrl }],
         gifPlayback: request.gifPlayback,
       });
+
+      if (cfg.messages?.deliveryMirror?.enabled && typeof request.sessionKey === "string") {
+        const sessionKey = request.sessionKey.trim();
+        if (sessionKey) {
+          const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+          await appendAssistantMessageToSessionTranscript({ agentId, sessionKey, text: message });
+        }
+      }
       const result = results.at(-1);
       if (!result) {
         throw new Error("No delivery result");

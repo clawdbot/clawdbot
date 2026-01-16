@@ -40,6 +40,10 @@ export type AudioConfig = {
 };
 
 export type MessagesConfig = {
+  deliveryMirror?: {
+    /** Mirror delivered outbound text back into the session transcript (assistant role). */
+    enabled?: boolean;
+  };
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
   /**

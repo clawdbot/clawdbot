@@ -30,6 +30,8 @@ export type CronServiceDeps = {
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
     status: "ok" | "error" | "skipped";
     summary?: string;
+    /** Last non-empty agent text output (not truncated). */
+    outputText?: string;
     error?: string;
   }>;
   onEvent?: (evt: CronEvent) => void;
