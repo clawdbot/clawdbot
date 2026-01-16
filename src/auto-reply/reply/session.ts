@@ -278,7 +278,10 @@ export async function initSessionState(params: {
       ctx.MessageThreadId,
     );
   }
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  // Fresh start for new sessions - don't inherit old state like compactionCount
+  sessionStore[sessionKey] = isNewSession
+    ? sessionEntry
+    : { ...sessionStore[sessionKey], ...sessionEntry };
   await updateSessionStore(storePath, (store) => {
     if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
       if (store[groupResolution.legacyKey] && !store[sessionKey]) {
@@ -286,7 +289,10 @@ export async function initSessionState(params: {
       }
       delete store[groupResolution.legacyKey];
     }
-    store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+    // Fresh start for new sessions - don't inherit old state like compactionCount
+    store[sessionKey] = isNewSession
+      ? sessionEntry
+      : { ...store[sessionKey], ...sessionEntry };
   });
 
   const sessionCtx: TemplateContext = {
