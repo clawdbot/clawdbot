@@ -194,6 +194,65 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 
 Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps the DM session key unchanged, but still uses the thread id for replies/draft streaming when it is present.
 
+## Inline Buttons
+
+Telegram supports inline keyboards with callback buttons. Enable this feature via capabilities:
+
+```json5
+{
+  "channels": {
+    "telegram": {
+      "capabilities": ["inlineButtons"]
+    }
+  }
+}
+```
+
+For per-account configuration:
+```json5
+{
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "main": {
+          "capabilities": ["inlineButtons"]
+        }
+      }
+    }
+  }
+}
+```
+
+### Sending buttons
+
+Use the message tool with the `buttons` parameter:
+
+```json
+{
+  "action": "send",
+  "channel": "telegram",
+  "to": "123456789",
+  "message": "Choose an option:",
+  "buttons": [
+    [
+      {"text": "Yes", "callback_data": "yes"},
+      {"text": "No", "callback_data": "no"}
+    ],
+    [
+      {"text": "Cancel", "callback_data": "cancel"}
+    ]
+  ]
+}
+```
+
+When a user clicks a button, the callback data is sent back to the agent as a message with the format:
+`callback_data: value`
+
+### Configuration options
+
+- `channels.telegram.capabilities`: Global capability list for the default account
+- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities
+
 ## Access control (DMs + groups)
 
 ### DM access
@@ -392,6 +451,8 @@ Provider options:
   - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
   - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
+- `channels.telegram.capabilities`: Enable channel features (e.g., "inlineButtons").
+- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
