@@ -313,9 +313,7 @@ export function buildWorkspaceSkillCommandSpecs(
     opts?.skillFilter,
     opts?.eligibility,
   );
-  const userInvocable = eligible.filter(
-    (entry) => entry.invocation?.userInvocable !== false,
-  );
+  const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(reserved.toLowerCase());
