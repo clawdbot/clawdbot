@@ -8,15 +8,17 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { buildAuthHealthSummary, formatRemainingShort } from "../../agents/auth-health.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
-  formatUsageSummaryLine,
+  formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
+  type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { buildStatusMessage } from "../status.js";
@@ -131,22 +133,45 @@ export async function buildStatusReply(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
+  const authStore = ensureAuthProfileStore(statusAgentDir, { allowKeychainPrompt: false });
+  const authHealth = buildAuthHealthSummary({ store: authStore, cfg });
+  const oauthProfiles = authHealth.profiles.filter(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+
+  const usageProviders = Array.from(
+    new Set(
+      oauthProfiles
+        .map((profile) => resolveUsageProviderId(profile.provider))
+        .filter((entry): entry is UsageProviderId => Boolean(entry)),
+    ),
+  );
+  const usageByProvider = new Map<string, string>();
+  if (usageProviders.length > 0) {
+    try {
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: 3500,
+        providers: usageProviders,
+        agentDir: statusAgentDir,
+      });
+      for (const snapshot of usageSummary.providers) {
+        const formatted = formatUsageWindowSummary(snapshot, {
+          now: Date.now(),
+          maxWindows: 2,
+        });
+        if (formatted) usageByProvider.set(snapshot.provider, formatted);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   let usageLine: string | null = null;
   try {
     const usageProvider = resolveUsageProviderId(provider);
-    if (usageProvider) {
-      const usageSummary = await loadProviderUsageSummary({
-        timeoutMs: 3500,
-        providers: [usageProvider],
-        agentDir: statusAgentDir,
-      });
-      usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
-      if (!usageLine && (resolvedVerboseLevel === "on" || resolvedElevatedLevel === "on")) {
-        const entry = usageSummary.providers[0];
-        if (entry?.error) {
-          usageLine = `📊 Usage: ${entry.displayName} (${entry.error})`;
-        }
-      }
+    if (oauthProfiles.length === 0 && usageProvider) {
+      const usage = usageByProvider.get(usageProvider);
+      if (usage) usageLine = `📊 Usage: ${usage}`;
     }
   } catch {
     usageLine = null;
@@ -198,5 +223,45 @@ export async function buildStatusReply(params: {
     },
     includeTranscriptUsage: false,
   });
-  return { text: statusText };
+
+  const authStatusLines = (() => {
+    if (oauthProfiles.length === 0) return [];
+    const formatStatus = (status: string) => {
+      if (status === "ok") return "ok";
+      if (status === "static") return "static";
+      if (status === "expiring") return "expiring";
+      if (status === "missing") return "unknown";
+      return "expired";
+    };
+    const profilesByProvider = new Map<string, typeof oauthProfiles>();
+    for (const profile of oauthProfiles) {
+      const current = profilesByProvider.get(profile.provider);
+      if (current) current.push(profile);
+      else profilesByProvider.set(profile.provider, [profile]);
+    }
+    const lines: string[] = ["OAuth/token status"];
+    for (const [provider, profiles] of profilesByProvider) {
+      const usageKey = resolveUsageProviderId(provider);
+      const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
+      const usageSuffix = usage ? ` — usage: ${usage}` : "";
+      lines.push(`- ${provider}${usageSuffix}`);
+      for (const profile of profiles) {
+        const labelText = profile.label || profile.profileId;
+        const status = formatStatus(profile.status);
+        const expiry =
+          profile.status === "static"
+            ? ""
+            : profile.expiresAt
+              ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+              : " expires unknown";
+        const source = profile.source !== "store" ? ` (${profile.source})` : "";
+        lines.push(`  - ${labelText} ${status}${expiry}${source}`);
+      }
+    }
+    return lines;
+  })();
+
+  const fullStatusText =
+    authStatusLines.length > 0 ? `${statusText}\n\n${authStatusLines.join("\n")}` : statusText;
+  return { text: fullStatusText };
 }
