@@ -1,0 +1,6 @@
+apiVersion: v2
+name: clawdbot
+description: Clawdbot gateway Helm chart
+type: application
+version: 0.1.12
+appVersion: "unknown"

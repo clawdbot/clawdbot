@@ -1,0 +1,23 @@
+{{- if .Values.browserDeployment.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clawdbot.browserServiceName" . }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: browser
+  {{- with .Values.browserDeployment.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.browserDeployment.service.type }}
+  ports:
+    - name: cdp
+      port: {{ default .Values.browserDeployment.port .Values.browserDeployment.service.port }}
+      targetPort: cdp
+      protocol: TCP
+  selector:
+    {{- include "clawdbot.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: browser
+{{- end }}

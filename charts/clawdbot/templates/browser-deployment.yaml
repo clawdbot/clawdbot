@@ -1,0 +1,91 @@
+{{- if .Values.browserDeployment.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clawdbot.browserServiceName" . }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: browser
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "clawdbot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: browser
+  template:
+    metadata:
+      labels:
+        {{- include "clawdbot.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: browser
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- $hasRegistryAuth := and .Values.registryAuth.enabled .Values.registryAuth.secretName }}
+      {{- $imagePullSecrets := .Values.imagePullSecrets | default (list) }}
+      {{- $hasImagePullSecrets := gt (len $imagePullSecrets) 0 }}
+      {{- $hasRegistryPull := and $hasRegistryAuth .Values.registryAuth.useForImagePull }}
+      {{- if or $hasRegistryPull $hasImagePullSecrets }}
+      imagePullSecrets:
+        {{- if $hasRegistryPull }}
+        - name: {{ .Values.registryAuth.secretName }}
+        {{- end }}
+        {{- if $hasImagePullSecrets }}
+        {{- toYaml $imagePullSecrets | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: browser
+          image: "{{ .Values.browserDeployment.image.repository }}:{{ .Values.browserDeployment.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.browserDeployment.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: CLAWDBOT_BROWSER_CDP_PORT
+              value: {{ .Values.browserDeployment.port | quote }}
+            - name: CLAWDBOT_BROWSER_VNC_PORT
+              value: {{ .Values.browserDeployment.vncPort | quote }}
+            - name: CLAWDBOT_BROWSER_NOVNC_PORT
+              value: {{ .Values.browserDeployment.noVncPort | quote }}
+            - name: CLAWDBOT_BROWSER_HEADLESS
+              value: {{ ternary "1" "0" .Values.browserDeployment.headless | quote }}
+            - name: CLAWDBOT_BROWSER_ENABLE_NOVNC
+              value: {{ ternary "1" "0" .Values.browserDeployment.enableNoVnc | quote }}
+          ports:
+            - name: cdp
+              containerPort: {{ .Values.browserDeployment.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.browserDeployment.resources | nindent 12 }}
+          volumeMounts:
+            - name: browser-home
+              mountPath: {{ .Values.browserDeployment.persistence.mountPath }}
+      volumes:
+        - name: browser-home
+          {{- if .Values.browserDeployment.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.browserDeployment.persistence.existingClaim | default (include "clawdbot.pvcName" (list . "-browser")) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

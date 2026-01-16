@@ -1,0 +1,203 @@
+replicaCount: 1
+
+image:
+  repository: 
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+containerSecurityContext: {}
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Gateway settings used for container args and service ports.
+gateway:
+  port: 18789
+  bind: lan
+
+service:
+  type: ClusterIP
+  annotations: {}
+  port: null # defaults to gateway.port
+  bridge:
+    enabled: false
+    port: 18790
+
+# HTTP ingress for the gateway/control UI (same port as gateway).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: clawdbot.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Persistent storage for state and workspace.
+persistence:
+  state:
+    enabled: true
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClass: ""
+    existingClaim: ""
+  workspace:
+    enabled: true
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClass: ""
+    existingClaim: ""
+
+# Liveness/readiness probes use a TCP socket on the gateway port.
+probes:
+  readiness:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+  liveness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 2
+    failureThreshold: 6
+
+# Extra environment variables and mounts for API keys or providers.
+extraEnv: []
+extraEnvFrom: []
+# Example hostPath + PVC mounts for the gateway container:
+# extraVolumes:
+#   - name: host-cache
+#     hostPath:
+#       path: /var/lib/clawdbot-cache
+#       type: DirectoryOrCreate
+#   - name: shared-data
+#     persistentVolumeClaim:
+#       claimName: clawdbot-shared
+# extraVolumeMounts:
+#   - name: host-cache
+#     mountPath: /home/node/.clawdbot/cache
+#   - name: shared-data
+#     mountPath: /home/node/shared
+extraVolumes: []
+extraVolumeMounts: []
+extraArgs: []
+
+# Optional Docker registry auth secret (kubernetes.io/dockerconfigjson).
+# Used for pulling the gateway image and for sandbox image pulls via docker CLI.
+registryAuth:
+  enabled: false
+  secretName: ""
+  mountPath: /home/node/.docker
+  useForImagePull: true
+
+# Docker-in-Docker sidecar for sandboxing. Requires privileged pods and a
+# gateway image that includes the docker CLI.
+dind:
+  enabled: false
+  image:
+    repository: docker
+    tag: "29.1.3-dind"
+    pullPolicy: IfNotPresent
+  securityContext:
+    privileged: true
+  env:
+    - name: DOCKER_TLS_CERTDIR
+      value: ""
+  # Optional list of images to pre-pull into the DinD daemon on startup.
+  prePull:
+    enabled: false
+    images: []
+    waitRetries: 30
+    waitSeconds: 2
+  command: []
+  args: []
+  resources: {}
+  storage:
+    type: emptyDir # emptyDir | pvc
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClass: ""
+    existingClaim: ""
+
+# Optional browser deployment for remote CDP (used by gateway browser control).
+browserDeployment:
+  enabled: false
+  image:
+    repository: "registry.example.com/clawdbot-sandbox-browser"
+    tag: "bookworm-slim"
+    pullPolicy: IfNotPresent
+  port: 9222
+  service:
+    type: ClusterIP
+    annotations: {}
+    port: null # defaults to browserDeployment.port
+  headless: false
+  enableNoVnc: false
+  vncPort: 5900
+  noVncPort: 6080
+  resources: {}
+  persistence:
+    enabled: true
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClass: ""
+    existingClaim: ""
+    mountPath: /tmp/clawdbot-home
+
+# Clawdbot config written to /config/clawdbot.json (rendered from this map).
+# Keep the workspace path aligned with the workspace PVC mount.
+# gateway.auth.token (if set) is used as the gatewayToken secret.
+config:
+  # Workspace where the agent writes files.
+  agent:
+    workspace: "/home/node/clawd"
+
+    # Optional Docker sandbox example with registry URLs.
+    sandbox:
+      mode: "non-main"
+      docker:
+        image: "registry.example.com/clawdbot-sandbox:bookworm-slim"
+      browser:
+        enabled: true
+        image: "registry.example.com/clawdbot-sandbox-browser:bookworm-slim"
+
+  # Gateway auth is required when binding to non-loopback.
+  gateway:
+    bind: "lan"
+    auth:
+      mode: "token"
+    controlUi:
+      enabled: true
+
+  # Bridge is optional (iOS/Android nodes).
+  bridge:
+    enabled: false
+    port: 18790
+    bind: "lan"
+
+  # Example allowlist (replace with your number).
+  whatsapp:
+    allowFrom:
+      - "+15555550123"

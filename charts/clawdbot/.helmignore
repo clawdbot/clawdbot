@@ -1,0 +1,17 @@
+.DS_Store
+.git/
+.gitignore
+.hg/
+.svn/
+.env
+.env.*
+.idea/
+.vscode/
+node_modules/
+
+# Charts
+Chart.lock
+charts/
+
+# CI
+.github/

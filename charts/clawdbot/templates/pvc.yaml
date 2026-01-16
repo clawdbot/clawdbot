@@ -1,0 +1,71 @@
+{{- if and .Values.persistence.state.enabled (not .Values.persistence.state.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "clawdbot.pvcName" (list . "-state") }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.state.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.state.size | quote }}
+  {{- if .Values.persistence.state.storageClass }}
+  storageClassName: {{ .Values.persistence.state.storageClass | quote }}
+  {{- end }}
+---
+{{- end }}
+{{- if and .Values.persistence.workspace.enabled (not .Values.persistence.workspace.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "clawdbot.pvcName" (list . "-workspace") }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.workspace.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.workspace.size | quote }}
+  {{- if .Values.persistence.workspace.storageClass }}
+  storageClassName: {{ .Values.persistence.workspace.storageClass | quote }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.dind.enabled (eq .Values.dind.storage.type "pvc") (not .Values.dind.storage.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "clawdbot.pvcName" (list . "-dind") }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.dind.storage.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.dind.storage.size | quote }}
+  {{- if .Values.dind.storage.storageClass }}
+  storageClassName: {{ .Values.dind.storage.storageClass | quote }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.browserDeployment.enabled .Values.browserDeployment.persistence.enabled (not .Values.browserDeployment.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "clawdbot.pvcName" (list . "-browser") }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.browserDeployment.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.browserDeployment.persistence.size | quote }}
+  {{- if .Values.browserDeployment.persistence.storageClass }}
+  storageClassName: {{ .Values.browserDeployment.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}

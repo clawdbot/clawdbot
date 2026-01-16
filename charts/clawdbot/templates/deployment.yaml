@@ -1,0 +1,277 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clawdbot.fullname" . }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "clawdbot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "clawdbot.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "clawdbot.configJson" . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- $hasRegistryAuth := and .Values.registryAuth.enabled .Values.registryAuth.secretName }}
+      {{- $imagePullSecrets := .Values.imagePullSecrets | default (list) }}
+      {{- $hasImagePullSecrets := gt (len $imagePullSecrets) 0 }}
+      {{- $hasRegistryPull := and $hasRegistryAuth .Values.registryAuth.useForImagePull }}
+      {{- $dindEnv := .Values.dind.env | default (list) }}
+      {{- $hasDindEnv := gt (len $dindEnv) 0 }}
+      {{- $dindPrePullImages := .Values.dind.prePull.images | default (list) }}
+      {{- $hasDindPrePullImages := gt (len $dindPrePullImages) 0 }}
+      {{- if or $hasRegistryPull $hasImagePullSecrets }}
+      imagePullSecrets:
+        {{- if $hasRegistryPull }}
+        - name: {{ .Values.registryAuth.secretName }}
+        {{- end }}
+        {{- if $hasImagePullSecrets }}
+        {{- toYaml $imagePullSecrets | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: config-seed
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+                set -eu
+                cp /config-seed/clawdbot.json /config/clawdbot.json
+                chmod 600 /config/clawdbot.json
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: config-seed
+              mountPath: /config-seed
+              readOnly: true
+      containers:
+        - name: clawdbot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ["node", "dist/index.js"]
+          args:
+            - gateway
+            - --bind
+            - {{ .Values.gateway.bind | quote }}
+            - --port
+            - {{ .Values.gateway.port | quote }}
+            {{- range .Values.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: HOME
+              value: /home/node
+            - name: CLAWDBOT_STATE_DIR
+              value: /home/node/.clawdbot
+            - name: CLAWDBOT_CONFIG_PATH
+              value: /config/clawdbot.json
+            - name: XDG_DATA_HOME
+              value: /home/node/.clawdbot/xdg-data
+            {{- if .Values.dind.enabled }}
+            - name: DOCKER_HOST
+              value: unix:///var/run/docker.sock
+            {{- end }}
+            {{- if $hasRegistryAuth }}
+            - name: DOCKER_CONFIG
+              value: {{ .Values.registryAuth.mountPath | quote }}
+            {{- end }}
+            - name: CLAWDBOT_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clawdbot.fullname" . }}
+                  key: gatewayToken
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: gateway
+              containerPort: {{ .Values.gateway.port }}
+              protocol: TCP
+            {{- if .Values.service.bridge.enabled }}
+            - name: bridge
+              containerPort: {{ .Values.service.bridge.port }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: gateway
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: gateway
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: state
+              mountPath: /home/node/.clawdbot
+            - name: workspace
+              mountPath: /home/node/clawd
+            {{- if .Values.dind.enabled }}
+            - name: dind-run
+              mountPath: /var/run
+            {{- end }}
+            {{- if $hasRegistryAuth }}
+            - name: registry-auth
+              mountPath: {{ .Values.registryAuth.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- if .Values.dind.enabled }}
+        - name: dind
+          image: "{{ .Values.dind.image.repository }}:{{ .Values.dind.image.tag }}"
+          imagePullPolicy: {{ .Values.dind.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.dind.securityContext | nindent 12 }}
+          {{- with .Values.dind.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.dind.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if or $hasRegistryAuth $hasDindEnv }}
+          env:
+            {{- if $hasRegistryAuth }}
+            - name: DOCKER_CONFIG
+              value: {{ .Values.registryAuth.mountPath | quote }}
+            {{- end }}
+            {{- if $hasDindEnv }}
+            {{- toYaml $dindEnv | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if and .Values.dind.prePull.enabled $hasDindPrePullImages }}
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                      set -eu
+                      i=0
+                      until docker info >/dev/null 2>&1; do
+                        i=$((i+1))
+                        if [ "$i" -ge {{ .Values.dind.prePull.waitRetries }} ]; then
+                          echo "dind: docker daemon not ready after {{ .Values.dind.prePull.waitRetries }} attempts" >&2
+                          exit 1
+                        fi
+                        sleep {{ .Values.dind.prePull.waitSeconds }}
+                      done
+                      {{ range $dindPrePullImages }}
+                      docker pull {{ . | quote }}
+                      {{ end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.dind.resources | nindent 12 }}
+          volumeMounts:
+            - name: dind-run
+              mountPath: /var/run
+            - name: dind-lib
+              mountPath: /var/lib/docker
+            {{- if $hasRegistryAuth }}
+            - name: registry-auth
+              mountPath: {{ .Values.registryAuth.mountPath }}
+              readOnly: true
+            {{- end }}
+        {{- end }}
+      volumes:
+        {{- if $hasRegistryAuth }}
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.registryAuth.secretName }}
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        {{- end }}
+        {{- if .Values.dind.enabled }}
+        - name: dind-run
+          emptyDir: {}
+        - name: dind-lib
+          {{- if eq .Values.dind.storage.type "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.dind.storage.existingClaim | default (include "clawdbot.pvcName" (list . "-dind")) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        - name: config
+          emptyDir: {}
+        - name: config-seed
+          secret:
+            secretName: {{ include "clawdbot.fullname" . }}
+            items:
+              - key: clawdbot.json
+                path: clawdbot.json
+        - name: state
+          {{- if .Values.persistence.state.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.state.existingClaim | default (include "clawdbot.pvcName" (list . "-state")) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: workspace
+          {{- if .Values.persistence.workspace.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.workspace.existingClaim | default (include "clawdbot.pvcName" (list . "-workspace")) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
