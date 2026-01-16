@@ -45,10 +45,19 @@ function which(cmd) {
 }
 
 function resolveRunner() {
-  const bun = which("bun");
-  if (bun) return { cmd: bun, kind: "bun" };
+  // CLAWDBOT_PREFER_PNPM=1 forces pnpm (useful in Docker on architectures where Bun fails)
+  const preferPnpm = process.env.CLAWDBOT_PREFER_PNPM === "1";
+  if (!preferPnpm) {
+    const bun = which("bun");
+    if (bun) return { cmd: bun, kind: "bun" };
+  }
   const pnpm = which("pnpm");
   if (pnpm) return { cmd: pnpm, kind: "pnpm" };
+  if (preferPnpm) {
+    // Fallback to bun if pnpm not found even when preferring pnpm
+    const bun = which("bun");
+    if (bun) return { cmd: bun, kind: "bun" };
+  }
   return null;
 }
 
