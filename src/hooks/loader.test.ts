@@ -8,16 +8,27 @@ import type { ClawdbotConfig } from '../config/config.js';
 
 describe('loader', () => {
   let tmpDir: string;
+  let originalBundledDir: string | undefined;
 
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
     tmpDir = path.join(os.tmpdir(), `clawdbot-test-${Date.now()}`);
     await fs.mkdir(tmpDir, { recursive: true });
+
+    // Disable bundled hooks during tests by setting env var to non-existent directory
+    originalBundledDir = process.env.CLAWDBOT_BUNDLED_HOOKS_DIR;
+    process.env.CLAWDBOT_BUNDLED_HOOKS_DIR = '/nonexistent/bundled/hooks';
   });
 
   afterEach(async () => {
     clearInternalHooks();
+    // Restore original env var
+    if (originalBundledDir === undefined) {
+      delete process.env.CLAWDBOT_BUNDLED_HOOKS_DIR;
+    } else {
+      process.env.CLAWDBOT_BUNDLED_HOOKS_DIR = originalBundledDir;
+    }
     // Clean up temp directory
     try {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -36,13 +47,13 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
     });
 
     it('should return 0 when hooks config is missing', async () => {
       const cfg: ClawdbotConfig = {};
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
     });
 
@@ -70,7 +81,7 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
 
       const keys = getRegisteredEventKeys();
@@ -97,7 +108,7 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(2);
 
       const keys = getRegisteredEventKeys();
@@ -130,7 +141,7 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
     });
 
@@ -151,7 +162,7 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
       expect(consoleError).toHaveBeenCalledWith(
         expect.stringContaining('Failed to load internal hook handler'),
@@ -182,7 +193,7 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
       expect(consoleError).toHaveBeenCalledWith(
         expect.stringContaining('is not a function')
@@ -213,7 +224,7 @@ describe('loader', () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg);
+      const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
     });
 
@@ -245,7 +256,7 @@ describe('loader', () => {
         },
       };
 
-      await loadInternalHooks(cfg);
+      await loadInternalHooks(cfg, tmpDir);
 
       // Trigger the hook
       const event = createInternalHookEvent('command', 'new', 'test-session');

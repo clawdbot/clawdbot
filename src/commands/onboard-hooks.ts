@@ -1,6 +1,8 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 
 export async function setupInternalHooks(
   cfg: ClawdbotConfig,
@@ -17,42 +19,67 @@ export async function setupInternalHooks(
     "Internal Hooks",
   );
 
-  const shouldConfigure = await prompter.confirm({
-    message: "Enable session memory hook? (saves context on /new)",
-    initialValue: true,
-  });
+  // Discover available hooks using the hook discovery system
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
-  if (!shouldConfigure) {
+  // Filter for eligible and recommended hooks (session-memory is recommended)
+  const recommendedHooks = report.hooks.filter(
+    (h) => h.eligible && h.name === "session-memory",
+  );
+
+  if (recommendedHooks.length === 0) {
+    await prompter.note(
+      "No eligible hooks found. You can configure hooks later in your config.",
+      "No Hooks Available",
+    );
     return cfg;
   }
 
-  // Enable the session-memory hook
+  const toEnable = await prompter.multiselect({
+    message: "Enable internal hooks?",
+    options: [
+      { value: "__skip__", label: "Skip for now" },
+      ...recommendedHooks.map((hook) => ({
+        value: hook.name,
+        label: `${hook.emoji ?? "🔗"} ${hook.name}`,
+        hint: hook.description,
+      })),
+    ],
+  });
+
+  const selected = toEnable.filter((name) => name !== "__skip__");
+  if (selected.length === 0) {
+    return cfg;
+  }
+
+  // Enable selected hooks using the new entries config format
+  const entries = { ...(cfg.hooks?.internal?.entries ?? {}) };
+  for (const name of selected) {
+    entries[name] = { enabled: true };
+  }
+
   const next: ClawdbotConfig = {
     ...cfg,
     hooks: {
       ...cfg.hooks,
       internal: {
         enabled: true,
-        handlers: [
-          {
-            event: "command:new",
-            module: "./hooks/handlers/session-memory.ts",
-          },
-        ],
+        entries,
       },
     },
   };
 
   await prompter.note(
     [
-      "Session memory hook enabled.",
-      "When you issue /new, session context will be saved to:",
-      "  ~/.clawdbot/memory/sessions/<session-key>_<timestamp>.json",
+      `Enabled ${selected.length} hook${selected.length > 1 ? "s" : ""}: ${selected.join(", ")}`,
       "",
-      "You can disable or customize this later in your config:",
-      "  hooks.internal.enabled = false",
+      "You can manage hooks later with:",
+      "  clawdbot hooks internal list",
+      "  clawdbot hooks internal enable <name>",
+      "  clawdbot hooks internal disable <name>",
     ].join("\n"),
-    "Hook configured",
+    "Hooks Configured",
   );
 
   return next;

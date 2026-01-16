@@ -20,6 +20,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { registerInternalHooksSubcommands } from "./hooks-internal-cli.js";
 
 export function registerHooksCli(program: Command) {
   const hooks = program
@@ -30,6 +31,9 @@ export function registerHooksCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.clawd.bot/cli/hooks")}\n`,
     );
+
+  // Register internal hooks management subcommands
+  registerInternalHooksSubcommands(hooks);
 
   const gmail = hooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");
 

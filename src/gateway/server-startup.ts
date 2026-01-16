@@ -92,11 +92,11 @@ export async function startGatewaySidecars(params: {
     }
   }
 
-  // Load internal hook handlers from configuration.
+  // Load internal hook handlers from configuration and directory discovery.
   try {
     // Clear any previously registered hooks to ensure fresh loading
     clearInternalHooks();
-    const loadedCount = await loadInternalHooks(params.cfg);
+    const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
     if (loadedCount > 0) {
       params.logHooks.info(`loaded ${loadedCount} internal hook handler${loadedCount > 1 ? 's' : ''}`);
     }

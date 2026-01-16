@@ -1,6 +1,6 @@
 # Internal Agent Hooks
 
-Internal hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Similar to Claude Code's hook system, internal hooks let you trigger custom code when specific events occur within clawdbot.
+Internal hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in Clawdbot.
 
 ## Overview
 
@@ -8,39 +8,158 @@ The internal hooks system allows you to:
 - Save session context to memory when `/new` is issued
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
-- Extend clawdbot's behavior without modifying core code
+- Extend Clawdbot's behavior without modifying core code
+
+## Getting Started
+
+### Bundled Hooks
+
+Clawdbot ships with two bundled hooks that are automatically discovered:
+
+- **💾 session-memory**: Saves session context to `~/clawd/memory/` when you issue `/new`
+- **📝 command-logger**: Logs all command events to `~/.clawdbot/logs/commands.log`
+
+List available hooks:
+
+```bash
+clawdbot hooks internal list
+```
+
+Enable a hook:
+
+```bash
+clawdbot hooks internal enable session-memory
+```
+
+Check hook status:
+
+```bash
+clawdbot hooks internal check
+```
+
+Get detailed information:
+
+```bash
+clawdbot hooks internal info session-memory
+```
+
+### Onboarding
+
+During onboarding (`clawdbot onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
+
+## Hook Discovery
+
+Hooks are automatically discovered from three directories (in order of precedence):
+
+1. **Workspace hooks**: `<workspace>/hooks/` (per-agent, highest precedence)
+2. **Managed hooks**: `~/.clawdbot/hooks/` (user-installed, shared across workspaces)
+3. **Bundled hooks**: `<clawdbot>/hooks/bundled/` (shipped with Clawdbot)
+
+Each hook is a directory containing:
+
+```
+my-hook/
+├── HOOK.md          # Metadata + documentation
+└── handler.ts       # Handler implementation
+```
+
+## Hook Structure
+
+### HOOK.md Format
+
+The `HOOK.md` file contains metadata in YAML frontmatter plus Markdown documentation:
+
+```markdown
+---
+name: my-hook
+description: "Short description of what this hook does"
+homepage: https://docs.clawd.bot/hooks/my-hook
+metadata: {"clawdbot":{"emoji":"🔗","events":["command:new"],"requires":{"bins":["node"]}}}
+---
+
+# My Hook
+
+Detailed documentation goes here...
+
+## What It Does
+
+- Listens for `/new` commands
+- Performs some action
+- Logs the result
+
+## Requirements
+
+- Node.js must be installed
 
 ## Configuration
 
-Enable internal hooks in your `~/.clawdbot/config.json`:
+No configuration needed.
+```
 
-```json
+### Metadata Fields
+
+The `metadata.clawdbot` object supports:
+
+- **`emoji`**: Display emoji for CLI (e.g., `"💾"`)
+- **`events`**: Array of events to listen for (e.g., `["command:new", "command:reset"]`)
+- **`export`**: Named export to use (defaults to `"default"`)
+- **`homepage`**: Documentation URL
+- **`requires`**: Optional requirements
+  - **`bins`**: Required binaries on PATH (e.g., `["git", "node"]`)
+  - **`anyBins`**: At least one of these binaries must be present
+  - **`env`**: Required environment variables
+  - **`config`**: Required config paths (e.g., `["workspace.dir"]`)
+  - **`os`**: Required platforms (e.g., `["darwin", "linux"]`)
+- **`always`**: Bypass eligibility checks (boolean)
+- **`install`**: Installation methods (for bundled hooks: `[{"id":"bundled","kind":"bundled"}]`)
+
+### Handler Implementation
+
+The `handler.ts` file exports an `InternalHookHandler` function:
+
+```typescript
+import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
+
+const myHandler: InternalHookHandler = async (event) => {
+  // Only trigger on 'new' command
+  if (event.type !== 'command' || event.action !== 'new') {
+    return;
+  }
+
+  console.log(`[my-hook] New command triggered`);
+  console.log(`  Session: ${event.sessionKey}`);
+  console.log(`  Timestamp: ${event.timestamp.toISOString()}`);
+
+  // Your custom logic here
+
+  // Optionally send message to user
+  event.messages.push('✨ My hook executed!');
+};
+
+export default myHandler;
+```
+
+#### Event Context
+
+Each event includes:
+
+```typescript
 {
-  "hooks": {
-    "internal": {
-      "enabled": true,
-      "handlers": [
-        {
-          "event": "command:new",
-          "module": "./hooks/handlers/session-memory.ts"
-        },
-        {
-          "event": "command",
-          "module": "./hooks/handlers/command-logger.ts"
-        }
-      ]
-    }
+  type: 'command' | 'session' | 'agent',
+  action: string,              // e.g., 'new', 'reset', 'stop'
+  sessionKey: string,          // Session identifier
+  timestamp: Date,             // When the event occurred
+  messages: string[],          // Push messages here to send to user
+  context: {
+    sessionEntry?: SessionEntry,
+    sessionId?: string,
+    sessionFile?: string,
+    commandSource?: string,    // e.g., 'whatsapp', 'telegram'
+    senderId?: string,
+    cfg?: ClawdbotConfig
   }
 }
 ```
-
-### Configuration Options
-
-- **`enabled`** (boolean): Enable or disable internal hooks
-- **`handlers`** (array): List of hook handler configurations
-  - **`event`** (string): Event key to listen for (e.g., `command:new`, `session:start`)
-  - **`module`** (string): Path to handler module (absolute or relative to cwd)
-  - **`export`** (string, optional): Named export to use (defaults to `default`)
 
 ## Event Types
 
@@ -53,204 +172,290 @@ Triggered when agent commands are issued:
 - **`command:reset`**: When `/reset` command is issued
 - **`command:stop`**: When `/stop` command is issued
 
-### Event Context
+### Future Events
 
-Each event includes:
+Planned event types:
 
-```typescript
-{
-  type: 'command' | 'session' | 'agent',
-  action: string,              // e.g., 'new', 'reset', 'stop'
-  sessionKey: string,          // Session identifier
-  timestamp: Date,             // When the event occurred
-  context: {
-    sessionEntry?: SessionEntry,
-    sessionId?: string,
-    commandSource?: string,    // e.g., 'whatsapp', 'telegram'
-    senderId?: string
-  }
-}
+- **`session:start`**: When a new session begins
+- **`session:end`**: When a session ends
+- **`agent:error`**: When an agent encounters an error
+- **`message:sent`**: When a message is sent
+- **`message:received`**: When a message is received
+
+## Creating Custom Hooks
+
+### 1. Choose Location
+
+- **Workspace hooks** (`<workspace>/hooks/`): Per-agent, highest precedence
+- **Managed hooks** (`~/.clawdbot/hooks/`): Shared across workspaces
+
+### 2. Create Directory Structure
+
+```bash
+mkdir -p ~/.clawdbot/hooks/my-hook
+cd ~/.clawdbot/hooks/my-hook
 ```
 
-## Writing Hook Handlers
+### 3. Create HOOK.md
 
-### Basic Handler
+```markdown
+---
+name: my-hook
+description: "Does something useful"
+metadata: {"clawdbot":{"emoji":"🎯","events":["command:new"]}}
+---
 
-Create a handler module that exports a default function:
+# My Custom Hook
+
+This hook does something useful when you issue `/new`.
+```
+
+### 4. Create handler.ts
 
 ```typescript
-// hooks/handlers/my-handler.ts
 import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
 
-const myHandler: InternalHookHandler = async (event) => {
-  console.log(`Event triggered: ${event.type}:${event.action}`);
-  console.log(`Session: ${event.sessionKey}`);
-
-  // Your custom logic here
-};
-
-export default myHandler;
-```
-
-### Named Export Handler
-
-Use named exports for multiple handlers in one file:
-
-```typescript
-// hooks/handlers/analytics.ts
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
-
-export const trackCommand: InternalHookHandler = async (event) => {
-  // Track command usage
-};
-
-export const trackSession: InternalHookHandler = async (event) => {
-  // Track session lifecycle
-};
-```
-
-Configuration:
-
-```json
-{
-  "event": "command",
-  "module": "./hooks/handlers/analytics.ts",
-  "export": "trackCommand"
-}
-```
-
-## Example Handlers
-
-### Session Memory Handler
-
-Save session context when `/new` is issued:
-
-```typescript
-// hooks/handlers/session-memory.ts
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
-
-const saveSessionToMemory: InternalHookHandler = async (event) => {
+const handler: InternalHookHandler = async (event) => {
   if (event.type !== 'command' || event.action !== 'new') {
     return;
   }
 
-  const memoryDir = path.join(os.homedir(), '.clawdbot', 'memory', 'sessions');
-  await fs.mkdir(memoryDir, { recursive: true });
-
-  const timestamp = event.timestamp.toISOString().replace(/[:.]/g, '-');
-  const sessionSlug = event.sessionKey.replace(/[^a-zA-Z0-9]/g, '-');
-  const memoryFile = path.join(memoryDir, `${sessionSlug}_${timestamp}.json`);
-
-  await fs.writeFile(
-    memoryFile,
-    JSON.stringify({
-      sessionKey: event.sessionKey,
-      timestamp: event.timestamp.toISOString(),
-      context: event.context,
-    }, null, 2),
-    'utf-8'
-  );
-
-  console.log(`[session-memory] Saved to ${memoryFile}`);
+  console.log('[my-hook] Running!');
+  // Your logic here
 };
 
-export default saveSessionToMemory;
+export default handler;
 ```
 
-### Command Logger
+### 5. Enable and Test
 
-Log all commands to a file:
+```bash
+# Verify hook is discovered
+clawdbot hooks internal list
 
-```typescript
-// hooks/handlers/command-logger.ts
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
+# Enable it
+clawdbot hooks internal enable my-hook
 
-const logCommand: InternalHookHandler = async (event) => {
-  if (event.type !== 'command') {
-    return;
-  }
+# Restart gateway
+pkill -9 -f 'clawdbot.*gateway' && pnpm clawdbot gateway
 
-  const logDir = path.join(os.homedir(), '.clawdbot', 'logs');
-  await fs.mkdir(logDir, { recursive: true });
-
-  const logFile = path.join(logDir, 'commands.log');
-  const logLine = JSON.stringify({
-    timestamp: event.timestamp.toISOString(),
-    action: event.action,
-    sessionKey: event.sessionKey,
-    senderId: event.context.senderId ?? 'unknown',
-    source: event.context.commandSource ?? 'unknown',
-  }) + '\n';
-
-  await fs.appendFile(logFile, logLine, 'utf-8');
-};
-
-export default logCommand;
+# Trigger the event
+# Send /new via your messaging channel
 ```
 
-### Git Commit on Session End
+## Configuration
 
-Automatically commit changes when starting a new session:
+### New Config Format (Recommended)
 
-```typescript
-// hooks/handlers/git-commit.ts
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
-
-const execAsync = promisify(exec);
-
-const gitCommitOnNew: InternalHookHandler = async (event) => {
-  if (event.action !== 'new') {
-    return;
-  }
-
-  try {
-    // Check if there are changes
-    const { stdout: status } = await execAsync('git status --porcelain');
-    if (!status.trim()) {
-      return; // No changes to commit
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": { "enabled": true },
+        "command-logger": { "enabled": false }
+      }
     }
-
-    // Commit changes
-    await execAsync('git add .');
-    await execAsync('git commit -m "Session checkpoint before /new"');
-    console.log('[git-commit] Created checkpoint commit');
-  } catch (err) {
-    console.error('[git-commit] Failed:', err);
   }
-};
-
-export default gitCommitOnNew;
+}
 ```
 
-## Event Lifecycle
+### Per-Hook Configuration
 
-1. User issues a command (e.g., `/new`)
-2. Command is validated and authorized
-3. Internal hook event is created and triggered
-4. All registered handlers for the event are called in order
-5. Command processing continues
-6. Handlers run asynchronously and errors are caught/logged
+Hooks can have custom configuration:
 
-## Error Handling
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "my-hook": {
+          "enabled": true,
+          "env": {
+            "MY_CUSTOM_VAR": "value"
+          }
+        }
+      }
+    }
+  }
+}
+```
 
-- Handlers are wrapped in try-catch blocks
-- Errors in one handler don't prevent other handlers from running
-- Errors are logged to console with context
-- Failed handlers don't block command processing
+### Extra Directories
+
+Load hooks from additional directories:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "load": {
+        "extraDirs": ["/path/to/more/hooks"]
+      }
+    }
+  }
+}
+```
+
+### Legacy Config Format (Still Supported)
+
+The old config format still works for backwards compatibility:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "handlers": [
+        {
+          "event": "command:new",
+          "module": "./hooks/handlers/my-handler.ts",
+          "export": "default"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Migration**: Use the new discovery-based system for new hooks. Legacy handlers are loaded after directory-based hooks.
+
+## CLI Commands
+
+### List Hooks
+
+```bash
+# List all hooks
+clawdbot hooks internal list
+
+# Show only eligible hooks
+clawdbot hooks internal list --eligible
+
+# Verbose output (show missing requirements)
+clawdbot hooks internal list --verbose
+
+# JSON output
+clawdbot hooks internal list --json
+```
+
+### Hook Information
+
+```bash
+# Show detailed info about a hook
+clawdbot hooks internal info session-memory
+
+# JSON output
+clawdbot hooks internal info session-memory --json
+```
+
+### Check Eligibility
+
+```bash
+# Show eligibility summary
+clawdbot hooks internal check
+
+# JSON output
+clawdbot hooks internal check --json
+```
+
+### Enable/Disable
+
+```bash
+# Enable a hook
+clawdbot hooks internal enable session-memory
+
+# Disable a hook
+clawdbot hooks internal disable command-logger
+```
+
+## Bundled Hooks
+
+### session-memory
+
+Saves session context to memory when you issue `/new`.
+
+**Events**: `command:new`
+
+**Requirements**: `workspace.dir` must be configured
+
+**Output**: `~/clawd/memory/YYYY-MM-DD-slug.md`
+
+**What it does**:
+1. Finds the previous session file (most recent before reset)
+2. Extracts the last 15 lines of conversation
+3. Uses LLM to generate a descriptive filename slug
+4. Saves session metadata to a dated memory file
+
+**Example output**:
+
+```markdown
+# Session: 2026-01-16 14:30:00 UTC
+
+- **Session Key**: agent:main:main
+- **Session ID**: abc123def456
+- **Source**: telegram
+```
+
+**Filename examples**:
+- `2026-01-16-vendor-pitch.md`
+- `2026-01-16-api-design.md`
+- `2026-01-16-1430.md` (fallback timestamp if slug generation fails)
+
+**Enable**:
+
+```bash
+clawdbot hooks internal enable session-memory
+```
+
+### command-logger
+
+Logs all command events to a centralized audit file.
+
+**Events**: `command`
+
+**Requirements**: None
+
+**Output**: `~/.clawdbot/logs/commands.log`
+
+**What it does**:
+1. Captures event details (command action, timestamp, session key, sender ID, source)
+2. Appends to log file in JSONL format
+3. Runs silently in the background
+
+**Example log entries**:
+
+```jsonl
+{"timestamp":"2026-01-16T14:30:00.000Z","action":"new","sessionKey":"agent:main:main","senderId":"+1234567890","source":"telegram"}
+{"timestamp":"2026-01-16T15:45:22.000Z","action":"stop","sessionKey":"agent:main:main","senderId":"user@example.com","source":"whatsapp"}
+```
+
+**View logs**:
+
+```bash
+# View recent commands
+tail -n 20 ~/.clawdbot/logs/commands.log
+
+# Pretty-print with jq
+cat ~/.clawdbot/logs/commands.log | jq .
+
+# Filter by action
+grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
+```
+
+**Enable**:
+
+```bash
+clawdbot hooks internal enable command-logger
+```
 
 ## Best Practices
 
 ### Keep Handlers Fast
 
-Hooks run synchronously during command processing. Keep handlers lightweight:
+Hooks run during command processing. Keep them lightweight:
 
 ```typescript
 // ✓ Good - async work, returns immediately
@@ -274,7 +479,7 @@ const handler: InternalHookHandler = async (event) => {
   try {
     await riskyOperation(event);
   } catch (err) {
-    console.error('[my-handler] Failed:', err);
+    console.error('[my-handler] Failed:', err instanceof Error ? err.message : String(err));
     // Don't throw - let other handlers run
   }
 };
@@ -297,22 +502,16 @@ const handler: InternalHookHandler = async (event) => {
 
 ### Use Specific Event Keys
 
-Register for specific events when possible:
+Specify exact events in metadata when possible:
 
-```json
-{
-  "event": "command:new",  // Specific
-  "module": "./my-handler.ts"
-}
+```yaml
+metadata: {"clawdbot":{"events":["command:new"]}}  # Specific
 ```
 
-Rather than filtering in code:
+Rather than:
 
-```json
-{
-  "event": "command",      // General - more overhead
-  "module": "./my-handler.ts"
-}
+```yaml
+metadata: {"clawdbot":{"events":["command"]}}      # General - more overhead
 ```
 
 ## Debugging
@@ -322,7 +521,16 @@ Rather than filtering in code:
 The gateway logs hook loading at startup:
 
 ```
-[hooks] loaded 2 internal hook handlers
+Registered hook: session-memory -> command:new
+Registered hook: command-logger -> command
+```
+
+### Check Discovery
+
+List all discovered hooks:
+
+```bash
+clawdbot hooks internal list --verbose
 ```
 
 ### Check Registration
@@ -336,26 +544,38 @@ const handler: InternalHookHandler = async (event) => {
 };
 ```
 
-### Verify Module Paths
+### Verify Eligibility
 
-Ensure module paths are correct:
+Check why a hook isn't eligible:
 
 ```bash
-# Absolute path
-ls -la /home/user/.clawdbot/hooks/my-handler.ts
-
-# Relative path (from where gateway runs)
-ls -la ./hooks/my-handler.ts
+clawdbot hooks internal info my-hook
 ```
+
+Look for missing requirements in the output.
 
 ## Testing
 
-Test your handlers directly:
+### Gateway Logs
+
+Monitor gateway logs to see hook execution:
+
+```bash
+# macOS
+./scripts/clawlog.sh -f
+
+# Other platforms
+tail -f ~/.clawdbot/gateway.log
+```
+
+### Test Hooks Directly
+
+Test your handlers in isolation:
 
 ```typescript
 import { test } from 'vitest';
-import { createInternalHookEvent, triggerInternalHook } from './src/hooks/internal-hooks.js';
-import myHandler from './hooks/handlers/my-handler.js';
+import { createInternalHookEvent } from './src/hooks/internal-hooks.js';
+import myHandler from './hooks/my-hook/handler.js';
 
 test('my handler works', async () => {
   const event = createInternalHookEvent('command', 'new', 'test-session', {
@@ -372,13 +592,33 @@ test('my handler works', async () => {
 
 ### Core Components
 
-- **`src/hooks/internal-hooks.ts`**: Core hook system (register, trigger, event types)
+- **`src/hooks/types.ts`**: Type definitions
+- **`src/hooks/workspace.ts`**: Directory scanning and loading
+- **`src/hooks/frontmatter.ts`**: HOOK.md metadata parsing
+- **`src/hooks/config.ts`**: Eligibility checking
+- **`src/hooks/hooks-status.ts`**: Status reporting
 - **`src/hooks/loader.ts`**: Dynamic module loader
+- **`src/cli/hooks-internal-cli.ts`**: CLI commands
 - **`src/gateway/server-startup.ts`**: Loads hooks at gateway start
 - **`src/auto-reply/reply/commands-core.ts`**: Triggers command events
-- **`src/auto-reply/reply/commands-session.ts`**: Triggers session events
 
-### Flow
+### Discovery Flow
+
+```
+Gateway startup
+    ↓
+Scan directories (workspace → managed → bundled)
+    ↓
+Parse HOOK.md files
+    ↓
+Check eligibility (bins, env, config, os)
+    ↓
+Load handlers from eligible hooks
+    ↓
+Register handlers for events
+```
+
+### Event Flow
 
 ```
 User sends /new
@@ -394,36 +634,145 @@ Command processing continues
 Session reset
 ```
 
-## Migration from Webhook Hooks
+## Troubleshooting
 
-If you're using webhook hooks, internal hooks complement them:
+### Hook Not Discovered
 
-- **Webhook hooks**: External HTTP endpoints
-- **Internal hooks**: In-process TypeScript functions
+1. Check directory structure:
+   ```bash
+   ls -la ~/.clawdbot/hooks/my-hook/
+   # Should show: HOOK.md, handler.ts
+   ```
 
-Internal hooks are better for:
-- Local automations
-- File system operations
-- Direct access to session state
-- Lower latency
+2. Verify HOOK.md format:
+   ```bash
+   cat ~/.clawdbot/hooks/my-hook/HOOK.md
+   # Should have YAML frontmatter with name and metadata
+   ```
 
-Webhook hooks are better for:
-- External integrations
-- Remote services
-- Language-agnostic handlers
+3. List all discovered hooks:
+   ```bash
+   clawdbot hooks internal list
+   ```
 
-## Roadmap
+### Hook Not Eligible
 
-Future event types:
+Check requirements:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
-- **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
+```bash
+clawdbot hooks internal info my-hook
+```
+
+Look for missing:
+- Binaries (check PATH)
+- Environment variables
+- Config values
+- OS compatibility
+
+### Hook Not Executing
+
+1. Verify hook is enabled:
+   ```bash
+   clawdbot hooks internal list
+   # Should show ✓ next to enabled hooks
+   ```
+
+2. Restart gateway:
+   ```bash
+   pkill -9 -f 'clawdbot.*gateway'
+   pnpm clawdbot gateway
+   ```
+
+3. Check gateway logs for errors:
+   ```bash
+   ./scripts/clawlog.sh | grep hook
+   ```
+
+### Handler Errors
+
+Check for TypeScript/import errors:
+
+```bash
+# Test import directly
+node -e "import('./path/to/handler.ts').then(console.log)"
+```
+
+## Migration Guide
+
+### From Legacy Config to Discovery
+
+**Before**:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "handlers": [
+        {
+          "event": "command:new",
+          "module": "./hooks/handlers/my-handler.ts"
+        }
+      ]
+    }
+  }
+}
+```
+
+**After**:
+
+1. Create hook directory:
+   ```bash
+   mkdir -p ~/.clawdbot/hooks/my-hook
+   mv ./hooks/handlers/my-handler.ts ~/.clawdbot/hooks/my-hook/handler.ts
+   ```
+
+2. Create HOOK.md:
+   ```markdown
+   ---
+   name: my-hook
+   description: "My custom hook"
+   metadata: {"clawdbot":{"emoji":"🎯","events":["command:new"]}}
+   ---
+
+   # My Hook
+
+   Does something useful.
+   ```
+
+3. Update config:
+   ```json
+   {
+     "hooks": {
+       "internal": {
+         "enabled": true,
+         "entries": {
+           "my-hook": { "enabled": true }
+         }
+       }
+     }
+   }
+   ```
+
+4. Verify and restart:
+   ```bash
+   clawdbot hooks internal list
+   # Should show: 🎯 my-hook ✓
+
+   pkill -9 -f 'clawdbot.*gateway'
+   pnpm clawdbot gateway
+   ```
+
+**Benefits of migration**:
+- Automatic discovery
+- CLI management
+- Eligibility checking
+- Better documentation
+- Consistent structure
 
 ## See Also
 
-- [Hooks Configuration](/configuration#hooks)
-- [Webhook Hooks](https://docs.clawd.bot/gateway/hooks)
-- [Commands](https://docs.clawd.bot/commands)
+- [CLI Reference: hooks internal](/cli/hooks)
+- [Bundled Hooks README](https://github.com/clawdbot/clawdbot/tree/main/hooks/bundled)
+- [Webhook Hooks](/automation/webhook)
+- [Configuration](/configuration#hooks)
