@@ -16,13 +16,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     corepack enable
 
 WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts ./scripts
+
+RUN pnpm install && npm install -g https://github.com/tobi/qmd
+
 COPY . .
 
-RUN pnpm install && \
-    pnpm build && \
+RUN pnpm build && \
     pnpm ui:install && \
-    pnpm ui:build && \
-    npm install -g https://github.com/tobi/qmd
+    pnpm ui:build
 
 ENV NODE_ENV=production
 

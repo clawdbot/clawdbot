@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: 
+  repository:
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -171,17 +171,18 @@ browserDeployment:
 # gateway.auth.token (if set) is used as the gatewayToken secret.
 config:
   # Workspace where the agent writes files.
-  agent:
-    workspace: "/home/node/clawd"
+  agents:
+    defaults:
+      workspace: "/home/node/clawd"
 
-    # Optional Docker sandbox example with registry URLs.
-    sandbox:
-      mode: "non-main"
-      docker:
-        image: "registry.example.com/clawdbot-sandbox:bookworm-slim"
-      browser:
-        enabled: true
-        image: "registry.example.com/clawdbot-sandbox-browser:bookworm-slim"
+      # Optional Docker sandbox example with registry URLs.
+      sandbox:
+        mode: "non-main"
+        docker:
+          image: "registry.example.com/clawdbot-sandbox:bookworm-slim"
+        browser:
+          enabled: true
+          image: "registry.example.com/clawdbot-sandbox-browser:bookworm-slim"
 
   # Gateway auth is required when binding to non-loopback.
   gateway:
@@ -198,6 +199,7 @@ config:
     bind: "lan"
 
   # Example allowlist (replace with your number).
-  whatsapp:
-    allowFrom:
-      - "+15555550123"
+  channels:
+    whatsapp:
+      allowFrom:
+        - "+15555550123"
