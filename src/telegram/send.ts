@@ -20,6 +20,7 @@ import { markdownToTelegramHtml } from "./format.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -166,12 +167,10 @@ export async function sendMessageTelegram(
 
   // Build optional params for forum topics and reply threading.
   // Only include these if actually provided to keep API calls clean.
-  const threadParams: Record<string, number> = {};
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  if (messageThreadId != null) {
-    threadParams.message_thread_id = Math.trunc(messageThreadId);
-  }
+  const threadIdParams = buildTelegramThreadParams(messageThreadId);
+  const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {
     threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
   }
