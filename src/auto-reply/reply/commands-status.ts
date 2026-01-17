@@ -15,6 +15,7 @@ import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
   formatUsageSummaryLine,
+  formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
@@ -148,11 +149,12 @@ export async function buildStatusReply(params: {
         providers: [currentUsageProvider],
         agentDir: statusAgentDir,
       });
-      const summaryLine = formatUsageSummaryLine(usageSummary, {
+      const summaryLine = formatUsageWindowSummary(usageSummary.providers[0], {
         now: Date.now(),
-        maxProviders: 1,
+        maxWindows: 2,
+        includeResets: true,
       });
-      if (summaryLine) usageLine = summaryLine;
+      if (summaryLine) usageLine = `📊 Usage: ${summaryLine}`;
     } catch {
       usageLine = null;
     }
