@@ -51,7 +51,7 @@ const geminiCliProvider: ProviderPlugin = {
             throw new Error("OAuth flow did not return credentials");
           }
 
-          const email = oauthCreds.email?.trim() || "gemini-cli";
+          const email = oauthCreds.email?.trim() || "default";
           const profileId = `google-gemini-cli:${email}`;
 
           return {
