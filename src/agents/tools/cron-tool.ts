@@ -16,7 +16,6 @@ const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs"
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 
-const REMINDER_CONTEXT_MESSAGES = 3;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
@@ -34,6 +33,7 @@ const CronToolSchema = Type.Object({
   patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
   text: Type.Optional(Type.String()),
   mode: optionalStringEnum(CRON_WAKE_MODES),
+  contextMessages: Type.Optional(Type.Number()),
 });
 
 type CronToolOptions = {
@@ -86,7 +86,9 @@ function extractMessageText(message: ChatMessage): { role: string; text: string 
 async function buildReminderContextLines(params: {
   agentSessionKey?: string;
   gatewayOpts: GatewayCallOptions;
+  contextMessages: number;
 }) {
+  if (params.contextMessages <= 0) return [];
   const sessionKey = params.agentSessionKey?.trim();
   if (!sessionKey) return [];
   const cfg = loadConfig();
@@ -101,7 +103,7 @@ async function buildReminderContextLines(params: {
     const parsed = messages
       .map((msg) => extractMessageText(msg as ChatMessage))
       .filter((msg): msg is { role: string; text: string } => Boolean(msg));
-    const recent = parsed.slice(-REMINDER_CONTEXT_MESSAGES);
+    const recent = parsed.slice(-params.contextMessages);
     if (recent.length === 0) return [];
     const lines: string[] = [];
     let total = 0;
@@ -149,6 +151,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
             throw new Error("job required");
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
+          const contextMessages =
+            typeof params.contextMessages === "number" ? params.contextMessages : 0;
           if (
             job &&
             typeof job === "object" &&
@@ -160,6 +164,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               const contextLines = await buildReminderContextLines({
                 agentSessionKey: opts?.agentSessionKey,
                 gatewayOpts,
+                contextMessages,
               });
               if (contextLines.length > 0) {
                 const baseText = stripExistingContext(payload.text);

@@ -85,7 +85,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("adds recent context for systemEvent reminders when session key is available", async () => {
+  it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
         messages: [
@@ -102,6 +102,7 @@ describe("cron tool", () => {
     const tool = createCronTool({ agentSessionKey: "main" });
     await tool.execute("call3", {
       action: "add",
+      contextMessages: 3,
       job: {
         name: "reminder",
         schedule: { atMs: 123 },
@@ -126,5 +127,29 @@ describe("cron tool", () => {
     expect(text).toContain("User: Discussed Q2 budget");
     expect(text).toContain("Assistant: We agreed to review on Tuesday.");
     expect(text).toContain("User: Remind me about the thing at 2pm");
+  });
+
+  it("does not add context when contextMessages is 0 (default)", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "main" });
+    await tool.execute("call4", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { atMs: 123 },
+        payload: { text: "Reminder: the thing." },
+      },
+    });
+
+    // Should only call cron.add, not chat.history
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const cronCall = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { payload?: { text?: string } };
+    };
+    expect(cronCall.method).toBe("cron.add");
+    const text = cronCall.params?.payload?.text ?? "";
+    expect(text).not.toContain("Recent context:");
   });
 });
