@@ -17,6 +17,9 @@ Docs: https://docs.clawd.bot
 - Sessions: add `session.identityLinks` for cross-platform DM session li  nking. (#1033) — thanks @thewilloftheshadow. https://docs.clawd.bot/concepts/session
 - Web search: add `country`/`language` parameters (schema + Brave API) and docs. (#1046) — thanks @YuriNachos. https://docs.clawd.bot/tools/web
 
+### Features
+- Channels: add the BlueBubbles plugin (REST send/receive, typing/read, reactions, webhook pairing). (#1077) — thanks @thewilloftheshadow.
+
 ### Breaking
 - **BREAKING:** `clawdbot message` and message tool now require `target` (dropping `to`/`channelId` for destinations). (#1034) — thanks @tobalsan.
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.

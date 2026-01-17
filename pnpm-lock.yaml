@@ -43,9 +43,6 @@ importers:
       '@mariozechner/pi-tui':
         specifier: ^0.46.0
         version: 0.46.0
-      '@mozilla/readability':
-        specifier: ^0.6.0
-        version: 0.6.0
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
@@ -161,6 +158,9 @@ importers:
       '@mariozechner/mini-lit':
         specifier: 0.2.1
         version: 0.2.1(lit@3.3.2)(tailwindcss@4.1.17)
+      '@mozilla/readability':
+        specifier: ^0.6.0
+        version: 0.6.0
       '@types/body-parser':
         specifier: ^1.19.6
         version: 1.19.6
@@ -231,6 +231,8 @@ importers:
       node-llama-cpp:
         specifier: 3.14.5
         version: 3.14.5(typescript@5.9.3)
+
+  extensions/bluebubbles: {}
 
   extensions/matrix:
     dependencies:
