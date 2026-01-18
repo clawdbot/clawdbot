@@ -15,14 +15,16 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { type ChatRunEntry, createChatRunState } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import {
+  type SlackHttpConfig,
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+} from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
 export async function createGatewayRuntimeState(params: {
-  cfg: {
-    canvasHost?: { root?: string; enabled?: boolean; liveReload?: boolean };
-  };
+  cfg: import("../config/config.js").ClawdbotConfig;
   bindHost: string;
   port: number;
   controlUiEnabled: boolean;
@@ -98,6 +100,7 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
+  const slackConfig = params.cfg.channels?.slack as SlackHttpConfig | undefined;
   const httpServer = createGatewayHttpServer({
     canvasHost,
     controlUiEnabled: params.controlUiEnabled,
@@ -106,6 +109,7 @@ export async function createGatewayRuntimeState(params: {
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth: params.resolvedAuth,
+    slackConfig,
   });
 
   await listenGatewayHttpServer({

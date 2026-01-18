@@ -6,6 +6,7 @@ export type MonitorSlackOpts = {
   botToken?: string;
   appToken?: string;
   accountId?: string;
+  mode?: "socket" | "http";
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;

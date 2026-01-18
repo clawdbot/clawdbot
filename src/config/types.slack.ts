@@ -70,6 +70,8 @@ export type SlackThreadConfig = {
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Slack connection mode (socket|http). Default: socket. */
+  mode?: "socket" | "http";
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
   /** Override native command registration for Slack (bool or "auto"). */

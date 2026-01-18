@@ -8,6 +8,7 @@ import type { WebSocketServer } from "ws";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import type { createSubsystemLogger } from "../logging.js";
+import { createSlackHttpHandler, dispatchSlackHttpEvent } from "../slack/http/index.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   extractHookToken,
@@ -40,6 +41,12 @@ type HookDispatchers = {
     thinking?: string;
     timeoutSeconds?: number;
   }) => string;
+};
+
+export type SlackHttpConfig = {
+  mode?: "socket" | "http";
+  signingSecret?: string;
+  webhookPath?: string;
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -192,6 +199,7 @@ export function createGatewayHttpServer(opts: {
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
+  slackConfig?: SlackHttpConfig;
 }): HttpServer {
   const {
     canvasHost,
@@ -201,13 +209,34 @@ export function createGatewayHttpServer(opts: {
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth,
+    slackConfig,
   } = opts;
+  const slackWebhookPathRaw = slackConfig?.webhookPath?.trim();
+  const slackWebhookPath = slackWebhookPathRaw
+    ? slackWebhookPathRaw.startsWith("/")
+      ? slackWebhookPathRaw
+      : `/${slackWebhookPathRaw}`
+    : "/slack/events";
+  const slackHttpHandler =
+    slackConfig?.mode === "http" && slackConfig.signingSecret
+      ? createSlackHttpHandler({
+          signingSecret: slackConfig.signingSecret,
+          onEvent: dispatchSlackHttpEvent,
+        })
+      : null;
   const httpServer: HttpServer = createHttpServer((req, res) => {
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
 
     void (async () => {
       if (await handleHooksRequest(req, res)) return;
+      if (slackHttpHandler) {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname === slackWebhookPath) {
+          await slackHttpHandler(req, res);
+          return;
+        }
+      }
       if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
       if (openAiChatCompletionsEnabled) {
         if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth })) return;

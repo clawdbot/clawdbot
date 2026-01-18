@@ -1,4 +1,5 @@
-import { App } from "@slack/bolt";
+import { App, type SlackEventMiddlewareArgs } from "@slack/bolt";
+import { WebClient } from "@slack/web-api";
 
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -14,6 +15,7 @@ import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
+import { registerSlackHttpDispatcher } from "../http/dispatch.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
@@ -49,12 +51,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const sessionScope: SessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
 
+  const slackMode = opts.mode ?? account.config.mode ?? "socket";
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
-  if (!botToken || !appToken) {
-    throw new Error(
-      `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`,
-    );
+  if (!botToken || (slackMode !== "http" && !appToken)) {
+    const missing =
+      slackMode === "http"
+        ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
+        : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+    throw new Error(missing);
   }
 
   const runtime: RuntimeEnv = opts.runtime ?? {
@@ -102,11 +107,29 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
+  if (slackMode === "http") {
+    const client = new WebClient(botToken);
+    void client;
+    runtime.log?.("Slack HTTP webhook mode active");
+    return { stop: () => {} };
+  }
+
   const app = new App({
     token: botToken,
     appToken,
     socketMode: true,
   });
+  type SlackEventHandler = (args: SlackEventMiddlewareArgs<string>) => Promise<void> | void;
+  const slackEventHandlers = new Map<string, SlackEventHandler[]>();
+  const originalEvent = app.event.bind(app);
+  app.event = ((eventName, handler) => {
+    if (typeof eventName === "string") {
+      const handlers = slackEventHandlers.get(eventName) ?? [];
+      handlers.push(handler as SlackEventHandler);
+      slackEventHandlers.set(eventName, handlers);
+    }
+    return originalEvent(eventName as never, handler as never);
+  }) as typeof app.event;
 
   let botUserId = "";
   let teamId = "";
@@ -164,6 +187,26 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
   registerSlackMonitorSlashCommands({ ctx, account });
+  const unregisterHttpDispatcher = registerSlackHttpDispatcher(async (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const raw = payload as { event?: unknown };
+    if (!raw.event || typeof raw.event !== "object") return;
+    const event = raw.event as { type?: unknown };
+    const eventType = typeof event.type === "string" ? event.type : "";
+    if (!eventType) return;
+    const handlers = slackEventHandlers.get(eventType);
+    if (!handlers || handlers.length === 0) return;
+    await Promise.all(
+      handlers.map((handler) =>
+        Promise.resolve(
+          handler({
+            event: raw.event,
+            body: payload,
+          } as SlackEventMiddlewareArgs<string>),
+        ),
+      ),
+    );
+  });
 
   if (resolveToken) {
     void (async () => {
@@ -299,6 +342,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+    unregisterHttpDispatcher();
     await app.stop().catch(() => undefined);
   }
 }

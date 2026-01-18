@@ -305,7 +305,18 @@ export const SlackAccountSchema = z.object({
 });
 
 export const SlackConfigSchema = SlackAccountSchema.extend({
+  mode: z.enum(["socket", "http"]).optional().default("socket"),
+  signingSecret: z.string().optional(),
+  webhookPath: z.string().optional().default("/slack/events"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  if (value.mode === "http" && !value.signingSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
+      path: ["signingSecret"],
+    });
+  }
 });
 
 export const SignalAccountSchemaBase = z.object({
