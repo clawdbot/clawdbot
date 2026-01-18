@@ -26,6 +26,8 @@ type FallbackAttempt = {
 
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
+  // Do not treat FailoverErrors as aborts - they should always trigger fallback
+  if (isFailoverError(err)) return false;
   const name = "name" in err ? String(err.name) : "";
   if (name === "AbortError") return true;
   const message =
