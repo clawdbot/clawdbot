@@ -25,6 +25,7 @@ import {
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import {
   classifyFailoverReason,
+  extractResetTimeMs,
   formatAssistantErrorText,
   isAuthAssistantError,
   isCompactionFailureError,
@@ -117,7 +118,7 @@ export async function runEmbeddedPiAgent(
       }
 
       const authStore = ensureAuthProfileStore(agentDir);
-      const explicitProfileId = params.authProfileId?.trim();
+      const explicitProfileId = params.authProfileIdSource === "user" ? params.authProfileId?.trim() : undefined;
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
         store: authStore,
@@ -128,6 +129,7 @@ export async function runEmbeddedPiAgent(
         throw new Error(`Auth profile "${explicitProfileId}" is not configured for ${provider}.`);
       }
       const profileCandidates = profileOrder.length > 0 ? profileOrder : [undefined];
+      log.info(`[AUTH] Profile order for ${provider}: [${profileCandidates.filter(Boolean).join(", ") || "default"}]`);
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
@@ -162,6 +164,7 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
+        log.info(`[AUTH] Advancing from profile index ${profileIndex}, candidates: [${profileCandidates.filter(Boolean).join(", ") || "default"}]`);
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
@@ -170,8 +173,10 @@ export async function runEmbeddedPiAgent(
             profileIndex = nextIndex;
             thinkLevel = initialThinkLevel;
             attemptedThinking.clear();
+            log.info(`[AUTH] Rotated to profile: ${candidate ?? "default"}`);
             return true;
           } catch (err) {
+        log.info(`[AUTH] Caught error during applyApiKeyInfo: ${err instanceof Error ? err.message : String(err)}`);
             if (candidate && candidate === explicitProfileId) throw err;
             nextIndex += 1;
           }
@@ -181,8 +186,10 @@ export async function runEmbeddedPiAgent(
 
       try {
         await applyApiKeyInfo(profileCandidates[profileIndex]);
+        log.info(`[AUTH] Selected profile: ${lastProfileId ?? "default"} for ${provider}/${modelId}`);
       } catch (err) {
-        if (profileCandidates[profileIndex] === explicitProfileId) throw err;
+        log.info(`[AUTH] Caught error during applyApiKeyInfo: ${err instanceof Error ? err.message : String(err)}`);
+        log.info(`[AUTH] explicitProfileId=${explicitProfileId}, current=${profileCandidates[profileIndex]}`); if (profileCandidates[profileIndex] === explicitProfileId) { log.info("[AUTH] Re-throwing because explicit profile"); throw err; }
         const advanced = await advanceAuthProfile();
         if (!advanced) throw err;
       }
@@ -292,12 +299,17 @@ export async function runEmbeddedPiAgent(
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
             if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
+              // Extract reset time from error message for rate limit failures
+              const cooldownMs = promptFailoverReason === "rate_limit"
+                ? extractResetTimeMs(errorText) ?? undefined
+                : undefined;
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
                 reason: promptFailoverReason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                cooldownMs,
               });
             }
             if (
@@ -363,13 +375,25 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
+              // Extract reset time from error for rate limit cooldowns
+              const resetErrorText = lastAssistant?.errorMessage ?? "";
+              const cooldownMs = reason === "rate_limit" || reason === "timeout"
+                ? extractResetTimeMs(resetErrorText) ?? undefined
+                : undefined;
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
                 reason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                cooldownMs,
               });
+              if (cooldownMs) {
+                const resetMinutes = Math.ceil(cooldownMs / 60000);
+                log.warn(
+                  `Profile ${lastProfileId} rate limited. Cooldown: ${resetMinutes}m (from API). Trying next account...`,
+                );
+              }
               if (timedOut) {
                 log.warn(
                   `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,

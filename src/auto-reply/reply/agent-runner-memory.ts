@@ -120,6 +120,7 @@ export async function runMemoryFlushIfNeeded(params: {
           provider,
           model,
           authProfileId: params.followupRun.run.authProfileId,
+          authProfileIdSource: params.followupRun.run.authProfileIdSource,
           thinkLevel: params.followupRun.run.thinkLevel,
           verboseLevel: params.followupRun.run.verboseLevel,
           reasoningLevel: params.followupRun.run.reasoningLevel,

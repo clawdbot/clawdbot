@@ -417,3 +417,43 @@ export function isFailoverAssistantError(msg: AssistantMessage | undefined): boo
   if (!msg || msg.stopReason !== "error") return false;
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }
+
+/**
+ * Extract reset time in milliseconds from API error messages.
+ * Parses patterns like:
+ *   - "Your quota will reset after 18h31m10s"
+ *   - "Please retry in 30s"
+ *   - "Please retry in 500ms"
+ * Returns null if no parseable reset time is found.
+ * Adds a 1-second buffer to account for timing variations.
+ */
+export function extractResetTimeMs(errorMessage: string): number | null {
+  if (!errorMessage) return null;
+
+  // Pattern 1: "reset after 18h31m10s" (hours, minutes, seconds - all optional except seconds)
+  const durationMatch = errorMessage.match(
+    /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i,
+  );
+  if (durationMatch) {
+    const hours = durationMatch[1] ? parseInt(durationMatch[1], 10) : 0;
+    const minutes = durationMatch[2] ? parseInt(durationMatch[2], 10) : 0;
+    const seconds = parseFloat(durationMatch[3]);
+    if (!Number.isNaN(seconds)) {
+      const totalMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+      if (totalMs > 0) return Math.ceil(totalMs + 1000); // +1s buffer
+    }
+  }
+
+  // Pattern 2: "Please retry in Xs" or "Please retry in Xms"
+  const retryMatch = errorMessage.match(/Please retry in ([0-9.]+)(ms|s)/i);
+  if (retryMatch?.[1]) {
+    const value = parseFloat(retryMatch[1]);
+    if (!Number.isNaN(value) && value > 0) {
+      return Math.ceil(
+        (retryMatch[2].toLowerCase() === "ms" ? value : value * 1000) + 1000,
+      );
+    }
+  }
+
+  return null;
+}

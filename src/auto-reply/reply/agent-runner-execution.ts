@@ -222,7 +222,10 @@ export async function runAgentTurnWithFallback(params: {
             enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
             provider,
             model,
-            authProfileId: params.followupRun.run.authProfileId,
+            authProfileId: provider === params.followupRun.run.provider
+              ? params.followupRun.run.authProfileId
+              : undefined,
+            authProfileIdSource: params.followupRun.run.authProfileIdSource,
             thinkLevel: params.followupRun.run.thinkLevel,
             verboseLevel: params.followupRun.run.verboseLevel,
             reasoningLevel: params.followupRun.run.reasoningLevel,

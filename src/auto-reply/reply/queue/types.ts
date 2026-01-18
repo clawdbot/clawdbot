@@ -52,6 +52,7 @@ export type FollowupRun = {
     provider: string;
     model: string;
     authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;

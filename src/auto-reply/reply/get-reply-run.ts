@@ -426,6 +426,7 @@ export async function runPreparedReply(
       provider,
       model,
       authProfileId,
+      authProfileIdSource: sessionEntry?.authProfileOverrideSource as "auto" | "user" | undefined,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,

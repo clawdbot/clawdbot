@@ -24,6 +24,10 @@ import {
 } from "../infra/skills-remote.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
+import {
+  ensureAuthProfileStore,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -174,6 +178,25 @@ export async function startGatewayServer(
   const cfgAtStart = loadConfig();
   initSubagentRegistry();
   await autoMigrateLegacyState({ cfg: cfgAtStart, log });
+  // Clear all cooldowns on fresh gateway start - allows fresh probing
+  try {
+    const authStore = ensureAuthProfileStore();
+    if (authStore.usageStats) {
+      let cleared = 0;
+      for (const profileId of Object.keys(authStore.usageStats)) {
+        if (authStore.usageStats[profileId]?.cooldownUntil) {
+          delete authStore.usageStats[profileId].cooldownUntil;
+          cleared += 1;
+        }
+      }
+      if (cleared > 0) {
+        saveAuthProfileStore(authStore);
+        log.info(`cleared cooldowns for ${cleared} auth profile(s) on startup`);
+      }
+    }
+  } catch (err) {
+    log.warn(`failed to clear auth profile cooldowns: ${String(err)}`);
+  }
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();

@@ -385,6 +385,7 @@ export async function agentCommand(
             provider: providerOverride,
             model: modelOverride,
             authProfileId: sessionEntry?.authProfileOverride,
+            authProfileIdSource: sessionEntry?.authProfileOverrideSource as "auto" | "user" | undefined,
             thinkLevel: resolvedThinkLevel,
             verboseLevel: resolvedVerboseLevel,
             timeoutMs,

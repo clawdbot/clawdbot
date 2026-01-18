@@ -29,6 +29,7 @@ export async function markAuthProfileUsed(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  cooldownMs?: number;  // explicit cooldown from API reset time
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
   const updated = await updateAuthProfileStoreWithLock({
@@ -148,6 +149,7 @@ function computeNextProfileUsageStats(params: {
   now: number;
   reason: AuthProfileFailureReason;
   cfgResolved: ResolvedAuthCooldownConfig;
+  explicitCooldownMs?: number;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
   const windowExpired =
@@ -177,7 +179,8 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    // Use explicit cooldownMs if provided (from API reset time), otherwise exponential backoff
+    const backoffMs = params.explicitCooldownMs ?? calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
 
@@ -194,6 +197,7 @@ export async function markAuthProfileFailure(params: {
   reason: AuthProfileFailureReason;
   cfg?: ClawdbotConfig;
   agentDir?: string;
+  cooldownMs?: number;  // explicit cooldown from API reset time
 }): Promise<void> {
   const { store, profileId, reason, agentDir, cfg } = params;
   const updated = await updateAuthProfileStoreWithLock({
@@ -216,6 +220,7 @@ export async function markAuthProfileFailure(params: {
         now,
         reason,
         cfgResolved,
+        explicitCooldownMs: params.cooldownMs,
       });
       return true;
     },
@@ -240,6 +245,7 @@ export async function markAuthProfileFailure(params: {
     now,
     reason,
     cfgResolved,
+    explicitCooldownMs: params.cooldownMs,
   });
   saveAuthProfileStore(store, agentDir);
 }
@@ -253,6 +259,7 @@ export async function markAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  cooldownMs?: number;  // explicit cooldown from API reset time
 }): Promise<void> {
   await markAuthProfileFailure({
     store: params.store,
@@ -270,6 +277,7 @@ export async function clearAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  cooldownMs?: number;  // explicit cooldown from API reset time
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
   const updated = await updateAuthProfileStoreWithLock({
