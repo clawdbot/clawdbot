@@ -9,6 +9,7 @@ export {
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
   resolveDiscordCommandAuthorized,
   resolveDiscordGuildEntry,
   resolveDiscordShouldRequireMention,

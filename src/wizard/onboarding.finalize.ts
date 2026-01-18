@@ -19,20 +19,16 @@ import {
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  buildGatewayInstallPlan,
+  gatewayInstallErrorHint,
+} from "../commands/daemon-install-helpers.js";
 import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -161,48 +157,37 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     }
 
     if (!loaded || (loaded && (await service.isLoaded({ env: process.env })) === false)) {
-      const devMode =
-        process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
-      await withWizardProgress(
-        "Gateway daemon",
-        { doneMessage: "Gateway daemon installed." },
-        async (progress) => {
-          progress.update("Preparing Gateway daemon…");
-          const nodePath = await resolvePreferredNodePath({
-            env: process.env,
-            runtime: daemonRuntime,
-          });
-          const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-            port: settings.port,
-            dev: devMode,
-            runtime: daemonRuntime,
-            nodePath,
-          });
-          if (daemonRuntime === "node") {
-            const systemNode = await resolveSystemNodeInfo({ env: process.env });
-            const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-            if (warning) await prompter.note(warning, "Gateway runtime");
-          }
-          const environment = buildServiceEnvironment({
-            env: process.env,
-            port: settings.port,
-            token: settings.gatewayToken,
-            launchdLabel:
-              process.platform === "darwin"
-                ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-                : undefined,
-          });
+      const progress = prompter.progress("Gateway daemon");
+      let installError: string | null = null;
+      try {
+        progress.update("Preparing Gateway daemon…");
+        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+          env: process.env,
+          port: settings.port,
+          token: settings.gatewayToken,
+          runtime: daemonRuntime,
+          warn: (message, title) => prompter.note(message, title),
+        });
 
-          progress.update("Installing Gateway daemon…");
-          await service.install({
-            env: process.env,
-            stdout: process.stdout,
-            programArguments,
-            workingDirectory,
-            environment,
-          });
-        },
-      );
+        progress.update("Installing Gateway daemon…");
+        await service.install({
+          env: process.env,
+          stdout: process.stdout,
+          programArguments,
+          workingDirectory,
+          environment,
+        });
+      } catch (err) {
+        installError = err instanceof Error ? err.message : String(err);
+      } finally {
+        progress.stop(
+          installError ? "Gateway daemon install failed." : "Gateway daemon installed.",
+        );
+      }
+      if (installError) {
+        await prompter.note(`Gateway daemon install failed: ${installError}`, "Gateway");
+        await prompter.note(gatewayInstallErrorHint(), "Gateway");
+      }
     }
   }
 

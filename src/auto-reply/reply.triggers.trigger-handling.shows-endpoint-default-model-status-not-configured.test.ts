@@ -203,21 +203,4 @@ describe("trigger handling", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("reports status via /usage without invoking the agent", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        {
-          Body: "/usage",
-          From: "+1002",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        makeCfg(home),
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Clawdbot");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
 });

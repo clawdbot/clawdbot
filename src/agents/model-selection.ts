@@ -26,6 +26,7 @@ export function normalizeProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "z.ai" || normalized === "z-ai") return "zai";
   if (normalized === "opencode-zen") return "opencode";
+  if (normalized === "qwen") return "qwen-portal";
   return normalized;
 }
 

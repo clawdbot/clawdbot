@@ -3,9 +3,11 @@ import {
   clearInternalHooks,
   createInternalHookEvent,
   getRegisteredEventKeys,
+  isAgentBootstrapEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
+  type AgentBootstrapHookContext,
   type InternalHookEvent,
 } from "./internal-hooks.js";
 
@@ -161,6 +163,22 @@ describe("hooks", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
 
       expect(event.context).toEqual({});
+    });
+  });
+
+  describe("isAgentBootstrapEvent", () => {
+    it("returns true for agent:bootstrap events with expected context", () => {
+      const context: AgentBootstrapHookContext = {
+        workspaceDir: "/tmp",
+        bootstrapFiles: [],
+      };
+      const event = createInternalHookEvent("agent", "bootstrap", "test-session", context);
+      expect(isAgentBootstrapEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-bootstrap events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isAgentBootstrapEvent(event)).toBe(false);
     });
   });
 

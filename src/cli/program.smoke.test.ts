@@ -180,6 +180,29 @@ describe("cli program (smoke)", () => {
     );
   });
 
+  it("passes kimi code api key to onboard", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "onboard",
+        "--non-interactive",
+        "--auth-choice",
+        "kimi-code-api-key",
+        "--kimi-code-api-key",
+        "sk-kimi-code-test",
+      ],
+      { from: "user" },
+    );
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonInteractive: true,
+        authChoice: "kimi-code-api-key",
+        kimiCodeApiKey: "sk-kimi-code-test",
+      }),
+      runtime,
+    );
+  });
+
   it("passes synthetic api key to onboard", async () => {
     const program = buildProgram();
     await program.parseAsync(

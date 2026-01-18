@@ -2,7 +2,7 @@ export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
 export type VerboseLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on";
 export type ReasoningLevel = "off" | "on" | "stream";
-export type UsageDisplayLevel = "off" | "on";
+export type UsageDisplayLevel = "off" | "tokens" | "full";
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) return "";
@@ -92,13 +92,19 @@ export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undef
   return undefined;
 }
 
-// Normalize response-usage display flags used to toggle cost/token lines.
+// Normalize response-usage display modes used to toggle per-response usage footers.
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
   if (!raw) return undefined;
   const key = raw.toLowerCase();
   if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) return "off";
-  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key)) return "on";
+  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key)) return "tokens";
+  if (["tokens", "token", "tok", "minimal", "min"].includes(key)) return "tokens";
+  if (["full", "session"].includes(key)) return "full";
   return undefined;
+}
+
+export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
+  return normalizeUsageDisplay(raw) ?? "off";
 }
 
 // Normalize elevated flags used to toggle elevated bash permissions.

@@ -1,3 +1,7 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { loadConfig } from "../config/config.js";
+import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../infra/voicewake.js";
 import {
   ErrorCodes,
@@ -71,6 +75,20 @@ export const handleSystemBridgeMethods: BridgeMethodHandler = async (
       }
       const models = await ctx.loadGatewayModelCatalog();
       return { ok: true, payloadJSON: JSON.stringify({ models }) };
+    }
+    case "skills.bins": {
+      const cfg = loadConfig();
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        config: cfg,
+        eligibility: { remote: getRemoteSkillEligibility() },
+      });
+      const bins = Array.from(
+        new Set(
+          report.skills.flatMap((skill) => skill.requirements?.bins ?? []).filter(Boolean),
+        ),
+      );
+      return { ok: true, payloadJSON: JSON.stringify({ bins }) };
     }
     default:
       return null;

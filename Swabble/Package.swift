@@ -13,7 +13,7 @@ let package = Package(
         .executable(name: "swabble", targets: ["SwabbleCLI"]),
     ],
     dependencies: [
-        .package(path: "../Peekaboo/Commander"),
+        .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.1"),
         .package(url: "https://github.com/apple/swift-testing", from: "0.99.0"),
     ],
     targets: [

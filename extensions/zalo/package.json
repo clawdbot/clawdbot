@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/zalo",
-  "version": "2026.1.16",
+  "version": "2026.1.17-1",
   "type": "module",
   "description": "Clawdbot Zalo channel plugin",
   "clawdbot": {
@@ -9,6 +9,7 @@
     ]
   },
   "dependencies": {
+    "clawdbot": "workspace:*",
     "undici": "7.18.2"
   }
 }

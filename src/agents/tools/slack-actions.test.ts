@@ -48,6 +48,20 @@ describe("handleSlackAction", () => {
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
 
+  it("strips channel: prefix for channelId params", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "channel:C1",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+  });
+
   it("removes reactions on empty emoji", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
     await handleSlackAction(

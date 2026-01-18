@@ -46,14 +46,18 @@ async function main() {
     { setGatewayWsLogStyle },
     { setVerbose },
     { defaultRuntime },
+    { enableConsoleCapture, setConsoleTimestampPrefix },
   ] = await Promise.all([
     import("../config/config.js"),
     import("../gateway/server.js"),
     import("../gateway/ws-logging.js"),
     import("../globals.js"),
     import("../runtime.js"),
+    import("../logging.js"),
   ]);
 
+  enableConsoleCapture();
+  setConsoleTimestampPrefix(true);
   setVerbose(hasFlag(args, "--verbose"));
 
   const wsLogRaw = (hasFlag(args, "--compact") ? "compact" : argValue(args, "--ws-log")) as

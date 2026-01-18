@@ -25,9 +25,9 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-
 import type { ResolvedSlackAccount } from "../accounts.js";
 
 import {
-  allowListMatches,
   normalizeAllowList,
   normalizeAllowListLower,
+  resolveSlackAllowListMatch,
   resolveSlackUserAllowed,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
@@ -201,12 +201,15 @@ export function registerSlackMonitorSlashCommands(params: {
         if (ctx.dmPolicy !== "open") {
           const sender = await ctx.resolveUserName(command.user_id);
           const senderName = sender?.name ?? undefined;
-          const permitted = allowListMatches({
+          const allowMatch = resolveSlackAllowListMatch({
             allowList: effectiveAllowFromLower,
             id: command.user_id,
             name: senderName,
           });
-          if (!permitted) {
+          const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
+            allowMatch.matchSource ?? "none"
+          }`;
+          if (!allowMatch.allowed) {
             if (ctx.dmPolicy === "pairing") {
               const { code, created } = await upsertChannelPairingRequest({
                 channel: "slack",
@@ -214,6 +217,11 @@ export function registerSlackMonitorSlashCommands(params: {
                 meta: { name: senderName },
               });
               if (created) {
+                logVerbose(
+                  `slack pairing request sender=${command.user_id} name=${
+                    senderName ?? "unknown"
+                  } (${allowMatchMeta})`,
+                );
                 await respond({
                   text: buildPairingReply({
                     channel: "slack",
@@ -224,6 +232,9 @@ export function registerSlackMonitorSlashCommands(params: {
                 });
               }
             } else {
+              logVerbose(
+                `slack: blocked slash sender ${command.user_id} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
+              );
               await respond({
                 text: "You are not authorized to use this command.",
                 response_type: "ephemeral",
@@ -289,11 +300,11 @@ export function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const ownerAllowed = allowListMatches({
+      const ownerAllowed = resolveSlackAllowListMatch({
         allowList: effectiveAllowFromLower,
         id: command.user_id,
         name: senderName,
-      });
+      }).allowed;
       if (isRoomish) {
         commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
           useAccessGroups: ctx.useAccessGroups,

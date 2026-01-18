@@ -13,6 +13,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
@@ -23,6 +24,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -231,6 +233,25 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyMoonshotConfig(nextConfig);
   }
 
+  if (authChoice === "kimi-code-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "kimi-code",
+      cfg: baseConfig,
+      flagValue: opts.kimiCodeApiKey,
+      flagName: "--kimi-code-api-key",
+      envVar: "KIMICODE_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setKimiCodeApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "kimi-code:default",
+      provider: "kimi-code",
+      mode: "api_key",
+    });
+    return applyKimiCodeConfig(nextConfig);
+  }
+
   if (authChoice === "synthetic-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "synthetic",
@@ -331,7 +352,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyOpencodeZenConfig(nextConfig);
   }
 
-  if (authChoice === "oauth" || authChoice === "chutes" || authChoice === "openai-codex") {
+  if (
+    authChoice === "oauth" ||
+    authChoice === "chutes" ||
+    authChoice === "openai-codex" ||
+    authChoice === "qwen-portal"
+  ) {
     runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
     return null;

@@ -1,6 +1,6 @@
 import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
 
-import { matchesMentionPatterns } from "../../../../../src/auto-reply/reply/mentions.js";
+import { matchesMentionPatterns } from "clawdbot/plugin-sdk";
 
 export function resolveMentions(params: {
   content: RoomMessageEventContent;

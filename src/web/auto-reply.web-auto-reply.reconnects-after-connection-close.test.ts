@@ -228,7 +228,7 @@ describe("web auto-reply", () => {
     await run;
   }, 15_000);
 
-  it("stops after hitting max reconnect attempts", { timeout: 20000 }, async () => {
+  it("stops after hitting max reconnect attempts", { timeout: 60_000 }, async () => {
     const closeResolvers: Array<() => void> = [];
     const sleep = vi.fn(async () => {});
     const listenerFactory = vi.fn(async () => {

@@ -434,25 +434,25 @@ extension ChannelsSettings {
 
     private func resolveChannelDetailTitle(_ id: String) -> String {
         switch id {
-        case "whatsapp": return "WhatsApp Web"
-        case "telegram": return "Telegram Bot"
-        case "discord": return "Discord Bot"
-        case "slack": return "Slack Bot"
-        case "signal": return "Signal REST"
-        case "imessage": return "iMessage"
-        default: return self.resolveChannelTitle(id)
+        case "whatsapp": "WhatsApp Web"
+        case "telegram": "Telegram Bot"
+        case "discord": "Discord Bot"
+        case "slack": "Slack Bot"
+        case "signal": "Signal REST"
+        case "imessage": "iMessage"
+        default: self.resolveChannelTitle(id)
         }
     }
 
     private func resolveChannelSystemImage(_ id: String) -> String {
         switch id {
-        case "whatsapp": return "message"
-        case "telegram": return "paperplane"
-        case "discord": return "bubble.left.and.bubble.right"
-        case "slack": return "number"
-        case "signal": return "antenna.radiowaves.left.and.right"
-        case "imessage": return "message.fill"
-        default: return "message"
+        case "whatsapp": "message"
+        case "telegram": "paperplane"
+        case "discord": "bubble.left.and.bubble.right"
+        case "slack": "number"
+        case "signal": "antenna.radiowaves.left.and.right"
+        case "imessage": "message.fill"
+        default: "message"
         }
     }
 

@@ -35,7 +35,7 @@ enum CLIInstaller {
     }
 
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
-        let expected = GatewayEnvironment.expectedGatewayVersion()?.description ?? "latest"
+        let expected = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
         let prefix = Self.installPrefix()
         await statusHandler("Installing clawdbot CLI…")
         let cmd = self.installScriptCommand(version: expected, prefix: prefix)

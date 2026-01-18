@@ -3,6 +3,7 @@ import lockfile from "proper-lockfile";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { writeClaudeCliCredentials } from "../cli-credentials.js";
 import { AUTH_STORE_LOCK_OPTIONS, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -57,7 +58,12 @@ async function refreshOAuthTokenWithLock(params: {
             });
             return { apiKey: newCredentials.access, newCredentials };
           })()
-        : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
+        : String(cred.provider) === "qwen-portal"
+          ? await (async () => {
+              const newCredentials = await refreshQwenPortalCredentials(cred);
+              return { apiKey: newCredentials.access, newCredentials };
+            })()
+          : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
     if (!result) return null;
     store.profiles[params.profileId] = {
       ...cred,

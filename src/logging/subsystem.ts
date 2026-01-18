@@ -7,6 +7,7 @@ import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger } from "./logger.js";
 import { loggingState } from "./state.js";
+import { clearActiveProgressLine } from "../terminal/progress-line.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -148,13 +149,22 @@ function formatConsoleLine(opts: {
           ? color.gray
           : color.cyan;
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
-  const time = opts.style === "pretty" ? color.gray(new Date().toISOString().slice(11, 19)) : "";
+  const time = (() => {
+    if (opts.style === "pretty") {
+      return color.gray(new Date().toISOString().slice(11, 19));
+    }
+    if (loggingState.consoleTimestampPrefix) {
+      return color.gray(new Date().toISOString());
+    }
+    return "";
+  })();
   const prefixToken = prefixColor(prefix);
   const head = [time, prefixToken].filter(Boolean).join(" ");
   return `${head} ${levelColor(displayMessage)}`;
 }
 
 function writeConsoleLine(level: LogLevel, line: string) {
+  clearActiveProgressLine();
   const sanitized =
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")

@@ -21,6 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: () => "/tmp/sessions.json",
   loadSessionStore: () => testStore,
+  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../web/auth-store.js", () => ({

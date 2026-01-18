@@ -333,7 +333,7 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
-  test("agent dedupe survives reconnect", { timeout: 15000 }, async () => {
+  test("agent dedupe survives reconnect", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port);
 

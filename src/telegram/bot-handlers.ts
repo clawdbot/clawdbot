@@ -243,7 +243,8 @@ export const registerTelegramHandlers = ({
             return;
           }
         }
-        const groupPolicy = telegramCfg.groupPolicy ?? "open";
+        const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+        const groupPolicy = telegramCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
         if (groupPolicy === "disabled") {
           logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
           return;
@@ -430,7 +431,8 @@ export const registerTelegramHandlers = ({
         // - "open": groups bypass allowFrom, only mention-gating applies
         // - "disabled": block all group messages entirely
         // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-        const groupPolicy = telegramCfg.groupPolicy ?? "open";
+        const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+        const groupPolicy = telegramCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
         if (groupPolicy === "disabled") {
           logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
           return;

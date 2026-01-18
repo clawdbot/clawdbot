@@ -9,6 +9,9 @@ read_when:
 Clawdbot memory is **plain Markdown in the agent workspace**. The files are the
 source of truth; the model only "remembers" what gets written to disk.
 
+Memory search tools are provided by the active memory plugin (default:
+`memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
+
 ## Memory files (Markdown)
 
 The default workspace layout uses two memory layers:
@@ -78,6 +81,7 @@ Defaults:
 - Watches memory files for changes (debounced).
 - Uses remote embeddings (OpenAI) unless configured for local.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
+- Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
 
 Remote embeddings **require** an API key for the embedding provider. By default
 this is OpenAI (`OPENAI_API_KEY` or `models.providers.openai.apiKey`). Codex
@@ -107,6 +111,19 @@ agents: {
 If you don't want to set an API key, use `memorySearch.provider = "local"` or set
 `memorySearch.fallback = "none"`.
 
+Batch indexing (OpenAI only):
+- Enabled by default for OpenAI embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
+- Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.
+- Set `remote.batch.concurrency` to control how many batch jobs we submit in parallel (default: 2).
+- Batch mode currently applies only when `memorySearch.provider = "openai"` and uses your OpenAI API key.
+
+Why OpenAI batch is fast + cheap:
+- For large backfills, OpenAI is typically the fastest option we support because we can submit many embedding requests in a single batch job and let OpenAI process them asynchronously.
+- OpenAI offers discounted pricing for Batch API workloads, so large indexing runs are usually cheaper than sending the same requests synchronously.
+- See the OpenAI Batch API docs and pricing for details:
+  - https://platform.openai.com/docs/api-reference/batch
+  - https://platform.openai.com/pricing
+
 Config example:
 
 ```json5
@@ -116,6 +133,9 @@ agents: {
       provider: "openai",
       model: "text-embedding-3-small",
       fallback: "openai",
+      remote: {
+        batch: { enabled: true, concurrency: 2 }
+      },
       sync: { watch: true }
     }
   }
@@ -140,8 +160,147 @@ Local mode:
 ### What gets indexed (and when)
 
 - File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
-- Index storage: per-agent SQLite at `~/.clawdbot/state/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
-- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval. Reindex triggers when embedding model/provider or chunk sizes change.
+- Index storage: per-agent SQLite at `~/.clawdbot/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
+- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval.
+- Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, Clawdbot automatically resets and reindexes the entire store.
+
+### Hybrid search (BM25 + vector)
+
+When enabled, Clawdbot combines:
+- **Vector similarity** (semantic match, wording can differ)
+- **BM25 keyword relevance** (exact tokens like IDs, env vars, code symbols)
+
+If full-text search is unavailable on your platform, Clawdbot falls back to vector-only search.
+
+#### Why hybrid?
+
+Vector search is great at “this means the same thing”:
+- “Mac Studio gateway host” vs “the machine running the gateway”
+- “debounce file updates” vs “avoid indexing on every write”
+
+But it can be weak at exact, high-signal tokens:
+- IDs (`a828e60`, `b3b9895a…`)
+- code symbols (`memorySearch.query.hybrid`)
+- error strings (“sqlite-vec unavailable”)
+
+BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
+Hybrid search is the pragmatic middle ground: **use both retrieval signals** so you get
+good results for both “natural language” queries and “needle in a haystack” queries.
+
+#### How we merge results (the current design)
+
+Implementation sketch:
+
+1) Retrieve a candidate pool from both sides:
+- **Vector**: top `maxResults * candidateMultiplier` by cosine similarity.
+- **BM25**: top `maxResults * candidateMultiplier` by FTS5 BM25 rank (lower is better).
+
+2) Convert BM25 rank into a 0..1-ish score:
+- `textScore = 1 / (1 + max(0, bm25Rank))`
+
+3) Union candidates by chunk id and compute a weighted score:
+- `finalScore = vectorWeight * vectorScore + textWeight * textScore`
+
+Notes:
+- `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages.
+- If embeddings are unavailable (or the provider returns a zero-vector), we still run BM25 and return keyword matches.
+- If FTS5 can’t be created, we keep vector-only search (no hard failure).
+
+This isn’t “IR-theory perfect”, but it’s simple, fast, and tends to improve recall/precision on real notes.
+If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
+(min/max or z-score) before mixing.
+
+Config:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      query: {
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4
+        }
+      }
+    }
+  }
+}
+```
+
+### Embedding cache
+
+Clawdbot can cache **chunk embeddings** in SQLite so reindexing and frequent updates (especially session transcripts) don't re-embed unchanged text.
+
+Config:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      cache: {
+        enabled: true,
+        maxEntries: 50000
+      }
+    }
+  }
+}
+```
+
+### Session memory search (experimental)
+
+You can optionally index **session transcripts** and surface them via `memory_search`.
+This is gated behind an experimental flag.
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      experimental: { sessionMemory: true },
+      sources: ["memory", "sessions"]
+    }
+  }
+}
+```
+
+Notes:
+- Session indexing is **opt-in** (off by default).
+- Session updates are debounced and indexed lazily on the next `memory_search` (or manual `clawdbot memory index`).
+- Results still include snippets only; `memory_get` remains limited to memory files.
+- Session indexing is isolated per agent (only that agent’s session logs are indexed).
+- Session logs live on disk (`~/.clawdbot/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
+
+### SQLite vector acceleration (sqlite-vec)
+
+When the sqlite-vec extension is available, Clawdbot stores embeddings in a
+SQLite virtual table (`vec0`) and performs vector distance queries in the
+database. This keeps search fast without loading every embedding into JS.
+
+Configuration (optional):
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      store: {
+        vector: {
+          enabled: true,
+          extensionPath: "/path/to/sqlite-vec"
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `enabled` defaults to true; when disabled, search falls back to in-process
+  cosine similarity over stored embeddings.
+- If the sqlite-vec extension is missing or fails to load, Clawdbot logs the
+  error and continues with the JS fallback (no vector table).
+- `extensionPath` overrides the bundled sqlite-vec path (useful for custom builds
+  or non-standard install locations).
 
 ### Local embedding auto-download
 

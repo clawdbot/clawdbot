@@ -23,6 +23,7 @@ export type HookStatusEntry = {
   name: string;
   description: string;
   source: string;
+  pluginId?: string;
   filePath: string;
   baseDir: string;
   handlerPath: string;
@@ -33,6 +34,7 @@ export type HookStatusEntry = {
   always: boolean;
   disabled: boolean;
   eligible: boolean;
+  managedByPlugin: boolean;
   requirements: {
     bins: string[];
     anyBins: string[];
@@ -94,7 +96,8 @@ function buildHookStatus(
 ): HookStatusEntry {
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const disabled = hookConfig?.enabled === false;
+  const managedByPlugin = entry.hook.source === "clawdbot-plugin";
+  const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.clawdbot?.always === true;
   const emoji = entry.clawdbot?.emoji ?? entry.frontmatter.emoji;
   const homepageRaw =
@@ -171,6 +174,7 @@ function buildHookStatus(
     name: entry.hook.name,
     description: entry.hook.description,
     source: entry.hook.source,
+    pluginId: entry.hook.pluginId,
     filePath: entry.hook.filePath,
     baseDir: entry.hook.baseDir,
     handlerPath: entry.hook.handlerPath,
@@ -181,6 +185,7 @@ function buildHookStatus(
     always,
     disabled,
     eligible,
+    managedByPlugin,
     requirements: {
       bins: requiredBins,
       anyBins: requiredAnyBins,

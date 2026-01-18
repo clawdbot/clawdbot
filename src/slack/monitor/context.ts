@@ -310,6 +310,9 @@ export function createSlackMonitorContext(params: {
         channels: params.channelsConfig,
         defaultRequireMention,
       });
+      const channelMatchMeta = `matchKey=${channelConfig?.matchKey ?? "none"} matchSource=${
+        channelConfig?.matchSource ?? "none"
+      }`;
       const channelAllowed = channelConfig?.allowed !== false;
       const channelAllowlistConfigured =
         Boolean(params.channelsConfig) && Object.keys(params.channelsConfig ?? {}).length > 0;
@@ -320,9 +323,16 @@ export function createSlackMonitorContext(params: {
           channelAllowed,
         })
       ) {
+        logVerbose(
+          `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
+        );
         return false;
       }
-      if (!channelAllowed) return false;
+      if (!channelAllowed) {
+        logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
+        return false;
+      }
+      logVerbose(`slack: allow channel ${p.channelId} (${channelMatchMeta})`);
     }
 
     return true;

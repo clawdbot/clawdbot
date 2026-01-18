@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -20,7 +19,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
-import { normalizeProviderId, resolveConfiguredModelRef } from "../model-selection.js";
+import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
 import type { AnyAgentTool } from "./common.js";
@@ -62,77 +61,6 @@ function hasAuthForProvider(params: { provider: string; agentDir: string }): boo
   return listProfilesForProvider(store, params.provider).length > 0;
 }
 
-type ProviderModelEntry = {
-  id?: string;
-  input?: string[];
-};
-
-type ProviderConfigLike = {
-  models?: ProviderModelEntry[];
-};
-
-function resolveProviderConfig(
-  providers: Record<string, ProviderConfigLike> | undefined,
-  provider: string,
-): ProviderConfigLike | null {
-  if (!providers) return null;
-  const normalized = normalizeProviderId(provider);
-  for (const [key, value] of Object.entries(providers)) {
-    if (normalizeProviderId(key) === normalized) return value;
-  }
-  return null;
-}
-
-function resolveModelSupportsImages(params: {
-  providerConfig: ProviderConfigLike | null;
-  modelId: string;
-}): boolean | null {
-  const models = params.providerConfig?.models;
-  if (!Array.isArray(models) || models.length === 0) return null;
-  const trimmedId = params.modelId.trim();
-  if (!trimmedId) return null;
-  const match =
-    models.find((model) => String(model?.id ?? "").trim() === trimmedId) ??
-    models.find(
-      (model) =>
-        String(model?.id ?? "")
-          .trim()
-          .toLowerCase() === trimmedId.toLowerCase(),
-    );
-  if (!match) return null;
-  const input = Array.isArray(match.input) ? match.input : [];
-  return input.includes("image");
-}
-
-function resolvePrimaryModelSupportsImages(params: {
-  cfg?: ClawdbotConfig;
-  agentDir: string;
-}): boolean | null {
-  if (!params.cfg) return null;
-  const primary = resolveDefaultModelRef(params.cfg);
-  const providerConfig = resolveProviderConfig(
-    params.cfg.models?.providers as Record<string, ProviderConfigLike> | undefined,
-    primary.provider,
-  );
-  const fromConfig = resolveModelSupportsImages({
-    providerConfig,
-    modelId: primary.model,
-  });
-  if (fromConfig !== null) return fromConfig;
-  try {
-    const modelsPath = path.join(params.agentDir, "models.json");
-    const raw = fsSync.readFileSync(modelsPath, "utf8");
-    const parsed = JSON.parse(raw) as { providers?: Record<string, ProviderConfigLike> };
-    const provider = resolveProviderConfig(parsed.providers, primary.provider);
-    return resolveModelSupportsImages({
-      providerConfig: provider,
-      modelId: primary.model,
-    });
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Resolve the effective image model config for the `image` tool.
  *
@@ -145,11 +73,10 @@ export function resolveImageModelConfigForTool(params: {
   cfg?: ClawdbotConfig;
   agentDir: string;
 }): ImageModelConfig | null {
-  const primarySupportsImages = resolvePrimaryModelSupportsImages({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
-  if (primarySupportsImages === true) return null;
+  // Note: We intentionally do NOT gate based on primarySupportsImages here.
+  // Even when the primary model supports images, we keep the tool available
+  // because images are auto-injected into prompts (see attempt.ts detectAndLoadPromptImages).
+  // The tool description is adjusted via modelHasVision to discourage redundant usage.
   const explicit = coerceImageModelConfig(params.cfg);
   if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
     return explicit;
@@ -368,6 +295,8 @@ export function createImageTool(options?: {
   config?: ClawdbotConfig;
   agentDir?: string;
   sandboxRoot?: string;
+  /** If true, the model has native vision capability and images in the prompt are auto-injected */
+  modelHasVision?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   if (!agentDir) {
@@ -382,11 +311,17 @@ export function createImageTool(options?: {
     agentDir,
   });
   if (!imageModelConfig) return null;
+
+  // If model has native vision, images in the prompt are auto-injected
+  // so this tool is only needed when image wasn't provided in the prompt
+  const description = options?.modelHasVision
+    ? "Analyze an image with a vision model. Only use this tool when the image was NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
+    : "Analyze an image with the configured image model (agents.defaults.imageModel). Provide a prompt and image path or URL.";
+
   return {
     label: "Image",
     name: "image",
-    description:
-      "Analyze an image with the configured image model (agents.defaults.imageModel). Provide a prompt and image path or URL.",
+    description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
       image: Type.String(),

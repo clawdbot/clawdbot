@@ -1,9 +1,11 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import {
   extractElevatedDirective,
+  extractExecDirective,
   extractReasoningDirective,
   extractStatusDirective,
   extractThinkDirective,
@@ -27,6 +29,20 @@ export type InlineDirectives = {
   hasElevatedDirective: boolean;
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
+  hasExecDirective: boolean;
+  execHost?: ExecHost;
+  execSecurity?: ExecSecurity;
+  execAsk?: ExecAsk;
+  execNode?: string;
+  rawExecHost?: string;
+  rawExecSecurity?: string;
+  rawExecAsk?: string;
+  rawExecNode?: string;
+  hasExecOptions: boolean;
+  invalidExecHost: boolean;
+  invalidExecSecurity: boolean;
+  invalidExecAsk: boolean;
+  invalidExecNode: boolean;
   hasStatusDirective: boolean;
   hasModelDirective: boolean;
   rawModelDirective?: string;
@@ -83,10 +99,27 @@ export function parseInlineDirectives(
         hasDirective: false,
       }
     : extractElevatedDirective(reasoningCleaned);
+  const {
+    cleaned: execCleaned,
+    execHost,
+    execSecurity,
+    execAsk,
+    execNode,
+    rawExecHost,
+    rawExecSecurity,
+    rawExecAsk,
+    rawExecNode,
+    hasExecOptions,
+    invalidHost: invalidExecHost,
+    invalidSecurity: invalidExecSecurity,
+    invalidAsk: invalidExecAsk,
+    invalidNode: invalidExecNode,
+    hasDirective: hasExecDirective,
+  } = extractExecDirective(elevatedCleaned);
   const allowStatusDirective = options?.allowStatusDirective !== false;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
-    ? extractStatusDirective(elevatedCleaned)
-    : { cleaned: elevatedCleaned, hasDirective: false };
+    ? extractStatusDirective(execCleaned)
+    : { cleaned: execCleaned, hasDirective: false };
   const {
     cleaned: modelCleaned,
     rawModel,
@@ -124,6 +157,20 @@ export function parseInlineDirectives(
     hasElevatedDirective,
     elevatedLevel,
     rawElevatedLevel,
+    hasExecDirective,
+    execHost,
+    execSecurity,
+    execAsk,
+    execNode,
+    rawExecHost,
+    rawExecSecurity,
+    rawExecAsk,
+    rawExecNode,
+    hasExecOptions,
+    invalidExecHost,
+    invalidExecSecurity,
+    invalidExecAsk,
+    invalidExecNode,
     hasStatusDirective,
     hasModelDirective,
     rawModelDirective: rawModel,
@@ -156,6 +203,7 @@ export function isDirectiveOnly(params: {
     !directives.hasVerboseDirective &&
     !directives.hasReasoningDirective &&
     !directives.hasElevatedDirective &&
+    !directives.hasExecDirective &&
     !directives.hasModelDirective &&
     !directives.hasQueueDirective
   )

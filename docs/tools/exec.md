@@ -14,17 +14,56 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 ## Parameters
 
 - `command` (required)
+- `workdir` (defaults to cwd)
+- `env` (key/value overrides)
 - `yieldMs` (default 10000): auto-background after delay
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill on expiry
 - `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
-- `elevated` (bool): run on host if elevated mode is enabled/allowed (only changes behavior when the agent is sandboxed)
-- Need a fully interactive session? Use `pty: true` and the `process` tool for stdin/output.
-Note: `elevated` is ignored when sandboxing is off (exec already runs on the host).
+- `host` (`sandbox | gateway | node`): where to execute
+- `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
+- `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
+- `node` (string): node id/name for `host=node`
+- `elevated` (bool): alias for `host=gateway` + `security=full` when sandboxed and allowed
+
+Notes:
+- `host` defaults to `sandbox`.
+- `elevated` is ignored when sandboxing is off (exec already runs on the host).
+- `gateway`/`node` approvals are controlled by `~/.clawdbot/exec-approvals.json`.
+- `node` requires a paired node (companion app or headless node host).
+- If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 
 ## Config
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
+- `tools.exec.host` (default: `sandbox`)
+- `tools.exec.security` (default: `deny`)
+- `tools.exec.ask` (default: `on-miss`)
+- `tools.exec.node` (default: unset)
+
+Per-agent node binding (use the agent list index in config):
+
+```bash
+clawdbot config get agents.list
+clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
+```
+
+Control UI: the Nodes tab includes a small “Exec node binding” panel for the same settings.
+
+## Session overrides (`/exec`)
+
+Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `node`.
+Send `/exec` with no arguments to show the current values.
+
+Example:
+```
+/exec host=gateway security=allowlist ask=on-miss node=mac-1
+```
+
+## Exec approvals (companion app / node host)
+
+Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
+See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
 
 ## Examples
 

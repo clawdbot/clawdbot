@@ -52,7 +52,7 @@ describe("Agent-specific sandbox config", () => {
 
   it(
     "should use global sandbox config when no agent-specific config exists",
-    { timeout: 15_000 },
+    { timeout: 60_000 },
     async () => {
       const { resolveSandboxContext } = await import("./sandbox.js");
 

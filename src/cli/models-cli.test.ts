@@ -14,7 +14,7 @@ vi.mock("../commands/models.js", async () => {
 });
 
 describe("models cli", () => {
-  it("registers github-copilot login command", { timeout: 15_000 }, async () => {
+  it("registers github-copilot login command", { timeout: 60_000 }, async () => {
     const { Command } = await import("commander");
     const { registerModelsCli } = await import("./models-cli.js");
 

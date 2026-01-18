@@ -266,7 +266,7 @@
     "sessions_spawn": {
       "emoji": "🧑‍🔧",
       "title": "Sub-agent",
-      "detailKeys": ["label", "agentId", "runTimeoutSeconds", "cleanup"]
+      "detailKeys": ["label", "agentId", "thinking", "runTimeoutSeconds", "cleanup"]
     },
     "session_status": {
       "emoji": "📊",

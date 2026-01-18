@@ -1,12 +1,14 @@
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
+  readQwenCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
+  QWEN_CLI_PROFILE_ID,
   log,
 } from "./constants.js";
 import type {
@@ -45,7 +47,11 @@ function shallowEqualTokenCredentials(a: TokenCredential | undefined, b: TokenCr
 function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
   if (!cred) return false;
   if (cred.type !== "oauth" && cred.type !== "token") return false;
-  if (cred.provider !== "anthropic" && cred.provider !== "openai-codex") {
+  if (
+    cred.provider !== "anthropic" &&
+    cred.provider !== "openai-codex" &&
+    cred.provider !== "qwen-portal"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") return true;
@@ -161,6 +167,34 @@ export function syncExternalCliCredentials(
       log.info("synced openai-codex credentials from codex cli", {
         profileId: CODEX_CLI_PROFILE_ID,
         expires: new Date(codexCreds.expires).toISOString(),
+      });
+    }
+  }
+
+  // Sync from Qwen Code CLI
+  const existingQwen = store.profiles[QWEN_CLI_PROFILE_ID];
+  const shouldSyncQwen =
+    !existingQwen ||
+    existingQwen.provider !== "qwen-portal" ||
+    !isExternalProfileFresh(existingQwen, now);
+  const qwenCreds = shouldSyncQwen
+    ? readQwenCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
+    : null;
+  if (qwenCreds) {
+    const existing = store.profiles[QWEN_CLI_PROFILE_ID];
+    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    const shouldUpdate =
+      !existingOAuth ||
+      existingOAuth.provider !== "qwen-portal" ||
+      existingOAuth.expires <= now ||
+      qwenCreds.expires > existingOAuth.expires;
+
+    if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, qwenCreds)) {
+      store.profiles[QWEN_CLI_PROFILE_ID] = qwenCreds;
+      mutated = true;
+      log.info("synced qwen credentials from qwen cli", {
+        profileId: QWEN_CLI_PROFILE_ID,
+        expires: new Date(qwenCreds.expires).toISOString(),
       });
     }
   }

@@ -47,7 +47,7 @@ extension ConfigSettings {
                         .foregroundStyle(.secondary)
                 }
             }
-            if self.store.configDirty && !self.isNixMode {
+            if self.store.configDirty, !self.isNixMode {
                 Text("Unsaved changes")
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -7,6 +7,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommand } from "../../commands/agent.js";
 import { mergeSessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -299,6 +300,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
+      const lane = isAcpSessionKey(p.sessionKey) ? p.sessionKey : undefined;
       void agentCommand(
         {
           message: parsedMessage,
@@ -311,6 +313,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           timeout: Math.ceil(timeoutMs / 1000).toString(),
           messageChannel: INTERNAL_MESSAGE_CHANNEL,
           abortSignal: abortController.signal,
+          lane,
         },
         defaultRuntime,
         context.deps,

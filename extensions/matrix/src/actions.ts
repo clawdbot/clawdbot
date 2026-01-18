@@ -1,13 +1,15 @@
-import { createActionGate, readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
+import {
+  createActionGate,
+  readNumberParam,
+  readStringParam,
+  type ChannelMessageActionAdapter,
+  type ChannelMessageActionContext,
+  type ChannelMessageActionName,
+  type ChannelToolSend,
+} from "clawdbot/plugin-sdk";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
 import type { CoreConfig } from "./types.js";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-  ChannelToolSend,
-} from "../../../src/channels/plugins/types.js";
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {

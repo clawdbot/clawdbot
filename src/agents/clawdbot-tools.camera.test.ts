@@ -91,7 +91,7 @@ describe("nodes run", () => {
   it("passes invoke and command timeouts", async () => {
     callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
-        return { nodes: [{ nodeId: "mac-1" }] };
+        return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
       }
       if (method === "node.invoke") {
         expect(params).toMatchObject({

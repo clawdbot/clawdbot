@@ -7,7 +7,7 @@ import { prependSystemEvents } from "./session-updates.js";
 describe("prependSystemEvents", () => {
   it("adds a UTC timestamp to queued system events", async () => {
     vi.useFakeTimers();
-    const timestamp = new Date("2026-01-12T20:19:17");
+    const timestamp = new Date("2026-01-12T20:19:17Z");
     vi.setSystemTime(timestamp);
 
     enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });

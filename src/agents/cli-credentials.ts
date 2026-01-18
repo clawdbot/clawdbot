@@ -13,6 +13,7 @@ const log = createSubsystemLogger("agents/auth-profiles");
 
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
+const QWEN_CLI_CREDENTIALS_RELATIVE_PATH = ".qwen/oauth_creds.json";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
@@ -25,6 +26,7 @@ type CachedValue<T> = {
 
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
+let qwenCliCache: CachedValue<QwenCliCredential> | null = null;
 
 export type ClaudeCliCredential =
   | {
@@ -44,6 +46,14 @@ export type ClaudeCliCredential =
 export type CodexCliCredential = {
   type: "oauth";
   provider: OAuthProvider;
+  access: string;
+  refresh: string;
+  expires: number;
+};
+
+export type QwenCliCredential = {
+  type: "oauth";
+  provider: "qwen-portal";
   access: string;
   refresh: string;
   expires: number;
@@ -76,6 +86,11 @@ function resolveCodexHomePath() {
   } catch {
     return home;
   }
+}
+
+function resolveQwenCliCredentialsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, QWEN_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function computeCodexKeychainAccount(codexHome: string) {
@@ -131,6 +146,28 @@ function readCodexKeychainCredentials(options?: {
   } catch {
     return null;
   }
+}
+
+function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
+  const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") return null;
+  const data = raw as Record<string, unknown>;
+  const accessToken = data.access_token;
+  const refreshToken = data.refresh_token;
+  const expiresAt = data.expiry_date;
+
+  if (typeof accessToken !== "string" || !accessToken) return null;
+  if (typeof refreshToken !== "string" || !refreshToken) return null;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return null;
+
+  return {
+    type: "oauth",
+    provider: "qwen-portal",
+    access: accessToken,
+    refresh: refreshToken,
+    expires: expiresAt,
+  };
 }
 
 function readClaudeCliKeychainCredentials(): ClaudeCliCredential | null {
@@ -403,6 +440,28 @@ export function readCodexCliCredentialsCached(options?: {
   const value = readCodexCliCredentials({ platform: options?.platform });
   if (ttlMs > 0) {
     codexCliCache = { value, readAt: now, cacheKey };
+  }
+  return value;
+}
+
+export function readQwenCliCredentialsCached(options?: {
+  ttlMs?: number;
+  homeDir?: string;
+}): QwenCliCredential | null {
+  const ttlMs = options?.ttlMs ?? 0;
+  const now = Date.now();
+  const cacheKey = resolveQwenCliCredentialsPath(options?.homeDir);
+  if (
+    ttlMs > 0 &&
+    qwenCliCache &&
+    qwenCliCache.cacheKey === cacheKey &&
+    now - qwenCliCache.readAt < ttlMs
+  ) {
+    return qwenCliCache.value;
+  }
+  const value = readQwenCliCredentials({ homeDir: options?.homeDir });
+  if (ttlMs > 0) {
+    qwenCliCache = { value, readAt: now, cacheKey };
   }
   return value;
 }

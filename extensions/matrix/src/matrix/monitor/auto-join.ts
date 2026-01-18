@@ -1,8 +1,7 @@
 import type { MatrixClient, MatrixEvent, RoomMember } from "matrix-js-sdk";
 import { RoomMemberEvent } from "matrix-js-sdk";
 
-import { danger, logVerbose } from "../../../../../src/globals.js";
-import type { RuntimeEnv } from "../../../../../src/runtime.js";
+import { danger, logVerbose, type RuntimeEnv } from "clawdbot/plugin-sdk";
 import type { CoreConfig } from "../../types.js";
 
 export function registerMatrixAutoJoin(params: {

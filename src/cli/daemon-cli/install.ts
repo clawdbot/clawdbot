@@ -1,19 +1,11 @@
-import path from "node:path";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
+import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
-import { resolveGatewayLaunchAgentLabel } from "../../daemon/constants.js";
-import { resolveGatewayProgramArguments } from "../../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
 import { parsePort } from "./shared.js";
@@ -96,34 +88,15 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
-  const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
-  const nodePath = await resolvePreferredNodePath({
-    env: process.env,
-    runtime: runtimeRaw,
-  });
-  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-    port,
-    dev: devMode,
-    runtime: runtimeRaw,
-    nodePath,
-  });
-  if (runtimeRaw === "node") {
-    const systemNode = await resolveSystemNodeInfo({ env: process.env });
-    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) {
-      if (json) warnings.push(warning);
-      else defaultRuntime.log(warning);
-    }
-  }
-  const environment = buildServiceEnvironment({
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
     token: opts.token || cfg.gateway?.auth?.token || process.env.CLAWDBOT_GATEWAY_TOKEN,
-    launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-        : undefined,
+    runtime: runtimeRaw,
+    warn: (message) => {
+      if (json) warnings.push(message);
+      else defaultRuntime.log(message);
+    },
   });
 
   try {

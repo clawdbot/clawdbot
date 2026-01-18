@@ -15,7 +15,11 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
-import { createSubsystemLogger, setConsoleSubsystemFilter } from "../../logging.js";
+import {
+  createSubsystemLogger,
+  setConsoleSubsystemFilter,
+  setConsoleTimestampPrefix,
+} from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { forceFreePortAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
@@ -59,6 +63,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
 
+  setConsoleTimestampPrefix(true);
   setVerbose(Boolean(opts.verbose));
   if (opts.claudeCliLogs) {
     setConsoleSubsystemFilter(["agent/claude-cli"]);

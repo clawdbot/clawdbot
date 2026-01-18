@@ -1,25 +1,22 @@
-import type {
-  CoreConfig,
-  ResolvedZaloAccount,
-  ZaloAccountConfig,
-  ZaloConfig,
-} from "./types.js";
-import { resolveZaloToken } from "./token.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./shared/account-ids.js";
+import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 
-function listConfiguredAccountIds(cfg: CoreConfig): string[] {
+import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
+import { resolveZaloToken } from "./token.js";
+
+function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   const accounts = (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listZaloAccountIds(cfg: CoreConfig): string[] {
+export function listZaloAccountIds(cfg: ClawdbotConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
   return ids.sort((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultZaloAccountId(cfg: CoreConfig): string {
+export function resolveDefaultZaloAccountId(cfg: ClawdbotConfig): string {
   const zaloConfig = cfg.channels?.zalo as ZaloConfig | undefined;
   if (zaloConfig?.defaultAccount?.trim()) return zaloConfig.defaultAccount.trim();
   const ids = listZaloAccountIds(cfg);
@@ -28,7 +25,7 @@ export function resolveDefaultZaloAccountId(cfg: CoreConfig): string {
 }
 
 function resolveAccountConfig(
-  cfg: CoreConfig,
+  cfg: ClawdbotConfig,
   accountId: string,
 ): ZaloAccountConfig | undefined {
   const accounts = (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts;
@@ -36,7 +33,7 @@ function resolveAccountConfig(
   return accounts[accountId] as ZaloAccountConfig | undefined;
 }
 
-function mergeZaloAccountConfig(cfg: CoreConfig, accountId: string): ZaloAccountConfig {
+function mergeZaloAccountConfig(cfg: ClawdbotConfig, accountId: string): ZaloAccountConfig {
   const raw = (cfg.channels?.zalo ?? {}) as ZaloConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -44,7 +41,7 @@ function mergeZaloAccountConfig(cfg: CoreConfig, accountId: string): ZaloAccount
 }
 
 export function resolveZaloAccount(params: {
-  cfg: CoreConfig;
+  cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedZaloAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -67,7 +64,7 @@ export function resolveZaloAccount(params: {
   };
 }
 
-export function listEnabledZaloAccounts(cfg: CoreConfig): ResolvedZaloAccount[] {
+export function listEnabledZaloAccounts(cfg: ClawdbotConfig): ResolvedZaloAccount[] {
   return listZaloAccountIds(cfg)
     .map((accountId) => resolveZaloAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

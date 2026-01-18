@@ -1,3 +1,15 @@
+import {
+  parseAgentSessionKey,
+  type ParsedAgentSessionKey,
+} from "../sessions/session-key-utils.js";
+
+export {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+  type ParsedAgentSessionKey,
+} from "../sessions/session-key-utils.js";
+
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -10,11 +22,6 @@ export function normalizeMainKey(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   return trimmed ? trimmed : DEFAULT_MAIN_KEY;
 }
-
-export type ParsedAgentSessionKey = {
-  agentId: string;
-  rest: string;
-};
 
 export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
   const raw = (storeKey ?? "").trim();
@@ -68,28 +75,6 @@ export function normalizeAccountId(value: string | undefined | null): string {
       .replace(/-+$/, "")
       .slice(0, 64) || DEFAULT_ACCOUNT_ID
   );
-}
-
-export function parseAgentSessionKey(
-  sessionKey: string | undefined | null,
-): ParsedAgentSessionKey | null {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) return null;
-  const parts = raw.split(":").filter(Boolean);
-  if (parts.length < 3) return null;
-  if (parts[0] !== "agent") return null;
-  const agentId = parts[1]?.trim();
-  const rest = parts.slice(2).join(":");
-  if (!agentId || !rest) return null;
-  return { agentId, rest };
-}
-
-export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) return false;
-  if (raw.toLowerCase().startsWith("subagent:")) return true;
-  const parsed = parseAgentSessionKey(raw);
-  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
 }
 
 export function buildAgentMainSessionKey(params: {

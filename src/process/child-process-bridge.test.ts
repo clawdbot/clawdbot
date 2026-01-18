@@ -79,6 +79,7 @@ describe("attachChildProcessBridge", () => {
   it("forwards SIGTERM to the wrapped child", async () => {
     const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
 
+    const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const child = spawn(process.execPath, [childPath], {
       stdio: ["ignore", "pipe", "inherit"],
       env: process.env,
@@ -86,6 +87,8 @@ describe("attachChildProcessBridge", () => {
     const { detach } = attachChildProcessBridge(child);
     detachments.push(detach);
     children.push(child);
+    const afterSigterm = process.listeners("SIGTERM");
+    const addedSigterm = afterSigterm.find((listener) => !beforeSigterm.has(listener));
 
     if (!child.stdout) throw new Error("expected stdout");
     const portLine = await waitForLine(child.stdout);
@@ -95,7 +98,8 @@ describe("attachChildProcessBridge", () => {
     expect(await canConnect(port)).toBe(true);
 
     // Simulate systemd sending SIGTERM to the parent process.
-    process.emit("SIGTERM");
+    if (!addedSigterm) throw new Error("expected SIGTERM listener");
+    addedSigterm();
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), 10_000);

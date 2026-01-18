@@ -18,7 +18,7 @@ import {
 } from "./config-helpers.js";
 import { formatPairingApproveHint } from "./helpers.js";
 import { resolveChannelMediaMaxBytes } from "./media-limits.js";
-import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize-target.js";
+import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize/signal.js";
 import { signalOnboardingAdapter } from "./onboarding/signal.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
@@ -105,8 +105,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       return [
         `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,

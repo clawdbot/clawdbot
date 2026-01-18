@@ -6,6 +6,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { agentCommand } from "../commands/agent.js";
 import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
+import { isAcpSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   abortChatRunById,
@@ -385,6 +386,7 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (ctx, nodeId, 
           runId: clientRunId,
           status: "started" as const,
         };
+        const lane = isAcpSessionKey(p.sessionKey) ? p.sessionKey : undefined;
         void agentCommand(
           {
             message: parsedMessage,
@@ -397,6 +399,7 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (ctx, nodeId, 
             timeout: Math.ceil(timeoutMs / 1000).toString(),
             messageChannel: `node(${nodeId})`,
             abortSignal: abortController.signal,
+            lane,
           },
           defaultRuntime,
           ctx.deps,

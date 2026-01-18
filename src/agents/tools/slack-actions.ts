@@ -17,6 +17,7 @@ import {
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
+import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 
@@ -52,10 +53,9 @@ function resolveThreadTsFromContext(
   // No context or missing required fields
   if (!context?.currentThreadTs || !context?.currentChannelId) return undefined;
 
-  // Normalize target (strip "channel:" prefix if present)
-  const normalizedTarget = targetChannel.startsWith("channel:")
-    ? targetChannel.slice("channel:".length)
-    : targetChannel;
+  const parsedTarget = parseSlackTarget(targetChannel, { defaultKind: "channel" });
+  if (!parsedTarget || parsedTarget.kind !== "channel") return undefined;
+  const normalizedTarget = parsedTarget.id;
 
   // Different channel - don't inject
   if (normalizedTarget !== context.currentChannelId) return undefined;
@@ -76,6 +76,12 @@ export async function handleSlackAction(
   cfg: ClawdbotConfig,
   context?: SlackActionContext,
 ): Promise<AgentToolResult<unknown>> {
+  const resolveChannelId = () =>
+    resolveSlackChannelId(
+      readStringParam(params, "channelId", {
+        required: true,
+      }),
+    );
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
   const account = resolveSlackAccount({ cfg, accountId });
@@ -109,7 +115,7 @@ export async function handleSlackAction(
     if (!isActionEnabled("reactions")) {
       throw new Error("Slack reactions are disabled.");
     }
-    const channelId = readStringParam(params, "channelId", { required: true });
+    const channelId = resolveChannelId();
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
@@ -166,8 +172,8 @@ export async function handleSlackAction(
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const normalizedTarget = to.startsWith("channel:") ? to.slice("channel:".length) : to;
-          if (normalizedTarget === context.currentChannelId) {
+          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
+          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -175,9 +181,7 @@ export async function handleSlackAction(
         return jsonResult({ ok: true, result });
       }
       case "editMessage": {
-        const channelId = readStringParam(params, "channelId", {
-          required: true,
-        });
+        const channelId = resolveChannelId();
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
@@ -192,9 +196,7 @@ export async function handleSlackAction(
         return jsonResult({ ok: true });
       }
       case "deleteMessage": {
-        const channelId = readStringParam(params, "channelId", {
-          required: true,
-        });
+        const channelId = resolveChannelId();
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
@@ -206,9 +208,7 @@ export async function handleSlackAction(
         return jsonResult({ ok: true });
       }
       case "readMessages": {
-        const channelId = readStringParam(params, "channelId", {
-          required: true,
-        });
+        const channelId = resolveChannelId();
         const limitRaw = params.limit;
         const limit =
           typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
@@ -237,7 +237,7 @@ export async function handleSlackAction(
     if (!isActionEnabled("pins")) {
       throw new Error("Slack pins are disabled.");
     }
-    const channelId = readStringParam(params, "channelId", { required: true });
+    const channelId = resolveChannelId();
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", {
         required: true,

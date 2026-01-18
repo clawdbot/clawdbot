@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { Type } from "@sinclair/typebox";
 
+import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import {
@@ -29,11 +30,21 @@ const SessionsSpawnToolSchema = Type.Object({
   label: Type.Optional(Type.String()),
   agentId: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
+
+function splitModelRef(ref?: string) {
+  if (!ref) return { provider: undefined, model: undefined };
+  const trimmed = ref.trim();
+  if (!trimmed) return { provider: undefined, model: undefined };
+  const [provider, model] = trimmed.split("/", 2);
+  if (model) return { provider, model };
+  return { provider: undefined, model: trimmed };
+}
 
 function normalizeModelSelection(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -64,6 +75,7 @@ export function createSessionsSpawnTool(opts?: {
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const requestedAgentId = readStringParam(params, "agentId");
       const modelOverride = readStringParam(params, "model");
+      const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete"
           ? (params.cleanup as "keep" | "delete")
@@ -143,6 +155,19 @@ export function createSessionsSpawnTool(opts?: {
         normalizeModelSelection(modelOverride) ??
         normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
         normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
+      let thinkingOverride: string | undefined;
+      if (thinkingOverrideRaw) {
+        const normalized = normalizeThinkLevel(thinkingOverrideRaw);
+        if (!normalized) {
+          const { provider, model } = splitModelRef(resolvedModel);
+          const hint = formatThinkingLevels(provider, model);
+          return jsonResult({
+            status: "error",
+            error: `Invalid thinking level "${thinkingOverrideRaw}". Use one of: ${hint}.`,
+          });
+        }
+        thinkingOverride = normalized;
+      }
       if (resolvedModel) {
         try {
           await callGateway({
@@ -187,6 +212,7 @@ export function createSessionsSpawnTool(opts?: {
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
+            thinking: thinkingOverride,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
             label: label || undefined,
             spawnedBy: shouldPatchSpawnedBy ? requesterInternalKey : undefined,

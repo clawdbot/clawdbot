@@ -5,7 +5,25 @@
  * like command processing, session lifecycle, etc.
  */
 
+import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
+import type { ClawdbotConfig } from "../config/config.js";
+
 export type InternalHookEventType = "command" | "session" | "agent";
+
+export type AgentBootstrapHookContext = {
+  workspaceDir: string;
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  cfg?: ClawdbotConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+};
+
+export type AgentBootstrapHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "bootstrap";
+  context: AgentBootstrapHookContext;
+};
 
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, etc.) */
@@ -146,4 +164,12 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
+}
+
+export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
+  if (event.type !== "agent" || event.action !== "bootstrap") return false;
+  const context = event.context as Partial<AgentBootstrapHookContext> | null;
+  if (!context || typeof context !== "object") return false;
+  if (typeof context.workspaceDir !== "string") return false;
+  return Array.isArray(context.bootstrapFiles);
 }

@@ -16,14 +16,32 @@ const formatLine = (label: string, value: string) => {
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
 
+function resolveTaskName(env: Record<string, string | undefined>): string {
+  const override = env.CLAWDBOT_WINDOWS_TASK_NAME?.trim();
+  if (override) return override;
+  return resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+}
+
 export function resolveTaskScriptPath(env: Record<string, string | undefined>): string {
+  const override = env.CLAWDBOT_TASK_SCRIPT?.trim();
+  if (override) return override;
+  const scriptName = env.CLAWDBOT_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
   const stateDir = resolveGatewayStateDir(env);
-  return path.join(stateDir, "gateway.cmd");
+  return path.join(stateDir, scriptName);
 }
 
 function quoteCmdArg(value: string): string {
   if (!/[ \t"]/g.test(value)) return value;
   return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function resolveTaskUser(env: Record<string, string | undefined>): string | null {
+  const username = env.USERNAME || env.USER || env.LOGNAME;
+  if (!username) return null;
+  if (username.includes("\\")) return username;
+  const domain = env.USERDOMAIN;
+  if (domain) return `${domain}\\${username}`;
+  return username;
 }
 
 function parseCommandLine(value: string): string[] {
@@ -192,31 +210,35 @@ export async function installScheduledTask({
   programArguments,
   workingDirectory,
   environment,
+  description,
 }: {
   env: Record<string, string | undefined>;
   stdout: NodeJS.WritableStream;
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string | undefined>;
+  description?: string;
 }): Promise<{ scriptPath: string }> {
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const description = formatGatewayServiceDescription({
-    profile: env.CLAWDBOT_PROFILE,
-    version: environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
-  });
+  const taskDescription =
+    description ??
+    formatGatewayServiceDescription({
+      profile: env.CLAWDBOT_PROFILE,
+      version: environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
+    });
   const script = buildTaskScript({
-    description,
+    description: taskDescription,
     programArguments,
     workingDirectory,
     environment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
 
-  const taskName = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+  const taskName = resolveTaskName(env);
   const quotedScript = quoteCmdArg(scriptPath);
-  const create = await execSchtasks([
+  const baseArgs = [
     "/Create",
     "/F",
     "/SC",
@@ -227,9 +249,20 @@ export async function installScheduledTask({
     taskName,
     "/TR",
     quotedScript,
-  ]);
+  ];
+  const taskUser = resolveTaskUser(env);
+  let create = await execSchtasks(
+    taskUser ? [...baseArgs, "/RU", taskUser, "/NP", "/IT"] : baseArgs,
+  );
+  if (create.code !== 0 && taskUser) {
+    create = await execSchtasks(baseArgs);
+  }
   if (create.code !== 0) {
-    throw new Error(`schtasks create failed: ${create.stderr || create.stdout}`.trim());
+    const detail = create.stderr || create.stdout;
+    const hint = /access is denied/i.test(detail)
+      ? " Run PowerShell as Administrator or rerun without installing the daemon."
+      : "";
+    throw new Error(`schtasks create failed: ${detail}${hint}`.trim());
   }
 
   await execSchtasks(["/Run", "/TN", taskName]);
@@ -248,7 +281,7 @@ export async function uninstallScheduledTask({
   stdout: NodeJS.WritableStream;
 }): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+  const taskName = resolveTaskName(env);
   await execSchtasks(["/Delete", "/F", "/TN", taskName]);
 
   const scriptPath = resolveTaskScriptPath(env);
@@ -273,7 +306,7 @@ export async function stopScheduledTask({
   env?: Record<string, string | undefined>;
 }): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(env?.CLAWDBOT_PROFILE);
+  const taskName = resolveTaskName(env ?? (process.env as Record<string, string | undefined>));
   const res = await execSchtasks(["/End", "/TN", taskName]);
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
@@ -289,7 +322,7 @@ export async function restartScheduledTask({
   env?: Record<string, string | undefined>;
 }): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(env?.CLAWDBOT_PROFILE);
+  const taskName = resolveTaskName(env ?? (process.env as Record<string, string | undefined>));
   await execSchtasks(["/End", "/TN", taskName]);
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
@@ -302,7 +335,7 @@ export async function isScheduledTaskInstalled(args: {
   env?: Record<string, string | undefined>;
 }): Promise<boolean> {
   await assertSchtasksAvailable();
-  const taskName = resolveGatewayWindowsTaskName(args.env?.CLAWDBOT_PROFILE);
+  const taskName = resolveTaskName(args.env ?? (process.env as Record<string, string | undefined>));
   const res = await execSchtasks(["/Query", "/TN", taskName]);
   return res.code === 0;
 }
@@ -318,7 +351,7 @@ export async function readScheduledTaskRuntime(
       detail: String(err),
     };
   }
-  const taskName = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+  const taskName = resolveTaskName(env);
   const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();

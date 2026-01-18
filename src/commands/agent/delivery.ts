@@ -1,3 +1,4 @@
+import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -21,6 +22,28 @@ import type { AgentCommandOpts } from "./types.js";
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
 >;
+
+const NESTED_LOG_PREFIX = "[agent:nested]";
+
+function formatNestedLogPrefix(opts: AgentCommandOpts): string {
+  const parts = [NESTED_LOG_PREFIX];
+  const session = opts.sessionKey ?? opts.sessionId;
+  if (session) parts.push(`session=${session}`);
+  if (opts.runId) parts.push(`run=${opts.runId}`);
+  const channel = opts.messageChannel ?? opts.channel;
+  if (channel) parts.push(`channel=${channel}`);
+  if (opts.to) parts.push(`to=${opts.to}`);
+  if (opts.accountId) parts.push(`account=${opts.accountId}`);
+  return parts.join(" ");
+}
+
+function logNestedOutput(runtime: RuntimeEnv, opts: AgentCommandOpts, output: string) {
+  const prefix = formatNestedLogPrefix(opts);
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    runtime.log(`${prefix} ${line}`);
+  }
+}
 
 export async function deliverAgentCommandResult(params: {
   cfg: ClawdbotConfig;
@@ -112,7 +135,12 @@ export async function deliverAgentCommandResult(params: {
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) return;
     const output = formatOutboundPayloadLog(payload);
-    if (output) runtime.log(output);
+    if (!output) return;
+    if (opts.lane === AGENT_LANE_NESTED) {
+      logNestedOutput(runtime, opts, output);
+      return;
+    }
+    runtime.log(output);
   };
   if (!deliver) {
     for (const payload of deliveryPayloads) logPayload(payload);

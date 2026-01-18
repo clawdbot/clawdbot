@@ -19,7 +19,8 @@ export type AuthChoiceGroupId =
   | "zai"
   | "opencode-zen"
   | "minimax"
-  | "synthetic";
+  | "synthetic"
+  | "qwen";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -53,6 +54,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["minimax-api", "minimax-api-lightning"],
   },
   {
+    value: "qwen",
+    label: "Qwen",
+    hint: "OAuth",
+    choices: ["qwen-portal"],
+  },
+  {
     value: "synthetic",
     label: "Synthetic",
     hint: "Anthropic-compatible (multi-model)",
@@ -79,8 +86,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "moonshot",
     label: "Moonshot AI",
-    hint: "Kimi K2 preview",
-    choices: ["moonshot-api-key"],
+    hint: "Kimi K2 + Kimi Code",
+    choices: ["moonshot-api-key", "kimi-code-api-key"],
   },
   {
     value: "zai",
@@ -180,6 +187,7 @@ export function buildAuthChoiceOptions(params: {
     label: "Vercel AI Gateway API key",
   });
   options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
+  options.push({ value: "kimi-code-api-key", label: "Kimi Code API key" });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
   options.push({
     value: "github-copilot",
@@ -188,6 +196,7 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
+  options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({

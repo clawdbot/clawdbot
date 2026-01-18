@@ -1,14 +1,22 @@
 import type { Request, Response } from "express";
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import type { ClawdbotConfig } from "../../../src/config/types.js";
-import { getChildLogger } from "../../../src/logging.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import {
+  getChildLogger,
+  mergeAllowlist,
+  resolveTextChunkLimit,
+  summarizeMapping,
+  type ClawdbotConfig,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { registerMSTeamsHandlers } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
+import {
+  resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsUserAllowlist,
+} from "./resolve-allowlist.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -30,8 +38,8 @@ export type MonitorMSTeamsResult = {
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
-  const cfg = opts.cfg;
-  const msteamsCfg = cfg.channels?.msteams;
+  let cfg = opts.cfg;
+  let msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
     log.debug("msteams provider disabled");
     return { app: null, shutdown: async () => {} };
@@ -49,6 +57,142 @@ export async function monitorMSTeamsProvider(
     error: console.error,
     exit: (code: number): never => {
       throw new Error(`exit ${code}`);
+    },
+  };
+
+  let allowFrom = msteamsCfg.allowFrom;
+  let groupAllowFrom = msteamsCfg.groupAllowFrom;
+  let teamsConfig = msteamsCfg.teams;
+
+  const cleanAllowEntry = (entry: string) =>
+    entry
+      .replace(/^(msteams|teams):/i, "")
+      .replace(/^user:/i, "")
+      .trim();
+
+  const resolveAllowlistUsers = async (label: string, entries: string[]) => {
+    if (entries.length === 0) return { additions: [], unresolved: [] };
+    const resolved = await resolveMSTeamsUserAllowlist({ cfg, entries });
+    const additions: string[] = [];
+    const unresolved: string[] = [];
+    for (const entry of resolved) {
+      if (entry.resolved && entry.id) {
+        additions.push(entry.id);
+      } else {
+        unresolved.push(entry.input);
+      }
+    }
+    const mapping = resolved
+      .filter((entry) => entry.resolved && entry.id)
+      .map((entry) => `${entry.input}→${entry.id}`);
+    summarizeMapping(label, mapping, unresolved, runtime);
+    return { additions, unresolved };
+  };
+
+  try {
+    const allowEntries =
+      allowFrom?.map((entry) => cleanAllowEntry(String(entry))).filter(
+        (entry) => entry && entry !== "*",
+      ) ?? [];
+    if (allowEntries.length > 0) {
+      const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
+      allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+    }
+
+    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+      const groupEntries = groupAllowFrom
+        .map((entry) => cleanAllowEntry(String(entry)))
+        .filter((entry) => entry && entry !== "*");
+      if (groupEntries.length > 0) {
+        const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
+        groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+      }
+    }
+
+    if (teamsConfig && Object.keys(teamsConfig).length > 0) {
+      const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
+      for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
+        if (teamKey === "*") continue;
+        const channels = teamCfg?.channels ?? {};
+        const channelKeys = Object.keys(channels).filter((key) => key !== "*");
+        if (channelKeys.length === 0) {
+          entries.push({ input: teamKey, teamKey });
+          continue;
+        }
+        for (const channelKey of channelKeys) {
+          entries.push({
+            input: `${teamKey}/${channelKey}`,
+            teamKey,
+            channelKey,
+          });
+        }
+      }
+
+      if (entries.length > 0) {
+        const resolved = await resolveMSTeamsChannelAllowlist({
+          cfg,
+          entries: entries.map((entry) => entry.input),
+        });
+        const mapping: string[] = [];
+        const unresolved: string[] = [];
+        const nextTeams = { ...(teamsConfig ?? {}) };
+
+        resolved.forEach((entry, idx) => {
+          const source = entries[idx];
+          if (!source) return;
+          const sourceTeam = teamsConfig?.[source.teamKey] ?? {};
+          if (!entry.resolved || !entry.teamId) {
+            unresolved.push(entry.input);
+            return;
+          }
+          mapping.push(
+            entry.channelId
+              ? `${entry.input}→${entry.teamId}/${entry.channelId}`
+              : `${entry.input}→${entry.teamId}`,
+          );
+          const existing = nextTeams[entry.teamId] ?? {};
+          const mergedChannels = {
+            ...(sourceTeam.channels ?? {}),
+            ...(existing.channels ?? {}),
+          };
+          const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
+          nextTeams[entry.teamId] = mergedTeam;
+          if (source.channelKey && entry.channelId) {
+            const sourceChannel = sourceTeam.channels?.[source.channelKey];
+            if (sourceChannel) {
+              nextTeams[entry.teamId] = {
+                ...mergedTeam,
+                channels: {
+                  ...mergedChannels,
+                  [entry.channelId]: {
+                    ...sourceChannel,
+                    ...(mergedChannels?.[entry.channelId] ?? {}),
+                  },
+                },
+              };
+            }
+          }
+        });
+
+        teamsConfig = nextTeams;
+        summarizeMapping("msteams channels", mapping, unresolved, runtime);
+      }
+    }
+  } catch (err) {
+    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+  }
+
+  msteamsCfg = {
+    ...msteamsCfg,
+    allowFrom,
+    groupAllowFrom,
+    teams: teamsConfig,
+  };
+  cfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: msteamsCfg,
     },
   };
 

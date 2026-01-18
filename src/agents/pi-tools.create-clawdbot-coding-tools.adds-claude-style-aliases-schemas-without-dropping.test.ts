@@ -117,8 +117,6 @@ describe("createClawdbotCodingTools", () => {
       "sessions_send",
       "sessions_spawn",
       "session_status",
-      "memory_search",
-      "memory_get",
       "image",
     ]);
     const offenders: Array<{

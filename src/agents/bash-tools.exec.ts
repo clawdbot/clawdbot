@@ -1,8 +1,23 @@
+import crypto from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
+import {
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+  addAllowlistEntry,
+  matchAllowlist,
+  maxAsk,
+  minSecurity,
+  recordAllowlistUse,
+  requestExecApprovalViaSocket,
+  resolveCommandResolution,
+  resolveExecApprovals,
+} from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo } from "../logger.js";
 import {
@@ -28,6 +43,8 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { callGatewayTool } from "./tools/gateway.js";
+import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 
@@ -68,6 +85,11 @@ type PtySpawn = (
 ) => PtyHandle;
 
 export type ExecToolDefaults = {
+  host?: ExecHost;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  node?: string;
+  agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
   sandbox?: BashSandboxConfig;
@@ -75,6 +97,7 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  messageProvider?: string;
   notifyOnExit?: boolean;
   cwd?: string;
 };
@@ -113,6 +136,26 @@ const execSchema = Type.Object({
       description: "Run on the host with elevated permissions (if allowed)",
     }),
   ),
+  host: Type.Optional(
+    Type.String({
+      description: "Exec host (sandbox|gateway|node).",
+    }),
+  ),
+  security: Type.Optional(
+    Type.String({
+      description: "Exec security mode (deny|allowlist|full).",
+    }),
+  ),
+  ask: Type.Optional(
+    Type.String({
+      description: "Exec ask mode (off|on-miss|always).",
+    }),
+  ),
+  node: Type.Optional(
+    Type.String({
+      description: "Node id/name for host=node.",
+    }),
+  ),
 });
 
 export type ExecToolDetails =
@@ -131,6 +174,34 @@ export type ExecToolDetails =
       aggregated: string;
       cwd?: string;
     };
+
+function normalizeExecHost(value?: string | null): ExecHost | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeExecAsk(value?: string | null): ExecAsk | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized as ExecAsk;
+  }
+  return null;
+}
+
+function renderExecHostLabel(host: ExecHost) {
+  return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+}
 
 function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -188,6 +259,10 @@ export function createExecTool(
         timeout?: number;
         pty?: boolean;
         elevated?: boolean;
+        host?: string;
+        security?: string;
+        ask?: string;
+        node?: string;
       };
 
       if (!params.command) {
@@ -220,6 +295,11 @@ export function createExecTool(
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
+          const contextParts: string[] = [];
+          const provider = defaults?.messageProvider?.trim();
+          const sessionKey = defaults?.sessionKey?.trim();
+          if (provider) contextParts.push(`provider=${provider}`);
+          if (sessionKey) contextParts.push(`session=${sessionKey}`);
           if (!elevatedDefaults?.enabled) {
             gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
           } else {
@@ -231,12 +311,15 @@ export function createExecTool(
             [
               `elevated is not available right now (runtime=${runtime}).`,
               `Failing gates: ${gates.join(", ")}`,
+              contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
               "Fix-it keys:",
               "- tools.elevated.enabled",
               "- tools.elevated.allowFrom.<provider>",
               "- agents.list[].tools.elevated.enabled",
               "- agents.list[].tools.elevated.allowFrom.<provider>",
-            ].join("\n"),
+            ]
+              .filter(Boolean)
+              .join("\n"),
           );
         }
         logInfo(
@@ -246,8 +329,30 @@ export function createExecTool(
           )}`,
         );
       }
+      const configuredHost = defaults?.host ?? "sandbox";
+      const requestedHost = normalizeExecHost(params.host) ?? null;
+      let host: ExecHost = requestedHost ?? configuredHost;
+      if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
+        throw new Error(
+          `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
+            `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
+        );
+      }
+      if (elevatedRequested) {
+        host = "gateway";
+      }
 
-      const sandbox = elevatedRequested ? undefined : defaults?.sandbox;
+      const configuredSecurity = defaults?.security ?? "deny";
+      const requestedSecurity = normalizeExecSecurity(params.security);
+      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
+      if (elevatedRequested) {
+        security = "full";
+      }
+      const configuredAsk = defaults?.ask ?? "on-miss";
+      const requestedAsk = normalizeExecAsk(params.ask);
+      let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
+
+      const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
@@ -274,6 +379,171 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
+
+      if (host === "node") {
+        if (security === "deny") {
+          throw new Error("exec denied: host=node security=deny");
+        }
+        const boundNode = defaults?.node?.trim();
+        const requestedNode = params.node?.trim();
+        if (boundNode && requestedNode && boundNode !== requestedNode) {
+          throw new Error(`exec node not allowed (bound to ${boundNode})`);
+        }
+        const nodeQuery = boundNode || requestedNode;
+        const nodes = await listNodes({});
+        if (nodes.length === 0) {
+          throw new Error(
+            "exec host=node requires a paired node (none available). This requires a companion app or node host.",
+          );
+        }
+        let nodeId: string;
+        try {
+          nodeId = resolveNodeIdFromList(nodes, nodeQuery, !nodeQuery);
+        } catch (err) {
+          if (!nodeQuery && String(err).includes("node required")) {
+            throw new Error(
+              "exec host=node requires a node id when multiple nodes are available (set tools.exec.node or exec.node).",
+            );
+          }
+          throw err;
+        }
+        const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
+        const supportsSystemRun = Array.isArray(nodeInfo?.commands)
+          ? nodeInfo?.commands?.includes("system.run")
+          : false;
+        if (!supportsSystemRun) {
+          throw new Error(
+            "exec host=node requires a node that supports system.run (companion app or node host).",
+          );
+        }
+        const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+        const invokeParams: Record<string, unknown> = {
+          nodeId,
+          command: "system.run",
+          params: {
+            command: argv,
+            rawCommand: params.command,
+            cwd: workdir,
+            env: params.env,
+            timeoutMs: typeof params.timeout === "number" ? params.timeout * 1000 : undefined,
+            agentId: defaults?.agentId,
+            sessionKey: defaults?.sessionKey,
+          },
+          idempotencyKey: crypto.randomUUID(),
+        };
+        const raw = (await callGatewayTool("node.invoke", {}, invokeParams)) as {
+          payload?: {
+            exitCode?: number;
+            timedOut?: boolean;
+            success?: boolean;
+            stdout?: string;
+            stderr?: string;
+            error?: string | null;
+          };
+        };
+        const payload = raw?.payload ?? {};
+        return {
+          content: [
+            {
+              type: "text",
+              text: payload.stdout || payload.stderr || payload.error || "",
+            },
+          ],
+          details: {
+            status: payload.success ? "completed" : "failed",
+            exitCode: payload.exitCode ?? null,
+            durationMs: Date.now() - startedAt,
+            aggregated: [payload.stdout, payload.stderr, payload.error].filter(Boolean).join("\n"),
+            cwd: workdir,
+          } satisfies ExecToolDetails,
+        };
+      }
+
+      if (host === "gateway") {
+        const approvals = resolveExecApprovals(defaults?.agentId);
+        const hostSecurity = minSecurity(security, approvals.agent.security);
+        const hostAsk = maxAsk(ask, approvals.agent.ask);
+        const askFallback = approvals.agent.askFallback;
+        if (hostSecurity === "deny") {
+          throw new Error("exec denied: host=gateway security=deny");
+        }
+
+        const resolution = resolveCommandResolution(params.command, workdir, env);
+        const allowlistMatch =
+          hostSecurity === "allowlist" ? matchAllowlist(approvals.allowlist, resolution) : null;
+        const requiresAsk =
+          hostAsk === "always" ||
+          (hostAsk === "on-miss" && hostSecurity === "allowlist" && !allowlistMatch);
+
+        let approvedByAsk = false;
+        if (requiresAsk) {
+          const decision =
+            (await requestExecApprovalViaSocket({
+              socketPath: approvals.socketPath,
+              token: approvals.token,
+              request: {
+                command: params.command,
+                cwd: workdir,
+                host: "gateway",
+                security: hostSecurity,
+                ask: hostAsk,
+                agentId: defaults?.agentId,
+                resolvedPath: resolution?.resolvedPath ?? null,
+              },
+            })) ?? null;
+
+          if (decision === "deny") {
+            throw new Error("exec denied: user denied");
+          }
+          if (!decision) {
+            if (askFallback === "full") {
+              approvedByAsk = true;
+            } else if (askFallback === "allowlist") {
+              if (!allowlistMatch) {
+                throw new Error(
+                  "exec denied: approval required (companion app approval UI not available)",
+                );
+              }
+              approvedByAsk = true;
+            } else {
+              throw new Error(
+                "exec denied: approval required (companion app approval UI not available)",
+              );
+            }
+          }
+          if (decision === "allow-once") {
+            approvedByAsk = true;
+          }
+          if (decision === "allow-always") {
+            approvedByAsk = true;
+            if (hostSecurity === "allowlist") {
+              const pattern =
+                resolution?.resolvedPath ??
+                resolution?.rawExecutable ??
+                params.command.split(/\s+/).shift() ??
+                "";
+              if (pattern) {
+                addAllowlistEntry(approvals.file, defaults?.agentId, pattern);
+              }
+            }
+          }
+        }
+
+        if (hostSecurity === "allowlist" && !allowlistMatch && !approvedByAsk) {
+          throw new Error("exec denied: allowlist miss");
+        }
+
+        if (allowlistMatch) {
+          recordAllowlistUse(
+            approvals.file,
+            defaults?.agentId,
+            allowlistMatch,
+            params.command,
+            resolution?.resolvedPath,
+          );
+        }
+      }
+
       const usePty = params.pty === true && !sandbox;
       let child: ChildProcessWithoutNullStreams | null = null;
       let pty: PtyHandle | null = null;

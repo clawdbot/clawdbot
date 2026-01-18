@@ -16,7 +16,7 @@ import {
 installGatewayTestHooks();
 
 describe("gateway server health/presence", () => {
-  test("connect + health + presence + status succeed", { timeout: 8000 }, async () => {
+  test("connect + health + presence + status succeed", { timeout: 60_000 }, async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 

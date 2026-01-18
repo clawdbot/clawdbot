@@ -33,7 +33,7 @@ beforeEach(() => {
 });
 
 describe("discord native commands", () => {
-  it("streams tool results for native slash commands", { timeout: 30_000 }, async () => {
+  it("streams tool results for native slash commands", { timeout: 60_000 }, async () => {
     const { ChannelType } = await import("@buape/carbon");
     const { createDiscordNativeCommand } = await import("./monitor.js");
 

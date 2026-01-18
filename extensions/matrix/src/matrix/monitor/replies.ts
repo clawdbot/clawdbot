@@ -1,9 +1,12 @@
 import type { MatrixClient } from "matrix-js-sdk";
 
-import { chunkMarkdownText } from "../../../../../src/auto-reply/chunk.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
-import { danger } from "../../../../../src/globals.js";
-import type { RuntimeEnv } from "../../../../../src/runtime.js";
+import {
+  chunkMarkdownText,
+  danger,
+  logVerbose,
+  type ReplyPayload,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import { sendMessageMatrix } from "../send.js";
 
 export async function deliverMatrixReplies(params: {
@@ -18,7 +21,12 @@ export async function deliverMatrixReplies(params: {
   const chunkLimit = Math.min(params.textLimit, 4000);
   let hasReplied = false;
   for (const reply of params.replies) {
-    if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
+    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+    if (!reply?.text && !hasMedia) {
+      if (reply?.audioAsVoice) {
+        logVerbose("matrix reply has audioAsVoice without media/text; skipping");
+        continue;
+      }
       params.runtime.error?.(danger("matrix reply missing text/media"));
       continue;
     }
@@ -57,6 +65,7 @@ export async function deliverMatrixReplies(params: {
         mediaUrl,
         replyToId: shouldIncludeReply(replyToId) ? replyToId : undefined,
         threadId: params.threadId,
+        audioAsVoice: reply.audioAsVoice,
       });
       if (shouldIncludeReply(replyToId)) {
         hasReplied = true;

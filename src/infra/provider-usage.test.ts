@@ -103,7 +103,7 @@ describe("provider usage loading", () => {
           },
         });
       }
-      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
         return makeResponse(200, {
           base_resp: { status_code: 0, status_msg: "ok" },
           data: {
@@ -147,7 +147,7 @@ describe("provider usage loading", () => {
     const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
         return makeResponse(200, {
           base_resp: { status_code: 0, status_msg: "ok" },
           data: {
@@ -185,7 +185,7 @@ describe("provider usage loading", () => {
     const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
         return makeResponse(200, {
           base_resp: { status_code: 0, status_msg: "ok" },
           data: {
@@ -220,7 +220,7 @@ describe("provider usage loading", () => {
     const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
         return makeResponse(200, {
           base_resp: { status_code: 0, status_msg: "ok" },
           model_remains: [

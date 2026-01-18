@@ -4,7 +4,7 @@ import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { normalizeSlackMessagingTarget } from "./normalize-target.js";
+import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DirectoryConfigParams = {

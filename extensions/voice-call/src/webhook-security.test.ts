@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { verifyPlivoWebhook } from "./webhook-security.js";
+import { verifyPlivoWebhook, verifyTwilioWebhook } from "./webhook-security.js";
 
 function canonicalizeBase64(input: string): string {
   return Buffer.from(input, "base64").toString("base64");
@@ -69,6 +69,26 @@ function plivoV3Signature(params: {
     .update(`${baseUrl}.${params.nonce}`)
     .digest("base64");
   return canonicalizeBase64(digest);
+}
+
+function twilioSignature(params: {
+  authToken: string;
+  url: string;
+  postBody: string;
+}): string {
+  let dataToSign = params.url;
+  const sortedParams = Array.from(
+    new URLSearchParams(params.postBody).entries(),
+  ).sort((a, b) => a[0].localeCompare(b[0]));
+
+  for (const [key, value] of sortedParams) {
+    dataToSign += key + value;
+  }
+
+  return crypto
+    .createHmac("sha1", params.authToken)
+    .update(dataToSign)
+    .digest("base64");
 }
 
 describe("verifyPlivoWebhook", () => {
@@ -154,3 +174,35 @@ describe("verifyPlivoWebhook", () => {
   });
 });
 
+describe("verifyTwilioWebhook", () => {
+  it("uses request query when publicUrl omits it", () => {
+    const authToken = "test-auth-token";
+    const publicUrl = "https://example.com/voice/webhook";
+    const urlWithQuery = `${publicUrl}?callId=abc`;
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+
+    const signature = twilioSignature({
+      authToken,
+      url: urlWithQuery,
+      postBody,
+    });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+        },
+        rawBody: postBody,
+        url: "http://local/voice/webhook?callId=abc",
+        method: "POST",
+        query: { callId: "abc" },
+      },
+      authToken,
+      { publicUrl },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+});

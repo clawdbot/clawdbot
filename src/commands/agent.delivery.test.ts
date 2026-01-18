@@ -219,4 +219,43 @@ describe("deliverAgentCommandResult", () => {
       expect.objectContaining({ channel: "telegram", to: "123" }),
     );
   });
+
+  it("prefixes nested agent outputs with context", async () => {
+    const cfg = {} as ClawdbotConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = {
+      payloads: [{ text: "ANNOUNCE_SKIP" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested",
+        sessionKey: "agent:main:main",
+        runId: "run-announce",
+        messageChannel: "webchat",
+      },
+      sessionEntry: undefined,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const line = String(runtime.log.mock.calls[0]?.[0]);
+    expect(line).toContain("[agent:nested]");
+    expect(line).toContain("session=agent:main:main");
+    expect(line).toContain("run=run-announce");
+    expect(line).toContain("channel=webchat");
+    expect(line).toContain("ANNOUNCE_SKIP");
+  });
 });

@@ -8,6 +8,8 @@ export type DiscordChannelPermissionsAuditEntry = {
   ok: boolean;
   missing?: string[];
   error?: string | null;
+  matchKey?: string;
+  matchSource?: "id";
 };
 
 export type DiscordChannelPermissionsAudit = {
@@ -97,12 +99,16 @@ export async function auditDiscordChannelPermissions(params: {
         ok: missing.length === 0,
         missing: missing.length ? missing : undefined,
         error: null,
+        matchKey: channelId,
+        matchSource: "id",
       });
     } catch (err) {
       channels.push({
         channelId,
         ok: false,
         error: err instanceof Error ? err.message : String(err),
+        matchKey: channelId,
+        matchSource: "id",
       });
     }
   }

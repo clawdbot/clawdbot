@@ -46,8 +46,8 @@ When TLS is enabled, discovery TXT records include `bridgeTls=1` plus
 ## Frames
 
 Client → Gateway:
-- `req` / `res`: scoped gateway RPC (chat, sessions, config, health, voicewake)
-- `event`: node signals (voice transcript, agent request, chat subscribe)
+- `req` / `res`: scoped gateway RPC (chat, sessions, config, health, voicewake, skills.bins)
+- `event`: node signals (voice transcript, agent request, chat subscribe, exec lifecycle)
 
 Gateway → Client:
 - `invoke` / `invoke-res`: node commands (`canvas.*`, `camera.*`, `screen.record`,
@@ -56,6 +56,18 @@ Gateway → Client:
 - `ping` / `pong`: keepalive
 
 Exact allowlist is enforced in `src/gateway/server-bridge.ts`.
+
+## Exec lifecycle events
+
+Nodes can emit `exec.started`, `exec.finished`, or `exec.denied` events to surface
+system.run activity. These are mapped to system events in the gateway.
+
+Payload fields (all optional unless noted):
+- `sessionKey` (required): agent session to receive the system event.
+- `runId`: unique exec id for grouping.
+- `command`: raw or formatted command string.
+- `exitCode`, `timedOut`, `success`, `output`: completion details (finished only).
+- `reason`: denial reason (denied only).
 
 ## Tailnet usage
 

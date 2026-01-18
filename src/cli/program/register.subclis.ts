@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { loadConfig } from "../../config/config.js";
 import { registerPluginCliCommands } from "../../plugins/cli.js";
+import { registerAcpCli } from "../acp-cli.js";
 import { registerChannelsCli } from "../channels-cli.js";
 import { registerCronCli } from "../cron-cli.js";
 import { registerDaemonCli } from "../daemon-cli.js";
@@ -11,9 +12,9 @@ import { registerGatewayCli } from "../gateway-cli.js";
 import { registerHooksCli } from "../hooks-cli.js";
 import { registerWebhooksCli } from "../webhooks-cli.js";
 import { registerLogsCli } from "../logs-cli.js";
-import { registerMemoryCli } from "../memory-cli.js";
 import { registerModelsCli } from "../models-cli.js";
 import { registerNodesCli } from "../nodes-cli.js";
+import { registerNodeCli } from "../node-cli.js";
 import { registerPairingCli } from "../pairing-cli.js";
 import { registerPluginsCli } from "../plugins-cli.js";
 import { registerSandboxCli } from "../sandbox-cli.js";
@@ -23,12 +24,13 @@ import { registerTuiCli } from "../tui-cli.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 export function registerSubCliCommands(program: Command) {
+  registerAcpCli(program);
   registerDaemonCli(program);
   registerGatewayCli(program);
   registerLogsCli(program);
-  registerMemoryCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
+  registerNodeCli(program);
   registerSandboxCli(program);
   registerTuiCli(program);
   registerCronCli(program);

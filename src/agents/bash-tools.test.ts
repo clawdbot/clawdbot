@@ -150,6 +150,8 @@ describe("exec tool backgrounding", () => {
   it("rejects elevated requests when not allowed", async () => {
     const customBash = createExecTool({
       elevated: { enabled: true, allowed: false, defaultLevel: "off" },
+      messageProvider: "telegram",
+      sessionKey: "agent:main:main",
     });
 
     await expect(
@@ -157,7 +159,7 @@ describe("exec tool backgrounding", () => {
         command: "echo hi",
         elevated: true,
       }),
-    ).rejects.toThrow("tools.elevated.allowFrom.<provider>");
+    ).rejects.toThrow("Context: provider=telegram session=agent:main:main");
   });
 
   it("does not default to elevated when not allowed", async () => {

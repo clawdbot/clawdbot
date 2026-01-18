@@ -15,6 +15,7 @@ the configure wizard (same as `clawdbot configure`).
 clawdbot config get browser.executablePath
 clawdbot config set browser.executablePath "/usr/bin/google-chrome"
 clawdbot config set agents.defaults.heartbeat.every "2h"
+clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
 clawdbot config unset tools.web.search.apiKey
 ```
 
@@ -25,6 +26,13 @@ Paths use dot or bracket notation:
 ```bash
 clawdbot config get agents.defaults.workspace
 clawdbot config get agents.list[0].id
+```
+
+Use the agent list index to target a specific agent:
+
+```bash
+clawdbot config get agents.list
+clawdbot config set agents.list[1].tools.exec.node "node-id-or-name"
 ```
 
 ## Values

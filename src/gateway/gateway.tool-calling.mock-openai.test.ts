@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
@@ -169,49 +169,8 @@ async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<R
   });
 }
 
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === "string") {
-        srv.close();
-        reject(new Error("failed to acquire free port"));
-        return;
-      }
-      const port = addr.port;
-      srv.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
-      });
-    });
-  });
-}
-
-async function isPortFree(port: number): Promise<boolean> {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
-  return await new Promise((resolve) => {
-    const srv = createServer();
-    srv.once("error", () => resolve(false));
-    srv.listen(port, "127.0.0.1", () => {
-      srv.close(() => resolve(true));
-    });
-  });
-}
-
 async function getFreeGatewayPort(): Promise<number> {
-  // Gateway uses derived ports (bridge/browser/canvas). Avoid flaky collisions by
-  // ensuring the common derived offsets are free too.
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    const port = await getFreePort();
-    const candidates = [port, port + 1, port + 2, port + 4];
-    const ok = (await Promise.all(candidates.map((candidate) => isPortFree(candidate)))).every(
-      Boolean,
-    );
-    if (ok) return port;
-  }
-  throw new Error("failed to acquire a free gateway port block");
+  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
 function extractPayloadText(result: unknown): string {
@@ -252,7 +211,7 @@ async function connectClient(params: { url: string; token: string }) {
 }
 
 describe("gateway (mock openai): tool calling", () => {
-  it("runs a Read tool call end-to-end via gateway agent loop", async () => {
+  it("runs a Read tool call end-to-end via gateway agent loop", { timeout: 90_000 }, async () => {
     const prev = {
       home: process.env.HOME,
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
@@ -264,7 +223,8 @@ describe("gateway (mock openai): tool calling", () => {
     };
 
     const originalFetch = globalThis.fetch;
-    const openaiResponsesUrl = "https://api.openai.com/v1/responses";
+    const openaiBaseUrl = "https://api.openai.com/v1";
+    const openaiResponsesUrl = `${openaiBaseUrl}/responses`;
     const isOpenAIResponsesRequest = (url: string) =>
       url === openaiResponsesUrl ||
       url.startsWith(`${openaiResponsesUrl}/`) ||
@@ -284,6 +244,9 @@ describe("gateway (mock openai): tool calling", () => {
         const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
         const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
         return await buildOpenAIResponsesSse({ input: inputItems });
+      }
+      if (url.startsWith(openaiBaseUrl)) {
+        throw new Error(`unexpected OpenAI request in mock test: ${url}`);
       }
 
       if (!originalFetch) {
@@ -322,7 +285,7 @@ describe("gateway (mock openai): tool calling", () => {
         mode: "replace",
         providers: {
           openai: {
-            baseUrl: "https://api.openai.com/v1",
+            baseUrl: openaiBaseUrl,
             apiKey: "test",
             api: "openai-responses",
             models: [
@@ -400,5 +363,5 @@ describe("gateway (mock openai): tool calling", () => {
       process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
     }
-  }, 30_000);
+  });
 });

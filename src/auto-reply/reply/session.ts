@@ -4,15 +4,16 @@ import path from "node:path";
 
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  buildGroupDisplayName,
-  DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGERS,
+  deriveSessionMetaPatch,
+  evaluateSessionFreshness,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveThreadFlag,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionKey,
@@ -107,7 +108,6 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
-  const idleMinutes = Math.max(sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES, 1);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
@@ -172,8 +172,19 @@ export async function initSessionState(params: {
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
-  const idleMs = idleMinutes * 60_000;
-  const freshEntry = entry && Date.now() - entry.updatedAt <= idleMs;
+  const now = Date.now();
+  const isThread = resolveThreadFlag({
+    sessionKey,
+    messageThreadId: ctx.MessageThreadId,
+    threadLabel: ctx.ThreadLabel,
+    threadStarterBody: ctx.ThreadStarterBody,
+    parentSessionKey: ctx.ParentSessionKey,
+  });
+  const resetType = resolveSessionResetType({ sessionKey, isGroup, isThread });
+  const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
+  const freshEntry = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    : false;
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
@@ -237,39 +248,16 @@ export async function initSessionState(params: {
     lastTo,
     lastAccountId,
   };
-  if (groupResolution?.channel) {
-    const channel = groupResolution.channel;
-    const subject = ctx.GroupSubject?.trim();
-    const space = ctx.GroupSpace?.trim();
-    const explicitChannel = ctx.GroupChannel?.trim();
-    const normalizedChannel = normalizeChannelId(channel);
-    const isChannelProvider = Boolean(
-      normalizedChannel &&
-      getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
-    );
-    const nextGroupChannel =
-      explicitChannel ??
-      ((groupResolution.chatType === "channel" || isChannelProvider) &&
-      subject &&
-      subject.startsWith("#")
-        ? subject
-        : undefined);
-    const nextSubject = nextGroupChannel ? undefined : subject;
-    sessionEntry.chatType = groupResolution.chatType ?? "group";
-    sessionEntry.channel = channel;
-    sessionEntry.groupId = groupResolution.id;
-    if (nextSubject) sessionEntry.subject = nextSubject;
-    if (nextGroupChannel) sessionEntry.groupChannel = nextGroupChannel;
-    if (space) sessionEntry.space = space;
-    sessionEntry.displayName = buildGroupDisplayName({
-      provider: sessionEntry.channel,
-      subject: sessionEntry.subject,
-      groupChannel: sessionEntry.groupChannel,
-      space: sessionEntry.space,
-      id: groupResolution.id,
-      key: sessionKey,
-    });
-  } else if (!sessionEntry.chatType) {
+  const metaPatch = deriveSessionMetaPatch({
+    ctx: sessionCtxForState,
+    sessionKey,
+    existing: sessionEntry,
+    groupResolution,
+  });
+  if (metaPatch) {
+    sessionEntry = { ...sessionEntry, ...metaPatch };
+  }
+  if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
   }
   const threadLabel = ctx.ThreadLabel?.trim();

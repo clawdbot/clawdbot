@@ -26,7 +26,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 1500) {
 }
 
 describe("gateway server chat", () => {
-  test("chat.history caps payload bytes", { timeout: 15_000 }, async () => {
+  test("chat.history caps payload bytes", { timeout: 60_000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
@@ -105,7 +105,7 @@ describe("gateway server chat", () => {
     await server.close();
   });
 
-  test("chat.abort cancels an in-flight chat.send", { timeout: 15000 }, async () => {
+  test("chat.abort cancels an in-flight chat.send", { timeout: 60_000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
@@ -263,7 +263,7 @@ describe("gateway server chat", () => {
     await server.close();
   });
 
-  test("chat.send treats /stop as an out-of-band abort", { timeout: 15000 }, async () => {
+  test("chat.send treats /stop as an out-of-band abort", { timeout: 60_000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({

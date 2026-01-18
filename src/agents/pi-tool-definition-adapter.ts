@@ -5,6 +5,7 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
@@ -24,6 +25,7 @@ function describeToolExecutionError(err: unknown): {
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
+    const normalizedName = normalizeToolName(name);
     return {
       name,
       label: tool.label ?? name,
@@ -50,12 +52,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (name === "AbortError") throw err;
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
-            logDebug(`tools: ${tool.name} failed stack:\n${described.stack}`);
+            logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${tool.name} failed: ${described.message}`);
+          logError(`[tools] ${normalizedName} failed: ${described.message}`);
           return jsonResult({
             status: "error",
-            tool: tool.name,
+            tool: normalizedName,
             error: described.message,
           });
         }

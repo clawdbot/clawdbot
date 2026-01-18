@@ -8,15 +8,25 @@ read_when:
 # `clawdbot memory`
 
 Memory search tools (semantic memory status/index/search).
+Provided by the active memory plugin (default: `memory-core`; use `plugins.slots.memory = "none"` to disable).
 
 Related:
 - Memory concept: [Memory](/concepts/memory)
+ - Plugins: [Plugins](/plugins)
 
 ## Examples
 
 ```bash
 clawdbot memory status
+clawdbot memory status --deep
+clawdbot memory status --deep --index
+clawdbot memory status --deep --index --verbose
 clawdbot memory index
 clawdbot memory search "release checklist"
 ```
 
+## Options
+
+- `--verbose`: emit debug logs during memory probes and indexing.
+- `--index-mode auto|batch|direct`: override batch usage when indexing (`direct` favors speed; `batch` favors OpenAI Batch pricing).
+- `--progress auto|line|log|none`: progress output mode (`log` prints updates even without a TTY).

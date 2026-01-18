@@ -5,6 +5,11 @@ import {
 } from "../../daemon/constants.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import {
+  isSystemdUnavailableDetail,
+  renderSystemdUnavailableHints,
+} from "../../daemon/systemd-hints.js";
+import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
@@ -160,6 +165,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
+    }
+    spacer();
+  }
+
+  const systemdUnavailable =
+    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+  if (systemdUnavailable) {
+    defaultRuntime.error(errorText("systemd user services unavailable."));
+    for (const hint of renderSystemdUnavailableHints({ wsl: isWSLEnv() })) {
+      defaultRuntime.error(errorText(hint));
     }
     spacer();
   }

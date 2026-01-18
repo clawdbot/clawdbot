@@ -6,19 +6,8 @@ const saveMediaBufferMock = vi.fn(async () => ({
   contentType: "image/png",
 }));
 
-const modulePaths = vi.hoisted(() => {
-  const downloadModuleUrl = new URL("./attachments/download.js", import.meta.url);
-  return {
-    mimeModulePath: new URL("../../../../src/media/mime.js", downloadModuleUrl).pathname,
-    storeModulePath: new URL("../../../../src/media/store.js", downloadModuleUrl).pathname,
-  };
-});
-
-vi.mock(modulePaths.mimeModulePath, () => ({
+vi.mock("clawdbot/plugin-sdk", () => ({
   detectMime: (...args: unknown[]) => detectMimeMock(...args),
-}));
-
-vi.mock(modulePaths.storeModulePath, () => ({
   saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
 }));
 

@@ -678,10 +678,11 @@ Notes:
 - `"open"`: groups bypass allowlists; mention-gating still applies.
 - `"disabled"`: block all group/room messages.
 - `"allowlist"`: only allow groups/rooms that match the configured allowlist.
+- `channels.defaults.groupPolicy` sets the default when a provider’s `groupPolicy` is unset.
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams use `groupAllowFrom` (fallback: explicit `allowFrom`).
 - Discord/Slack use channel allowlists (`channels.discord.guilds.*.channels`, `channels.slack.channels`).
 - Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
-- Default is `groupPolicy: "allowlist"`; if no allowlist is configured, group messages are blocked.
+- Default is `groupPolicy: "allowlist"` (unless overridden by `channels.defaults.groupPolicy`); if no allowlist is configured, group messages are blocked.
 
 ### Multi-agent routing (`agents.list` + `bindings`)
 
@@ -2234,6 +2235,49 @@ Notes:
 - Model ref: `moonshot/kimi-k2-0905-preview`.
 - Use `https://api.moonshot.cn/v1` if you need the China endpoint.
 
+### Kimi Code
+
+Use Kimi Code's dedicated OpenAI-compatible endpoint (separate from Moonshot):
+
+```json5
+{
+  env: { KIMICODE_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "kimi-code/kimi-for-coding" },
+      models: { "kimi-code/kimi-for-coding": { alias: "Kimi Code" } }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      "kimi-code": {
+        baseUrl: "https://api.kimi.com/coding/v1",
+        apiKey: "${KIMICODE_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "kimi-for-coding",
+            name: "Kimi For Coding",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 262144,
+            maxTokens: 32768,
+            headers: { "User-Agent": "KimiCLI/0.77" },
+            compat: { supportsDeveloperRole: false }
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Set `KIMICODE_API_KEY` in the environment or use `clawdbot onboard --auth-choice kimi-code-api-key`.
+- Model ref: `kimi-code/kimi-for-coding`.
+
 ### Synthetic (Anthropic-compatible)
 
 Use Synthetic's Anthropic-compatible endpoint:
@@ -2372,7 +2416,7 @@ Notes:
 
 ### `session`
 
-Controls session scoping, idle expiry, reset triggers, and where the session store is written.
+Controls session scoping, reset policy, reset triggers, and where the session store is written.
 
 ```json5
 {
@@ -2382,7 +2426,16 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     identityLinks: {
       alice: ["telegram:123456789", "discord:987654321012345678"]
     },
-    idleMinutes: 60,
+    reset: {
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 60
+    },
+    resetByType: {
+      thread: { mode: "daily", atHour: 4 },
+      dm: { mode: "idle", idleMinutes: 240 },
+      group: { mode: "idle", idleMinutes: 120 }
+    },
     resetTriggers: ["/new", "/reset"],
     // Default is already per-agent under ~/.clawdbot/agents/<agentId>/sessions/sessions.json
     // You can override with {agentId} templating:
@@ -2393,12 +2446,12 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
       // Max ping-pong reply turns between requester/target (0–5).
       maxPingPongTurns: 5
     },
-        sendPolicy: {
-          rules: [
+    sendPolicy: {
+      rules: [
         { action: "deny", match: { channel: "discord", chatType: "group" } }
-          ],
-          default: "allow"
-        }
+      ],
+      default: "allow"
+    }
   }
 }
 ```
@@ -2412,6 +2465,13 @@ Fields:
   - `per-channel-peer`: isolate DMs per channel + sender (recommended for multi-user inboxes).
 - `identityLinks`: map canonical ids to provider-prefixed peers so the same person shares a DM session across channels when using `per-peer` or `per-channel-peer`.
   - Example: `alice: ["telegram:123456789", "discord:987654321012345678"]`.
+- `reset`: primary reset policy. Defaults to daily resets at 4:00 AM local time on the gateway host.
+  - `mode`: `daily` or `idle` (default: `daily` when `reset` is present).
+  - `atHour`: local hour (0-23) for the daily reset boundary.
+  - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
+- `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
+  - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, Clawdbot stays in idle-only mode for backward compatibility.
+- `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
 - `sendPolicy.rules[]`: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.

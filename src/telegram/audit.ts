@@ -8,6 +8,8 @@ export type TelegramGroupMembershipAuditEntry = {
   ok: boolean;
   status?: string | null;
   error?: string | null;
+  matchKey?: string;
+  matchSource?: "id";
 };
 
 export type TelegramGroupMembershipAudit = {
@@ -105,7 +107,14 @@ export async function auditTelegramGroupMembership(params: {
           isRecord(json) && json.ok === false && typeof json.description === "string"
             ? json.description
             : `getChatMember failed (${res.status})`;
-        groups.push({ chatId, ok: false, status: null, error: desc });
+        groups.push({
+          chatId,
+          ok: false,
+          status: null,
+          error: desc,
+          matchKey: chatId,
+          matchSource: "id",
+        });
         continue;
       }
       const status = isRecord((json as TelegramApiOk<unknown>).result)
@@ -117,6 +126,8 @@ export async function auditTelegramGroupMembership(params: {
         ok,
         status,
         error: ok ? null : "bot not in group",
+        matchKey: chatId,
+        matchSource: "id",
       });
     } catch (err) {
       groups.push({
@@ -124,6 +135,8 @@ export async function auditTelegramGroupMembership(params: {
         ok: false,
         status: null,
         error: err instanceof Error ? err.message : String(err),
+        matchKey: chatId,
+        matchSource: "id",
       });
     }
   }

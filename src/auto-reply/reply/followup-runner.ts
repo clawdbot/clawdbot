@@ -138,8 +138,10 @@ export function createFollowupRunner(params: {
             queued.run.config,
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
-          run: (provider, model) =>
-            runEmbeddedPiAgent({
+          run: (provider, model) => {
+            const authProfileId =
+              provider === queued.run.provider ? queued.run.authProfileId : undefined;
+            return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               messageProvider: queued.run.messageProvider,
@@ -154,10 +156,12 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
-              authProfileId: queued.run.authProfileId,
+              authProfileId,
+              authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
+              execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
@@ -170,7 +174,8 @@ export function createFollowupRunner(params: {
                   autoCompactionCompleted = true;
                 }
               },
-            }),
+            });
+          },
         });
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;

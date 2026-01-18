@@ -155,7 +155,7 @@ struct OnboardingView: View {
 
     var canAdvance: Bool { !self.isWizardBlocking }
     var devLinkCommand: String {
-        let version = GatewayEnvironment.expectedGatewayVersion()?.description ?? "latest"
+        let version = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
         return "npm install -g clawdbot@\(version)"
     }
 

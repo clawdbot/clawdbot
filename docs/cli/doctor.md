@@ -21,6 +21,9 @@ clawdbot doctor --repair
 clawdbot doctor --deep
 ```
 
+Notes:
+- Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
+
 ## macOS: `launchctl` env overrides
 
 If you previously ran `launchctl setenv CLAWDBOT_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent “unauthorized” errors.

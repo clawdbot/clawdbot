@@ -1,5 +1,5 @@
 import type { ClawdbotConfig } from "../config/config.js";
-import { MemoryIndexManager } from "./manager.js";
+import type { MemoryIndexManager } from "./manager.js";
 
 export type MemorySearchManagerResult = {
   manager: MemoryIndexManager | null;
@@ -11,6 +11,7 @@ export async function getMemorySearchManager(params: {
   agentId: string;
 }): Promise<MemorySearchManagerResult> {
   try {
+    const { MemoryIndexManager } = await import("./manager.js");
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {

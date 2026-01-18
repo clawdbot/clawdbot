@@ -59,6 +59,11 @@ It does **not** rotate on every request. The pinned profile is reused until:
 Manual selection via `/model …@<profileId>` sets a **user override** for that session
 and is not auto‑rotated until a new session starts.
 
+Auto‑pinned profiles (selected by the session router) are treated as a **preference**:
+they are tried first, but Clawdbot may rotate to another profile on rate limits/timeouts.
+User‑pinned profiles stay locked to that profile; if it fails and model fallbacks
+are configured, Clawdbot moves to the next model instead of switching profiles.
+
 ### Why OAuth can “look lost”
 
 If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:

@@ -39,6 +39,7 @@ function buildSendSchema(options: { includeButtons: boolean }) {
     media: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
+    asVoice: Type.Optional(Type.Boolean()),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     buttons: Type.Optional(

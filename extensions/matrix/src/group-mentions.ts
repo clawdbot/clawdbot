@@ -1,4 +1,4 @@
-import type { ChannelGroupContext } from "../../../src/channels/plugins/types.js";
+import type { ChannelGroupContext } from "clawdbot/plugin-sdk";
 
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import type { CoreConfig } from "./types.js";

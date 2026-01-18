@@ -89,3 +89,137 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get("ui_lang")).toBe("de");
   });
 });
+
+describe("web_search perplexity baseUrl defaults", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    // @ts-expect-error global fetch cleanup
+    global.fetch = priorFetch;
+  });
+
+  it("defaults to Perplexity direct when PERPLEXITY_API_KEY is set", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "perplexity" } } } },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-openrouter" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
+  });
+
+  it("defaults to OpenRouter when OPENROUTER_API_KEY is set", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "perplexity" } } } },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-openrouter-env" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("prefers PERPLEXITY_API_KEY when both env keys are set", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "perplexity" } } } },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-both-env" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
+  });
+
+  it("uses configured baseUrl even when PERPLEXITY_API_KEY is set", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "perplexity",
+              perplexity: { baseUrl: "https://example.com/pplx" },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-config-baseurl" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/pplx/chat/completions");
+  });
+
+  it("defaults to OpenRouter when apiKey is configured without baseUrl", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "perplexity",
+              perplexity: { apiKey: "pplx-config" },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-config-apikey" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+});

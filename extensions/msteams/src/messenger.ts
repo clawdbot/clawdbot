@@ -1,7 +1,10 @@
-import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import type { MSTeamsReplyStyle } from "../../../src/config/types.js";
+import {
+  chunkMarkdownText,
+  isSilentReplyText,
+  type MSTeamsReplyStyle,
+  type ReplyPayload,
+  SILENT_REPLY_TOKEN,
+} from "clawdbot/plugin-sdk";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
 

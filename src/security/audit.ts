@@ -492,7 +492,9 @@ async function collectChannelSecurityFindings(params: {
       });
       const slashEnabled = nativeEnabled || nativeSkillsEnabled;
       if (slashEnabled) {
-        const groupPolicy = (discordCfg.groupPolicy as string | undefined) ?? "allowlist";
+        const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
+        const groupPolicy =
+          (discordCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
         const guildEntries = (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
         const guildsConfigured = Object.keys(guildEntries).length > 0;
         const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
@@ -652,7 +654,9 @@ async function collectChannelSecurityFindings(params: {
       const telegramCfg =
         (account as { config?: Record<string, unknown> } | null)?.config ??
         ({} as Record<string, unknown>);
-      const groupPolicy = (telegramCfg.groupPolicy as string | undefined) ?? "allowlist";
+      const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy =
+        (telegramCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
       const groups = telegramCfg.groups as Record<string, unknown> | undefined;
       const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
       const groupAccessPossible =

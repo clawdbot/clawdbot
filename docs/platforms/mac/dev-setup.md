@@ -14,15 +14,7 @@ Before building the app, ensure you have the following installed:
 1.  **Xcode 26.2+**: Required for Swift development.
 2.  **Node.js 22+ & pnpm**: Required for the gateway, CLI, and packaging scripts.
 
-## 1. Initialize Submodules
-
-Clawdbot depends on several submodules (like `Peekaboo`). You must initialize these recursively:
-
-```bash
-git submodule update --init --recursive
-```
-
-## 2. Install Dependencies
+## 1. Install Dependencies
 
 Install the project-wide dependencies:
 
@@ -30,7 +22,7 @@ Install the project-wide dependencies:
 pnpm install
 ```
 
-## 3. Build and Package the App
+## 2. Build and Package the App
 
 To build the macOS app and package it into `dist/Clawdbot.app`, run:
 
@@ -42,7 +34,7 @@ If you don't have an Apple Developer ID certificate, the script will automatical
 
 > **Note**: Ad-hoc signed apps may trigger security prompts. If the app crashes immediately with "Abort trap 6", see the [Troubleshooting](#troubleshooting) section.
 
-## 4. Install the CLI
+## 3. Install the CLI
 
 The macOS app expects a global `clawdbot` CLI install to manage background tasks.
 

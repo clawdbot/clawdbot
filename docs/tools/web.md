@@ -1,15 +1,16 @@
 ---
-summary: "Web search + fetch tools (Brave Search API)"
+summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
+  - You want to use Perplexity Sonar for web search
 ---
 
 # Web tools
 
 Clawdbot ships two lightweight web tools:
 
-- `web_search` — Brave Search API queries (fast, structured results).
+- `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (via OpenRouter).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -17,12 +18,55 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 ## How it works
 
-- `web_search` calls Brave’s Search API and returns structured results
-  (title, URL, snippet). No browser is involved.
+- `web_search` calls your configured provider and returns results.
+  - **Brave** (default): returns structured results (title, URL, snippet).
+  - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
+
+## Choosing a search provider
+
+| Provider | Pros | Cons | API Key |
+|----------|------|------|---------|
+| **Brave** (default) | Fast, structured results, free tier | Traditional search results | `BRAVE_API_KEY` |
+| **Perplexity** | AI-synthesized answers, citations, real-time | Requires OpenRouter credits | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+
+See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
+
+Set the provider in config:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "brave"  // or "perplexity"
+      }
+    }
+  }
+}
+```
+
+Example: switch to Perplexity Sonar (direct API):
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "perplexity",
+        perplexity: {
+          apiKey: "pplx-...",
+          baseUrl: "https://api.perplexity.ai",
+          model: "perplexity/sonar-pro"
+        }
+      }
+    }
+  }
+}
+```
 
 ## Getting a Brave API key
 
@@ -42,14 +86,65 @@ current limits and pricing.
 environment. For a daemon install, put it in `~/.clawdbot/.env` (or your
 service environment). See [Env vars](/start/faq#how-does-clawdbot-load-environment-variables).
 
+## Using Perplexity (direct or via OpenRouter)
+
+Perplexity Sonar models have built-in web search capabilities and return AI-synthesized
+answers with citations. You can use them via OpenRouter (no credit card required - supports
+crypto/prepaid).
+
+### Getting an OpenRouter API key
+
+1) Create an account at https://openrouter.ai/
+2) Add credits (supports crypto, prepaid, or credit card)
+3) Generate an API key in your account settings
+
+### Setting up Perplexity search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "perplexity",
+        perplexity: {
+          // API key (optional if OPENROUTER_API_KEY or PERPLEXITY_API_KEY is set)
+          apiKey: "sk-or-v1-...",
+          // Base URL (defaults to OpenRouter)
+          baseUrl: "https://openrouter.ai/api/v1",
+          // Model (defaults to perplexity/sonar-pro)
+          model: "perplexity/sonar-pro"
+        }
+      }
+    }
+  }
+}
+```
+
+**Environment alternative:** set `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` in the Gateway
+environment. For a daemon install, put it in `~/.clawdbot/.env`.
+
+If `PERPLEXITY_API_KEY` is used from the environment and no base URL is set,
+Clawdbot defaults to the direct Perplexity endpoint (`https://api.perplexity.ai`).
+
+### Available Perplexity models
+
+| Model | Description | Best for |
+|-------|-------------|----------|
+| `perplexity/sonar` | Fast Q&A with web search | Quick lookups |
+| `perplexity/sonar-pro` (default) | Multi-step reasoning with web search | Complex questions |
+| `perplexity/sonar-reasoning-pro` | Chain-of-thought analysis | Deep research |
+
 ## web_search
 
-Search the web with Brave’s API.
+Search the web using your configured provider.
 
 ### Requirements
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
-- Brave API key (recommended: `clawdbot configure --section web`, or set `BRAVE_API_KEY`)
+- API key for your chosen provider:
+  - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
+  - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
 
 ### Config
 

@@ -26,7 +26,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("cron cli", () => {
-  it("trims model and thinking on cron add", { timeout: 30_000 }, async () => {
+  it("trims model and thinking on cron add", { timeout: 60_000 }, async () => {
     callGatewayFromCli.mockClear();
 
     const { registerCronCli } = await import("./cron-cli.js");

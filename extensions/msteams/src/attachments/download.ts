@@ -1,5 +1,4 @@
-import { detectMime } from "../../../../src/media/mime.js";
-import { saveMediaBuffer } from "../../../../src/media/store.js";
+import { detectMime, saveMediaBuffer } from "clawdbot/plugin-sdk";
 import {
   extractInlineImageCandidates,
   inferPlaceholder,

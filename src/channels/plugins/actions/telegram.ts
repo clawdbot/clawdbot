@@ -10,6 +10,29 @@ import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../t
 
 const providerId = "telegram";
 
+function readTelegramSendParams(params: Record<string, unknown>) {
+  const to = readStringParam(params, "to", { required: true });
+  const mediaUrl = readStringParam(params, "media", { trim: false });
+  const content =
+    readStringParam(params, "message", {
+      required: !mediaUrl,
+      allowEmpty: true,
+    }) ?? "";
+  const replyTo = readStringParam(params, "replyTo");
+  const threadId = readStringParam(params, "threadId");
+  const buttons = params.buttons;
+  const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
+  return {
+    to,
+    content,
+    mediaUrl: mediaUrl ?? undefined,
+    replyToMessageId: replyTo ?? undefined,
+    messageThreadId: threadId ?? undefined,
+    buttons,
+    asVoice,
+  };
+}
+
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const accounts = listEnabledTelegramAccounts(cfg).filter(
@@ -41,25 +64,12 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
-      const to = readStringParam(params, "to", { required: true });
-      const content = readStringParam(params, "message", {
-        required: true,
-        allowEmpty: true,
-      });
-      const mediaUrl = readStringParam(params, "media", { trim: false });
-      const replyTo = readStringParam(params, "replyTo");
-      const threadId = readStringParam(params, "threadId");
-      const buttons = params.buttons;
+      const sendParams = readTelegramSendParams(params);
       return await handleTelegramAction(
         {
           action: "sendMessage",
-          to,
-          content,
-          mediaUrl: mediaUrl ?? undefined,
-          replyToMessageId: replyTo ?? undefined,
-          messageThreadId: threadId ?? undefined,
+          ...sendParams,
           accountId: accountId ?? undefined,
-          buttons,
         },
         cfg,
       );

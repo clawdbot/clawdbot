@@ -1,6 +1,10 @@
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 import type { TelegramAccountConfig } from "../../config/types.telegram.js";
 import type {
+  TelegramForwardChat,
+  TelegramForwardOrigin,
+  TelegramForwardUser,
+  TelegramForwardedMessage,
   TelegramLocation,
   TelegramMessage,
   TelegramStreamMode,
@@ -110,6 +114,35 @@ export function hasBotMention(msg: TelegramMessage, botUsername: string) {
   return false;
 }
 
+type TelegramTextLinkEntity = {
+  type: string;
+  offset: number;
+  length: number;
+  url?: string;
+};
+
+export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[] | null): string {
+  if (!text || !entities?.length) return text;
+
+  const textLinks = entities
+    .filter(
+      (entity): entity is TelegramTextLinkEntity & { url: string } =>
+        entity.type === "text_link" && Boolean(entity.url),
+    )
+    .sort((a, b) => b.offset - a.offset);
+
+  if (textLinks.length === 0) return text;
+
+  let result = text;
+  for (const entity of textLinks) {
+    const linkText = text.slice(entity.offset, entity.offset + entity.length);
+    const markdown = `[${linkText}](${entity.url})`;
+    result =
+      result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
+  }
+  return result;
+}
+
 export function resolveTelegramReplyId(raw?: string): number | undefined {
   if (!raw) return undefined;
   const parsed = Number(raw);
@@ -140,6 +173,172 @@ export function describeReplyTarget(msg: TelegramMessage) {
     sender: senderLabel,
     body,
   };
+}
+
+export type TelegramForwardedContext = {
+  from: string;
+  date?: number;
+  fromType: string;
+  fromId?: string;
+  fromUsername?: string;
+  fromTitle?: string;
+  fromSignature?: string;
+};
+
+function normalizeForwardedUserLabel(user: TelegramForwardUser) {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  const username = user.username?.trim() || undefined;
+  const id = user.id != null ? String(user.id) : undefined;
+  const display =
+    (name && username
+      ? `${name} (@${username})`
+      : name || (username ? `@${username}` : undefined)) || (id ? `user:${id}` : undefined);
+  return { display, name: name || undefined, username, id };
+}
+
+function normalizeForwardedChatLabel(chat: TelegramForwardChat, fallbackKind: "chat" | "channel") {
+  const title = chat.title?.trim() || undefined;
+  const username = chat.username?.trim() || undefined;
+  const id = chat.id != null ? String(chat.id) : undefined;
+  const display =
+    title || (username ? `@${username}` : undefined) || (id ? `${fallbackKind}:${id}` : undefined);
+  return { display, title, username, id };
+}
+
+function buildForwardedContextFromUser(params: {
+  user: TelegramForwardUser;
+  date?: number;
+  type: string;
+}): TelegramForwardedContext | null {
+  const { display, name, username, id } = normalizeForwardedUserLabel(params.user);
+  if (!display) return null;
+  return {
+    from: display,
+    date: params.date,
+    fromType: params.type,
+    fromId: id,
+    fromUsername: username,
+    fromTitle: name,
+  };
+}
+
+function buildForwardedContextFromHiddenName(params: {
+  name?: string;
+  date?: number;
+  type: string;
+}): TelegramForwardedContext | null {
+  const trimmed = params.name?.trim();
+  if (!trimmed) return null;
+  return {
+    from: trimmed,
+    date: params.date,
+    fromType: params.type,
+    fromTitle: trimmed,
+  };
+}
+
+function buildForwardedContextFromChat(params: {
+  chat: TelegramForwardChat;
+  date?: number;
+  type: string;
+  signature?: string;
+}): TelegramForwardedContext | null {
+  const fallbackKind =
+    params.type === "channel" || params.type === "legacy_channel" ? "channel" : "chat";
+  const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
+  if (!display) return null;
+  const signature = params.signature?.trim() || undefined;
+  const from = signature ? `${display} (${signature})` : display;
+  return {
+    from,
+    date: params.date,
+    fromType: params.type,
+    fromId: id,
+    fromUsername: username,
+    fromTitle: title,
+    fromSignature: signature,
+  };
+}
+
+function resolveForwardOrigin(
+  origin: TelegramForwardOrigin,
+  signature?: string,
+): TelegramForwardedContext | null {
+  if (origin.type === "user" && origin.sender_user) {
+    return buildForwardedContextFromUser({
+      user: origin.sender_user,
+      date: origin.date,
+      type: "user",
+    });
+  }
+  if (origin.type === "hidden_user") {
+    return buildForwardedContextFromHiddenName({
+      name: origin.sender_user_name,
+      date: origin.date,
+      type: "hidden_user",
+    });
+  }
+  if (origin.type === "chat" && origin.sender_chat) {
+    return buildForwardedContextFromChat({
+      chat: origin.sender_chat,
+      date: origin.date,
+      type: "chat",
+      signature,
+    });
+  }
+  if (origin.type === "channel" && origin.chat) {
+    return buildForwardedContextFromChat({
+      chat: origin.chat,
+      date: origin.date,
+      type: "channel",
+      signature,
+    });
+  }
+  return null;
+}
+
+/**
+ * Extract forwarded message origin info from Telegram message.
+ * Supports both new forward_origin API and legacy forward_from/forward_from_chat fields.
+ */
+export function normalizeForwardedContext(msg: TelegramMessage): TelegramForwardedContext | null {
+  const forwardMsg = msg as TelegramForwardedMessage;
+  const signature = forwardMsg.forward_signature?.trim() || undefined;
+
+  if (forwardMsg.forward_origin) {
+    const originContext = resolveForwardOrigin(forwardMsg.forward_origin, signature);
+    if (originContext) return originContext;
+  }
+
+  if (forwardMsg.forward_from_chat) {
+    const legacyType =
+      forwardMsg.forward_from_chat.type === "channel" ? "legacy_channel" : "legacy_chat";
+    const legacyContext = buildForwardedContextFromChat({
+      chat: forwardMsg.forward_from_chat,
+      date: forwardMsg.forward_date,
+      type: legacyType,
+      signature,
+    });
+    if (legacyContext) return legacyContext;
+  }
+
+  if (forwardMsg.forward_from) {
+    const legacyContext = buildForwardedContextFromUser({
+      user: forwardMsg.forward_from,
+      date: forwardMsg.forward_date,
+      type: "legacy_user",
+    });
+    if (legacyContext) return legacyContext;
+  }
+
+  const hiddenContext = buildForwardedContextFromHiddenName({
+    name: forwardMsg.forward_sender_name,
+    date: forwardMsg.forward_date,
+    type: "legacy_hidden_user",
+  });
+  if (hiddenContext) return hiddenContext;
+
+  return null;
 }
 
 export function extractTelegramLocation(msg: TelegramMessage): NormalizedLocation | null {

@@ -1,5 +1,4 @@
-import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+import { chunkMarkdownText, type ChannelOutboundAdapter } from "clawdbot/plugin-sdk";
 
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";

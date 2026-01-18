@@ -60,13 +60,47 @@ export function formatToolAggregate(
 
   const allSegments = [...rawSegments, ...segments];
   const meta = allSegments.join("; ");
-  return `${prefix}: ${maybeWrapMarkdown(meta, options?.markdown)}`;
+  return `${prefix}: ${formatMetaForDisplay(toolName, meta, options?.markdown)}`;
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {
   const extra = meta?.trim() ? shortenMeta(meta) : undefined;
   const display = resolveToolDisplay({ name: toolName, meta: extra });
   return formatToolSummary(display);
+}
+
+function formatMetaForDisplay(
+  toolName: string | undefined,
+  meta: string,
+  markdown?: boolean,
+): string {
+  const normalized = (toolName ?? "").trim().toLowerCase();
+  if (normalized === "exec" || normalized === "bash") {
+    const { flags, body } = splitExecFlags(meta);
+    if (flags.length > 0) {
+      if (!body) return flags.join(" · ");
+      return `${flags.join(" · ")} · ${maybeWrapMarkdown(body, markdown)}`;
+    }
+  }
+  return maybeWrapMarkdown(meta, markdown);
+}
+
+function splitExecFlags(meta: string): { flags: string[]; body: string } {
+  const parts = meta
+    .split(" · ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return { flags: [], body: "" };
+  const flags: string[] = [];
+  const bodyParts: string[] = [];
+  for (const part of parts) {
+    if (part === "elevated" || part === "pty") {
+      flags.push(part);
+      continue;
+    }
+    bodyParts.push(part);
+  }
+  return { flags, body: bodyParts.join(" · ") };
 }
 
 function isPathLike(value: string): boolean {

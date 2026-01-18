@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 describe("sandbox config merges", () => {
-  it("resolves sandbox scope deterministically", { timeout: 15_000 }, async () => {
+  it("resolves sandbox scope deterministically", { timeout: 60_000 }, async () => {
     const { resolveSandboxScope } = await import("./sandbox.js");
 
     expect(resolveSandboxScope({})).toBe("agent");

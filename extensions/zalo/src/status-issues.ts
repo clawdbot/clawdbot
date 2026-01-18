@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../../src/channels/plugins/types.js";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "clawdbot/plugin-sdk";
 
 type ZaloAccountStatus = {
   accountId?: unknown;

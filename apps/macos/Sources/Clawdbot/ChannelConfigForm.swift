@@ -6,11 +6,11 @@ struct ConfigSchemaForm: View {
     let path: ConfigPath
 
     var body: some View {
-        self.renderNode(schema, path: path)
+        self.renderNode(self.schema, path: self.path)
     }
 
     private func renderNode(_ schema: ConfigSchemaNode, path: ConfigPath) -> AnyView {
-        let storedValue = store.configValue(at: path)
+        let storedValue = self.store.configValue(at: path)
         let value = storedValue ?? schema.explicitDefault
         let label = hintForPath(path, hints: store.configUiHints)?.label ?? schema.title
         let help = hintForPath(path, hints: store.configUiHints)?.help ?? schema.description
@@ -21,7 +21,7 @@ struct ConfigSchemaForm: View {
             if nonNull.count == 1, let only = nonNull.first {
                 return self.renderNode(only, path: path)
             }
-            let literals = nonNull.compactMap { $0.literalValue }
+            let literals = nonNull.compactMap(\.literalValue)
             if !literals.isEmpty, literals.count == nonNull.count {
                 return AnyView(
                     VStack(alignment: .leading, spacing: 6) {
@@ -31,15 +31,20 @@ struct ConfigSchemaForm: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        Picker("", selection: self.enumBinding(path, options: literals, defaultValue: schema.explicitDefault)) {
+                        Picker(
+                            "",
+                            selection: self.enumBinding(
+                                path,
+                                options: literals,
+                                defaultValue: schema.explicitDefault))
+                        {
                             Text("Select…").tag(-1)
                             ForEach(literals.indices, id: \ .self) { index in
                                 Text(String(describing: literals[index])).tag(index)
                             }
                         }
                         .pickerStyle(.menu)
-                    }
-                )
+                    })
             }
         }
 
@@ -71,8 +76,7 @@ struct ConfigSchemaForm: View {
                     if schema.allowsAdditionalProperties {
                         self.renderAdditionalProperties(schema, path: path, value: value)
                     }
-                }
-            )
+                })
         case "array":
             return AnyView(self.renderArray(schema, path: path, value: value, label: label, help: help))
         case "boolean":
@@ -80,8 +84,7 @@ struct ConfigSchemaForm: View {
                 Toggle(isOn: self.boolBinding(path, defaultValue: schema.explicitDefault as? Bool)) {
                     if let label { Text(label) } else { Text("Enabled") }
                 }
-                .help(help ?? "")
-            )
+                .help(help ?? ""))
         case "number", "integer":
             return AnyView(self.renderNumberField(schema, path: path, label: label, help: help))
         case "string":
@@ -93,8 +96,7 @@ struct ConfigSchemaForm: View {
                     Text("Unsupported field type.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-            )
+                })
         }
     }
 
@@ -155,9 +157,7 @@ struct ConfigSchemaForm: View {
                 text: self.numberBinding(
                     path,
                     isInteger: schema.schemaType == "integer",
-                    defaultValue: defaultValue
-                )
-            )
+                    defaultValue: defaultValue))
                 .textFieldStyle(.roundedBorder)
         }
     }
@@ -189,7 +189,7 @@ struct ConfigSchemaForm: View {
                     Button("Remove") {
                         var next = items
                         next.remove(at: index)
-                        store.updateConfigValue(path: path, value: next)
+                        self.store.updateConfigValue(path: path, value: next)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -202,7 +202,7 @@ struct ConfigSchemaForm: View {
                 } else {
                     next.append("")
                 }
-                store.updateConfigValue(path: path, value: next)
+                self.store.updateConfigValue(path: path, value: next)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -238,7 +238,7 @@ struct ConfigSchemaForm: View {
                             Button("Remove") {
                                 var next = dict
                                 next.removeValue(forKey: key)
-                                store.updateConfigValue(path: path, value: next)
+                                self.store.updateConfigValue(path: path, value: next)
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -254,7 +254,7 @@ struct ConfigSchemaForm: View {
                         key = "new-\(index)"
                     }
                     next[key] = additionalSchema.defaultValue
-                    store.updateConfigValue(path: path, value: next)
+                    self.store.updateConfigValue(path: path, value: next)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -270,9 +270,8 @@ struct ConfigSchemaForm: View {
             },
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                store.updateConfigValue(path: path, value: trimmed.isEmpty ? nil : trimmed)
-            }
-        )
+                self.store.updateConfigValue(path: path, value: trimmed.isEmpty ? nil : trimmed)
+            })
     }
 
     private func boolBinding(_ path: ConfigPath, defaultValue: Bool?) -> Binding<Bool> {
@@ -282,16 +281,15 @@ struct ConfigSchemaForm: View {
                 return defaultValue ?? false
             },
             set: { newValue in
-                store.updateConfigValue(path: path, value: newValue)
-            }
-        )
+                self.store.updateConfigValue(path: path, value: newValue)
+            })
     }
 
     private func numberBinding(
         _ path: ConfigPath,
         isInteger: Bool,
-        defaultValue: Double?
-    ) -> Binding<String> {
+        defaultValue: Double?) -> Binding<String>
+    {
         Binding(
             get: {
                 if let value = store.configValue(at: path) { return String(describing: value) }
@@ -301,22 +299,21 @@ struct ConfigSchemaForm: View {
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
-                    store.updateConfigValue(path: path, value: nil)
+                    self.store.updateConfigValue(path: path, value: nil)
                 } else if let value = Double(trimmed) {
-                    store.updateConfigValue(path: path, value: isInteger ? Int(value) : value)
+                    self.store.updateConfigValue(path: path, value: isInteger ? Int(value) : value)
                 }
-            }
-        )
+            })
     }
 
     private func enumBinding(
         _ path: ConfigPath,
         options: [Any],
-        defaultValue: Any?
-    ) -> Binding<Int> {
+        defaultValue: Any?) -> Binding<Int>
+    {
         Binding(
             get: {
-                let value = store.configValue(at: path) ?? defaultValue
+                let value = self.store.configValue(at: path) ?? defaultValue
                 guard let value else { return -1 }
                 return options.firstIndex { option in
                     String(describing: option) == String(describing: value)
@@ -324,12 +321,11 @@ struct ConfigSchemaForm: View {
             },
             set: { index in
                 guard index >= 0, index < options.count else {
-                    store.updateConfigValue(path: path, value: nil)
+                    self.store.updateConfigValue(path: path, value: nil)
                     return
                 }
-                store.updateConfigValue(path: path, value: options[index])
-            }
-        )
+                self.store.updateConfigValue(path: path, value: options[index])
+            })
     }
 
     private func mapKeyBinding(path: ConfigPath, key: String) -> Binding<String> {
@@ -339,14 +335,13 @@ struct ConfigSchemaForm: View {
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
                 guard trimmed != key else { return }
-                let current = store.configValue(at: path) as? [String: Any] ?? [:]
+                let current = self.store.configValue(at: path) as? [String: Any] ?? [:]
                 guard current[trimmed] == nil else { return }
                 var next = current
                 next[trimmed] = current[key]
                 next.removeValue(forKey: key)
-                store.updateConfigValue(path: path, value: next)
-            }
-        )
+                self.store.updateConfigValue(path: path, value: next)
+            })
     }
 }
 
@@ -355,10 +350,10 @@ struct ChannelConfigForm: View {
     let channelId: String
 
     var body: some View {
-        if store.configSchemaLoading {
+        if self.store.configSchemaLoading {
             ProgressView().controlSize(.small)
         } else if let schema = store.channelConfigSchema(for: channelId) {
-            ConfigSchemaForm(store: store, schema: schema, path: [.key("channels"), .key(channelId)])
+            ConfigSchemaForm(store: self.store, schema: schema, path: [.key("channels"), .key(self.channelId)])
         } else {
             Text("Schema unavailable for this channel.")
                 .font(.caption)

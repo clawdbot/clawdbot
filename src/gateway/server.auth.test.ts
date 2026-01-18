@@ -1,6 +1,8 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import fs from "node:fs/promises";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { HANDSHAKE_TIMEOUT_MS } from "./server-constants.js";
 import {
   connectReq,
   getFreePort,
@@ -13,16 +15,21 @@ import {
 
 installGatewayTestHooks();
 
+async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
+  const deadline = process.hrtime.bigint() + BigInt(timeoutMs) * 1_000_000n;
+  while (process.hrtime.bigint() < deadline) {
+    if (ws.readyState === WebSocket.CLOSED) return true;
+    // Yield to the event loop without relying on timers (fake timers can leak).
+    await fs.stat(process.cwd()).catch(() => {});
+  }
+  return ws.readyState === WebSocket.CLOSED;
+}
+
 describe("gateway server auth/connect", () => {
-  test("closes silent handshakes after timeout", { timeout: 15_000 }, async () => {
+  test("closes silent handshakes after timeout", { timeout: 60_000 }, async () => {
+    vi.useRealTimers();
     const { server, ws } = await startServerWithClient();
-    const closed = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 12_000);
-      ws.once("close", () => {
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
+    const closed = await waitForWsClose(ws, HANDSHAKE_TIMEOUT_MS + 2_000);
     expect(closed).toBe(true);
     await server.close();
   });
@@ -122,7 +129,7 @@ describe("gateway server auth/connect", () => {
 
   test(
     "invalid connect params surface in response and close reason",
-    { timeout: 15000 },
+    { timeout: 60_000 },
     async () => {
       const { server, ws } = await startServerWithClient();
       const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {

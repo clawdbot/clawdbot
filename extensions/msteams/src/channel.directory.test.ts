@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../../../src/config/config.js";
+import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 
 import { msteamsPlugin } from "./channel.js";
 

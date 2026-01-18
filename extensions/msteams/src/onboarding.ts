@@ -1,15 +1,22 @@
-import type { ClawdbotConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
-import { addWildcardAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
+  ClawdbotConfig,
+  DmPolicy,
+  WizardPrompter,
+} from "clawdbot/plugin-sdk";
+import {
+  addWildcardAllowFrom,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  promptChannelAccessConfig,
+} from "clawdbot/plugin-sdk";
 
 import { resolveMSTeamsCredentials } from "./token.js";
+import {
+  parseMSTeamsTeamEntry,
+  resolveMSTeamsChannelAllowlist,
+} from "./resolve-allowlist.js";
 
 const channel = "msteams" as const;
 
@@ -42,6 +49,54 @@ async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void
     ].join("\n"),
     "MS Teams credentials",
   );
+}
+
+function setMSTeamsGroupPolicy(
+  cfg: ClawdbotConfig,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): ClawdbotConfig {
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: {
+        ...cfg.channels?.msteams,
+        enabled: true,
+        groupPolicy,
+      },
+    },
+  };
+}
+
+function setMSTeamsTeamsAllowlist(
+  cfg: ClawdbotConfig,
+  entries: Array<{ teamKey: string; channelKey?: string }>,
+): ClawdbotConfig {
+  const baseTeams = cfg.channels?.msteams?.teams ?? {};
+  const teams: Record<string, { channels?: Record<string, unknown> }> = { ...baseTeams };
+  for (const entry of entries) {
+    const teamKey = entry.teamKey;
+    if (!teamKey) continue;
+    const existing = teams[teamKey] ?? {};
+    if (entry.channelKey) {
+      const channels = { ...(existing.channels ?? {}) };
+      channels[entry.channelKey] = channels[entry.channelKey] ?? {};
+      teams[teamKey] = { ...existing, channels };
+    } else {
+      teams[teamKey] = existing;
+    }
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: {
+        ...cfg.channels?.msteams,
+        enabled: true,
+        teams,
+      },
+    },
+  };
 }
 
 const dmPolicy: ChannelOnboardingDmPolicy = {
@@ -182,6 +237,93 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
           },
         },
       };
+    }
+
+    const currentEntries = Object.entries(next.channels?.msteams?.teams ?? {}).flatMap(
+      ([teamKey, value]) => {
+        const channels = value?.channels ?? {};
+        const channelKeys = Object.keys(channels);
+        if (channelKeys.length === 0) return [teamKey];
+        return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
+      },
+    );
+    const accessConfig = await promptChannelAccessConfig({
+      prompter,
+      label: "MS Teams channels",
+      currentPolicy: next.channels?.msteams?.groupPolicy ?? "allowlist",
+      currentEntries,
+      placeholder: "Team Name/Channel Name, teamId/conversationId",
+      updatePrompt: Boolean(next.channels?.msteams?.teams),
+    });
+    if (accessConfig) {
+      if (accessConfig.policy !== "allowlist") {
+        next = setMSTeamsGroupPolicy(next, accessConfig.policy);
+      } else {
+        let entries = accessConfig.entries
+          .map((entry) => parseMSTeamsTeamEntry(entry))
+          .filter(Boolean) as Array<{ teamKey: string; channelKey?: string }>;
+        if (accessConfig.entries.length > 0 && resolveMSTeamsCredentials(next.channels?.msteams)) {
+          try {
+            const resolved = await resolveMSTeamsChannelAllowlist({
+              cfg: next,
+              entries: accessConfig.entries,
+            });
+            const resolvedChannels = resolved.filter(
+              (entry) => entry.resolved && entry.teamId && entry.channelId,
+            );
+            const resolvedTeams = resolved.filter(
+              (entry) => entry.resolved && entry.teamId && !entry.channelId,
+            );
+            const unresolved = resolved
+              .filter((entry) => !entry.resolved)
+              .map((entry) => entry.input);
+
+            entries = [
+              ...resolvedChannels.map((entry) => ({
+                teamKey: entry.teamId as string,
+                channelKey: entry.channelId as string,
+              })),
+              ...resolvedTeams.map((entry) => ({
+                teamKey: entry.teamId as string,
+              })),
+              ...unresolved
+                .map((entry) => parseMSTeamsTeamEntry(entry))
+                .filter(Boolean),
+            ] as Array<{ teamKey: string; channelKey?: string }>;
+
+            if (resolvedChannels.length > 0 || resolvedTeams.length > 0 || unresolved.length > 0) {
+              const summary: string[] = [];
+              if (resolvedChannels.length > 0) {
+                summary.push(
+                  `Resolved channels: ${resolvedChannels
+                    .map((entry) => entry.channelId)
+                    .filter(Boolean)
+                    .join(", ")}`,
+                );
+              }
+              if (resolvedTeams.length > 0) {
+                summary.push(
+                  `Resolved teams: ${resolvedTeams
+                    .map((entry) => entry.teamId)
+                    .filter(Boolean)
+                    .join(", ")}`,
+                );
+              }
+              if (unresolved.length > 0) {
+                summary.push(`Unresolved (kept as typed): ${unresolved.join(", ")}`);
+              }
+              await prompter.note(summary.join("\n"), "MS Teams channels");
+            }
+          } catch (err) {
+            await prompter.note(
+              `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+              "MS Teams channels",
+            );
+          }
+        }
+        next = setMSTeamsGroupPolicy(next, "allowlist");
+        next = setMSTeamsTeamsAllowlist(next, entries);
+      }
     }
 
     return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };

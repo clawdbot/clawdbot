@@ -116,16 +116,18 @@ export async function runEmbeddedPiAgent(
         );
       }
 
-      const authStore = ensureAuthProfileStore(agentDir);
-      const explicitProfileId = params.authProfileId?.trim();
+      const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+      const preferredProfileId = params.authProfileId?.trim();
+      const lockedProfileId =
+        params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
         store: authStore,
         provider,
-        preferredProfile: explicitProfileId,
+        preferredProfile: preferredProfileId,
       });
-      if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
-        throw new Error(`Auth profile "${explicitProfileId}" is not configured for ${provider}.`);
+      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
+        throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
       const profileCandidates = profileOrder.length > 0 ? profileOrder : [undefined];
       let profileIndex = 0;
@@ -162,6 +164,7 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
+        if (lockedProfileId) return false;
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
@@ -172,7 +175,7 @@ export async function runEmbeddedPiAgent(
             attemptedThinking.clear();
             return true;
           } catch (err) {
-            if (candidate && candidate === explicitProfileId) throw err;
+            if (candidate && candidate === lockedProfileId) throw err;
             nextIndex += 1;
           }
         }
@@ -182,7 +185,7 @@ export async function runEmbeddedPiAgent(
       try {
         await applyApiKeyInfo(profileCandidates[profileIndex]);
       } catch (err) {
-        if (profileCandidates[profileIndex] === explicitProfileId) throw err;
+        if (profileCandidates[profileIndex] === lockedProfileId) throw err;
         const advanced = await advanceAuthProfile();
         if (!advanced) throw err;
       }
@@ -218,6 +221,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
             runId: params.runId,
@@ -317,6 +321,19 @@ export async function runEmbeddedPiAgent(
               );
               thinkLevel = fallbackThinking;
               continue;
+            }
+            // FIX: Throw FailoverError for prompt errors when fallbacks configured
+            // This enables model fallback for quota/rate limit errors during prompt submission
+            const promptFallbackConfigured =
+              (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+            if (promptFallbackConfigured && isFailoverErrorMessage(errorText)) {
+              throw new FailoverError(errorText, {
+                reason: promptFailoverReason ?? "unknown",
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
+              });
             }
             throw promptError;
           }

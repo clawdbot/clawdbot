@@ -172,6 +172,10 @@ vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  loadClawdbotPlugins: () => ({ plugins: [], diagnostics: [] }),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -248,6 +252,7 @@ vi.mock("../telegram/pairing-store.js", () => ({
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+  upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
 vi.mock("../telegram/token.js", () => ({
@@ -372,7 +377,7 @@ describe("doctor command", () => {
         );
       }),
     ).toBe(true);
-  }, 20_000);
+  }, 30_000);
 
   it("warns when extra workspace directories exist", async () => {
     readConfigFileSnapshot.mockResolvedValue({

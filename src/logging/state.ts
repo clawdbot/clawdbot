@@ -5,6 +5,7 @@ export const loggingState = {
   overrideSettings: null as unknown,
   consolePatched: false,
   forceConsoleToStderr: false,
+  consoleTimestampPrefix: false,
   consoleSubsystemFilter: null as string[] | null,
   rawConsole: null as {
     log: typeof console.log;

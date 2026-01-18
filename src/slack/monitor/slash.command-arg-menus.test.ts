@@ -97,8 +97,8 @@ describe("Slack native command argument menus", () => {
     const { commands, ctx, account } = createHarness();
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
-    const handler = commands.get("/cost");
-    if (!handler) throw new Error("Missing /cost handler");
+    const handler = commands.get("/usage");
+    if (!handler) throw new Error("Missing /usage handler");
 
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
@@ -133,7 +133,7 @@ describe("Slack native command argument menus", () => {
     await handler({
       ack: vi.fn().mockResolvedValue(undefined),
       action: {
-        value: encodeValue({ command: "cost", arg: "mode", value: "on", userId: "U1" }),
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
       body: {
         user: { id: "U1", name: "Ada" },
@@ -145,7 +145,7 @@ describe("Slack native command argument menus", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
-    expect(call.ctx?.Body).toBe("/cost on");
+    expect(call.ctx?.Body).toBe("/usage tokens");
   });
 
   it("rejects menu clicks from other users", async () => {
@@ -159,7 +159,7 @@ describe("Slack native command argument menus", () => {
     await handler({
       ack: vi.fn().mockResolvedValue(undefined),
       action: {
-        value: encodeValue({ command: "cost", arg: "mode", value: "on", userId: "U1" }),
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
       body: {
         user: { id: "U2", name: "Eve" },

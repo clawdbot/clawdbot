@@ -1,9 +1,14 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.16-2",
+  "version": "2026.1.17-1",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin-sdk": "./dist/plugin-sdk/index.js",
+    "./plugin-sdk/*": "./dist/plugin-sdk/*"
+  },
   "bin": {
     "clawdbot": "dist/entry.js"
   },
@@ -29,6 +34,7 @@
     "dist/media-understanding/**",
     "dist/process/**",
     "dist/plugins/**",
+    "dist/plugin-sdk/**",
     "dist/security/**",
     "dist/sessions/**",
     "dist/providers/**",
@@ -75,8 +81,8 @@
     "start": "tsx src/entry.ts",
     "clawdbot": "tsx src/entry.ts",
     "gateway:watch": "tsx watch src/entry.ts gateway --force",
-    "gateway:dev": "tsx src/entry.ts --dev gateway",
-    "gateway:dev:reset": "tsx src/entry.ts --dev gateway --reset",
+    "gateway:dev": "CLAWDBOT_SKIP_CHANNELS=1 tsx src/entry.ts --dev gateway",
+    "gateway:dev:reset": "CLAWDBOT_SKIP_CHANNELS=1 tsx src/entry.ts --dev gateway --reset",
     "tui": "tsx src/entry.ts tui",
     "tui:dev": "CLAWDBOT_PROFILE=dev tsx src/entry.ts tui",
     "clawdbot:rpc": "tsx src/entry.ts agent --mode rpc --json",
@@ -134,6 +140,7 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
+    "@agentclientprotocol/sdk": "0.13.0",
     "@buape/carbon": "0.0.0-beta-20260110172854",
     "@clack/prompts": "^0.11.0",
     "@grammyjs/runner": "^2.0.3",
@@ -174,10 +181,12 @@
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
+    "sqlite-vec": "0.1.7-alpha.2",
     "tar": "^7.5.3",
     "tslog": "^4.10.2",
     "undici": "^7.18.2",
     "ws": "^8.19.0",
+    "yaml": "^2.8.2",
     "zod": "^4.3.5"
   },
   "optionalDependencies": {

@@ -76,12 +76,13 @@ Disable with:
 
 **DM access**
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` accepts AAD object IDs or UPNs.
+- `channels.msteams.allowFrom` accepts AAD object IDs, UPNs, or display names (resolved at startup when Graph allows).
 
 **Group access**
-- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`).
+- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
 - `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
 - Set `groupPolicy: "open"` to allow any member (still mention‑gated by default).
+- To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
 Example:
 ```json5
@@ -90,6 +91,32 @@ Example:
     msteams: {
       groupPolicy: "allowlist",
       groupAllowFrom: ["user@org.com"]
+    }
+  }
+}
+```
+
+**Teams + channel allowlist**
+- Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
+- Keys can be team IDs or names; channel keys can be conversation IDs or names.
+- When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention‑gated).
+- The configure wizard accepts `Team/Channel` entries and stores them for you.
+- On startup, Clawdbot resolves team/channel and user allowlist names to IDs (when Graph permissions allow)
+  and logs the mapping; unresolved entries are kept as typed.
+
+Example:
+```json5
+{
+  channels: {
+    msteams: {
+      groupPolicy: "allowlist",
+      teams: {
+        "My Team": {
+          channels: {
+            "General": { requireMention: true }
+          }
+        }
+      }
     }
   }
 }

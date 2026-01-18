@@ -1,18 +1,9 @@
-import path from "node:path";
-
 import type { ClawdbotConfig } from "../../../config/config.js";
-import { resolveGatewayLaunchAgentLabel } from "../../../daemon/constants.js";
-import { resolveGatewayProgramArguments } from "../../../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../../../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
-import { buildServiceEnvironment } from "../../../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
@@ -41,40 +32,25 @@ export async function installGatewayDaemonNonInteractive(params: {
   }
 
   const service = resolveGatewayService();
-  const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
-  const nodePath = await resolvePreferredNodePath({
-    env: process.env,
-    runtime: daemonRuntimeRaw,
-  });
-  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-    port,
-    dev: devMode,
-    runtime: daemonRuntimeRaw,
-    nodePath,
-  });
-
-  if (daemonRuntimeRaw === "node") {
-    const systemNode = await resolveSystemNodeInfo({ env: process.env });
-    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) runtime.log(warning);
-  }
-
-  const environment = buildServiceEnvironment({
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
     token: gatewayToken,
-    launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-        : undefined,
+    runtime: daemonRuntimeRaw,
+    warn: (message) => runtime.log(message),
   });
-  await service.install({
-    env: process.env,
-    stdout: process.stdout,
-    programArguments,
-    workingDirectory,
-    environment,
-  });
+  try {
+    await service.install({
+      env: process.env,
+      stdout: process.stdout,
+      programArguments,
+      workingDirectory,
+      environment,
+    });
+  } catch (err) {
+    runtime.error(`Gateway daemon install failed: ${String(err)}`);
+    runtime.log(gatewayInstallErrorHint());
+    return;
+  }
   await ensureSystemdUserLingerNonInteractive({ runtime });
 }

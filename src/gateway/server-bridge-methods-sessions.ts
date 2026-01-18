@@ -9,6 +9,7 @@ import {
 import { loadConfig } from "../config/config.js";
 import {
   resolveMainSessionKeyFromConfig,
+  snapshotSessionOrigin,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
@@ -205,6 +206,7 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
           contextTokens: entry?.contextTokens,
           sendPolicy: entry?.sendPolicy,
           label: entry?.label,
+          origin: snapshotSessionOrigin(entry),
           displayName: entry?.displayName,
           chatType: entry?.chatType,
           channel: entry?.channel,

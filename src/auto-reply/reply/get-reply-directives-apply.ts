@@ -110,6 +110,20 @@ export async function applyInlineDirectiveOverrides(params: {
       hasVerboseDirective: false,
       hasReasoningDirective: false,
       hasElevatedDirective: false,
+      hasExecDirective: false,
+      execHost: undefined,
+      execSecurity: undefined,
+      execAsk: undefined,
+      execNode: undefined,
+      rawExecHost: undefined,
+      rawExecSecurity: undefined,
+      rawExecAsk: undefined,
+      rawExecNode: undefined,
+      hasExecOptions: false,
+      invalidExecHost: false,
+      invalidExecSecurity: false,
+      invalidExecAsk: false,
+      invalidExecNode: false,
       hasStatusDirective: false,
       hasModelDirective: false,
       hasQueueDirective: false,
@@ -206,6 +220,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasVerboseDirective ||
     directives.hasReasoningDirective ||
     directives.hasElevatedDirective ||
+    directives.hasExecDirective ||
     directives.hasModelDirective ||
     directives.hasQueueDirective ||
     directives.hasStatusDirective;

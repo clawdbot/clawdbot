@@ -163,7 +163,8 @@ export const registerTelegramNativeCommands = ({
           }
 
           if (isGroup && useAccessGroups) {
-            const groupPolicy = telegramCfg.groupPolicy ?? "open";
+            const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+            const groupPolicy = telegramCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
             if (groupPolicy === "disabled") {
               await bot.api.sendMessage(chatId, "Telegram group commands are disabled.");
               return;

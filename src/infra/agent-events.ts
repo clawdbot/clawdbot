@@ -51,8 +51,14 @@ export function resetAgentRunContextForTest() {
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const nextSeq = (seqByRun.get(event.runId) ?? 0) + 1;
   seqByRun.set(event.runId, nextSeq);
+  const context = runContextById.get(event.runId);
+  const sessionKey =
+    typeof event.sessionKey === "string" && event.sessionKey.trim()
+      ? event.sessionKey
+      : context?.sessionKey;
   const enriched: AgentEventPayload = {
     ...event,
+    sessionKey,
     seq: nextSeq,
     ts: Date.now(),
   };

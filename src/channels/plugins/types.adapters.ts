@@ -263,6 +263,26 @@ export type ChannelDirectoryAdapter = {
   }) => Promise<ChannelDirectoryEntry[]>;
 };
 
+export type ChannelResolveKind = "user" | "group";
+
+export type ChannelResolveResult = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+  name?: string;
+  note?: string;
+};
+
+export type ChannelResolverAdapter = {
+  resolveTargets: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    inputs: string[];
+    kind: ChannelResolveKind;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelResolveResult[]>;
+};
+
 export type ChannelElevatedAdapter = {
   allowFromFallback?: (params: {
     cfg: ClawdbotConfig;

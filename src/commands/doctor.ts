@@ -233,7 +233,11 @@ export async function doctorCommand(
 
   noteWorkspaceStatus(cfg);
 
-  const { healthOk } = await checkGatewayHealth({ runtime, cfg });
+  const { healthOk } = await checkGatewayHealth({
+    runtime,
+    cfg,
+    timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
+  });
   await maybeRepairGatewayDaemon({
     cfg,
     runtime,

@@ -68,15 +68,14 @@ export type ListenOptions = CommonOptions & {
   prefix?: string;
 };
 
-// Channel plugin config types
-export const DEFAULT_ACCOUNT_ID = "default";
-
 export type ZalouserAccountConfig = {
   enabled?: boolean;
   name?: string;
   profile?: string;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groups?: Record<string, { allow?: boolean; enabled?: boolean }>;
   messagePrefix?: string;
 };
 
@@ -87,16 +86,10 @@ export type ZalouserConfig = {
   defaultAccount?: string;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groups?: Record<string, { allow?: boolean; enabled?: boolean }>;
   messagePrefix?: string;
   accounts?: Record<string, ZalouserAccountConfig>;
-};
-
-export type CoreConfig = {
-  channels?: {
-    zalouser?: ZalouserConfig;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
 };
 
 export type ResolvedZalouserAccount = {

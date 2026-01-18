@@ -59,6 +59,7 @@ import {
   runUpdate,
   saveConfig,
   updateConfigFormValue,
+  removeConfigFormValue,
 } from "./controllers/config";
 import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
@@ -292,7 +293,29 @@ export function renderApp(state: AppViewState) {
           ? renderNodes({
               loading: state.nodesLoading,
               nodes: state.nodes,
+              configForm: state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null),
+              configLoading: state.configLoading,
+              configSaving: state.configSaving,
+              configDirty: state.configFormDirty,
+              configFormMode: state.configFormMode,
               onRefresh: () => loadNodes(state),
+              onLoadConfig: () => loadConfig(state),
+              onBindDefault: (nodeId) => {
+                if (nodeId) {
+                  updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
+                } else {
+                  removeConfigFormValue(state, ["tools", "exec", "node"]);
+                }
+              },
+              onBindAgent: (agentIndex, nodeId) => {
+                const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
+                if (nodeId) {
+                  updateConfigFormValue(state, basePath, nodeId);
+                } else {
+                  removeConfigFormValue(state, basePath);
+                }
+              },
+              onSaveBindings: () => saveConfig(state),
             })
           : nothing}
 

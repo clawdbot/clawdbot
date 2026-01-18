@@ -3,8 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
-import { runCommandWithTimeout } from "../../../../src/process/exec.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { runCommandWithTimeout, type RuntimeEnv } from "clawdbot/plugin-sdk";
 
 const MATRIX_SDK_PACKAGE = "matrix-js-sdk";
 

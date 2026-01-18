@@ -1,9 +1,13 @@
+import type { AllowlistMatch } from "../channels/allowlist-match.js";
+
 export type NormalizedAllowFrom = {
   entries: string[];
   entriesLower: string[];
   hasWildcard: boolean;
   hasEntries: boolean;
 };
+
+export type AllowFromMatch = AllowlistMatch<"wildcard" | "id" | "username">;
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
   const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
@@ -39,4 +43,28 @@ export const isSenderAllowed = (params: {
   const username = senderUsername?.toLowerCase();
   if (!username) return false;
   return allow.entriesLower.some((entry) => entry === username || entry === `@${username}`);
+};
+
+export const resolveSenderAllowMatch = (params: {
+  allow: NormalizedAllowFrom;
+  senderId?: string;
+  senderUsername?: string;
+}): AllowFromMatch => {
+  const { allow, senderId, senderUsername } = params;
+  if (allow.hasWildcard) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
+  }
+  if (!allow.hasEntries) return { allowed: false };
+  if (senderId && allow.entries.includes(senderId)) {
+    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  }
+  const username = senderUsername?.toLowerCase();
+  if (!username) return { allowed: false };
+  const entry = allow.entriesLower.find(
+    (candidate) => candidate === username || candidate === `@${username}`,
+  );
+  if (entry) {
+    return { allowed: true, matchKey: entry, matchSource: "username" };
+  }
+  return { allowed: false };
 };

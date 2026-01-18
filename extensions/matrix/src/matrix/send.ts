@@ -1,14 +1,21 @@
 import type { AccountDataEvents, MatrixClient } from "matrix-js-sdk";
 import { EventType, MsgType, RelationType } from "matrix-js-sdk";
 import type {
-  ReactionEventContent,
   RoomMessageEventContent,
+  ReactionEventContent,
 } from "matrix-js-sdk/lib/@types/events.js";
 
-import { chunkMarkdownText, resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import type { PollInput } from "../../../../src/polls.js";
-import { loadWebMedia } from "../../../../src/web/media.js";
+import {
+  chunkMarkdownText,
+  getImageMetadata,
+  isVoiceCompatibleAudio,
+  loadConfig,
+  loadWebMedia,
+  mediaKindFromMime,
+  type PollInput,
+  resolveTextChunkLimit,
+  resizeToJpeg,
+} from "clawdbot/plugin-sdk";
 import { getActiveMatrixClient } from "./active-client.js";
 import {
   createMatrixClient,
@@ -47,6 +54,8 @@ export type MatrixSendOpts = {
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
+  audioAsVoice?: boolean;
 };
 
 function ensureNodeRuntime() {
@@ -69,6 +78,12 @@ function normalizeTarget(raw: string): string {
     throw new Error("Matrix target is required (room:<id> or #alias)");
   }
   return trimmed;
+}
+
+function normalizeThreadId(raw?: string | number | null): string | null {
+  if (raw === undefined || raw === null) return null;
+  const trimmed = String(raw).trim();
+  return trimmed ? trimmed : null;
 }
 
 async function resolveDirectRoomId(client: MatrixClient, userId: string): Promise<string> {
@@ -119,6 +134,18 @@ export async function resolveMatrixRoomId(
   return target;
 }
 
+type MatrixImageInfo = {
+  w?: number;
+  h?: number;
+  thumbnail_url?: string;
+  thumbnail_info?: {
+    w: number;
+    h: number;
+    mimetype: string;
+    size: number;
+  };
+};
+
 function buildMediaContent(params: {
   msgtype: MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File;
   body: string;
@@ -127,8 +154,24 @@ function buildMediaContent(params: {
   mimetype?: string;
   size: number;
   relation?: MatrixReplyRelation;
+  isVoice?: boolean;
+  durationMs?: number;
+  imageInfo?: MatrixImageInfo;
 }): RoomMessageEventContent {
-  const info = { mimetype: params.mimetype, size: params.size };
+  const info: Record<string, unknown> = { mimetype: params.mimetype, size: params.size };
+  if (params.durationMs !== undefined) {
+    info.duration = params.durationMs;
+  }
+  if (params.imageInfo) {
+    if (params.imageInfo.w) info.w = params.imageInfo.w;
+    if (params.imageInfo.h) info.h = params.imageInfo.h;
+    if (params.imageInfo.thumbnail_url) {
+      info.thumbnail_url = params.imageInfo.thumbnail_url;
+      if (params.imageInfo.thumbnail_info) {
+        info.thumbnail_info = params.imageInfo.thumbnail_info;
+      }
+    }
+  }
   const base: MatrixMessageContent = {
     msgtype: params.msgtype,
     body: params.body,
@@ -136,6 +179,12 @@ function buildMediaContent(params: {
     info,
     url: params.url,
   };
+  if (params.isVoice) {
+    base["org.matrix.msc3245.voice"] = {};
+    base["org.matrix.msc1767.audio"] = {
+      duration: params.durationMs,
+    };
+  }
   if (params.relation) {
     base["m.relates_to"] = params.relation;
   }
@@ -169,6 +218,75 @@ function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined
   const trimmed = replyToId?.trim();
   if (!trimmed) return undefined;
   return { "m.in_reply_to": { event_id: trimmed } };
+}
+
+function resolveMatrixMsgType(
+  contentType?: string,
+  fileName?: string,
+): MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File {
+  const kind = mediaKindFromMime(contentType ?? "");
+  switch (kind) {
+    case "image":
+      return MsgType.Image;
+    case "audio":
+      return MsgType.Audio;
+    case "video":
+      return MsgType.Video;
+    default:
+      return MsgType.File;
+  }
+}
+
+function resolveMatrixVoiceDecision(opts: {
+  wantsVoice: boolean;
+  contentType?: string;
+  fileName?: string;
+}): { useVoice: boolean } {
+  if (!opts.wantsVoice) return { useVoice: false };
+  if (isVoiceCompatibleAudio({ contentType: opts.contentType, fileName: opts.fileName })) {
+    return { useVoice: true };
+  }
+  return { useVoice: false };
+}
+
+const THUMBNAIL_MAX_SIDE = 800;
+const THUMBNAIL_QUALITY = 80;
+
+async function prepareImageInfo(params: {
+  buffer: Buffer;
+  client: MatrixClient;
+}): Promise<MatrixImageInfo | undefined> {
+  const meta = await getImageMetadata(params.buffer).catch(() => null);
+  if (!meta) return undefined;
+  const imageInfo: MatrixImageInfo = { w: meta.width, h: meta.height };
+  const maxDim = Math.max(meta.width, meta.height);
+  if (maxDim > THUMBNAIL_MAX_SIDE) {
+    try {
+      const thumbBuffer = await resizeToJpeg({
+        buffer: params.buffer,
+        maxSide: THUMBNAIL_MAX_SIDE,
+        quality: THUMBNAIL_QUALITY,
+        withoutEnlargement: true,
+      });
+      const thumbMeta = await getImageMetadata(thumbBuffer).catch(() => null);
+      const thumbUri = await params.client.uploadContent(thumbBuffer as MatrixUploadContent, {
+        type: "image/jpeg",
+        name: "thumbnail.jpg",
+      });
+      imageInfo.thumbnail_url = thumbUri.content_uri;
+      if (thumbMeta) {
+        imageInfo.thumbnail_info = {
+          w: thumbMeta.width,
+          h: thumbMeta.height,
+          mimetype: "image/jpeg",
+          size: thumbBuffer.byteLength,
+        };
+      }
+    } catch {
+      // Thumbnail generation failed, continue without it
+    }
+  }
+  return imageInfo;
 }
 
 async function uploadFile(
@@ -238,14 +356,10 @@ export async function sendMessageMatrix(
     const textLimit = resolveTextChunkLimit(cfg, "matrix");
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
     const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
-    const rawThreadId = opts.threadId;
-    const threadId =
-      rawThreadId !== undefined && rawThreadId !== null
-        ? String(rawThreadId).trim()
-        : null;
+    const threadId = normalizeThreadId(opts.threadId);
     const relation = threadId ? undefined : buildReplyRelation(opts.replyToId);
     const sendContent = (content: RoomMessageEventContent) =>
-      client.sendMessage(roomId, threadId ?? undefined, content);
+      threadId ? client.sendMessage(roomId, threadId, content) : client.sendMessage(roomId, content);
 
     let lastMessageId = "";
     if (opts.mediaUrl) {
@@ -255,9 +369,17 @@ export async function sendMessageMatrix(
         contentType: media.contentType,
         filename: media.fileName,
       });
-      const msgtype = MsgType.File;
+      const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
+      const { useVoice } = resolveMatrixVoiceDecision({
+        wantsVoice: opts.audioAsVoice === true,
+        contentType: media.contentType,
+        fileName: media.fileName,
+      });
+      const msgtype = useVoice ? MsgType.Audio : baseMsgType;
+      const isImage = msgtype === MsgType.Image;
+      const imageInfo = isImage ? await prepareImageInfo({ buffer: media.buffer, client }) : undefined;
       const [firstChunk, ...rest] = chunks;
-      const body = firstChunk ?? media.fileName ?? "(file)";
+      const body = useVoice ? "Voice message" : (firstChunk ?? media.fileName ?? "(file)");
       const content = buildMediaContent({
         msgtype,
         body,
@@ -266,10 +388,13 @@ export async function sendMessageMatrix(
         mimetype: media.contentType,
         size: media.buffer.byteLength,
         relation,
+        isVoice: useVoice,
+        imageInfo,
       });
       const response = await sendContent(content);
       lastMessageId = response.event_id ?? lastMessageId;
-      for (const chunk of rest) {
+      const textChunks = useVoice ? chunks : rest;
+      for (const chunk of textChunks) {
         const text = chunk.trim();
         if (!text) continue;
         const followup = buildTextContent(text);
@@ -316,17 +441,19 @@ export async function sendPollMatrix(
   try {
     const roomId = await resolveMatrixRoomId(client, to);
     const pollContent = buildPollStartContent(poll);
-    const rawThreadId = opts.threadId;
-    const threadId =
-      rawThreadId !== undefined && rawThreadId !== null
-        ? String(rawThreadId).trim()
-        : null;
-    const response = await client.sendEvent(
-      roomId,
-      threadId ?? undefined,
-      M_POLL_START as EventType.RoomMessage,
-      pollContent as unknown as RoomMessageEventContent,
-    );
+    const threadId = normalizeThreadId(opts.threadId);
+    const response = threadId
+      ? await client.sendEvent(
+          roomId,
+          threadId,
+          M_POLL_START,
+          pollContent,
+        )
+      : await client.sendEvent(
+          roomId,
+          M_POLL_START,
+          pollContent,
+        );
 
     return {
       eventId: response.event_id ?? "unknown",

@@ -57,7 +57,7 @@ extension ChannelsStore {
             return value
         }
         guard path.count >= 2 else { return nil }
-        if case .key("channels") = path[0], case .key(_) = path[1] {
+        if case .key("channels") = path[0], case .key = path[1] {
             let fallbackPath = Array(path.dropFirst())
             return valueAtPath(self.configDraft, path: fallbackPath)
         }
@@ -93,10 +93,10 @@ private func valueAtPath(_ root: Any, path: ConfigPath) -> Any? {
     var current: Any? = root
     for segment in path {
         switch segment {
-        case .key(let key):
+        case let .key(key):
             guard let dict = current as? [String: Any] else { return nil }
             current = dict[key]
-        case .index(let index):
+        case let .index(index):
             guard let array = current as? [Any], array.indices.contains(index) else { return nil }
             current = array[index]
         }
@@ -107,7 +107,7 @@ private func valueAtPath(_ root: Any, path: ConfigPath) -> Any? {
 private func setValue(_ root: inout Any, path: ConfigPath, value: Any?) {
     guard let segment = path.first else { return }
     switch segment {
-    case .key(let key):
+    case let .key(key):
         var dict = root as? [String: Any] ?? [:]
         if path.count == 1 {
             if let value {
@@ -122,7 +122,7 @@ private func setValue(_ root: inout Any, path: ConfigPath, value: Any?) {
         setValue(&child, path: Array(path.dropFirst()), value: value)
         dict[key] = child
         root = dict
-    case .index(let index):
+    case let .index(index):
         var array = root as? [Any] ?? []
         if index >= array.count {
             array.append(contentsOf: repeatElement(NSNull() as Any, count: index - array.count + 1))

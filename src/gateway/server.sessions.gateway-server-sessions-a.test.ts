@@ -202,6 +202,7 @@ describe("gateway server sessions", () => {
         verboseLevel?: string;
         sendPolicy?: string;
         label?: string;
+        displayName?: string;
       }>;
     }>(ws, "sessions.list", {});
     expect(list2.ok).toBe(true);
@@ -211,6 +212,7 @@ describe("gateway server sessions", () => {
     expect(main2?.sendPolicy).toBe("deny");
     const subagent = list2.payload?.sessions.find((s) => s.key === "agent:main:subagent:one");
     expect(subagent?.label).toBe("Briefing");
+    expect(subagent?.displayName).toBe("Briefing");
 
     const clearedVerbose = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
       key: "agent:main:main",

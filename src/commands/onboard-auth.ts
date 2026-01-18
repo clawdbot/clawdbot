@@ -4,6 +4,8 @@ export {
 } from "../agents/synthetic-models.js";
 export {
   applyAuthProfileConfig,
+  applyKimiCodeConfig,
+  applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpenrouterConfig,
@@ -31,6 +33,7 @@ export {
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -43,10 +46,14 @@ export {
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
+  buildKimiCodeModelDefinition,
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
+  KIMI_CODE_BASE_URL,
+  KIMI_CODE_MODEL_ID,
+  KIMI_CODE_MODEL_REF,
   MINIMAX_API_BASE_URL,
   MINIMAX_HOSTED_MODEL_ID,
   MINIMAX_HOSTED_MODEL_REF,

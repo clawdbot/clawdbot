@@ -2,10 +2,134 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-4
+
+### Changes
+- macOS: switch PeekabooBridge integration to the tagged Swift Package Manager release (no submodule).
+- macOS: stop syncing Peekaboo as a git submodule in postinstall.
+- Swabble: use the tagged Commander Swift package release.
+- CLI: add `clawdbot acp client` interactive ACP harness for debugging.
+
+### Fixes
+- Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
+- macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
+
+## 2026.1.18-3
+
+### Changes
+- Exec: add host/security/ask routing for gateway + node exec.
+- Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node).
+- macOS: migrate exec approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists and skill auto-allow toggle.
+- macOS: add approvals socket UI server + node exec lifecycle events.
+- Nodes: add headless node host (`clawdbot node start`) for `system.run`/`system.which`.
+- Nodes: add node daemon service install/status/start/stop/restart.
+- Bridge: add `skills.bins` RPC to support node host auto-allow skill bins.
+- Slash commands: replace `/cost` with `/usage off|tokens|full` to control per-response usage footer; `/usage` no longer aliases `/status`. (Supersedes #1140) — thanks @Nachx639.
+- Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) — thanks @austinm911.
+- Agents: auto-inject local image references for vision models and avoid reloading history images. (#1098) — thanks @tyler6204.
+- Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
+- Docs: add node host CLI + update exec approvals/bridge protocol docs. https://docs.clawd.bot/cli/node
+- ACP: add experimental ACP support for IDE integrations (`clawdbot acp`). Thanks @visionik.
+
+### Fixes
+- Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
+- Tools: return a companion-app-required message when node exec is requested with no paired node.
+- Streaming: emit assistant deltas for OpenAI-compatible SSE chunks. (#1147) — thanks @alauppe.
+- Model fallback: treat timeout aborts as failover while preserving user aborts. (#1137) — thanks @cheeeee.
+
+## 2026.1.18-2
+
+### Fixes
+- Tests: stabilize plugin SDK resolution and embedded agent timeouts.
+
+## 2026.1.17-6
+
+### Changes
+- Plugins: add exclusive plugin slots with a dedicated memory slot selector.
+- Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
+- Docs: document plugin slots and memory plugin behavior.
+- Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
+- Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
+- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime.
+- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime.
+
+## 2026.1.17-5
+
+### Changes
+- Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback.
+- Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
+- CLI: surface FTS + embedding cache state in `clawdbot memory status`.
+- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default.
+- Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
+- Tools: centralize plugin tool policy helpers.
+- Commands: add `/subagents info` and show sub-agent counts in `/status`.
+- Docs: clarify plugin agent tool configuration. https://docs.clawd.bot/plugins/agent-tools
+
+### Fixes
+- Voice call: include request query in Twilio webhook verification when publicUrl is set. (#864)
+
+## 2026.1.18-1
+
+### Changes
+- Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
+- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers.
+- Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
+- Memory: add `--verbose` logging for memory status + batch indexing details.
+- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2).
+- macOS: add per-agent exec approvals with allowlists, skill CLI auto-allow, and settings UI.
+- Docs: add exec approvals guide and link from tools index. https://docs.clawd.bot/tools/exec-approvals
+
+### Fixes
+- Memory: apply OpenAI batch defaults even without explicit remote config.
+- macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
+- Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
+- Discord: only emit slow listener warnings after 30s.
+## 2026.1.17-3
+
+### Changes
+- Memory: add OpenAI Batch API indexing for embeddings when configured.
+- Memory: enable OpenAI batch indexing by default for OpenAI embeddings.
+
+### Fixes
+- Memory: retry transient 5xx errors (Cloudflare) during embedding indexing.
+
+## 2026.1.17-2
+
+### Changes
+
+### Fixes
+- Tools: show exec elevated flag before the command and keep it outside markdown in tool summaries.
+- Memory: parallelize embedding indexing with rate-limit retries.
+- Memory: split overly long lines to keep embeddings under token limits.
+- Memory: skip empty chunks to avoid invalid embedding inputs.
+- Sessions: fall back to session labels when listing display names. (#1124) — thanks @abdaraxus.
+- Discord: inherit parent channel allowlists for thread slash commands and reactions. (#1123) — thanks @thewilloftheshadow.
+
+## 2026.1.17-1
+
+### Changes
+- Telegram: enrich forwarded message context with normalized origin details + legacy fallback. (#1090) — thanks @sleontenko.
+- macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
+- macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
+- CLI: surface update availability in `clawdbot status`.
+- CLI: add `clawdbot memory status --deep/--index` probes.
+- CLI: add playful update completion quips.
+
+### Fixes
+- Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
+- Hooks: parse multi-line/YAML frontmatter metadata blocks (JSON5-friendly). (#1114) — thanks @sebslight.
+- CLI: add WSL2/systemd unavailable hints in daemon status/doctor output.
+- Windows: install gateway scheduled task as the current user; show friendly guidance instead of failing on access denied.
+- Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
+- Memory: probe sqlite-vec availability in `clawdbot memory status`.
+- Memory: split embedding batches to avoid OpenAI token limits during indexing.
+- Telegram: preserve hidden text_link URLs by expanding entities in inbound text. (#1118) — thanks @sleontenko.
+
 ## 2026.1.16-2
 
 ### Changes
 - CLI: stamp build commit into dist metadata so banners show the commit in npm installs.
+- CLI: close memory manager after memory commands to avoid hanging processes. (#1127) — thanks @NicholasSpisak.
 
 ## 2026.1.16-1
 
@@ -43,6 +167,8 @@ Docs: https://docs.clawd.bot
 - Status: trim `/status` to current-provider usage only and drop the OAuth/token block.
 - Directory: unify `clawdbot directory` across channels and plugin channels.
 - UI: allow deleting sessions from the Control UI.
+- Memory: add sqlite-vec vector acceleration with CLI status details.
+- Memory: add experimental session transcript indexing for memory_search (opt-in via memorySearch.experimental.sessionMemory + sources).
 - Skills: add user-invocable skill commands and expanded skill command registration.
 - Telegram: default reaction level to minimal and enable reaction notifications by default.
 - Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
@@ -61,6 +187,10 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - macOS: drain subprocess pipes before waiting to avoid deadlocks. (#1081) — thanks @thesash.
 - Verbose: wrap tool summaries/output in markdown only for markdown-capable channels.
+- Tools: include provider/session context in elevated exec denial errors.
+- Tools: normalize exec tool alias naming in tool error logs.
+- Logging: reuse shared ANSI stripping to keep console capture lint-clean.
+- Logging: prefix nested agent output with session/run/channel context.
 - Telegram: accept tg/group/telegram prefixes + topic targets for inline button validation. (#1072) — thanks @danielz1z.
 - Telegram: split long captions into follow-up messages.
 - Config: block startup on invalid config, preserve best-effort doctor config, and keep rolling config backups. (#1083) — thanks @mukhtharcm.

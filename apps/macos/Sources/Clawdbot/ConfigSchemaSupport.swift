@@ -133,7 +133,7 @@ struct ConfigSchemaNode {
         for segment in path {
             guard let node = current else { return nil }
             switch segment {
-            case .key(let key):
+            case let .key(key):
                 if node.schemaType == "object" {
                     if let next = node.properties[key] {
                         current = next
@@ -174,7 +174,7 @@ func hintForPath(_ path: ConfigPath, hints: [String: ConfigUiHint]) -> ConfigUiH
         var match = true
         for (index, seg) in segments.enumerated() {
             let hintSegment = hintSegments[index]
-            if hintSegment != "*" && hintSegment != seg {
+            if hintSegment != "*", hintSegment != seg {
                 match = false
                 break
             }
@@ -196,7 +196,7 @@ func isSensitivePath(_ path: ConfigPath) -> Bool {
 func pathKey(_ path: ConfigPath) -> String {
     path.compactMap { segment -> String? in
         switch segment {
-        case .key(let key): return key
+        case let .key(key): return key
         case .index: return nil
         }
     }

@@ -1,5 +1,5 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { appendMatchMetadata, asString, isRecord } from "./shared.js";
 
 type TelegramAccountStatus = {
   accountId?: unknown;
@@ -17,6 +17,8 @@ type TelegramGroupMembershipAuditSummary = {
     ok?: boolean;
     status?: string | null;
     error?: string | null;
+    matchKey?: string;
+    matchSource?: string;
   }>;
 };
 
@@ -53,7 +55,9 @@ function readTelegramGroupMembershipAuditSummary(
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
           const status = asString(entry.status) ?? null;
           const error = asString(entry.error) ?? null;
-          return { chatId, ok, status, error };
+          const matchKey = asString(entry.matchKey) ?? undefined;
+          const matchSource = asString(entry.matchSource) ?? undefined;
+          return { chatId, ok, status, error, matchKey, matchSource };
         })
         .filter(Boolean) as TelegramGroupMembershipAuditSummary["groups"])
     : undefined;
@@ -107,11 +111,15 @@ export function collectTelegramStatusIssues(
       if (group.ok === true) continue;
       const status = group.status ? ` status=${group.status}` : "";
       const err = group.error ? `: ${group.error}` : "";
+      const baseMessage = `Group ${group.chatId} not reachable by bot.${status}${err}`;
       issues.push({
         channel: "telegram",
         accountId,
         kind: "runtime",
-        message: `Group ${group.chatId} not reachable by bot.${status}${err}`,
+        message: appendMatchMetadata(baseMessage, {
+          matchKey: group.matchKey,
+          matchSource: group.matchSource,
+        }),
         fix: "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
       });
     }

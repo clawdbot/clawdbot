@@ -1,3 +1,4 @@
+import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { loadConfig } from "../../../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { formatError } from "../../session.js";
@@ -20,6 +21,7 @@ export function updateLastRouteInBackground(params: {
   channel: "whatsapp";
   to: string;
   accountId?: string;
+  ctx?: MsgContext;
   warn: (obj: unknown, msg: string) => void;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
@@ -33,6 +35,7 @@ export function updateLastRouteInBackground(params: {
       to: params.to,
       accountId: params.accountId,
     },
+    ctx: params.ctx,
   }).catch((err) => {
     params.warn(
       {

@@ -20,10 +20,9 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.1.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.8.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
+        .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
         .package(path: "../shared/ClawdbotKit"),
         .package(path: "../../Swabble"),
-        .package(path: "../../Peekaboo/Core/PeekabooCore"),
-        .package(path: "../../Peekaboo/Core/PeekabooAutomationKit"),
     ],
     targets: [
         .target(
@@ -61,8 +60,8 @@ let package = Package(
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Sparkle", package: "Sparkle"),
-                .product(name: "PeekabooBridge", package: "PeekabooCore"),
-                .product(name: "PeekabooAutomationKit", package: "PeekabooAutomationKit"),
+                .product(name: "PeekabooBridge", package: "Peekaboo"),
+                .product(name: "PeekabooAutomationKit", package: "Peekaboo"),
             ],
             exclude: [
                 "Resources/Info.plist",

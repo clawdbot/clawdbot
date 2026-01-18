@@ -1,10 +1,12 @@
-import { addWildcardAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import {
+  addWildcardAllowFrom,
+  formatDocsLink,
+  promptChannelAccessConfig,
+  type ChannelOnboardingAdapter,
+  type ChannelOnboardingDmPolicy,
+  type WizardPrompter,
+} from "clawdbot/plugin-sdk";
+import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import type { CoreConfig, DmPolicy } from "./types.js";
@@ -78,6 +80,35 @@ async function promptMatrixAllowFrom(params: {
           policy: "allowlist",
           allowFrom: unique,
         },
+      },
+    },
+  };
+}
+
+function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist" | "disabled") {
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      matrix: {
+        ...cfg.channels?.matrix,
+        enabled: true,
+        groupPolicy,
+      },
+    },
+  };
+}
+
+function setMatrixRoomAllowlist(cfg: CoreConfig, roomKeys: string[]) {
+  const rooms = Object.fromEntries(roomKeys.map((key) => [key, { allow: true }]));
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      matrix: {
+        ...cfg.channels?.matrix,
+        enabled: true,
+        rooms,
       },
     },
   };
@@ -252,6 +283,75 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (forceAllowFrom) {
       next = await promptMatrixAllowFrom({ cfg: next, prompter });
+    }
+
+    const accessConfig = await promptChannelAccessConfig({
+      prompter,
+      label: "Matrix rooms",
+      currentPolicy: next.channels?.matrix?.groupPolicy ?? "allowlist",
+      currentEntries: Object.keys(next.channels?.matrix?.rooms ?? {}),
+      placeholder: "!roomId:server, #alias:server, Project Room",
+      updatePrompt: Boolean(next.channels?.matrix?.rooms),
+    });
+    if (accessConfig) {
+      if (accessConfig.policy !== "allowlist") {
+        next = setMatrixGroupPolicy(next, accessConfig.policy);
+      } else {
+        let roomKeys = accessConfig.entries;
+        if (accessConfig.entries.length > 0) {
+          try {
+            const resolvedIds: string[] = [];
+            const unresolved: string[] = [];
+            for (const entry of accessConfig.entries) {
+              const trimmed = entry.trim();
+              if (!trimmed) continue;
+              const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
+              if (cleaned.startsWith("!") && cleaned.includes(":")) {
+                resolvedIds.push(cleaned);
+                continue;
+              }
+              const matches = await listMatrixDirectoryGroupsLive({
+                cfg: next,
+                query: trimmed,
+                limit: 10,
+              });
+              const exact = matches.find(
+                (match) => (match.name ?? "").toLowerCase() === trimmed.toLowerCase(),
+              );
+              const best = exact ?? matches[0];
+              if (best?.id) {
+                resolvedIds.push(best.id);
+              } else {
+                unresolved.push(entry);
+              }
+            }
+            roomKeys = [
+              ...resolvedIds,
+              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
+            ];
+            if (resolvedIds.length > 0 || unresolved.length > 0) {
+              await prompter.note(
+                [
+                  resolvedIds.length > 0 ? `Resolved: ${resolvedIds.join(", ")}` : undefined,
+                  unresolved.length > 0
+                    ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
+                    : undefined,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+                "Matrix rooms",
+              );
+            }
+          } catch (err) {
+            await prompter.note(
+              `Room lookup failed; keeping entries as typed. ${String(err)}`,
+              "Matrix rooms",
+            );
+          }
+        }
+        next = setMatrixGroupPolicy(next, "allowlist");
+        next = setMatrixRoomAllowlist(next, roomKeys);
+      }
     }
 
     return { cfg: next };

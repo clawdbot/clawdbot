@@ -5,7 +5,7 @@ const VERBOSE_LEVELS = ["on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off"];
 const ACTIVATION_LEVELS = ["mention", "always"];
-const TOGGLE = ["on", "off"];
+const USAGE_FOOTER_LEVELS = ["off", "tokens", "full"];
 
 export type ParsedCommand = {
   name: string;
@@ -73,10 +73,10 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
         })),
     },
     {
-      name: "cost",
+      name: "usage",
       description: "Toggle per-response usage line",
       getArgumentCompletions: (prefix) =>
-        TOGGLE.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
+        USAGE_FOOTER_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
           value,
           label: value,
         })),
@@ -129,7 +129,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     `/think <${thinkLevels}>`,
     "/verbose <on|off>",
     "/reasoning <on|off>",
-    "/cost <on|off>",
+    "/usage <off|tokens|full>",
     "/elevated <on|off>",
     "/elev <on|off>",
     "/activation <mention|always>",

@@ -52,13 +52,21 @@ When the audit prints findings, treat this as a priority order:
 5. **Plugins/extensions**: only load what you explicitly trust.
 6. **Model choice**: prefer modern, instruction-hardened models for any bot with tools.
 
+## Local session logs live on disk
+
+Clawdbot stores session transcripts on disk under `~/.clawdbot/agents/<agentId>/sessions/*.jsonl`.
+This is required for session continuity and (optionally) session memory indexing, but it also means
+**any process/user with filesystem access can read those logs**. Treat disk access as the trust
+boundary and lock down permissions on `~/.clawdbot` (see the audit section below). If you need
+stronger isolation between agents, run them under separate OS users or separate hosts.
+
 ## Node execution (system.run)
 
 If a macOS node is paired, the Gateway can invoke `system.run` on that node. This is **remote code execution** on the Mac:
 
 - Requires node pairing (approval + token).
-- Controlled on the Mac via **Settings → "Node Run Commands"**: "Always Ask" (default), "Always Allow", or "Never".
-- If you don’t want remote execution, set the policy to "Never" and remove node pairing for that Mac.
+- Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
+- If you don’t want remote execution, set security to **deny** and remove node pairing for that Mac.
 
 ## Dynamic skills (watcher / remote nodes)
 

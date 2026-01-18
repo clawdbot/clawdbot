@@ -381,6 +381,8 @@ export function listSessionsFromStore(params: {
       const groupChannel = entry?.groupChannel;
       const space = entry?.space;
       const id = parsed?.id;
+      const origin = entry?.origin;
+      const originLabel = origin?.label;
       const displayName =
         entry?.displayName ??
         (channel
@@ -392,7 +394,9 @@ export function listSessionsFromStore(params: {
               id,
               key,
             })
-          : undefined);
+          : undefined) ??
+        entry?.label ??
+        originLabel;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       return {
         key,
@@ -404,6 +408,7 @@ export function listSessionsFromStore(params: {
         groupChannel,
         space,
         chatType: entry?.chatType,
+        origin,
         updatedAt,
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,

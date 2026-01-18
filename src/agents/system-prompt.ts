@@ -183,7 +183,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
     session_status:
-      "Show a /status-equivalent status card (usage/cost + Reasoning/Verbose/Elevated); optional per-session model override",
+      "Show a /status-equivalent status card (usage + Reasoning/Verbose/Elevated); optional per-session model override",
     image: "Analyze an image with the configured image model",
   };
 

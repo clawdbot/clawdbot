@@ -283,7 +283,7 @@ export async function fetchMinimaxUsage(
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
-    "https://api.minimax.io/v1/coding_plan/remains",
+    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
     {
       method: "GET",
       headers: {

@@ -89,7 +89,11 @@ export async function runWebHeartbeatOnce(opts: {
         sessionKey: sessionSnapshot.key,
         sessionId: sessionId ?? sessionSnapshot.entry?.sessionId ?? null,
         sessionFresh: sessionSnapshot.fresh,
-        idleMinutes: sessionSnapshot.idleMinutes,
+        resetMode: sessionSnapshot.resetPolicy.mode,
+        resetAtHour: sessionSnapshot.resetPolicy.atHour,
+        idleMinutes: sessionSnapshot.resetPolicy.idleMinutes ?? null,
+        dailyResetAt: sessionSnapshot.dailyResetAt ?? null,
+        idleExpiresAt: sessionSnapshot.idleExpiresAt ?? null,
       },
       "heartbeat session snapshot",
     );

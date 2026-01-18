@@ -152,6 +152,7 @@ By default, the bot only responds to mentions in groups (`@botname` or patterns 
 ```
 
 **Important:** Setting `channels.telegram.groups` creates an **allowlist** - only listed groups (or `"*"`) will be accepted.
+Forum topics inherit their parent group config (allowFrom, requireMention, skills, prompts) unless you add per-topic overrides under `channels.telegram.groups.<groupId>.topics.<topicId>`.
 
 To allow all groups with always-respond:
 ```json5
@@ -216,6 +217,7 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - General topic (thread id `1`) is special: message sends omit `message_thread_id` (Telegram rejects it), but typing indicators still include it.
 - Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
 - Topic-specific configuration is available under `channels.telegram.groups.<chatId>.topics.<threadId>` (skills, allowlists, auto-reply, system prompts, disable).
+- Topic configs inherit group settings (requireMention, allowlists, skills, prompts, enabled) unless overridden per topic.
 
 Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps the DM session key unchanged, but still uses the thread id for replies/draft streaming when it is present.
 
@@ -359,6 +361,19 @@ To force a voice note bubble in agent replies, include this tag anywhere in the 
 - `[[audio_as_voice]]` — send audio as a voice note instead of a file.
 
 The tag is stripped from the delivered text. Other channels ignore this tag.
+
+For message tool sends, set `asVoice: true` with a voice-compatible audio `media` URL
+(`message` is optional when media is present):
+
+```json5
+{
+  "action": "send",
+  "channel": "telegram",
+  "to": "123456789",
+  "media": "https://example.com/voice.ogg",
+  "asVoice": true
+}
+```
 
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.

@@ -6,9 +6,11 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
 } from "../../../slack/accounts.js";
+import { resolveSlackChannelAllowlist } from "../../../slack/resolve-channels.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import { promptChannelAccessConfig } from "./channel-access.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "slack" as const;
@@ -119,6 +121,83 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
     ].join("\n"),
     "Slack socket mode tokens",
   );
+}
+
+function setSlackGroupPolicy(
+  cfg: ClawdbotConfig,
+  accountId: string,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): ClawdbotConfig {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        slack: {
+          ...cfg.channels?.slack,
+          enabled: true,
+          groupPolicy,
+        },
+      },
+    };
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      slack: {
+        ...cfg.channels?.slack,
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.slack?.accounts,
+          [accountId]: {
+            ...cfg.channels?.slack?.accounts?.[accountId],
+            enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
+            groupPolicy,
+          },
+        },
+      },
+    },
+  };
+}
+
+function setSlackChannelAllowlist(
+  cfg: ClawdbotConfig,
+  accountId: string,
+  channelKeys: string[],
+): ClawdbotConfig {
+  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        slack: {
+          ...cfg.channels?.slack,
+          enabled: true,
+          channels,
+        },
+      },
+    };
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      slack: {
+        ...cfg.channels?.slack,
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.slack?.accounts,
+          [accountId]: {
+            ...cfg.channels?.slack?.accounts?.[accountId],
+            enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
+            channels,
+          },
+        },
+      },
+    },
+  };
 }
 
 const dmPolicy: ChannelOnboardingDmPolicy = {
@@ -281,6 +360,63 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
             },
           },
         };
+      }
+    }
+
+    const accessConfig = await promptChannelAccessConfig({
+      prompter,
+      label: "Slack channels",
+      currentPolicy: resolvedAccount.config.groupPolicy ?? "allowlist",
+      currentEntries: Object.entries(resolvedAccount.config.channels ?? {})
+        .filter(([, value]) => value?.allow !== false && value?.enabled !== false)
+        .map(([key]) => key),
+      placeholder: "#general, #private, C123",
+      updatePrompt: Boolean(resolvedAccount.config.channels),
+    });
+    if (accessConfig) {
+      if (accessConfig.policy !== "allowlist") {
+        next = setSlackGroupPolicy(next, slackAccountId, accessConfig.policy);
+      } else {
+        let keys = accessConfig.entries;
+        const accountWithTokens = resolveSlackAccount({
+          cfg: next,
+          accountId: slackAccountId,
+        });
+        if (accountWithTokens.botToken && accessConfig.entries.length > 0) {
+          try {
+            const resolved = await resolveSlackChannelAllowlist({
+              token: accountWithTokens.botToken,
+              entries: accessConfig.entries,
+            });
+            const resolvedKeys = resolved
+              .filter((entry) => entry.resolved && entry.id)
+              .map((entry) => entry.id as string);
+            const unresolved = resolved
+              .filter((entry) => !entry.resolved)
+              .map((entry) => entry.input);
+            keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+            if (resolvedKeys.length > 0 || unresolved.length > 0) {
+              await prompter.note(
+                [
+                  resolvedKeys.length > 0 ? `Resolved: ${resolvedKeys.join(", ")}` : undefined,
+                  unresolved.length > 0
+                    ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
+                    : undefined,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+                "Slack channels",
+              );
+            }
+          } catch (err) {
+            await prompter.note(
+              `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+              "Slack channels",
+            );
+          }
+        }
+        next = setSlackGroupPolicy(next, slackAccountId, "allowlist");
+        next = setSlackChannelAllowlist(next, slackAccountId, keys);
       }
     }
 

@@ -1,4 +1,5 @@
 import {
+  ChannelType,
   type Client,
   MessageCreateListener,
   MessageReactionAddListener,
@@ -8,18 +9,20 @@ import {
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-duration.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   normalizeDiscordSlug,
-  resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
+import { resolveDiscordChannelInfo } from "./message-utils.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
-type Logger = ReturnType<typeof import("../../logging.js").getChildLogger>;
+type Logger = ReturnType<typeof import("../../logging.js").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
@@ -27,7 +30,8 @@ export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) 
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
-const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 1000;
+const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
+const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
 function logSlowDiscordListener(params: {
   logger: Logger | undefined;
@@ -40,12 +44,15 @@ function logSlowDiscordListener(params: {
     decimals: 1,
     unit: "seconds",
   });
-  const message = `[EventQueue] Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
-  if (params.logger?.warn) {
-    params.logger.warn(message);
-  } else {
-    console.warn(message);
-  }
+  const message = `Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
+  const logger = params.logger ?? discordEventQueueLog;
+  logger.warn("Slow listener detected", {
+    listener: params.listener,
+    event: params.event,
+    durationMs: params.durationMs,
+    duration,
+    consoleMessage: message,
+  });
 }
 
 export function registerDiscordListener(listeners: Array<object>, listener: object) {
@@ -184,11 +191,34 @@ async function handleDiscordReactionEvent(params: {
     if (!channel) return;
     const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelConfig = resolveDiscordChannelConfig({
+    const channelType = "type" in channel ? channel.type : undefined;
+    const isThreadChannel =
+      channelType === ChannelType.PublicThread ||
+      channelType === ChannelType.PrivateThread ||
+      channelType === ChannelType.AnnouncementThread;
+    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    let parentName: string | undefined;
+    let parentSlug = "";
+    if (isThreadChannel) {
+      if (!parentId) {
+        const channelInfo = await resolveDiscordChannelInfo(client, data.channel_id);
+        parentId = channelInfo?.parentId;
+      }
+      if (parentId) {
+        const parentInfo = await resolveDiscordChannelInfo(client, parentId);
+        parentName = parentInfo?.name;
+        parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
+      }
+    }
+    const channelConfig = resolveDiscordChannelConfigWithFallback({
       guildInfo,
       channelId: data.channel_id,
       channelName,
       channelSlug,
+      parentId,
+      parentName,
+      parentSlug,
+      scope: isThreadChannel ? "thread" : "channel",
     });
     if (channelConfig?.allowed === false) return;
 

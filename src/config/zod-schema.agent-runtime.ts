@@ -183,6 +183,24 @@ export const AgentToolsSchema = z
         allowFrom: ElevatedAllowFromSchema,
       })
       .optional(),
+    exec: z
+      .object({
+        host: z.enum(["sandbox", "gateway", "node"]).optional(),
+        security: z.enum(["deny", "allowlist", "full"]).optional(),
+        ask: z.enum(["off", "on-miss", "always"]).optional(),
+        node: z.string().optional(),
+        backgroundMs: z.number().int().positive().optional(),
+        timeoutSec: z.number().int().positive().optional(),
+        cleanupMs: z.number().int().positive().optional(),
+        notifyOnExit: z.boolean().optional(),
+        applyPatch: z
+          .object({
+            enabled: z.boolean().optional(),
+            allowModels: z.array(z.string()).optional(),
+          })
+          .optional(),
+      })
+      .optional(),
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -194,12 +212,27 @@ export const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
+    experimental: z
+      .object({
+        sessionMemory: z.boolean().optional(),
+      })
+      .optional(),
     provider: z.union([z.literal("openai"), z.literal("local")]).optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
         apiKey: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
+        batch: z
+          .object({
+            enabled: z.boolean().optional(),
+            wait: z.boolean().optional(),
+            concurrency: z.number().int().positive().optional(),
+            pollIntervalMs: z.number().int().nonnegative().optional(),
+            timeoutMinutes: z.number().int().positive().optional(),
+          })
+          .optional(),
       })
       .optional(),
     fallback: z.union([z.literal("openai"), z.literal("none")]).optional(),
@@ -214,6 +247,12 @@ export const MemorySearchSchema = z
       .object({
         driver: z.literal("sqlite").optional(),
         path: z.string().optional(),
+        vector: z
+          .object({
+            enabled: z.boolean().optional(),
+            extensionPath: z.string().optional(),
+          })
+          .optional(),
       })
       .optional(),
     chunking: z
@@ -235,6 +274,20 @@ export const MemorySearchSchema = z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
+        hybrid: z
+          .object({
+            enabled: z.boolean().optional(),
+            vectorWeight: z.number().min(0).max(1).optional(),
+            textWeight: z.number().min(0).max(1).optional(),
+            candidateMultiplier: z.number().int().positive().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
+    cache: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxEntries: z.number().int().positive().optional(),
       })
       .optional(),
   })
@@ -321,6 +374,10 @@ export const ToolsSchema = z
       .optional(),
     exec: z
       .object({
+        host: z.enum(["sandbox", "gateway", "node"]).optional(),
+        security: z.enum(["deny", "allowlist", "full"]).optional(),
+        ask: z.enum(["off", "on-miss", "always"]).optional(),
+        node: z.string().optional(),
         backgroundMs: z.number().int().positive().optional(),
         timeoutSec: z.number().int().positive().optional(),
         cleanupMs: z.number().int().positive().optional(),

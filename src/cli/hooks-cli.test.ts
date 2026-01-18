@@ -10,6 +10,7 @@ const report: HookStatusReport = {
       name: "session-memory",
       description: "Save session context to memory",
       source: "clawdbot-bundled",
+      pluginId: undefined,
       filePath: "/tmp/hooks/session-memory/HOOK.md",
       baseDir: "/tmp/hooks/session-memory",
       handlerPath: "/tmp/hooks/session-memory/handler.js",
@@ -20,6 +21,7 @@ const report: HookStatusReport = {
       always: false,
       disabled: false,
       eligible: true,
+      managedByPlugin: false,
       requirements: {
         bins: [],
         anyBins: [],
@@ -50,5 +52,50 @@ describe("hooks cli formatting", () => {
   it("labels hooks status output", () => {
     const output = formatHooksCheck(report, {});
     expect(output).toContain("Hooks Status");
+  });
+
+  it("labels plugin-managed hooks with plugin id", () => {
+    const pluginReport: HookStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedHooksDir: "/tmp/hooks",
+      hooks: [
+        {
+          name: "plugin-hook",
+          description: "Hook from plugin",
+          source: "clawdbot-plugin",
+          pluginId: "voice-call",
+          filePath: "/tmp/hooks/plugin-hook/HOOK.md",
+          baseDir: "/tmp/hooks/plugin-hook",
+          handlerPath: "/tmp/hooks/plugin-hook/handler.js",
+          hookKey: "plugin-hook",
+          emoji: "🔗",
+          homepage: undefined,
+          events: ["command:new"],
+          always: false,
+          disabled: false,
+          eligible: true,
+          managedByPlugin: true,
+          requirements: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+          missing: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+          configChecks: [],
+          install: [],
+        },
+      ],
+    };
+
+    const output = formatHooksList(pluginReport, {});
+    expect(output).toContain("plugin:voice-call");
   });
 });

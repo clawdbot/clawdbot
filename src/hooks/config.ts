@@ -73,11 +73,12 @@ export function shouldIncludeHook(params: {
   const { entry, config, eligibility } = params;
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
+  const pluginManaged = entry.hook.source === "clawdbot-plugin";
   const osList = entry.clawdbot?.os ?? [];
   const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   // Check if explicitly disabled
-  if (hookConfig?.enabled === false) return false;
+  if (!pluginManaged && hookConfig?.enabled === false) return false;
 
   // Check OS requirement
   if (

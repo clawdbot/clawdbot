@@ -214,9 +214,10 @@ enum CommandResolver {
         subcommand: String,
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
+        configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil) -> [String]
     {
-        let settings = self.connectionSettings(defaults: defaults)
+        let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, let ssh = self.sshNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
@@ -264,12 +265,14 @@ enum CommandResolver {
         subcommand: String,
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
+        configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil) -> [String]
     {
         self.clawdbotNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
+            configRoot: configRoot,
             searchPaths: searchPaths)
     }
 
@@ -384,8 +387,11 @@ enum CommandResolver {
         let cliPath: String
     }
 
-    static func connectionSettings(defaults: UserDefaults = .standard) -> RemoteSettings {
-        let root = ClawdbotConfigFile.loadDict()
+    static func connectionSettings(
+        defaults: UserDefaults = .standard,
+        configRoot: [String: Any]? = nil) -> RemoteSettings
+    {
+        let root = configRoot ?? ClawdbotConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
         let target = defaults.string(forKey: remoteTargetKey) ?? ""
         let identity = defaults.string(forKey: remoteIdentityKey) ?? ""

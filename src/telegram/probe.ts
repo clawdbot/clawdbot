@@ -7,7 +7,13 @@ export type TelegramProbe = {
   status?: number | null;
   error?: string | null;
   elapsedMs: number;
-  bot?: { id?: number | null; username?: string | null };
+  bot?: {
+    id?: number | null;
+    username?: string | null;
+    canJoinGroups?: boolean | null;
+    canReadAllGroupMessages?: boolean | null;
+    supportsInlineQueries?: boolean | null;
+  };
   webhook?: { url?: string | null; hasCustomCert?: boolean | null };
 };
 
@@ -46,7 +52,13 @@ export async function probeTelegram(
     const meJson = (await meRes.json()) as {
       ok?: boolean;
       description?: string;
-      result?: { id?: number; username?: string };
+      result?: {
+        id?: number;
+        username?: string;
+        can_join_groups?: boolean;
+        can_read_all_group_messages?: boolean;
+        supports_inline_queries?: boolean;
+      };
     };
     if (!meRes.ok || !meJson?.ok) {
       result.status = meRes.status;
@@ -57,6 +69,16 @@ export async function probeTelegram(
     result.bot = {
       id: meJson.result?.id ?? null,
       username: meJson.result?.username ?? null,
+      canJoinGroups:
+        typeof meJson.result?.can_join_groups === "boolean" ? meJson.result?.can_join_groups : null,
+      canReadAllGroupMessages:
+        typeof meJson.result?.can_read_all_group_messages === "boolean"
+          ? meJson.result?.can_read_all_group_messages
+          : null,
+      supportsInlineQueries:
+        typeof meJson.result?.supports_inline_queries === "boolean"
+          ? meJson.result?.supports_inline_queries
+          : null,
     };
 
     // Try to fetch webhook info, but don't fail health if it errors.

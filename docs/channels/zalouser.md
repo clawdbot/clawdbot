@@ -66,10 +66,35 @@ clawdbot directory groups list --channel zalouser --query "work"
 
 ## Access control (DMs)
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
+`channels.zalouser.allowFrom` accepts user IDs or names (resolved at startup when available).
 
 Approve via:
 - `clawdbot pairing list zalouser`
 - `clawdbot pairing approve zalouser <code>`
+
+## Group access (optional)
+- Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
+- Restrict to an allowlist with:
+  - `channels.zalouser.groupPolicy = "allowlist"`
+  - `channels.zalouser.groups` (keys are group IDs or names)
+- Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
+- The configure wizard can prompt for group allowlists.
+- On startup, Clawdbot resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+
+Example:
+```json5
+{
+  channels: {
+    zalouser: {
+      groupPolicy: "allowlist",
+      groups: {
+        "123456789": { allow: true },
+        "Work Chat": { allow: true }
+      }
+    }
+  }
+}
+```
 
 ## Multi-account
 Accounts map to zca profiles. Example:

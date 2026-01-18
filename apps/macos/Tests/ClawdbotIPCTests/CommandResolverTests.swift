@@ -34,7 +34,7 @@ import Testing
         let clawdbotPath = tmp.appendingPathComponent("node_modules/.bin/clawdbot")
         try self.makeExec(at: clawdbotPath)
 
-        let cmd = CommandResolver.clawdbotCommand(subcommand: "gateway", defaults: defaults)
+        let cmd = CommandResolver.clawdbotCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
         #expect(cmd.prefix(2).elementsEqual([clawdbotPath.path, "gateway"]))
     }
 
@@ -55,6 +55,7 @@ import Testing
         let cmd = CommandResolver.clawdbotCommand(
             subcommand: "rpc",
             defaults: defaults,
+            configRoot: [:],
             searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
 
         #expect(cmd.count >= 3)
@@ -75,7 +76,7 @@ import Testing
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
         try self.makeExec(at: pnpmPath)
 
-        let cmd = CommandResolver.clawdbotCommand(subcommand: "rpc", defaults: defaults)
+        let cmd = CommandResolver.clawdbotCommand(subcommand: "rpc", defaults: defaults, configRoot: [:])
 
         #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "clawdbot", "rpc"]))
     }
@@ -93,7 +94,8 @@ import Testing
         let cmd = CommandResolver.clawdbotCommand(
             subcommand: "health",
             extraArgs: ["--json", "--timeout", "5"],
-            defaults: defaults)
+            defaults: defaults,
+            configRoot: [:])
 
         #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "clawdbot", "health", "--json"]))
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
@@ -114,7 +116,11 @@ import Testing
         defaults.set("/tmp/id_ed25519", forKey: remoteIdentityKey)
         defaults.set("/srv/clawdbot", forKey: remoteProjectRootKey)
 
-        let cmd = CommandResolver.clawdbotCommand(subcommand: "status", extraArgs: ["--json"], defaults: defaults)
+        let cmd = CommandResolver.clawdbotCommand(
+            subcommand: "status",
+            extraArgs: ["--json"],
+            defaults: defaults,
+            configRoot: [:])
 
         #expect(cmd.first == "/usr/bin/ssh")
         #expect(cmd.contains("clawd@example.com"))
@@ -126,6 +132,29 @@ import Testing
             #expect(script.contains("status"))
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
+        }
+    }
+
+    @Test func configRootLocalOverridesRemoteDefaults() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("clawd@example.com:2222", forKey: remoteTargetKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let clawdbotPath = tmp.appendingPathComponent("node_modules/.bin/clawdbot")
+        try self.makeExec(at: clawdbotPath)
+
+        let cmd = CommandResolver.clawdbotCommand(
+            subcommand: "daemon",
+            defaults: defaults,
+            configRoot: ["gateway": ["mode": "local"]])
+
+        #expect(cmd.first == clawdbotPath.path)
+        #expect(cmd.count >= 2)
+        if cmd.count >= 2 {
+            #expect(cmd[1] == "daemon")
         }
     }
 }

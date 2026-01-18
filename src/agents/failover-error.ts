@@ -1,5 +1,7 @@
 import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
 
+const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
+
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
   readonly provider?: string;
@@ -64,6 +66,11 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
+function getErrorName(err: unknown): string {
+  if (!err || typeof err !== "object") return "";
+  return "name" in err ? String(err.name) : "";
+}
+
 function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") return undefined;
   const candidate = (err as { code?: unknown }).code;
@@ -86,6 +93,22 @@ function getErrorMessage(err: unknown): string {
   return "";
 }
 
+function hasTimeoutHint(err: unknown): boolean {
+  if (!err) return false;
+  if (getErrorName(err) === "TimeoutError") return true;
+  const message = getErrorMessage(err);
+  return Boolean(message && TIMEOUT_HINT_RE.test(message));
+}
+
+export function isTimeoutError(err: unknown): boolean {
+  if (hasTimeoutHint(err)) return true;
+  if (!err || typeof err !== "object") return false;
+  if (getErrorName(err) !== "AbortError") return false;
+  const cause = "cause" in err ? (err as { cause?: unknown }).cause : undefined;
+  const reason = "reason" in err ? (err as { reason?: unknown }).reason : undefined;
+  return hasTimeoutHint(cause) || hasTimeoutHint(reason);
+}
+
 export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
   if (isFailoverError(err)) return err.reason;
 
@@ -99,6 +122,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
     return "timeout";
   }
+  if (isTimeoutError(err)) return "timeout";
 
   const message = getErrorMessage(err);
   if (!message) return null;

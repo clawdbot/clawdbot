@@ -57,7 +57,7 @@ describe("normalizeLegacyConfigValues", () => {
     ]);
   });
 
-  it("copies legacy ack reaction when whatsapp auth exists", () => {
+  it("does not add whatsapp config when only auth exists (issue #900)", () => {
     const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
     writeCreds(credsDir);
 
@@ -65,14 +65,11 @@ describe("normalizeLegacyConfigValues", () => {
       messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
 
-    expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-      emoji: "👀",
-      direct: false,
-      group: "mentions",
-    });
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
   });
 
-  it("copies legacy ack reaction when legacy auth exists", () => {
+  it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
     const credsPath = path.join(tempOauthDir ?? "", "creds.json");
     fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
 
@@ -80,14 +77,11 @@ describe("normalizeLegacyConfigValues", () => {
       messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
 
-    expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-      emoji: "👀",
-      direct: false,
-      group: "mentions",
-    });
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
   });
 
-  it("copies legacy ack reaction when non-default auth exists", () => {
+  it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
     const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
     writeCreds(credsDir);
 
@@ -95,11 +89,8 @@ describe("normalizeLegacyConfigValues", () => {
       messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
 
-    expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-      emoji: "👀",
-      direct: false,
-      group: "mentions",
-    });
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
   });
 
   it("copies legacy ack reaction when authDir override exists", () => {

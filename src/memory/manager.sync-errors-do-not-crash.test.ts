@@ -24,7 +24,7 @@ vi.mock("./embeddings.js", () => {
         model: "mock-embed",
         embedQuery: async () => [0, 0, 0],
         embedBatch: async () => {
-          throw new Error("openai embeddings failed: 429 insufficient_quota");
+          throw new Error("openai embeddings failed: 400 bad request");
         },
       },
     }),
@@ -79,12 +79,17 @@ describe("memory manager sync failures", () => {
     expect(result.manager).not.toBeNull();
     if (!result.manager) throw new Error("manager missing");
     manager = result.manager;
+    const syncSpy = vi.spyOn(manager, "sync");
 
     // Call the internal scheduler directly; it uses fire-and-forget sync.
     (manager as unknown as { scheduleWatchSync: () => void }).scheduleWatchSync();
 
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
+    await vi.runOnlyPendingTimersAsync();
+    const syncPromise = syncSpy.mock.results[0]?.value as Promise<void> | undefined;
+    vi.useRealTimers();
+    if (syncPromise) {
+      await syncPromise.catch(() => undefined);
+    }
 
     process.off("unhandledRejection", handler);
     expect(unhandled).toHaveLength(0);

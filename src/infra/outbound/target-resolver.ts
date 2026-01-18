@@ -16,6 +16,8 @@ import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
 
 export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
+export type ResolveAmbiguousMode = "error" | "best" | "first";
+
 export type ResolvedMessagingTarget = {
   to: string;
   kind: TargetResolveKind;
@@ -249,6 +251,21 @@ async function getDirectoryEntries(params: {
   return liveEntries;
 }
 
+function pickAmbiguousMatch(
+  entries: ChannelDirectoryEntry[],
+  mode: ResolveAmbiguousMode,
+): ChannelDirectoryEntry | null {
+  if (entries.length === 0) return null;
+  if (mode === "first") return entries[0] ?? null;
+  const ranked = entries.map((entry) => ({
+    entry,
+    rank: typeof entry.rank === "number" ? entry.rank : 0,
+  }));
+  const bestRank = Math.max(...ranked.map((item) => item.rank));
+  const best = ranked.find((item) => item.rank === bestRank)?.entry;
+  return best ?? entries[0] ?? null;
+}
+
 export async function resolveMessagingTarget(params: {
   cfg: ClawdbotConfig;
   channel: ChannelId;
@@ -256,6 +273,7 @@ export async function resolveMessagingTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
+  resolveAmbiguous?: ResolveAmbiguousMode;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
@@ -314,6 +332,21 @@ export async function resolveMessagingTarget(params: {
     };
   }
   if (match.kind === "ambiguous") {
+    const mode = params.resolveAmbiguous ?? "error";
+    if (mode !== "error") {
+      const best = pickAmbiguousMatch(match.entries, mode);
+      if (best) {
+        return {
+          ok: true,
+          target: {
+            to: normalizeDirectoryEntryId(params.channel, best),
+            kind,
+            display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
+            source: "directory",
+          },
+        };
+      }
+    }
     return {
       ok: false,
       error: ambiguousTargetError(providerLabel, raw, hint),

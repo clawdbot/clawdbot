@@ -7,6 +7,7 @@ import {
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+import { resolveDiscordChannelId } from "../../../../discord/targets.js";
 
 const providerId = "discord";
 
@@ -22,7 +23,9 @@ export async function handleDiscordMessageAction(
   const { action, params, cfg } = ctx;
 
   const resolveChannelId = () =>
-    readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
+    resolveDiscordChannelId(
+      readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true }),
+    );
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });

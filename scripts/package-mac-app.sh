@@ -216,6 +216,19 @@ else
   echo "WARN: ClawdbotKit resource bundle not found at $CLAWDBOTKIT_BUNDLE (continuing)" >&2
 fi
 
+echo "📦 Copying Textual resources"
+TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
+TEXTUAL_BUNDLE="$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle"
+if [ ! -d "$TEXTUAL_BUNDLE" ]; then
+  TEXTUAL_BUNDLE="$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
+fi
+if [ -d "$TEXTUAL_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
+  cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
+else
+  echo "WARN: Textual resource bundle not found in $TEXTUAL_BUNDLE_DIR (continuing)" >&2
+fi
+
 echo "⏹  Stopping any running Clawdbot"
 killall -q Clawdbot 2>/dev/null || true
 

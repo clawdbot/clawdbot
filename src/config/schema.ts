@@ -140,6 +140,10 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
+  "tools.exec.host": "Exec Host",
+  "tools.exec.security": "Exec Security",
+  "tools.exec.ask": "Exec Ask",
+  "tools.exec.node": "Exec Node Binding",
   "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
@@ -168,14 +172,20 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
+  "agents.defaults.memorySearch.sources": "Memory Search Sources",
+  "agents.defaults.memorySearch.experimental.sessionMemory":
+    "Memory Search Session Index (Experimental)",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
+  "agents.defaults.memorySearch.remote.batch.concurrency": "Remote Batch Concurrency",
   "agents.defaults.memorySearch.model": "Memory Search Model",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
+  "agents.defaults.memorySearch.store.vector.enabled": "Memory Search Vector Index",
+  "agents.defaults.memorySearch.store.vector.extensionPath": "Memory Search Vector Extension Path",
   "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
   "agents.defaults.memorySearch.chunking.overlap": "Memory Chunk Overlap Tokens",
   "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
@@ -184,6 +194,13 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
+  "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
+  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
+    "Memory Search Hybrid Candidate Multiplier",
+  "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
+  "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -264,6 +281,8 @@ const FIELD_LABELS: Record<string, string> = {
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
   "plugins.load.paths": "Plugin Load Paths",
+  "plugins.slots": "Plugin Slots",
+  "plugins.slots.memory": "Memory Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.config": "Plugin Config",
@@ -351,18 +370,48 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+  "agents.defaults.memorySearch.sources":
+    'Sources to index for memory search (default: ["memory"]; add "sessions" to include session transcripts).',
+  "agents.defaults.memorySearch.experimental.sessionMemory":
+    "Enable experimental session transcript indexing for memory search (default: false).",
   "agents.defaults.memorySearch.provider": 'Embedding provider ("openai" or "local").',
   "agents.defaults.memorySearch.remote.baseUrl":
     "Custom OpenAI-compatible base URL (e.g. for Gemini/OpenRouter proxies).",
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
+  "agents.defaults.memorySearch.remote.batch.enabled":
+    "Enable OpenAI Batch API for memory embeddings (default: true).",
+  "agents.defaults.memorySearch.remote.batch.wait":
+    "Wait for OpenAI batch completion when indexing (default: true).",
+  "agents.defaults.memorySearch.remote.batch.concurrency":
+    "Max concurrent OpenAI batch jobs for memory indexing (default: 2).",
+  "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
+    "Polling interval in ms for OpenAI batch status (default: 2000).",
+  "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
+    "Timeout in minutes for OpenAI batch indexing (default: 60).",
   "agents.defaults.memorySearch.local.modelPath":
     "Local GGUF model path or hf: URI (node-llama-cpp).",
   "agents.defaults.memorySearch.fallback":
     'Fallback to OpenAI when local embeddings fail ("openai" or "none").',
   "agents.defaults.memorySearch.store.path":
     "SQLite index path (default: ~/.clawdbot/memory/{agentId}.sqlite).",
+  "agents.defaults.memorySearch.store.vector.enabled":
+    "Enable sqlite-vec extension for vector search (default: true).",
+  "agents.defaults.memorySearch.store.vector.extensionPath":
+    "Optional override path to sqlite-vec extension library (.dylib/.so/.dll).",
+  "agents.defaults.memorySearch.query.hybrid.enabled":
+    "Enable hybrid BM25 + vector search for memory (default: true).",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight":
+    "Weight for vector similarity when merging results (0-1).",
+  "agents.defaults.memorySearch.query.hybrid.textWeight":
+    "Weight for BM25 text relevance when merging results (0-1).",
+  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
+    "Multiplier for candidate pool size (default: 4).",
+  "agents.defaults.memorySearch.cache.enabled":
+    "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
+  "agents.defaults.memorySearch.cache.maxEntries":
+    "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
     "Lazy sync: reindex on first search after a change.",
   "agents.defaults.memorySearch.sync.watch": "Watch memory files for changes (chokidar).",
@@ -370,6 +419,9 @@ const FIELD_HELP: Record<string, string> = {
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
+  "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
+  "plugins.slots.memory":
+    'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.entries": "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
   "plugins.entries.*.enabled": "Overrides plugin enable/disable for this entry (restart required).",
   "plugins.entries.*.config": "Plugin-defined config payload (schema is provided by the plugin).",

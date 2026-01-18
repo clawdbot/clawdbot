@@ -11,6 +11,7 @@ Manage agent hooks (event-driven automations for commands like `/new`, `/reset`,
 
 Related:
 - Hooks: [Hooks](/hooks)
+- Plugin hooks: [Plugins](/plugin#plugin-hooks)
 
 ## List All Hooks
 
@@ -28,11 +29,12 @@ List all discovered hooks from workspace, managed, and bundled directories.
 **Example output:**
 
 ```
-Hooks (2/2 ready)
+Hooks (3/3 ready)
 
 Ready:
   📝 command-logger ✓ - Log all command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new command is issued
+  😈 soul-evil ✓ - Swap injected SOUL content during a purge window or by random chance
 ```
 
 **Example (verbose):**
@@ -117,6 +119,9 @@ clawdbot hooks enable <name>
 ```
 
 Enable a specific hook by adding it to your config (`~/.clawdbot/config.json`).
+
+**Note:** Hooks managed by plugins show `plugin:<id>` in `clawdbot hooks list` and
+can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
 - `<name>`: Hook name (e.g., `session-memory`)
@@ -256,3 +261,15 @@ grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/hooks#command-logger)
+
+### soul-evil
+
+Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
+
+**Enable:**
+
+```bash
+clawdbot hooks enable soul-evil
+```
+
+**See:** [SOUL Evil Hook](/hooks/soul-evil)

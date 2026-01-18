@@ -160,7 +160,11 @@ Example:
   session: {
     scope: "per-sender",
     resetTriggers: ["/new", "/reset"],
-    idleMinutes: 10080
+    reset: {
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 10080
+    }
   }
 }
 ```

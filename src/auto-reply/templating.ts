@@ -44,6 +44,13 @@ export type MsgContext = {
   ReplyToId?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
+  ForwardedFrom?: string;
+  ForwardedFromType?: string;
+  ForwardedFromId?: string;
+  ForwardedFromUsername?: string;
+  ForwardedFromTitle?: string;
+  ForwardedFromSignature?: string;
+  ForwardedDate?: number;
   ThreadStarterBody?: string;
   ThreadLabel?: string;
   MediaPath?: string;

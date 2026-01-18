@@ -2,7 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
+
+type SanitizeSessionHistory =
+  typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
+let sanitizeSessionHistory: SanitizeSessionHistory;
 
 // Mock dependencies
 vi.mock("./pi-embedded-helpers.js", async () => {
@@ -26,7 +29,7 @@ describe("sanitizeSessionHistory", () => {
 
   const mockMessages: AgentMessage[] = [{ role: "user", content: "hello" }];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
     vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     // Default mock implementation
@@ -34,6 +37,8 @@ describe("sanitizeSessionHistory", () => {
       if (!msgs) return [];
       return [...msgs, { role: "system", content: "downgraded" }];
     });
+    vi.resetModules();
+    ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
   });
 
   it("should downgrade history for Google models if provider is not google-antigravity", async () => {

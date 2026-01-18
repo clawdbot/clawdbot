@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { makeMissingToolResult } from "./session-transcript-repair.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ToolCall = { id: string; name?: string };
 
@@ -110,6 +111,13 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
     }
 
     const result = originalAppend(sanitized as never);
+
+    const sessionFile = (
+      sessionManager as { getSessionFile?: () => string | null }
+    ).getSessionFile?.();
+    if (sessionFile) {
+      emitSessionTranscriptUpdate(sessionFile);
+    }
 
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {

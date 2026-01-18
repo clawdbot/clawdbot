@@ -130,7 +130,10 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "sessions") await loadSessions(host as unknown as ClawdbotApp);
   if (host.tab === "cron") await loadCron(host);
   if (host.tab === "skills") await loadSkills(host as unknown as ClawdbotApp);
-  if (host.tab === "nodes") await loadNodes(host as unknown as ClawdbotApp);
+  if (host.tab === "nodes") {
+    await loadNodes(host as unknown as ClawdbotApp);
+    await loadConfig(host as unknown as ClawdbotApp);
+  }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     scheduleChatScroll(

@@ -1,14 +1,4 @@
-import { readFileSync } from "node:fs";
-
-function isWSL(): boolean {
-  if (process.platform !== "linux") return false;
-  try {
-    const release = readFileSync("/proc/version", "utf8").toLowerCase();
-    return release.includes("microsoft") || release.includes("wsl");
-  } catch {
-    return false;
-  }
-}
+import { isWSLEnv } from "../infra/wsl.js";
 
 export function isRemoteEnvironment(): boolean {
   if (process.env.SSH_CLIENT || process.env.SSH_TTY || process.env.SSH_CONNECTION) {
@@ -23,7 +13,7 @@ export function isRemoteEnvironment(): boolean {
     process.platform === "linux" &&
     !process.env.DISPLAY &&
     !process.env.WAYLAND_DISPLAY &&
-    !isWSL()
+    !isWSLEnv()
   ) {
     return true;
   }

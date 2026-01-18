@@ -335,6 +335,7 @@ For fine-grained control, use these tags in agent responses:
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `agent:<agentId>:slack:channel:<channelId>` sessions.
 - Slash commands use `agent:<agentId>:slack:slash:<userId>` sessions (prefix configurable via `channels.slack.slashCommand.sessionPrefix`).
+- If Slack doesn’t provide `channel_type`, Clawdbot infers it from the channel ID prefix (`D`, `C`, `G`) and defaults to `channel` to keep session keys stable.
 - Native command registration uses `commands.native` (global default `"auto"` → Slack off) and can be overridden per-workspace with `channels.slack.commands.native`. Text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
 - Full command list + config: [Slash commands](/tools/slash-commands)
 
@@ -342,10 +343,19 @@ For fine-grained control, use these tags in agent responses:
 - Default: `channels.slack.dm.policy="pairing"` — unknown DM senders get a pairing code (expires after 1 hour).
 - Approve via: `clawdbot pairing approve slack <code>`.
 - To allow anyone: set `channels.slack.dm.policy="open"` and `channels.slack.dm.allowFrom=["*"]`.
+- `channels.slack.dm.allowFrom` accepts user IDs, @handles, or emails (resolved at startup when tokens allow).
 
 ## Group policy
 - `channels.slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).
 - `allowlist` requires channels to be listed in `channels.slack.channels`.
+ - If you only set `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` and never create a `channels.slack` section,
+   the runtime defaults `groupPolicy` to `open`. Add `channels.slack.groupPolicy`,
+   `channels.defaults.groupPolicy`, or a channel allowlist to lock it down.
+ - The configure wizard accepts `#channel` names and resolves them to IDs when possible
+   (public + private); if multiple matches exist, it prefers the active channel.
+ - On startup, Clawdbot resolves channel/user names in allowlists to IDs (when tokens allow)
+   and logs the mapping; unresolved entries are kept as typed.
+ - To allow **no channels**, set `channels.slack.groupPolicy: "disabled"` (or keep an empty allowlist).
 
 Channel options (`channels.slack.channels.<id>` or `channels.slack.channels.<name>`):
 - `allow`: allow/deny the channel when `groupPolicy="allowlist"`.

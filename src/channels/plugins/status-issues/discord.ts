@@ -1,5 +1,5 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { appendMatchMetadata, asString, isRecord } from "./shared.js";
 
 type DiscordIntentSummary = {
   messageContent?: "enabled" | "limited" | "disabled";
@@ -24,6 +24,8 @@ type DiscordPermissionsAuditSummary = {
     ok?: boolean;
     missing?: string[];
     error?: string | null;
+    matchKey?: string;
+    matchSource?: string;
   }>;
 };
 
@@ -72,11 +74,15 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
             ? entry.missing.map((v) => asString(v)).filter(Boolean)
             : undefined;
           const error = asString(entry.error) ?? null;
+          const matchKey = asString(entry.matchKey) ?? undefined;
+          const matchSource = asString(entry.matchSource) ?? undefined;
           return {
             channelId,
             ok,
             missing: missing?.length ? missing : undefined,
             error,
+            matchKey,
+            matchSource,
           };
         })
         .filter(Boolean) as DiscordPermissionsAuditSummary["channels"])
@@ -122,11 +128,15 @@ export function collectDiscordStatusIssues(
       if (channel.ok === true) continue;
       const missing = channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : "";
       const error = channel.error ? `: ${channel.error}` : "";
+      const baseMessage = `Channel ${channel.channelId} permission check failed.${missing}${error}`;
       issues.push({
         channel: "discord",
         accountId,
         kind: "permissions",
-        message: `Channel ${channel.channelId} permission check failed.${missing}${error}`,
+        message: appendMatchMetadata(baseMessage, {
+          matchKey: channel.matchKey,
+          matchSource: channel.matchSource,
+        }),
         fix: "Ensure the bot role can view + send in this channel (and that channel overrides don't deny it).",
       });
     }

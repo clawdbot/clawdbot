@@ -4,6 +4,11 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
+import {
+  isSystemdUnavailableDetail,
+  renderSystemdUnavailableHints,
+} from "../daemon/systemd-hints.js";
+import { isWSLEnv } from "../infra/wsl.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
@@ -54,6 +59,11 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
+  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
+    hints.push(...renderSystemdUnavailableHints({ wsl: isWSLEnv() }));
+    if (fileLog) hints.push(`File logs: ${fileLog}`);
+    return hints;
+  }
   if (runtime.cachedLabel && platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
     hints.push(

@@ -1,6 +1,11 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { coerceToFailoverError, describeFailoverError, isFailoverError } from "./failover-error.js";
+import {
+  coerceToFailoverError,
+  describeFailoverError,
+  isFailoverError,
+  isTimeoutError,
+} from "./failover-error.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -26,11 +31,16 @@ type FallbackAttempt = {
 
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
+  if (isFailoverError(err)) return false;
   const name = "name" in err ? String(err.name) : "";
   if (name === "AbortError") return true;
   const message =
     "message" in err && typeof err.message === "string" ? err.message.toLowerCase() : "";
   return message.includes("aborted");
+}
+
+function shouldRethrowAbort(err: unknown): boolean {
+  return isAbortError(err) && !isTimeoutError(err);
 }
 
 function buildAllowedModelKeys(
@@ -216,7 +226,7 @@ export async function runWithModelFallback<T>(params: {
         attempts,
       };
     } catch (err) {
-      if (isAbortError(err)) throw err;
+      if (shouldRethrowAbort(err)) throw err;
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
@@ -303,7 +313,7 @@ export async function runWithImageModelFallback<T>(params: {
         attempts,
       };
     } catch (err) {
-      if (isAbortError(err)) throw err;
+      if (shouldRethrowAbort(err)) throw err;
       lastError = err;
       attempts.push({
         provider: candidate.provider,

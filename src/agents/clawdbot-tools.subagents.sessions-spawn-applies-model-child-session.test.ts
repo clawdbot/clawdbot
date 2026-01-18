@@ -92,6 +92,68 @@ describe("clawdbot-tools: subagents", () => {
       model: "claude-haiku-4-5",
     });
   });
+
+  it("sessions_spawn forwards thinking overrides to the agent run", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-thinking", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-thinking", {
+      task: "do thing",
+      thinking: "high",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall?.params).toMatchObject({
+      thinking: "high",
+    });
+  });
+
+  it("sessions_spawn rejects invalid thinking levels", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      calls.push(request);
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-thinking-invalid", {
+      task: "do thing",
+      thinking: "banana",
+    });
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(String(result.details?.error)).toMatch(/Invalid thinking level/i);
+    expect(calls).toHaveLength(0);
+  });
   it("sessions_spawn applies default subagent model from defaults config", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();

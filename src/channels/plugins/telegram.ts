@@ -26,7 +26,10 @@ import {
 } from "./config-helpers.js";
 import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize-target.js";
+import {
+  looksLikeTelegramTargetId,
+  normalizeTelegramMessagingTarget,
+} from "./normalize/telegram.js";
 import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
@@ -138,8 +141,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;

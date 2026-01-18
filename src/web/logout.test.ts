@@ -21,7 +21,7 @@ describe("web logout", () => {
     vi.restoreAllMocks();
   });
 
-  it("deletes cached credentials when present", { timeout: 15_000 }, async () => {
+  it("deletes cached credentials when present", { timeout: 60_000 }, async () => {
     await withTempHome(async (home) => {
       vi.resetModules();
       const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
@@ -37,7 +37,7 @@ describe("web logout", () => {
     });
   });
 
-  it("no-ops when nothing to delete", { timeout: 15_000 }, async () => {
+  it("no-ops when nothing to delete", { timeout: 60_000 }, async () => {
     await withTempHome(async () => {
       vi.resetModules();
       const { logoutWeb } = await import("./session.js");

@@ -2,7 +2,7 @@
 summary: "PeekabooBridge integration for macOS UI automation"
 read_when:
   - Hosting PeekabooBridge in Clawdbot.app
-  - Integrating Peekaboo as a submodule
+  - Integrating Peekaboo via Swift Package Manager
   - Changing PeekabooBridge protocol/paths
 ---
 # Peekaboo Bridge (macOS UI automation)

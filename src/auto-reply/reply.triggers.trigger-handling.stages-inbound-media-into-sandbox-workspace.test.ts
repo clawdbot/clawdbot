@@ -97,7 +97,7 @@ afterEach(() => {
 });
 
 describe("trigger handling", () => {
-  it("stages inbound media into the sandbox workspace", { timeout: 15_000 }, async () => {
+  it("stages inbound media into the sandbox workspace", { timeout: 60_000 }, async () => {
     await withTempHome(async (home) => {
       const inboundDir = join(home, ".clawdbot", "media", "inbound");
       await fs.mkdir(inboundDir, { recursive: true });

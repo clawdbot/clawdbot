@@ -2,24 +2,18 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { findLegacyGatewayServices, uninstallLegacyGatewayServices } from "../daemon/legacy.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
+import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
-import { buildServiceEnvironment } from "../daemon/service-env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -109,35 +103,26 @@ export async function maybeMigrateLegacyGatewayService(
     },
     DEFAULT_GATEWAY_DAEMON_RUNTIME,
   );
-  const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
   const port = resolveGatewayPort(cfg, process.env);
-  const nodePath = await resolvePreferredNodePath({
-    env: process.env,
-    runtime: daemonRuntime,
-  });
-  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-    port,
-    dev: devMode,
-    runtime: daemonRuntime,
-    nodePath,
-  });
-  const environment = buildServiceEnvironment({
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
     token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-        : undefined,
+    runtime: daemonRuntime,
+    warn: (message, title) => note(message, title),
   });
-  await service.install({
-    env: process.env,
-    stdout: process.stdout,
-    programArguments,
-    workingDirectory,
-    environment,
-  });
+  try {
+    await service.install({
+      env: process.env,
+      stdout: process.stdout,
+      programArguments,
+      workingDirectory,
+      environment,
+    });
+  } catch (err) {
+    runtime.error(`Gateway daemon install failed: ${String(err)}`);
+    note(gatewayInstallErrorHint(), "Gateway");
+  }
 }
 
 export async function maybeRepairGatewayServiceConfig(
@@ -183,15 +168,15 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
-  const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
   const port = resolveGatewayPort(cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(command.programArguments);
-  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+    env: process.env,
     port,
-    dev: devMode,
+    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
+    warn: (message, title) => note(message, title),
   });
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
@@ -239,16 +224,6 @@ export async function maybeRepairGatewayServiceConfig(
         initialValue: true,
       });
   if (!repair) return;
-  const environment = buildServiceEnvironment({
-    env: process.env,
-    port,
-    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-        : undefined,
-  });
-
   try {
     await service.install({
       env: process.env,

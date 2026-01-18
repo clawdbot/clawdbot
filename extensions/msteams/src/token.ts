@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "../../../src/config/types.js";
+import type { MSTeamsConfig } from "clawdbot/plugin-sdk";
 
 export type MSTeamsCredentials = {
   appId: string;

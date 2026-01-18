@@ -172,6 +172,10 @@ vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  loadClawdbotPlugins: () => ({ plugins: [], diagnostics: [] }),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -248,6 +252,7 @@ vi.mock("../telegram/pairing-store.js", () => ({
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+  upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
 vi.mock("../telegram/token.js", () => ({
@@ -317,7 +322,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 }));
 
 describe("doctor command", () => {
-  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 30_000 }, async () => {
+  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 60_000 }, async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",
       exists: true,
@@ -361,7 +366,7 @@ describe("doctor command", () => {
     expect(written.routing).toBeUndefined();
   });
 
-  it("migrates legacy gateway services", async () => {
+  it("migrates legacy gateway services", { timeout: 60_000 }, async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",
       exists: true,

@@ -894,7 +894,6 @@
           "gateway/heartbeat",
           "gateway/doctor",
           "gateway/logging",
-          "logging",
           "gateway/security",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
@@ -957,6 +956,8 @@
       {
         "group": "Automation & Hooks",
         "pages": [
+          "hooks",
+          "hooks/soul-evil",
           "automation/auth-monitoring",
           "automation/webhook",
           "automation/gmail-pubsub",

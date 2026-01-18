@@ -88,6 +88,7 @@ const TAGLINES: string[] = [
   "Your AI assistant, now without the $3,499 headset.",
   "Think different. Actually think.",
   "Ah, the fruit tree company! 🍎",
+  "Greetings, Professor Falken",
   HOLIDAY_TAGLINES.newYear,
   HOLIDAY_TAGLINES.lunarNewYear,
   HOLIDAY_TAGLINES.christmas,

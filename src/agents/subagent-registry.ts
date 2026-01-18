@@ -348,6 +348,11 @@ export function resetSubagentRegistryForTests() {
   persistSubagentRuns();
 }
 
+export function addSubagentRunForTests(entry: SubagentRunRecord) {
+  subagentRuns.set(entry.runId, entry);
+  persistSubagentRuns();
+}
+
 export function releaseSubagentRun(runId: string) {
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) persistSubagentRuns();

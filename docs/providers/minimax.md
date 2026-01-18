@@ -155,6 +155,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 ## Notes
 
 - Model refs are `minimax/<model>`.
+- Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
