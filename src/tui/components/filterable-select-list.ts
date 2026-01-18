@@ -4,6 +4,7 @@ import {
   SelectList,
   type SelectListTheme,
   fuzzyFilter,
+  getEditorKeybindings,
 } from "@mariozechner/pi-tui";
 import type { Component } from "@mariozechner/pi-tui";
 import chalk from "chalk";
@@ -109,7 +110,8 @@ export class FilterableSelectList implements Component {
     }
 
     // Escape: clear filter or cancel
-    if (keyData === "\x1b" || keyData === "\x1b\x1b") {
+    const kb = getEditorKeybindings();
+    if (kb.matches(keyData, "selectCancel")) {
       if (this.filterText) {
         this.filterText = "";
         this.input.setValue("");
