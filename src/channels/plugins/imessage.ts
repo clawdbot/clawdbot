@@ -7,7 +7,12 @@ import {
 } from "../../imessage/accounts.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeIMessageHandle, parseIMessageTarget } from "../../imessage/targets.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildSessionKeyFromContext,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
 import { IMessageConfigSchema } from "../../config/zod-schema.providers-core.js";
 import { buildChannelConfigSchema } from "./config-schema.js";
@@ -108,6 +113,39 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     resolveRequireMention: resolveIMessageGroupRequireMention,
   },
   messaging: {
+    resolveTargetSessionKey: ({ cfg, mainSessionKey, to }) => {
+      if (!to) return null;
+      let target;
+      try {
+        target = parseIMessageTarget(to);
+      } catch {
+        return null;
+      }
+      let peerKind: "dm" | "group";
+      let peerId = "";
+      if (target.kind === "handle") {
+        peerKind = "dm";
+        peerId = normalizeIMessageHandle(target.to);
+      } else if (target.kind === "chat_id") {
+        peerKind = "group";
+        peerId = String(target.chatId);
+      } else if (target.kind === "chat_guid") {
+        peerKind = "group";
+        peerId = target.chatGuid;
+      } else {
+        peerKind = "group";
+        peerId = target.chatIdentifier;
+      }
+      if (!peerId) return null;
+      return buildSessionKeyFromContext({
+        mainSessionKey,
+        channel: "imessage",
+        peerKind,
+        peerId,
+        dmScope: cfg.session?.dmScope,
+        identityLinks: cfg.session?.identityLinks,
+      });
+    },
     targetResolver: {
       looksLikeId: (raw) => {
         const trimmed = raw.trim();

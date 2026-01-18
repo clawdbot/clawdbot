@@ -141,6 +141,36 @@ export function buildAgentPeerSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
+function resolveMainKeyFromSessionKey(sessionKey: string | undefined | null): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) return DEFAULT_MAIN_KEY;
+  const rest = parsed.rest.trim();
+  if (!rest || rest.includes(":")) return DEFAULT_MAIN_KEY;
+  return normalizeMainKey(rest);
+}
+
+export function buildSessionKeyFromContext(params: {
+  mainSessionKey: string;
+  channel: string;
+  peerKind?: "dm" | "group" | "channel" | null;
+  peerId?: string | null;
+  /** DM session scope. */
+  dmScope?: "main" | "per-peer" | "per-channel-peer";
+  identityLinks?: Record<string, string[]>;
+}): string {
+  const agentId = resolveAgentIdFromSessionKey(params.mainSessionKey);
+  const mainKey = resolveMainKeyFromSessionKey(params.mainSessionKey);
+  return buildAgentPeerSessionKey({
+    agentId,
+    mainKey,
+    channel: params.channel,
+    peerKind: params.peerKind,
+    peerId: params.peerId,
+    dmScope: params.dmScope,
+    identityLinks: params.identityLinks,
+  });
+}
+
 function resolveLinkedPeerId(params: {
   identityLinks?: Record<string, string[]>;
   channel: string;

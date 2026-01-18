@@ -2,7 +2,11 @@ import { chunkMarkdownText } from "../../auto-reply/chunk.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { writeConfigFile } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildSessionKeyFromContext,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import {
   listTelegramAccountIds,
   type ResolvedTelegramAccount,
@@ -16,6 +20,8 @@ import {
 import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
+import { parseTelegramTarget } from "../../telegram/targets.js";
+import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
 import { getChatChannelMeta } from "../registry.js";
 import { TelegramConfigSchema } from "../../config/zod-schema.providers-core.js";
 import { telegramMessageActions } from "./actions/telegram.js";
@@ -165,6 +171,29 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
+    resolveTargetSessionKey: ({ cfg, mainSessionKey, to }) => {
+      if (!to) return null;
+      const normalized = normalizeTelegramMessagingTarget(to);
+      if (!normalized) return null;
+      const parsed = parseTelegramTarget(normalized);
+      const chatId = parsed.chatId.trim();
+      if (!chatId) return null;
+      const hasGroupPrefix = /(^|\b)(telegram:)?group:/i.test(to);
+      const isGroup =
+        hasGroupPrefix ||
+        parsed.messageThreadId != null ||
+        chatId.startsWith("-") ||
+        chatId.startsWith("@");
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, parsed.messageThreadId) : chatId;
+      return buildSessionKeyFromContext({
+        mainSessionKey,
+        channel: "telegram",
+        peerKind: isGroup ? "group" : "dm",
+        peerId,
+        dmScope: cfg.session?.dmScope,
+        identityLinks: cfg.session?.identityLinks,
+      });
+    },
     targetResolver: {
       looksLikeId: looksLikeTelegramTargetId,
       hint: "<chatId>",

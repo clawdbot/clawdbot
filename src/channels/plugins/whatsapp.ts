@@ -2,7 +2,11 @@ import { createActionGate, readStringParam } from "../../agents/tools/common.js"
 import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildSessionKeyFromContext,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   listWhatsAppAccountIds,
@@ -227,6 +231,20 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
+    resolveTargetSessionKey: ({ cfg, mainSessionKey, to }) => {
+      if (!to) return null;
+      const normalized = normalizeWhatsAppMessagingTarget(to);
+      if (!normalized) return null;
+      const isGroup = isWhatsAppGroupJid(normalized);
+      return buildSessionKeyFromContext({
+        mainSessionKey,
+        channel: "whatsapp",
+        peerKind: isGroup ? "group" : "dm",
+        peerId: normalized,
+        dmScope: cfg.session?.dmScope,
+        identityLinks: cfg.session?.identityLinks,
+      });
+    },
     targetResolver: {
       looksLikeId: looksLikeWhatsAppTargetId,
       hint: "<E.164|group JID>",

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -11,6 +12,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
@@ -278,6 +280,297 @@ describe("runHeartbeatOnce", () => {
     expect(res.status).toBe("skipped");
     if (res.status === "skipped") {
       expect(res.reason).toBe("disabled");
+    }
+  });
+
+  it("prepends recent channel context from the delivery session", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = path.join(tmpDir, "channel-session.jsonl");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "5m",
+              target: "discord",
+              to: "channel:123",
+              includeDeliveryChannelHistory: true,
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const deliverySessionKey = buildAgentPeerSessionKey({
+        agentId,
+        channel: "discord",
+        peerKind: "channel",
+        peerId: "123",
+      });
+
+      const sessionManager = SessionManager.open(sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "hey there" }],
+        timestamp: Date.now(),
+      });
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+        stopReason: "stop",
+        api: "openai-responses",
+        provider: "openai",
+        model: "mock-1",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        timestamp: Date.now(),
+      });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [deliverySessionKey]: {
+              sessionId: "sid-channel",
+              sessionFile,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      let capturedPrompt = "";
+      replySpy.mockImplementation(async (ctx) => {
+        capturedPrompt = ctx.Body;
+        return { text: "Heartbeat reply" };
+      });
+
+      const sendDiscord = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        channelId: "123",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendDiscord,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(capturedPrompt).toContain("Heartbeat will post to this channel");
+      expect(capturedPrompt).toContain("User: hey there");
+      expect(capturedPrompt).toContain("Assistant: hello");
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips delivery-channel history when disabled", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = path.join(tmpDir, "channel-session.jsonl");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "5m",
+              target: "discord",
+              to: "channel:123",
+              includeDeliveryChannelHistory: false,
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const deliverySessionKey = buildAgentPeerSessionKey({
+        agentId,
+        channel: "discord",
+        peerKind: "channel",
+        peerId: "123",
+      });
+
+      const sessionManager = SessionManager.open(sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "hey there" }],
+        timestamp: Date.now(),
+      });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [deliverySessionKey]: {
+              sessionId: "sid-channel",
+              sessionFile,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      let capturedPrompt = "";
+      replySpy.mockImplementation(async (ctx) => {
+        capturedPrompt = ctx.Body;
+        return { text: "Heartbeat reply" };
+      });
+
+      const sendDiscord = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        channelId: "123",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendDiscord,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(capturedPrompt).not.toContain("Delivery-channel history");
+      expect(capturedPrompt).not.toContain("hey there");
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects delivery-channel history limit", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = path.join(tmpDir, "channel-session.jsonl");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "5m",
+              target: "discord",
+              to: "channel:123",
+              includeDeliveryChannelHistory: true,
+              deliveryChannelHistoryLimit: 1,
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const deliverySessionKey = buildAgentPeerSessionKey({
+        agentId,
+        channel: "discord",
+        peerKind: "channel",
+        peerId: "123",
+      });
+
+      const sessionManager = SessionManager.open(sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "first message" }],
+        timestamp: Date.now(),
+      });
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "second message" }],
+        stopReason: "stop",
+        api: "openai-responses",
+        provider: "openai",
+        model: "mock-1",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        timestamp: Date.now(),
+      });
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "third message" }],
+        timestamp: Date.now(),
+      });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [deliverySessionKey]: {
+              sessionId: "sid-channel",
+              sessionFile,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      let capturedPrompt = "";
+      replySpy.mockImplementation(async (ctx) => {
+        capturedPrompt = ctx.Body;
+        return { text: "Heartbeat reply" };
+      });
+
+      const sendDiscord = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        channelId: "123",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendDiscord,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(capturedPrompt).toContain("User: third message");
+      expect(capturedPrompt).not.toContain("User: first message");
+      expect(capturedPrompt).not.toContain("Assistant: second message");
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 

@@ -1,5 +1,9 @@
 import { chunkText } from "../../auto-reply/chunk.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildSessionKeyFromContext,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import {
   listSignalAccountIds,
   type ResolvedSignalAccount,
@@ -116,6 +120,23 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
+    resolveTargetSessionKey: ({ cfg, mainSessionKey, to }) => {
+      if (!to) return null;
+      const normalized = normalizeSignalMessagingTarget(to);
+      if (!normalized) return null;
+      const lower = normalized.toLowerCase();
+      const isGroup = lower.startsWith("group:");
+      const peerId = isGroup ? normalized.slice("group:".length).trim() : normalized;
+      if (!peerId) return null;
+      return buildSessionKeyFromContext({
+        mainSessionKey,
+        channel: "signal",
+        peerKind: isGroup ? "group" : "dm",
+        peerId,
+        dmScope: cfg.session?.dmScope,
+        identityLinks: cfg.session?.identityLinks,
+      });
+    },
     targetResolver: {
       looksLikeId: looksLikeSignalTargetId,
       hint: "<E.164|group:ID|signal:group:ID|signal:+E.164>",

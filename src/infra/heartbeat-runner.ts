@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import {
@@ -8,14 +12,16 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
   saveSessionStore,
   updateSessionStore,
@@ -26,6 +32,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -46,6 +53,7 @@ type HeartbeatDeps = OutboundSendDeps &
 
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
+const DEFAULT_DELIVERY_CHANNEL_HISTORY_LIMIT = 10;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
@@ -262,6 +270,80 @@ function resolveHeartbeatSender(params: {
   return candidates[0] ?? "heartbeat";
 }
 
+function collectTextContent(
+  content: string | Array<{ type: string; text?: string }> | undefined,
+): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join(" ");
+}
+
+function truncateLine(text: string, limit = 500): string {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}...`;
+}
+
+async function buildHeartbeatChannelContext(params: {
+  cfg: ClawdbotConfig;
+  sessionKey: string;
+  limit?: number;
+}): Promise<string | null> {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const entry = store[params.sessionKey];
+  if (!entry?.sessionId) return null;
+
+  const sessionFile = resolveSessionFilePath(entry.sessionId, entry, { agentId });
+  if (!sessionFile) return null;
+  try {
+    await fs.stat(sessionFile);
+  } catch {
+    return null;
+  }
+
+  let sessionManager: SessionManager;
+  try {
+    sessionManager = SessionManager.open(sessionFile);
+  } catch {
+    return null;
+  }
+  let context: ReturnType<typeof sessionManager.buildSessionContext>;
+  try {
+    context = sessionManager.buildSessionContext();
+  } catch {
+    return null;
+  }
+  const messages = context.messages;
+  if (!messages.length) return null;
+
+  const limitRaw = params.limit;
+  const limit = Number.isFinite(limitRaw)
+    ? Math.max(1, limitRaw)
+    : DEFAULT_DELIVERY_CHANNEL_HISTORY_LIMIT;
+  const recent = messages.slice(-limit);
+  const lines: string[] = [];
+  for (const message of recent) {
+    const role = message.role;
+    if (role !== "assistant" && role !== "user") continue;
+    const content =
+      "content" in message
+        ? (message.content as string | Array<{ type: string; text?: string }>)
+        : undefined;
+    const text = truncateLine(collectTextContent(content));
+    if (!text.trim()) continue;
+    const label = role === "assistant" ? "Assistant" : "User";
+    lines.push(`${label}: ${text.trim()}`);
+  }
+
+  if (lines.length === 0) return null;
+  return `Delivery-channel history (last ${lines.length} messages). Heartbeat will post to this channel:\n${lines.join("\n")}`;
+}
+
 async function restoreHeartbeatUpdatedAt(params: {
   storePath: string;
   sessionKey: string;
@@ -336,7 +418,17 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
-  const lastChannel = delivery.lastChannel;
+  const deliveryPlugin = delivery.channel !== "none" ? getChannelPlugin(delivery.channel) : null;
+  const deliverySessionKey =
+    deliveryPlugin?.messaging?.resolveTargetSessionKey?.({
+      cfg,
+      mainSessionKey: sessionKey,
+      to: delivery.to,
+    }) ?? null;
+  const lastChannel =
+    delivery.lastChannel && delivery.lastChannel !== INTERNAL_MESSAGE_CHANNEL
+      ? normalizeChannelId(delivery.lastChannel)
+      : undefined;
   const lastAccountId = delivery.lastAccountId;
   const senderProvider = delivery.channel !== "none" ? delivery.channel : lastChannel;
   const senderAllowFrom = senderProvider
@@ -350,7 +442,18 @@ export async function runHeartbeatOnce(opts: {
     lastTo: entry?.lastTo,
     provider: senderProvider,
   });
-  const prompt = resolveHeartbeatPrompt(cfg, heartbeat);
+  let prompt = resolveHeartbeatPrompt(cfg, heartbeat);
+  const includeDeliveryChannelHistory = heartbeat?.includeDeliveryChannelHistory ?? false;
+  if (includeDeliveryChannelHistory && deliverySessionKey && deliverySessionKey !== sessionKey) {
+    const channelContext = await buildHeartbeatChannelContext({
+      cfg,
+      sessionKey: deliverySessionKey,
+      limit: heartbeat?.deliveryChannelHistoryLimit,
+    });
+    if (channelContext) {
+      prompt = `${channelContext}\n\n${prompt}`;
+    }
+  }
   const ctx = {
     Body: prompt,
     From: sender,

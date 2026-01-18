@@ -1,7 +1,11 @@
 import { createActionGate, readNumberParam, readStringParam } from "../../agents/tools/common.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import { loadConfig } from "../../config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildSessionKeyFromContext,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import {
   listEnabledSlackAccounts,
   listSlackAccountIds,
@@ -188,6 +192,23 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
+    resolveTargetSessionKey: ({ cfg, mainSessionKey, to }) => {
+      if (!to) return null;
+      const normalized = normalizeSlackMessagingTarget(to);
+      if (!normalized) return null;
+      const [prefix, ...rest] = normalized.split(":");
+      const peerId = rest.join(":").trim();
+      if (!peerId) return null;
+      const peerKind = prefix === "user" ? "dm" : "channel";
+      return buildSessionKeyFromContext({
+        mainSessionKey,
+        channel: "slack",
+        peerKind,
+        peerId,
+        dmScope: cfg.session?.dmScope,
+        identityLinks: cfg.session?.identityLinks,
+      });
+    },
     targetResolver: {
       looksLikeId: looksLikeSlackTargetId,
       hint: "<channelId|user:ID|channel:ID>",

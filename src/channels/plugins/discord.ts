@@ -13,7 +13,11 @@ import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.j
 import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildSessionKeyFromContext,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
 import { DiscordConfigSchema } from "../../config/zod-schema.providers-core.js";
 import { discordMessageActions } from "./actions/discord.js";
@@ -156,6 +160,23 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    resolveTargetSessionKey: ({ cfg, mainSessionKey, to }) => {
+      if (!to) return null;
+      const normalized = normalizeDiscordMessagingTarget(to);
+      if (!normalized) return null;
+      const [prefix, ...rest] = normalized.split(":");
+      const peerId = rest.join(":").trim();
+      if (!peerId) return null;
+      const peerKind = prefix === "user" ? "dm" : "channel";
+      return buildSessionKeyFromContext({
+        mainSessionKey,
+        channel: "discord",
+        peerKind,
+        peerId,
+        dmScope: cfg.session?.dmScope,
+        identityLinks: cfg.session?.identityLinks,
+      });
+    },
     targetResolver: {
       looksLikeId: looksLikeDiscordTargetId,
       hint: "<channelId|user:ID|channel:ID>",

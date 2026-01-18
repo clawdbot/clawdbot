@@ -1729,6 +1729,8 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
   `30m`. Set `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
 - `includeReasoning`: when `true`, heartbeats will also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`). Default: `false`.
+- `includeDeliveryChannelHistory`: when `true`, prepend recent delivery-channel message history when the heartbeat session differs from the delivery session. Default: `false`.
+- `deliveryChannelHistoryLimit`: number of recent delivery-channel messages to prepend (default: 10).
 - `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Overrides are sent verbatim; include a `Read HEARTBEAT.md` line if you still want the file read.

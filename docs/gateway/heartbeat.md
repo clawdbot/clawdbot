@@ -25,6 +25,8 @@ Example config:
         every: "30m",
         target: "last",
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
+        // includeDeliveryChannelHistory: false, // optional: disable delivery-channel history
+        // deliveryChannelHistoryLimit: 6, // optional: override history size
       }
     }
   }
@@ -123,6 +125,8 @@ Example: two agents, only the second agent runs heartbeats.
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
+- `includeDeliveryChannelHistory`: when enabled, prepend recent delivery-channel message history if the heartbeat session differs from the delivery session (default: false).
+- `deliveryChannelHistoryLimit`: number of recent delivery-channel messages to prepend (default: 10; only used when `includeDeliveryChannelHistory` is true).
 - `target`:
   - `last` (default): deliver to the last used external channel.
   - explicit channel: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`.
@@ -140,6 +144,15 @@ Example: two agents, only the second agent runs heartbeats.
   outbound message is sent.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
+
+### Delivery session context
+
+Heartbeats always run in the agent's main session, but they can deliver to a different
+channel (the delivery session) when `target` points somewhere else (e.g. a Discord channel).
+If you want heartbeat replies to be aware of the recent conversation in that delivery channel,
+enable `includeDeliveryChannelHistory` and optionally tune `deliveryChannelHistoryLimit`.
+When enabled, the delivery-channel history is prepended to the heartbeat prompt and stored
+in the main session transcript.
 
 ## HEARTBEAT.md (optional)
 

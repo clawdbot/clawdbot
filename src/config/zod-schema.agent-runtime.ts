@@ -13,6 +13,8 @@ export const HeartbeatSchema = z
     every: z.string().optional(),
     model: z.string().optional(),
     includeReasoning: z.boolean().optional(),
+    includeDeliveryChannelHistory: z.boolean().optional(),
+    deliveryChannelHistoryLimit: z.number().int().positive().optional(),
     target: z
       .union([
         z.literal("last"),

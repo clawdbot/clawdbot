@@ -167,6 +167,10 @@ export type AgentDefaultsConfig = {
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
+    /** Include recent delivery-channel message history when target differs from heartbeat session. */
+    includeDeliveryChannelHistory?: boolean;
+    /** Max number of delivery-channel messages to prepend (default: 10). */
+    deliveryChannelHistoryLimit?: number;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).

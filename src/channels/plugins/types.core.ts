@@ -217,6 +217,11 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  resolveTargetSessionKey?: (params: {
+    cfg: ClawdbotConfig;
+    mainSessionKey: string;
+    to?: string | null;
+  }) => string | null;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
