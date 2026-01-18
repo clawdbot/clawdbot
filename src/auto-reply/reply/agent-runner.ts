@@ -470,10 +470,13 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
+      const usageFormat = cfg?.agents?.defaults?.usageFormat ?? "inout";
       const formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
+        format: usageFormat,
+        contextTokens: contextTokensUsed,
       });
       if (formatted) responseUsageLine = formatted;
     }

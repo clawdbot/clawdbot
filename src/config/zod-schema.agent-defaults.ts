@@ -43,6 +43,7 @@ export const AgentDefaultsSchema = z
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     contextTokens: z.number().int().positive().optional(),
+    usageFormat: z.union([z.literal("inout"), z.literal("context")]).optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
     contextPruning: z

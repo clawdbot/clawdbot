@@ -73,12 +73,27 @@ export const formatResponseUsageLine = (params: {
     cacheRead: number;
     cacheWrite: number;
   };
+  /** Usage format: "inout" (default) or "context". */
+  format?: "inout" | "context";
+  /** Context window size (for "context" format). */
+  contextTokens?: number;
 }): string | null => {
   const usage = params.usage;
   if (!usage) return null;
   const input = usage.input;
   const output = usage.output;
   if (typeof input !== "number" && typeof output !== "number") return null;
+
+  // Context format: "Usage: 16k/200k (8%)"
+  if (params.format === "context" && params.contextTokens && typeof input === "number") {
+    const totalUsed = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+    const usedLabel = formatTokenCount(totalUsed);
+    const maxLabel = formatTokenCount(params.contextTokens);
+    const pct = Math.round((totalUsed / params.contextTokens) * 100);
+    return `Usage: ${usedLabel}/${maxLabel} (${pct}%)`;
+  }
+
+  // Default "inout" format: "Usage: 10 in / 93 out · est $0.01"
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const cost =

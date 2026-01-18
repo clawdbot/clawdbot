@@ -107,6 +107,8 @@ export type AgentDefaultsConfig = {
   timeFormat?: "auto" | "12" | "24";
   /** Optional display-only context window override (used for % in status UIs). */
   contextTokens?: number;
+  /** Usage footer format: "inout" (10 in / 93 out) or "context" (16k/200k 8%). */
+  usageFormat?: "inout" | "context";
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
