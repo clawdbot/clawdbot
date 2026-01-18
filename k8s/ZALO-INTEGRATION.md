@@ -106,7 +106,7 @@ Expected output:
 ```json
 {
   "dmPolicy": "allowlist",
-  "allowFrom": ["0fc808c0d7893ed76798", "987654321"]  // Zalo user IDs
+  "allowFrom": ["0fc808c0d7893ed76798", "0b59340e0d46e418bd57"]  // Zalo user IDs
 }
 ```
 

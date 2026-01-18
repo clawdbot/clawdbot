@@ -16,13 +16,15 @@ This workflow helps you obtain the CLAUDE_AI_SESSION_KEY needed for Clawdbot aut
 
 ## Quick Method (Recommended)
 
+Sử dụng Claude Code CLI để lấy OAuth token tự động.
+
 ### Step 1: Login via Claude Code
 
 ```bash
 claude login
 ```
 
-Or trong Claude Code session, chạy `/login`.
+Hoặc trong Claude Code session, chạy `/login`.
 
 ### Step 2: Sync Credentials to K8s
 
@@ -33,6 +35,8 @@ bash .agent/sync-claude-credentials/scripts/sync.sh
 Script sẽ tự động:
 - Đọc credentials từ `~/.claude/.credentials.json`
 - Cập nhật `CLAUDE_AI_SESSION_KEY` trong `k8s/secret.yaml`
+
+> **Note**: Token format là `sk-ant-oat01-...` (OAuth access token), khác với browser cookie `eyJ...`
 
 ### Step 3: Apply và Restart
 
@@ -47,6 +51,8 @@ Done! Skip to **Step 7** để verify.
 ## Manual Method (Browser)
 
 Sử dụng nếu `claude login` không hoạt động.
+
+> **Note**: Browser cookie có format `eyJ...` (JWT), khác với OAuth token `sk-ant-oat01-...`
 
 ## Step 1: Login to Claude.ai
 

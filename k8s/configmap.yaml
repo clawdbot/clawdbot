@@ -36,8 +36,8 @@ data:
         },
         "zalo": {
           "enabled": true,
-          "dmPolicy": "open",
-          "allowFrom": ["*"],
+          "dmPolicy": "allowlist",
+          "allowFrom": ["0fc808c0d7893ed76798","0b59340e0d46e418bd57"],
           "mediaMaxMb": 5
         }
       },
