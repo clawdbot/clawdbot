@@ -170,8 +170,15 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
-    var systemRunPolicy: SystemRunPolicy {
-        didSet { self.ifNotPreview { MacNodeConfigFile.setSystemRunPolicy(self.systemRunPolicy) } }
+    var execApprovalMode: ExecApprovalQuickMode {
+        didSet {
+            self.ifNotPreview {
+                ExecApprovalsStore.updateDefaults { defaults in
+                    defaults.security = self.execApprovalMode.security
+                    defaults.ask = self.execApprovalMode.ask
+                }
+            }
+        }
     }
 
     /// Tracks whether the Canvas panel is currently visible (not persisted).
@@ -274,7 +281,8 @@ final class AppState {
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
-        self.systemRunPolicy = SystemRunPolicy.load()
+        let execDefaults = ExecApprovalsStore.resolveDefaults()
+        self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
         if !self.isPreview {

@@ -152,6 +152,7 @@ By default, the bot only responds to mentions in groups (`@botname` or patterns 
 ```
 
 **Important:** Setting `channels.telegram.groups` creates an **allowlist** - only listed groups (or `"*"`) will be accepted.
+Forum topics inherit their parent group config (allowFrom, requireMention, skills, prompts) unless you add per-topic overrides under `channels.telegram.groups.<groupId>.topics.<topicId>`.
 
 To allow all groups with always-respond:
 ```json5

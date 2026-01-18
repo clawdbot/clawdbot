@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity via OpenRouter)"
+summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
@@ -33,6 +33,8 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | **Brave** (default) | Fast, structured results, free tier | Traditional search results | `BRAVE_API_KEY` |
 | **Perplexity** | AI-synthesized answers, citations, real-time | Requires OpenRouter credits | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
 
+See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
+
 Set the provider in config:
 
 ```json5
@@ -41,6 +43,25 @@ Set the provider in config:
     web: {
       search: {
         provider: "brave"  // or "perplexity"
+      }
+    }
+  }
+}
+```
+
+Example: switch to Perplexity Sonar (direct API):
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "perplexity",
+        perplexity: {
+          apiKey: "pplx-...",
+          baseUrl: "https://api.perplexity.ai",
+          model: "perplexity/sonar-pro"
+        }
       }
     }
   }
@@ -65,7 +86,7 @@ current limits and pricing.
 environment. For a daemon install, put it in `~/.clawdbot/.env` (or your
 service environment). See [Env vars](/start/faq#how-does-clawdbot-load-environment-variables).
 
-## Using Perplexity (via OpenRouter)
+## Using Perplexity (direct or via OpenRouter)
 
 Perplexity Sonar models have built-in web search capabilities and return AI-synthesized
 answers with citations. You can use them via OpenRouter (no credit card required - supports
@@ -102,6 +123,9 @@ crypto/prepaid).
 
 **Environment alternative:** set `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` in the Gateway
 environment. For a daemon install, put it in `~/.clawdbot/.env`.
+
+If `PERPLEXITY_API_KEY` is used from the environment and no base URL is set,
+Clawdbot defaults to the direct Perplexity endpoint (`https://api.perplexity.ai`).
 
 ### Available Perplexity models
 

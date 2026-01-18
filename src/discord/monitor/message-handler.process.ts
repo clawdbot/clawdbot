@@ -17,7 +17,11 @@ import {
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -264,11 +268,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
 
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: route.agentId,
+  });
+  void recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    logVerbose(`discord: failed updating session meta: ${String(err)}`);
+  });
+
   if (isDirectMessage) {
-    const sessionCfg = cfg.session;
-    const storePath = resolveStorePath(sessionCfg?.store, {
-      agentId: route.agentId,
-    });
     await updateLastRoute({
       storePath,
       sessionKey: route.mainSessionKey,
@@ -277,6 +288,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         to: `user:${author.id}`,
         accountId: route.accountId,
       },
+      ctx: ctxPayload,
     });
   }
 

@@ -19,6 +19,7 @@ import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
+import { normalizeAllowList } from "./allow-list.js";
 
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -89,108 +90,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 
   const resolveToken = slackCfg.userToken?.trim() || botToken;
-  if (resolveToken) {
-    if (channelsConfig && Object.keys(channelsConfig).length > 0) {
-      try {
-        const entries = Object.keys(channelsConfig);
-        const resolved = await resolveSlackChannelAllowlist({
-          token: resolveToken,
-          entries,
-        });
-        const resolvedMap: string[] = [];
-        const unresolved: string[] = [];
-        const nextChannels = { ...channelsConfig };
-        for (const entry of resolved) {
-          if (entry.resolved && entry.id) {
-            resolvedMap.push(`${entry.input}→${entry.id}`);
-            if (!nextChannels[entry.id] && channelsConfig[entry.input]) {
-              nextChannels[entry.id] = channelsConfig[entry.input];
-            }
-          } else {
-            unresolved.push(entry.input);
-          }
-        }
-        channelsConfig = nextChannels;
-        summarizeMapping("slack channels", resolvedMap, unresolved, runtime);
-      } catch (err) {
-        runtime.log?.(`slack channel resolve failed; using config entries. ${String(err)}`);
-      }
-    }
-
-    const allowEntries =
-      allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
-    if (allowEntries.length > 0) {
-      try {
-        const resolvedUsers = await resolveSlackUserAllowlist({
-          token: resolveToken,
-          entries: allowEntries.map((entry) => String(entry)),
-        });
-        const resolvedMap: string[] = [];
-        const unresolved: string[] = [];
-        const additions: string[] = [];
-        for (const entry of resolvedUsers) {
-          if (entry.resolved && entry.id) {
-            resolvedMap.push(`${entry.input}→${entry.id}`);
-            additions.push(entry.id);
-          } else {
-            unresolved.push(entry.input);
-          }
-        }
-        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
-        summarizeMapping("slack users", resolvedMap, unresolved, runtime);
-      } catch (err) {
-        runtime.log?.(`slack user resolve failed; using config entries. ${String(err)}`);
-      }
-    }
-
-    if (channelsConfig && Object.keys(channelsConfig).length > 0) {
-      const userEntries = new Set<string>();
-      for (const channel of Object.values(channelsConfig)) {
-        if (!channel || typeof channel !== "object") continue;
-        const users = (channel as { users?: Array<string | number> }).users;
-        if (!Array.isArray(users)) continue;
-        for (const entry of users) {
-          const trimmed = String(entry).trim();
-          if (trimmed && trimmed !== "*") userEntries.add(trimmed);
-        }
-      }
-      if (userEntries.size > 0) {
-        try {
-          const resolvedUsers = await resolveSlackUserAllowlist({
-            token: resolveToken,
-            entries: Array.from(userEntries),
-          });
-          const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
-          const mapping = resolvedUsers
-            .filter((entry) => entry.resolved && entry.id)
-            .map((entry) => `${entry.input}→${entry.id}`);
-          const unresolved = resolvedUsers
-            .filter((entry) => !entry.resolved)
-            .map((entry) => entry.input);
-          const nextChannels = { ...channelsConfig };
-          for (const [channelId, channelConfig] of Object.entries(channelsConfig)) {
-            if (!channelConfig || typeof channelConfig !== "object") continue;
-            const users = (channelConfig as { users?: Array<string | number> }).users;
-            if (!Array.isArray(users) || users.length === 0) continue;
-            const additions: string[] = [];
-            for (const entry of users) {
-              const trimmed = String(entry).trim();
-              const resolved = resolvedMap.get(trimmed);
-              if (resolved?.resolved && resolved.id) additions.push(resolved.id);
-            }
-            nextChannels[channelId] = {
-              ...channelConfig,
-              users: mergeAllowlist({ existing: users, additions }),
-            };
-          }
-          channelsConfig = nextChannels;
-          summarizeMapping("slack channel users", mapping, unresolved, runtime);
-        } catch (err) {
-          runtime.log?.(`slack channel user resolve failed; using config entries. ${String(err)}`);
-        }
-      }
-    }
-  }
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
@@ -265,6 +164,124 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
   registerSlackMonitorSlashCommands({ ctx, account });
+
+  if (resolveToken) {
+    void (async () => {
+      if (opts.abortSignal?.aborted) return;
+
+      if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+        try {
+          const entries = Object.keys(channelsConfig).filter((key) => key !== "*");
+          if (entries.length > 0) {
+            const resolved = await resolveSlackChannelAllowlist({
+              token: resolveToken,
+              entries,
+            });
+            const nextChannels = { ...channelsConfig };
+            const mapping: string[] = [];
+            const unresolved: string[] = [];
+            for (const entry of resolved) {
+              const source = channelsConfig?.[entry.input];
+              if (!source) continue;
+              if (!entry.resolved || !entry.id) {
+                unresolved.push(entry.input);
+                continue;
+              }
+              mapping.push(`${entry.input}→${entry.id}${entry.archived ? " (archived)" : ""}`);
+              const existing = nextChannels[entry.id] ?? {};
+              nextChannels[entry.id] = { ...source, ...existing };
+            }
+            channelsConfig = nextChannels;
+            ctx.channelsConfig = nextChannels;
+            summarizeMapping("slack channels", mapping, unresolved, runtime);
+          }
+        } catch (err) {
+          runtime.log?.(`slack channel resolve failed; using config entries. ${String(err)}`);
+        }
+      }
+
+      const allowEntries =
+        allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
+      if (allowEntries.length > 0) {
+        try {
+          const resolvedUsers = await resolveSlackUserAllowlist({
+            token: resolveToken,
+            entries: allowEntries.map((entry) => String(entry)),
+          });
+          const mapping: string[] = [];
+          const unresolved: string[] = [];
+          const additions: string[] = [];
+          for (const entry of resolvedUsers) {
+            if (entry.resolved && entry.id) {
+              const note = entry.note ? ` (${entry.note})` : "";
+              mapping.push(`${entry.input}→${entry.id}${note}`);
+              additions.push(entry.id);
+            } else {
+              unresolved.push(entry.input);
+            }
+          }
+          allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+          ctx.allowFrom = normalizeAllowList(allowFrom);
+          summarizeMapping("slack users", mapping, unresolved, runtime);
+        } catch (err) {
+          runtime.log?.(`slack user resolve failed; using config entries. ${String(err)}`);
+        }
+      }
+
+      if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+        const userEntries = new Set<string>();
+        for (const channel of Object.values(channelsConfig)) {
+          if (!channel || typeof channel !== "object") continue;
+          const channelUsers = (channel as { users?: Array<string | number> }).users;
+          if (!Array.isArray(channelUsers)) continue;
+          for (const entry of channelUsers) {
+            const trimmed = String(entry).trim();
+            if (trimmed && trimmed !== "*") userEntries.add(trimmed);
+          }
+        }
+
+        if (userEntries.size > 0) {
+          try {
+            const resolvedUsers = await resolveSlackUserAllowlist({
+              token: resolveToken,
+              entries: Array.from(userEntries),
+            });
+            const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
+            const mapping = resolvedUsers
+              .filter((entry) => entry.resolved && entry.id)
+              .map((entry) => `${entry.input}→${entry.id}`);
+            const unresolved = resolvedUsers
+              .filter((entry) => !entry.resolved)
+              .map((entry) => entry.input);
+
+            const nextChannels = { ...channelsConfig };
+            for (const [channelKey, channelConfig] of Object.entries(channelsConfig)) {
+              if (!channelConfig || typeof channelConfig !== "object") continue;
+              const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
+              if (!Array.isArray(channelUsers) || channelUsers.length === 0) continue;
+              const additions: string[] = [];
+              for (const entry of channelUsers) {
+                const trimmed = String(entry).trim();
+                const resolved = resolvedMap.get(trimmed);
+                if (resolved?.resolved && resolved.id) additions.push(resolved.id);
+              }
+              nextChannels[channelKey] = {
+                ...channelConfig,
+                users: mergeAllowlist({ existing: channelUsers, additions }),
+              };
+            }
+            channelsConfig = nextChannels;
+            ctx.channelsConfig = nextChannels;
+            summarizeMapping("slack channel users", mapping, unresolved, runtime);
+          } catch (err) {
+            runtime.log?.(
+              `slack channel user resolve failed; using config entries. ${String(err)}`,
+            );
+          }
+        }
+      }
+    })();
+  }
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted) void app.stop();

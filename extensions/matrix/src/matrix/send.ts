@@ -5,13 +5,17 @@ import type {
   ReactionEventContent,
 } from "matrix-js-sdk/lib/@types/events.js";
 
-import { chunkMarkdownText, resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { isVoiceCompatibleAudio } from "../../../../src/media/audio.js";
-import { mediaKindFromMime } from "../../../../src/media/constants.js";
-import { getImageMetadata, resizeToJpeg } from "../../../../src/media/image-ops.js";
-import type { PollInput } from "../../../../src/polls.js";
-import { loadWebMedia } from "../../../../src/web/media.js";
+import {
+  chunkMarkdownText,
+  getImageMetadata,
+  isVoiceCompatibleAudio,
+  loadConfig,
+  loadWebMedia,
+  mediaKindFromMime,
+  type PollInput,
+  resolveTextChunkLimit,
+  resizeToJpeg,
+} from "clawdbot/plugin-sdk";
 import { getActiveMatrixClient } from "./active-client.js";
 import {
   createMatrixClient,

@@ -1,6 +1,6 @@
 import type { MatrixClient } from "matrix-js-sdk";
 
-import { saveMediaBuffer } from "../../../../../src/media/store.js";
+import { saveMediaBuffer } from "clawdbot/plugin-sdk";
 
 async function fetchMatrixMediaBuffer(params: {
   client: MatrixClient;

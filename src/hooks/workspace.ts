@@ -15,6 +15,7 @@ import type {
   HookEligibilityContext,
   HookEntry,
   HookSnapshot,
+  HookSource,
   ParsedHookFrontmatter,
 } from "./types.js";
 
@@ -50,7 +51,8 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
 
 function loadHookFromDir(params: {
   hookDir: string;
-  source: string;
+  source: HookSource;
+  pluginId?: string;
   nameHint?: string;
 }): Hook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
@@ -82,6 +84,7 @@ function loadHookFromDir(params: {
       name,
       description,
       source: params.source as Hook["source"],
+      pluginId: params.pluginId,
       filePath: hookMdPath,
       baseDir: params.hookDir,
       handlerPath,
@@ -95,8 +98,8 @@ function loadHookFromDir(params: {
 /**
  * Scan a directory for hooks (subdirectories containing HOOK.md)
  */
-function loadHooksFromDir(params: { dir: string; source: string }): Hook[] {
-  const { dir, source } = params;
+function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: string }): Hook[] {
+  const { dir, source, pluginId } = params;
 
   if (!fs.existsSync(dir)) return [];
 
@@ -119,6 +122,7 @@ function loadHooksFromDir(params: { dir: string; source: string }): Hook[] {
         const hook = loadHookFromDir({
           hookDir: resolvedHookDir,
           source,
+          pluginId,
           nameHint: path.basename(resolvedHookDir),
         });
         if (hook) hooks.push(hook);
@@ -126,11 +130,48 @@ function loadHooksFromDir(params: { dir: string; source: string }): Hook[] {
       continue;
     }
 
-    const hook = loadHookFromDir({ hookDir, source, nameHint: entry.name });
+    const hook = loadHookFromDir({
+      hookDir,
+      source,
+      pluginId,
+      nameHint: entry.name,
+    });
     if (hook) hooks.push(hook);
   }
 
   return hooks;
+}
+
+export function loadHookEntriesFromDir(params: {
+  dir: string;
+  source: HookSource;
+  pluginId?: string;
+}): HookEntry[] {
+  const hooks = loadHooksFromDir({
+    dir: params.dir,
+    source: params.source,
+    pluginId: params.pluginId,
+  });
+  return hooks.map((hook) => {
+    let frontmatter: ParsedHookFrontmatter = {};
+    try {
+      const raw = fs.readFileSync(hook.filePath, "utf-8");
+      frontmatter = parseFrontmatter(raw);
+    } catch {
+      // ignore malformed hooks
+    }
+    const entry: HookEntry = {
+      hook: {
+        ...hook,
+        source: params.source,
+        pluginId: params.pluginId,
+      },
+      frontmatter,
+      clawdbot: resolveClawdbotMetadata(frontmatter),
+      invocation: resolveHookInvocationPolicy(frontmatter),
+    };
+    return entry;
+  });
 }
 
 function loadHookEntries(
@@ -178,7 +219,7 @@ function loadHookEntries(
   for (const hook of managedHooks) merged.set(hook.name, hook);
   for (const hook of workspaceHooks) merged.set(hook.name, hook);
 
-  const hookEntries: HookEntry[] = Array.from(merged.values()).map((hook) => {
+  return Array.from(merged.values()).map((hook) => {
     let frontmatter: ParsedHookFrontmatter = {};
     try {
       const raw = fs.readFileSync(hook.filePath, "utf-8");
@@ -193,7 +234,6 @@ function loadHookEntries(
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
   });
-  return hookEntries;
 }
 
 export function buildWorkspaceHookSnapshot(

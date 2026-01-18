@@ -10,7 +10,10 @@ export function parseAllowlistEntries(raw: string): string[] {
 }
 
 export function formatAllowlistEntries(entries: string[]): string {
-  return entries.map((entry) => entry.trim()).filter(Boolean).join(", ");
+  return entries
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 export async function promptChannelAccessPolicy(params: {

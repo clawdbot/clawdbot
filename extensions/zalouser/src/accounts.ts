@@ -1,25 +1,22 @@
-import { runZca, parseJsonOutput } from "./zca.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  type CoreConfig,
-  type ResolvedZalouserAccount,
-  type ZalouserAccountConfig,
-  type ZalouserConfig,
-} from "./types.js";
+import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 
-function listConfiguredAccountIds(cfg: CoreConfig): string[] {
+import { runZca, parseJsonOutput } from "./zca.js";
+import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
+
+function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listZalouserAccountIds(cfg: CoreConfig): string[] {
+export function listZalouserAccountIds(cfg: ClawdbotConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
   return ids.sort((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultZalouserAccountId(cfg: CoreConfig): string {
+export function resolveDefaultZalouserAccountId(cfg: ClawdbotConfig): string {
   const zalouserConfig = cfg.channels?.zalouser as ZalouserConfig | undefined;
   if (zalouserConfig?.defaultAccount?.trim()) return zalouserConfig.defaultAccount.trim();
   const ids = listZalouserAccountIds(cfg);
@@ -27,14 +24,8 @@ export function resolveDefaultZalouserAccountId(cfg: CoreConfig): string {
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-export function normalizeAccountId(accountId?: string | null): string {
-  const trimmed = accountId?.trim();
-  if (!trimmed) return DEFAULT_ACCOUNT_ID;
-  return trimmed.toLowerCase();
-}
-
 function resolveAccountConfig(
-  cfg: CoreConfig,
+  cfg: ClawdbotConfig,
   accountId: string,
 ): ZalouserAccountConfig | undefined {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
@@ -42,7 +33,10 @@ function resolveAccountConfig(
   return accounts[accountId] as ZalouserAccountConfig | undefined;
 }
 
-function mergeZalouserAccountConfig(cfg: CoreConfig, accountId: string): ZalouserAccountConfig {
+function mergeZalouserAccountConfig(
+  cfg: ClawdbotConfig,
+  accountId: string,
+): ZalouserAccountConfig {
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -62,7 +56,7 @@ export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
 }
 
 export async function resolveZalouserAccount(params: {
-  cfg: CoreConfig;
+  cfg: ClawdbotConfig;
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const accountId = normalizeAccountId(params.accountId);
@@ -84,7 +78,7 @@ export async function resolveZalouserAccount(params: {
 }
 
 export function resolveZalouserAccountSync(params: {
-  cfg: CoreConfig;
+  cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedZalouserAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -104,7 +98,9 @@ export function resolveZalouserAccountSync(params: {
   };
 }
 
-export async function listEnabledZalouserAccounts(cfg: CoreConfig): Promise<ResolvedZalouserAccount[]> {
+export async function listEnabledZalouserAccounts(
+  cfg: ClawdbotConfig,
+): Promise<ResolvedZalouserAccount[]> {
   const ids = listZalouserAccountIds(cfg);
   const accounts = await Promise.all(
     ids.map((accountId) => resolveZalouserAccount({ cfg, accountId }))

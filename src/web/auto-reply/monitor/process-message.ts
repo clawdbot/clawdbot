@@ -20,6 +20,7 @@ import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-dete
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";
+import { recordSessionMetaFromInbound, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
@@ -33,7 +34,7 @@ import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
-import { updateLastRouteInBackground } from "./last-route.js";
+import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
 
 export type GroupHistoryEntry = {
@@ -205,26 +206,15 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
-  if (params.msg.chatType !== "group") {
-    const to = (() => {
-      if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
-      // In direct chats, `msg.from` is already the canonical conversation id.
-      if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
-      return normalizeE164(params.msg.from);
-    })();
-    if (to) {
-      updateLastRouteInBackground({
-        cfg: params.cfg,
-        backgroundTasks: params.backgroundTasks,
-        storeAgentId: params.route.agentId,
-        sessionKey: params.route.mainSessionKey,
-        channel: "whatsapp",
-        to,
-        accountId: params.route.accountId,
-        warn: params.replyLogger.warn.bind(params.replyLogger),
-      });
-    }
-  }
+  const dmRouteTarget =
+    params.msg.chatType !== "group"
+      ? (() => {
+          if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
+          // In direct chats, `msg.from` is already the canonical conversation id.
+          if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
+          return normalizeE164(params.msg.from);
+        })()
+      : undefined;
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
@@ -249,41 +239,76 @@ export async function processMessage(params: {
     identityName: resolveIdentityName(params.cfg, params.route.agentId),
   };
 
-  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: finalizeInboundContext({
-      Body: combinedBody,
-      RawBody: params.msg.body,
-      CommandBody: params.msg.body,
-      From: params.msg.from,
-      To: params.msg.to,
-      SessionKey: params.route.sessionKey,
-      AccountId: params.route.accountId,
-      MessageSid: params.msg.id,
-      ReplyToId: params.msg.replyToId,
-      ReplyToBody: params.msg.replyToBody,
-      ReplyToSender: params.msg.replyToSender,
-      MediaPath: params.msg.mediaPath,
-      MediaUrl: params.msg.mediaUrl,
-      MediaType: params.msg.mediaType,
-      ChatType: params.msg.chatType,
-      ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
-      GroupSubject: params.msg.groupSubject,
-      GroupMembers: formatGroupMembers({
-        participants: params.msg.groupParticipants,
-        roster: params.groupMemberNames.get(params.groupHistoryKey),
-        fallbackE164: params.msg.senderE164,
-      }),
-      SenderName: params.msg.senderName,
-      SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
-      SenderE164: params.msg.senderE164,
-      CommandAuthorized: commandAuthorized,
-      WasMentioned: params.msg.wasMentioned,
-      ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: params.msg.from,
+  const ctxPayload = finalizeInboundContext({
+    Body: combinedBody,
+    RawBody: params.msg.body,
+    CommandBody: params.msg.body,
+    From: params.msg.from,
+    To: params.msg.to,
+    SessionKey: params.route.sessionKey,
+    AccountId: params.route.accountId,
+    MessageSid: params.msg.id,
+    ReplyToId: params.msg.replyToId,
+    ReplyToBody: params.msg.replyToBody,
+    ReplyToSender: params.msg.replyToSender,
+    MediaPath: params.msg.mediaPath,
+    MediaUrl: params.msg.mediaUrl,
+    MediaType: params.msg.mediaType,
+    ChatType: params.msg.chatType,
+    ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
+    GroupSubject: params.msg.groupSubject,
+    GroupMembers: formatGroupMembers({
+      participants: params.msg.groupParticipants,
+      roster: params.groupMemberNames.get(params.groupHistoryKey),
+      fallbackE164: params.msg.senderE164,
     }),
+    SenderName: params.msg.senderName,
+    SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
+    SenderE164: params.msg.senderE164,
+    CommandAuthorized: commandAuthorized,
+    WasMentioned: params.msg.wasMentioned,
+    ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
+    Provider: "whatsapp",
+    Surface: "whatsapp",
+    OriginatingChannel: "whatsapp",
+    OriginatingTo: params.msg.from,
+  });
+
+  if (dmRouteTarget) {
+    updateLastRouteInBackground({
+      cfg: params.cfg,
+      backgroundTasks: params.backgroundTasks,
+      storeAgentId: params.route.agentId,
+      sessionKey: params.route.mainSessionKey,
+      channel: "whatsapp",
+      to: dmRouteTarget,
+      accountId: params.route.accountId,
+      ctx: ctxPayload,
+      warn: params.replyLogger.warn.bind(params.replyLogger),
+    });
+  }
+
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const metaTask = recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: params.route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    params.replyLogger.warn(
+      {
+        error: formatError(err),
+        storePath,
+        sessionKey: params.route.sessionKey,
+      },
+      "failed updating session meta",
+    );
+  });
+  trackBackgroundTask(params.backgroundTasks, metaTask);
+
+  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
     cfg: params.cfg,
     replyResolver: params.replyResolver,
     dispatcherOptions: {

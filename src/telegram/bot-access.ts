@@ -1,3 +1,5 @@
+import type { AllowlistMatch } from "../channels/allowlist-match.js";
+
 export type NormalizedAllowFrom = {
   entries: string[];
   entriesLower: string[];
@@ -5,11 +7,7 @@ export type NormalizedAllowFrom = {
   hasEntries: boolean;
 };
 
-export type AllowFromMatch = {
-  allowed: boolean;
-  matchKey?: string;
-  matchSource?: "wildcard" | "id" | "username";
-};
+export type AllowFromMatch = AllowlistMatch<"wildcard" | "id" | "username">;
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
   const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);

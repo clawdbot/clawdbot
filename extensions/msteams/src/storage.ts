@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { resolveStateDir } from "../../../src/config/paths.js";
+import { resolveStateDir } from "clawdbot/plugin-sdk";
 
 export type MSTeamsStorePathOptions = {
   env?: NodeJS.ProcessEnv;

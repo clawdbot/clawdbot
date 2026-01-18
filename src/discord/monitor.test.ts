@@ -268,6 +268,7 @@ describe("discord mention gating", () => {
       scope: "thread",
     });
     expect(channelConfig?.matchSource).toBe("parent");
+    expect(channelConfig?.matchKey).toBe("parent-1");
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,

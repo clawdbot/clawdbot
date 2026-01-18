@@ -146,4 +146,42 @@ describe("subscribeEmbeddedPiSession", () => {
       expect(combined).toBe("Final answer");
     },
   );
+
+  it("emits delta chunks in agent events for streaming assistant text", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onAgentEvent,
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "Hello" },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: " world" },
+    });
+
+    const payloads = onAgentEvent.mock.calls
+      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
+      .filter((value): value is Record<string, unknown> => Boolean(value));
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
+    expect(payloads[1]?.text).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+  });
 });

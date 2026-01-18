@@ -6,11 +6,16 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import type { InternalHookHandler } from "../hooks/internal-hooks.js";
+import type { HookEntry } from "../hooks/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { PluginRuntime } from "./runtime/types.js";
+
+export type { PluginRuntime } from "./runtime/types.js";
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -26,6 +31,8 @@ export type PluginConfigUiHint = {
   sensitive?: boolean;
   placeholder?: string;
 };
+
+export type PluginKind = "memory";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -59,6 +66,19 @@ export type ClawdbotPluginToolContext = {
 export type ClawdbotPluginToolFactory = (
   ctx: ClawdbotPluginToolContext,
 ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
+
+export type ClawdbotPluginToolOptions = {
+  name?: string;
+  names?: string[];
+  optional?: boolean;
+};
+
+export type ClawdbotPluginHookOptions = {
+  entry?: HookEntry;
+  name?: string;
+  description?: string;
+  register?: boolean;
+};
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
@@ -144,6 +164,7 @@ export type ClawdbotPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
+  kind?: PluginKind;
   configSchema?: ClawdbotPluginConfigSchema;
   register?: (api: ClawdbotPluginApi) => void | Promise<void>;
   activate?: (api: ClawdbotPluginApi) => void | Promise<void>;
@@ -161,10 +182,16 @@ export type ClawdbotPluginApi = {
   source: string;
   config: ClawdbotConfig;
   pluginConfig?: Record<string, unknown>;
+  runtime: PluginRuntime;
   logger: PluginLogger;
   registerTool: (
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
-    opts?: { name?: string; names?: string[] },
+    opts?: ClawdbotPluginToolOptions,
+  ) => void;
+  registerHook: (
+    events: string | string[],
+    handler: InternalHookHandler,
+    opts?: ClawdbotPluginHookOptions,
   ) => void;
   registerHttpHandler: (handler: ClawdbotPluginHttpHandler) => void;
   registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;

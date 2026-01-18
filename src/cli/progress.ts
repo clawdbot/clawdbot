@@ -1,8 +1,13 @@
 import { spinner } from "@clack/prompts";
 import { createOscProgressController, supportsOscProgress } from "osc-progress";
 import { theme } from "../terminal/theme.js";
+import {
+  clearActiveProgressLine,
+  registerActiveProgressLine,
+  unregisterActiveProgressLine,
+} from "../terminal/progress-line.js";
 
-const DEFAULT_DELAY_MS = 300;
+const DEFAULT_DELAY_MS = 0;
 let activeProgress = 0;
 
 type ProgressOptions = {
@@ -12,7 +17,7 @@ type ProgressOptions = {
   enabled?: boolean;
   delayMs?: number;
   stream?: NodeJS.WriteStream;
-  fallback?: "spinner" | "none";
+  fallback?: "spinner" | "line" | "none";
 };
 
 export type ProgressReporter = {
@@ -45,6 +50,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
   const canOsc = supportsOscProgress(process.env, stream.isTTY);
   const allowSpinner = options.fallback === undefined || options.fallback === "spinner";
+  const allowLine = options.fallback === "line";
 
   let started = false;
   let label = options.label;
@@ -55,6 +61,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     options.indeterminate ?? (options.total === undefined || options.total === null);
 
   activeProgress += 1;
+  registerActiveProgressLine(stream);
 
   const controller = canOsc
     ? createOscProgressController({
@@ -65,6 +72,14 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     : null;
 
   const spin = allowSpinner ? spinner() : null;
+  const renderLine = allowLine
+    ? () => {
+        if (!started) return;
+        const suffix = indeterminate ? "" : ` ${percent}%`;
+        clearActiveProgressLine();
+        stream.write(`${theme.accent(label)}${suffix}`);
+      }
+    : null;
   let timer: NodeJS.Timeout | null = null;
 
   const applyState = () => {
@@ -75,6 +90,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     }
     if (spin) {
       spin.message(theme.accent(label));
+    }
+    if (renderLine) {
+      renderLine();
     }
   };
 
@@ -122,6 +140,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     }
     if (controller) controller.clear();
     if (spin) spin.stop();
+    clearActiveProgressLine();
+    unregisterActiveProgressLine(stream);
     activeProgress = Math.max(0, activeProgress - 1);
   };
 

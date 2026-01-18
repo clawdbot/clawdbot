@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { resolveMatrixConfig } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";

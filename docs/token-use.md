@@ -42,13 +42,13 @@ Use these in chat:
 
 - `/status` → **emoji‑rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
-- `/cost on|off` → appends a **per-response usage line** to every reply.
+- `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
   - OAuth auth **hides cost** (tokens only).
 
 Other surfaces:
 
-- **TUI/Web TUI:** `/status` + `/cost` are supported.
+- **TUI/Web TUI:** `/status` + `/usage` are supported.
 - **CLI:** `clawdbot status --usage` and `clawdbot channels list` show
   provider quota windows (not per-response costs).
 

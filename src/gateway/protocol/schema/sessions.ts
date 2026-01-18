@@ -35,9 +35,20 @@ export const SessionsPatchParamsSchema = Type.Object(
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     responseUsage: Type.Optional(
-      Type.Union([Type.Literal("on"), Type.Literal("off"), Type.Null()]),
+      Type.Union([
+        Type.Literal("off"),
+        Type.Literal("tokens"),
+        Type.Literal("full"),
+        // Backward compat with older clients/stores.
+        Type.Literal("on"),
+        Type.Null(),
+      ]),
     ),
     elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     sendPolicy: Type.Optional(

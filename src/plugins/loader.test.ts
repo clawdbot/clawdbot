@@ -74,6 +74,72 @@ describe("loadClawdbotPlugins", () => {
     const enabled = enabledRegistry.plugins.find((entry) => entry.id === "bundled");
     expect(enabled?.status).toBe("loaded");
   });
+
+  it("enables bundled memory plugin when selected by slot", () => {
+    const bundledDir = makeTempDir();
+    const bundledPath = path.join(bundledDir, "memory-core.ts");
+    fs.writeFileSync(
+      bundledPath,
+      'export default { id: "memory-core", kind: "memory", register() {} };',
+      "utf-8",
+    );
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      },
+    });
+
+    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
+    expect(memory?.status).toBe("loaded");
+  });
+
+  it("preserves package.json metadata for bundled memory plugins", () => {
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "memory-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@clawdbot/memory-core",
+        version: "1.2.3",
+        description: "Memory plugin package",
+        clawdbot: { extensions: ["./index.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.ts"),
+      'export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
+      "utf-8",
+    );
+
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      },
+    });
+
+    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
+    expect(memory?.status).toBe("loaded");
+    expect(memory?.origin).toBe("bundled");
+    expect(memory?.name).toBe("Memory (Core)");
+    expect(memory?.version).toBe("1.2.3");
+  });
   it("loads plugins from config paths", () => {
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
@@ -235,6 +301,54 @@ describe("loadClawdbotPlugins", () => {
 
     const disabled = registry.plugins.find((entry) => entry.id === "config-disable");
     expect(disabled?.status).toBe("disabled");
+  });
+
+  it("enforces memory slot selection", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const memoryA = writePlugin({
+      id: "memory-a",
+      body: `export default { id: "memory-a", kind: "memory", register() {} };`,
+    });
+    const memoryB = writePlugin({
+      id: "memory-b",
+      body: `export default { id: "memory-b", kind: "memory", register() {} };`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [memoryA.file, memoryB.file] },
+          slots: { memory: "memory-b" },
+        },
+      },
+    });
+
+    const a = registry.plugins.find((entry) => entry.id === "memory-a");
+    const b = registry.plugins.find((entry) => entry.id === "memory-b");
+    expect(b?.status).toBe("loaded");
+    expect(a?.status).toBe("disabled");
+  });
+
+  it("disables memory plugins when slot is none", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const memory = writePlugin({
+      id: "memory-off",
+      body: `export default { id: "memory-off", kind: "memory", register() {} };`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [memory.file] },
+          slots: { memory: "none" },
+        },
+      },
+    });
+
+    const entry = registry.plugins.find((item) => item.id === "memory-off");
+    expect(entry?.status).toBe("disabled");
   });
 
   it("prefers higher-precedence plugins with the same id", () => {

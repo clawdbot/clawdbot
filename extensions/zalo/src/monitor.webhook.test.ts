@@ -3,8 +3,8 @@ import type { AddressInfo } from "node:net";
 
 import { describe, expect, it } from "vitest";
 
-import type { CoreConfig, ResolvedZaloAccount } from "./types.js";
-import type { loadCoreChannelDeps } from "./core-bridge.js";
+import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
+import type { ResolvedZaloAccount } from "./types.js";
 import { handleZaloWebhookRequest, registerZaloWebhookTarget } from "./monitor.js";
 
 async function withServer(
@@ -26,7 +26,7 @@ async function withServer(
 
 describe("handleZaloWebhookRequest", () => {
   it("returns 400 for non-object payloads", async () => {
-    const deps = {} as Awaited<ReturnType<typeof loadCoreChannelDeps>>;
+    const core = {} as PluginRuntime;
     const account: ResolvedZaloAccount = {
       accountId: "default",
       enabled: true,
@@ -37,9 +37,9 @@ describe("handleZaloWebhookRequest", () => {
     const unregister = registerZaloWebhookTarget({
       token: "tok",
       account,
-      config: {} as CoreConfig,
+      config: {} as ClawdbotConfig,
       runtime: {},
-      deps,
+      core,
       secret: "secret",
       path: "/hook",
       mediaMaxMb: 5,

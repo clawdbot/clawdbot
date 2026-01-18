@@ -68,9 +68,6 @@ export type ListenOptions = CommonOptions & {
   prefix?: string;
 };
 
-// Channel plugin config types
-export const DEFAULT_ACCOUNT_ID = "default";
-
 export type ZalouserAccountConfig = {
   enabled?: boolean;
   name?: string;
@@ -93,14 +90,6 @@ export type ZalouserConfig = {
   groups?: Record<string, { allow?: boolean; enabled?: boolean }>;
   messagePrefix?: string;
   accounts?: Record<string, ZalouserAccountConfig>;
-};
-
-export type CoreConfig = {
-  channels?: {
-    zalouser?: ZalouserConfig;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
 };
 
 export type ResolvedZalouserAccount = {

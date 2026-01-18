@@ -18,20 +18,18 @@ vi.mock("matrix-js-sdk", () => ({
   },
 }));
 
-vi.mock("../../../../src/config/config.js", () => ({
+vi.mock("clawdbot/plugin-sdk", () => ({
   loadConfig: () => ({}),
-}));
-
-vi.mock("../../../../src/web/media.js", () => ({
+  resolveTextChunkLimit: () => 4000,
+  chunkMarkdownText: (text: string) => (text ? [text] : []),
   loadWebMedia: vi.fn().mockResolvedValue({
     buffer: Buffer.from("media"),
     fileName: "photo.png",
     contentType: "image/png",
     kind: "image",
   }),
-}));
-
-vi.mock("../../../../src/media/image-ops.js", () => ({
+  mediaKindFromMime: () => "image",
+  isVoiceCompatibleAudio: () => false,
   getImageMetadata: vi.fn().mockResolvedValue(null),
   resizeToJpeg: vi.fn(),
 }));

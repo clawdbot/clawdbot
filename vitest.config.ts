@@ -1,8 +1,18 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const repoRoot = path.dirname(fileURLToPath(import.meta.url));
+
 export default defineConfig({
+  resolve: {
+    alias: {
+      "clawdbot/plugin-sdk": path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
+    },
+  },
   test: {
-    testTimeout: 20_000,
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",

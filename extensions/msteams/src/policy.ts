@@ -1,10 +1,17 @@
 import type {
+  AllowlistMatch,
   GroupPolicy,
   MSTeamsChannelConfig,
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
-} from "../../../src/config/types.js";
+} from "clawdbot/plugin-sdk";
+import {
+  buildChannelKeyCandidates,
+  normalizeChannelSlug,
+  resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
+} from "clawdbot/plugin-sdk";
 
 export type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
@@ -13,6 +20,8 @@ export type MSTeamsResolvedRouteConfig = {
   allowed: boolean;
   teamKey?: string;
   channelKey?: string;
+  channelMatchKey?: string;
+  channelMatchSource?: "direct" | "wildcard";
 };
 
 export function resolveMSTeamsRouteConfig(params: {
@@ -27,54 +36,53 @@ export function resolveMSTeamsRouteConfig(params: {
   const conversationId = params.conversationId?.trim();
   const channelName = params.channelName?.trim();
   const teams = params.cfg?.teams ?? {};
-  const teamKeys = Object.keys(teams);
-  const allowlistConfigured = teamKeys.length > 0;
-
-  const normalize = (value: string) =>
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/^#/, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-
-  let teamKey: string | undefined;
-  if (teamId && teams[teamId]) teamKey = teamId;
-  if (!teamKey && teamName) {
-    const slug = normalize(teamName);
-    if (slug) {
-      teamKey = teamKeys.find((key) => normalize(key) === slug);
-    }
-  }
-  if (!teamKey && teams["*"]) teamKey = "*";
-
-  const teamConfig = teamKey ? teams[teamKey] : undefined;
+  const allowlistConfigured = Object.keys(teams).length > 0;
+  const teamCandidates = buildChannelKeyCandidates(
+    teamId,
+    teamName,
+    teamName ? normalizeChannelSlug(teamName) : undefined,
+  );
+  const teamMatch = resolveChannelEntryMatchWithFallback({
+    entries: teams,
+    keys: teamCandidates,
+    wildcardKey: "*",
+    normalizeKey: normalizeChannelSlug,
+  });
+  const teamConfig = teamMatch.entry;
   const channels = teamConfig?.channels ?? {};
-  const channelKeys = Object.keys(channels);
+  const channelAllowlistConfigured = Object.keys(channels).length > 0;
+  const channelCandidates = buildChannelKeyCandidates(
+    conversationId,
+    channelName,
+    channelName ? normalizeChannelSlug(channelName) : undefined,
+  );
+  const channelMatch = resolveChannelEntryMatchWithFallback({
+    entries: channels,
+    keys: channelCandidates,
+    wildcardKey: "*",
+    normalizeKey: normalizeChannelSlug,
+  });
+  const channelConfig = channelMatch.entry;
 
-  let channelKey: string | undefined;
-  if (conversationId && channels[conversationId]) channelKey = conversationId;
-  if (!channelKey && channelName) {
-    const slug = normalize(channelName);
-    if (slug) {
-      channelKey = channelKeys.find((key) => normalize(key) === slug);
-    }
-  }
-  if (!channelKey && channels["*"]) channelKey = "*";
-  const channelConfig = channelKey ? channels[channelKey] : undefined;
-  const channelAllowlistConfigured = channelKeys.length > 0;
-
-  const allowed = !allowlistConfigured
-    ? true
-    : Boolean(teamConfig) && (!channelAllowlistConfigured || Boolean(channelConfig));
+  const allowed = resolveNestedAllowlistDecision({
+    outerConfigured: allowlistConfigured,
+    outerMatched: Boolean(teamConfig),
+    innerConfigured: channelAllowlistConfigured,
+    innerMatched: Boolean(channelConfig),
+  });
 
   return {
     teamConfig,
     channelConfig,
     allowlistConfigured,
     allowed,
-    teamKey,
-    channelKey,
+    teamKey: teamMatch.matchKey ?? teamMatch.key,
+    channelKey: channelMatch.matchKey ?? channelMatch.key,
+    channelMatchKey: channelMatch.matchKey,
+    channelMatchSource:
+      channelMatch.matchSource === "direct" || channelMatch.matchSource === "wildcard"
+        ? channelMatch.matchSource
+        : undefined,
   };
 }
 
@@ -82,6 +90,31 @@ export type MSTeamsReplyPolicy = {
   requireMention: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
+
+export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+
+export function resolveMSTeamsAllowlistMatch(params: {
+  allowFrom: Array<string | number>;
+  senderId: string;
+  senderName?: string | null;
+}): MSTeamsAllowlistMatch {
+  const allowFrom = params.allowFrom
+    .map((entry) => String(entry).trim().toLowerCase())
+    .filter(Boolean);
+  if (allowFrom.length === 0) return { allowed: false };
+  if (allowFrom.includes("*")) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
+  }
+  const senderId = params.senderId.toLowerCase();
+  if (allowFrom.includes(senderId)) {
+    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  }
+  const senderName = params.senderName?.toLowerCase();
+  if (senderName && allowFrom.includes(senderName)) {
+    return { allowed: true, matchKey: senderName, matchSource: "name" };
+  }
+  return { allowed: false };
+}
 
 export function resolveMSTeamsReplyPolicy(params: {
   isDirectMessage: boolean;
@@ -119,12 +152,5 @@ export function isMSTeamsGroupAllowed(params: {
   const { groupPolicy } = params;
   if (groupPolicy === "disabled") return false;
   if (groupPolicy === "open") return true;
-  const allowFrom = params.allowFrom
-    .map((entry) => String(entry).trim().toLowerCase())
-    .filter(Boolean);
-  if (allowFrom.length === 0) return false;
-  if (allowFrom.includes("*")) return true;
-  const senderId = params.senderId.toLowerCase();
-  const senderName = params.senderName?.toLowerCase();
-  return allowFrom.includes(senderId) || (senderName ? allowFrom.includes(senderName) : false);
+  return resolveMSTeamsAllowlistMatch(params).allowed;
 }

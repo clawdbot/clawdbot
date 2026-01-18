@@ -15,7 +15,7 @@ import type {
   RoomTopicEventContent,
 } from "matrix-js-sdk/lib/@types/state_events.js";
 
-import { loadConfig } from "../../../../src/config/config.js";
+import { loadConfig } from "clawdbot/plugin-sdk";
 import type { CoreConfig } from "../types.js";
 import { getActiveMatrixClient } from "./active-client.js";
 import {

@@ -62,7 +62,16 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
     { key: "CLAWDBOT_STATE_DIR", value: process.env.CLAWDBOT_STATE_DIR },
     { key: "CLAWDBOT_CONFIG_PATH", value: process.env.CLAWDBOT_CONFIG_PATH },
+    { key: "CLAWDBOT_GATEWAY_PORT", value: process.env.CLAWDBOT_GATEWAY_PORT },
+    { key: "CLAWDBOT_BRIDGE_ENABLED", value: process.env.CLAWDBOT_BRIDGE_ENABLED },
+    { key: "CLAWDBOT_BRIDGE_HOST", value: process.env.CLAWDBOT_BRIDGE_HOST },
+    { key: "CLAWDBOT_BRIDGE_PORT", value: process.env.CLAWDBOT_BRIDGE_PORT },
+    { key: "CLAWDBOT_CANVAS_HOST_PORT", value: process.env.CLAWDBOT_CANVAS_HOST_PORT },
     { key: "CLAWDBOT_TEST_HOME", value: process.env.CLAWDBOT_TEST_HOME },
+    { key: "COPILOT_GITHUB_TOKEN", value: process.env.COPILOT_GITHUB_TOKEN },
+    { key: "GH_TOKEN", value: process.env.GH_TOKEN },
+    { key: "GITHUB_TOKEN", value: process.env.GITHUB_TOKEN },
+    { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-test-home-"));
@@ -75,6 +84,18 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   delete process.env.CLAWDBOT_CONFIG_PATH;
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   delete process.env.CLAWDBOT_STATE_DIR;
+  // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
+  delete process.env.CLAWDBOT_GATEWAY_PORT;
+  delete process.env.CLAWDBOT_BRIDGE_ENABLED;
+  delete process.env.CLAWDBOT_BRIDGE_HOST;
+  delete process.env.CLAWDBOT_BRIDGE_PORT;
+  delete process.env.CLAWDBOT_CANVAS_HOST_PORT;
+  // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
+  delete process.env.COPILOT_GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
+  delete process.env.NODE_OPTIONS;
 
   // Windows: prefer the legacy default state dir so auth/profile tests match real paths.
   if (process.platform === "win32") {

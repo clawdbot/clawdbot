@@ -1,3 +1,5 @@
+import type { AllowlistMatch } from "clawdbot/plugin-sdk";
+
 function normalizeAllowList(list?: Array<string | number>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
@@ -10,11 +12,9 @@ function normalizeMatrixUser(raw?: string | null): string {
   return (raw ?? "").trim().toLowerCase();
 }
 
-export type MatrixAllowListMatch = {
-  allowed: boolean;
-  matchKey?: string;
-  matchSource?: "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "localpart";
-};
+export type MatrixAllowListMatch = AllowlistMatch<
+  "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "localpart"
+>;
 
 export function resolveMatrixAllowListMatch(params: {
   allowList: string[];

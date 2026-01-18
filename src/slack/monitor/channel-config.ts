@@ -2,7 +2,7 @@ import type { SlackReactionNotificationMode } from "../../config/config.js";
 import type { SlackMessageEvent } from "../types.js";
 import {
   buildChannelKeyCandidates,
-  resolveChannelEntryMatch,
+  resolveChannelEntryMatchWithFallback,
 } from "../../channels/channel-config.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
@@ -91,10 +91,10 @@ export function resolveSlackChannelConfig(params: {
   );
   const {
     entry: matched,
-    key: matchedKey,
     wildcardEntry: fallback,
-    wildcardKey,
-  } = resolveChannelEntryMatch({
+    matchKey,
+    matchSource,
+  } = resolveChannelEntryMatchWithFallback({
     entries,
     keys: candidates,
     wildcardKey: "*",
@@ -127,12 +127,9 @@ export function resolveSlackChannelConfig(params: {
     skills,
     systemPrompt,
   };
-  if (matchedKey) {
-    result.matchKey = matchedKey;
-    result.matchSource = "direct";
-  } else if (wildcardKey && fallback) {
-    result.matchKey = wildcardKey;
-    result.matchSource = "wildcard";
+  if (matchKey) result.matchKey = matchKey;
+  if (matchSource === "direct" || matchSource === "wildcard") {
+    result.matchSource = matchSource;
   }
   return result;
 }

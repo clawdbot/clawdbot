@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 type LockFilePayload = {
   pid: number;
@@ -46,6 +47,7 @@ export async function acquireSessionWriteLock(params: {
   const staleMs = params.staleMs ?? 30 * 60 * 1000;
   const sessionFile = params.sessionFile;
   const lockPath = `${sessionFile}.lock`;
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
   const held = HELD_LOCKS.get(sessionFile);
   if (held) {

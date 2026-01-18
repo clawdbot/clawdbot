@@ -2,8 +2,9 @@ import type { Guild, User } from "@buape/carbon";
 
 import {
   buildChannelKeyCandidates,
-  resolveChannelEntryMatch,
+  resolveChannelEntryMatchWithFallback,
 } from "../../channels/channel-config.js";
+import type { AllowlistMatch } from "../../channels/allowlist-match.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -12,11 +13,7 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
-export type DiscordAllowListMatch = {
-  allowed: boolean;
-  matchKey?: string;
-  matchSource?: "wildcard" | "id" | "name" | "tag";
-};
+export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 export type DiscordGuildEntryResolved = {
   id?: string;
@@ -178,40 +175,47 @@ type DiscordChannelLookup = {
   slug?: string;
 };
 type DiscordChannelScope = "channel" | "thread";
-type DiscordChannelMatch = {
-  entry: DiscordChannelEntry;
-  key: string;
-};
 
-function resolveDiscordChannelEntry(
-  channels: NonNullable<DiscordGuildEntryResolved["channels"]>,
+function buildDiscordChannelKeys(
   params: DiscordChannelLookup & { allowNameMatch?: boolean },
-): DiscordChannelMatch | null {
+): string[] {
   const allowNameMatch = params.allowNameMatch !== false;
-  const keys = buildChannelKeyCandidates(
+  return buildChannelKeyCandidates(
     params.id,
     allowNameMatch ? params.slug : undefined,
     allowNameMatch ? params.name : undefined,
   );
-  const { entry, key } = resolveChannelEntryMatch({ entries: channels, keys });
-  if (!entry || !key) return null;
-  return { entry, key };
+}
+
+function resolveDiscordChannelEntryMatch(
+  channels: NonNullable<DiscordGuildEntryResolved["channels"]>,
+  params: DiscordChannelLookup & { allowNameMatch?: boolean },
+  parentParams?: DiscordChannelLookup,
+) {
+  const keys = buildDiscordChannelKeys(params);
+  const parentKeys = parentParams ? buildDiscordChannelKeys(parentParams) : undefined;
+  return resolveChannelEntryMatchWithFallback({
+    entries: channels,
+    keys,
+    parentKeys,
+  });
 }
 
 function resolveDiscordChannelConfigEntry(
-  match: DiscordChannelMatch,
+  entry: DiscordChannelEntry,
+  matchKey: string | undefined,
   matchSource: "direct" | "parent",
 ): DiscordChannelConfigResolved {
   const resolved: DiscordChannelConfigResolved = {
-    allowed: match.entry.allow !== false,
-    requireMention: match.entry.requireMention,
-    skills: match.entry.skills,
-    enabled: match.entry.enabled,
-    users: match.entry.users,
-    systemPrompt: match.entry.systemPrompt,
-    autoThread: match.entry.autoThread,
+    allowed: entry.allow !== false,
+    requireMention: entry.requireMention,
+    skills: entry.skills,
+    enabled: entry.enabled,
+    users: entry.users,
+    systemPrompt: entry.systemPrompt,
+    autoThread: entry.autoThread,
   };
-  if (match.key) resolved.matchKey = match.key;
+  if (matchKey) resolved.matchKey = matchKey;
   resolved.matchSource = matchSource;
   return resolved;
 }
@@ -225,13 +229,13 @@ export function resolveDiscordChannelConfig(params: {
   const { guildInfo, channelId, channelName, channelSlug } = params;
   const channels = guildInfo?.channels;
   if (!channels) return null;
-  const entry = resolveDiscordChannelEntry(channels, {
+  const match = resolveDiscordChannelEntryMatch(channels, {
     id: channelId,
     name: channelName,
     slug: channelSlug,
   });
-  if (!entry) return { allowed: false };
-  return resolveDiscordChannelConfigEntry(entry, "direct");
+  if (!match.entry || !match.matchKey) return { allowed: false };
+  return resolveDiscordChannelConfigEntry(match.entry, match.matchKey, "direct");
 }
 
 export function resolveDiscordChannelConfigWithFallback(params: {
@@ -256,21 +260,29 @@ export function resolveDiscordChannelConfigWithFallback(params: {
   } = params;
   const channels = guildInfo?.channels;
   if (!channels) return null;
-  const entry = resolveDiscordChannelEntry(channels, {
-    id: channelId,
-    name: channelName,
-    slug: channelSlug,
-    allowNameMatch: scope !== "thread",
-  });
-  if (entry) return resolveDiscordChannelConfigEntry(entry, "direct");
-  if (parentId || parentName || parentSlug) {
-    const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");
-    const parentEntry = resolveDiscordChannelEntry(channels, {
-      id: parentId ?? "",
-      name: parentName,
-      slug: resolvedParentSlug,
-    });
-    if (parentEntry) return resolveDiscordChannelConfigEntry(parentEntry, "parent");
+  const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");
+  const match = resolveDiscordChannelEntryMatch(
+    channels,
+    {
+      id: channelId,
+      name: channelName,
+      slug: channelSlug,
+      allowNameMatch: scope !== "thread",
+    },
+    parentId || parentName || parentSlug
+      ? {
+          id: parentId ?? "",
+          name: parentName,
+          slug: resolvedParentSlug,
+        }
+      : undefined,
+  );
+  if (match.entry && match.matchKey && match.matchSource) {
+    return resolveDiscordChannelConfigEntry(
+      match.entry,
+      match.matchKey,
+      match.matchSource === "parent" ? "parent" : "direct",
+    );
   }
   return { allowed: false };
 }

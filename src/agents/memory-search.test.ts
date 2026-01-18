@@ -81,7 +81,8 @@ describe("memory search config", () => {
     expect(resolved?.remote?.batch).toEqual({
       enabled: true,
       wait: true,
-      pollIntervalMs: 5000,
+      concurrency: 2,
+      pollIntervalMs: 2000,
       timeoutMinutes: 60,
     });
   });
@@ -133,7 +134,8 @@ describe("memory search config", () => {
       batch: {
         enabled: true,
         wait: true,
-        pollIntervalMs: 5000,
+        concurrency: 2,
+        pollIntervalMs: 2000,
         timeoutMinutes: 60,
       },
     });

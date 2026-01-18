@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 
+import { DEFAULT_ACCOUNT_ID } from "clawdbot/plugin-sdk";
+
 import type { ZaloConfig } from "./types.js";
-import { DEFAULT_ACCOUNT_ID } from "./shared/account-ids.js";
 
 export type ZaloTokenResolution = {
   token: string;

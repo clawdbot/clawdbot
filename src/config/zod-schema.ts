@@ -324,6 +324,11 @@ export const ClawdbotSchema = z
             paths: z.array(z.string()).optional(),
           })
           .optional(),
+        slots: z
+          .object({
+            memory: z.string().optional(),
+          })
+          .optional(),
         entries: z
           .record(
             z.string(),

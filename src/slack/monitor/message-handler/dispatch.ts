@@ -37,6 +37,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         to: `user:${message.user}`,
         accountId: route.accountId,
       },
+      ctx: prepared.ctxPayload,
     });
   }
 

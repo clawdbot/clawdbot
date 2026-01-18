@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../../agents/subagent-registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import type { MsgContext } from "../templating.js";
@@ -195,5 +199,130 @@ describe("handleCommands context", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Context breakdown (detailed)");
     expect(result.reply?.text).toContain("Top tools (schema size):");
+  });
+});
+
+describe("handleCommands subagents", () => {
+  it("lists subagents when none exist", async () => {
+    resetSubagentRegistryForTests();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/subagents list", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Subagents: none");
+  });
+
+  it("returns help for unknown subagents action", async () => {
+    resetSubagentRegistryForTests();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/subagents foo", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("/subagents");
+  });
+
+  it("returns usage for subagents info without target", async () => {
+    resetSubagentRegistryForTests();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/subagents info", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("/subagents info");
+  });
+
+  it("includes subagent count in /status when active", async () => {
+    resetSubagentRegistryForTests();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as ClawdbotConfig;
+    const params = buildParams("/status", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("🤖 Subagents: 1 active");
+  });
+
+  it("includes subagent details in /status when verbose", async () => {
+    resetSubagentRegistryForTests();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    addSubagentRunForTests({
+      runId: "run-2",
+      childSessionKey: "agent:main:subagent:def",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finished task",
+      cleanup: "keep",
+      createdAt: 900,
+      startedAt: 900,
+      endedAt: 1200,
+      outcome: { status: "ok" },
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as ClawdbotConfig;
+    const params = buildParams("/status", cfg);
+    params.resolvedVerboseLevel = "on";
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("🤖 Subagents: 1 active");
+    expect(result.reply?.text).toContain("· 1 done");
+  });
+
+  it("returns info for a subagent", async () => {
+    resetSubagentRegistryForTests();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+      endedAt: 2000,
+      outcome: { status: "ok" },
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as ClawdbotConfig;
+    const params = buildParams("/subagents info 1", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Subagent info");
+    expect(result.reply?.text).toContain("Run: run-1");
+    expect(result.reply?.text).toContain("Status: done");
   });
 });

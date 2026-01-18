@@ -249,7 +249,7 @@ Send these in WhatsApp/Telegram/Slack/Microsoft Teams/WebChat (group commands ar
 - `/compact` — compact session context (summary)
 - `/think <level>` — off|minimal|low|medium|high|xhigh (GPT-5.2 + Codex models only)
 - `/verbose on|off`
-- `/cost on|off` — append per-response token/cost usage lines
+- `/usage off|tokens|full` — per-response usage footer
 - `/restart` — restart the gateway (owner-only in groups)
 - `/activation mention|always` — group activation toggle (groups only)
 

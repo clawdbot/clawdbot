@@ -27,7 +27,11 @@ struct Semver: Comparable, CustomStringConvertible, Sendable {
         else { return nil }
         // Strip prerelease suffix (e.g., "11-4" → "11", "5-beta.1" → "5")
         let patchRaw = String(parts[2])
-        let patchNumeric = patchRaw.split { $0 == "-" || $0 == "+" }.first.flatMap { Int($0) } ?? 0
+        guard let patchToken = patchRaw.split(whereSeparator: { $0 == "-" || $0 == "+" }).first,
+              let patchNumeric = Int(patchToken)
+        else {
+            return nil
+        }
         return Semver(major: major, minor: minor, patch: patchNumeric)
     }
 

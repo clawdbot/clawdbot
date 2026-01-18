@@ -48,6 +48,23 @@ const CATALOG: ChannelPluginCatalogEntry[] = [
     },
   },
   {
+    id: "bluebubbles",
+    meta: {
+      id: "bluebubbles",
+      label: "BlueBubbles",
+      selectionLabel: "BlueBubbles (macOS app)",
+      docsPath: "/channels/bluebubbles",
+      docsLabel: "bluebubbles",
+      blurb: "iMessage via the BlueBubbles mac app + REST API.",
+      order: 75,
+    },
+    install: {
+      npmSpec: "@clawdbot/bluebubbles",
+      localPath: "extensions/bluebubbles",
+      defaultChoice: "npm",
+    },
+  },
+  {
     id: "zalo",
     meta: {
       id: "zalo",

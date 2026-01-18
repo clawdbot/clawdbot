@@ -760,6 +760,10 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let reasoninglevel: AnyCodable?
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
+    public let exechost: AnyCodable?
+    public let execsecurity: AnyCodable?
+    public let execask: AnyCodable?
+    public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
     public let sendpolicy: AnyCodable?
@@ -773,6 +777,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         reasoninglevel: AnyCodable?,
         responseusage: AnyCodable?,
         elevatedlevel: AnyCodable?,
+        exechost: AnyCodable?,
+        execsecurity: AnyCodable?,
+        execask: AnyCodable?,
+        execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
         sendpolicy: AnyCodable?,
@@ -785,6 +793,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.reasoninglevel = reasoninglevel
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
+        self.exechost = exechost
+        self.execsecurity = execsecurity
+        self.execask = execask
+        self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
         self.sendpolicy = sendpolicy
@@ -798,6 +810,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         case reasoninglevel = "reasoningLevel"
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
+        case exechost = "execHost"
+        case execsecurity = "execSecurity"
+        case execask = "execAsk"
+        case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
         case sendpolicy = "sendPolicy"

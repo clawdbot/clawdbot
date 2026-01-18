@@ -1,3 +1,4 @@
+import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { loadConfig } from "../../../config/config.js";
 import { logVerbose } from "../../../globals.js";
@@ -94,6 +95,22 @@ export function createWebOnMessageHandler(params: {
     }
 
     if (msg.chatType === "group") {
+      const metaCtx = {
+        From: msg.from,
+        To: msg.to,
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
+        ChatType: msg.chatType,
+        ConversationLabel: conversationId,
+        GroupSubject: msg.groupSubject,
+        SenderName: msg.senderName,
+        SenderId: msg.senderJid?.trim() || msg.senderE164,
+        SenderE164: msg.senderE164,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: conversationId,
+      } satisfies MsgContext;
       updateLastRouteInBackground({
         cfg: params.cfg,
         backgroundTasks: params.backgroundTasks,
@@ -102,6 +119,7 @@ export function createWebOnMessageHandler(params: {
         channel: "whatsapp",
         to: conversationId,
         accountId: route.accountId,
+        ctx: metaCtx,
         warn: params.replyLogger.warn.bind(params.replyLogger),
       });
 

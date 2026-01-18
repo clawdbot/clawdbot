@@ -166,9 +166,7 @@ function setSlackChannelAllowlist(
   accountId: string,
   channelKeys: string[],
 ): ClawdbotConfig {
-  const channels = Object.fromEntries(
-    channelKeys.map((key) => [key, { allow: true }]),
-  );
+  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
@@ -396,16 +394,11 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
             const unresolved = resolved
               .filter((entry) => !entry.resolved)
               .map((entry) => entry.input);
-            keys = [
-              ...resolvedKeys,
-              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
-            ];
+            keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
             if (resolvedKeys.length > 0 || unresolved.length > 0) {
               await prompter.note(
                 [
-                  resolvedKeys.length > 0
-                    ? `Resolved: ${resolvedKeys.join(", ")}`
-                    : undefined,
+                  resolvedKeys.length > 0 ? `Resolved: ${resolvedKeys.join(", ")}` : undefined,
                   unresolved.length > 0
                     ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
                     : undefined,

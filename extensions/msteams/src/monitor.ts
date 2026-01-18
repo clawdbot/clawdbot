@@ -1,9 +1,12 @@
 import type { Request, Response } from "express";
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { mergeAllowlist, summarizeMapping } from "../../../src/channels/allowlists/resolve-utils.js";
-import type { ClawdbotConfig } from "../../../src/config/types.js";
-import { getChildLogger } from "../../../src/logging.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import {
+  getChildLogger,
+  mergeAllowlist,
+  resolveTextChunkLimit,
+  summarizeMapping,
+  type ClawdbotConfig,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { formatUnknownError } from "./errors.js";

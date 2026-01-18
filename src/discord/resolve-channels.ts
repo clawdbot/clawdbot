@@ -60,11 +60,7 @@ function parseDiscordChannelInput(raw: string): {
   return { guild: trimmed, guildOnly: true };
 }
 
-async function fetchDiscord<T>(
-  path: string,
-  token: string,
-  fetcher: typeof fetch,
-): Promise<T> {
+async function fetchDiscord<T>(path: string, token: string, fetcher: typeof fetch): Promise<T> {
   const res = await fetcher(`${DISCORD_API_BASE}${path}`, {
     headers: { Authorization: `Bot ${token}` },
   });
@@ -107,7 +103,7 @@ async function listGuildChannels(
           : undefined;
       return {
         id: channel.id,
-        name: "name" in channel ? channel.name ?? "" : "",
+        name: "name" in channel ? (channel.name ?? "") : "",
         guildId,
         type: channel.type,
         archived,
@@ -129,7 +125,7 @@ async function fetchChannel(
   if (!raw || !("guild_id" in raw)) return null;
   return {
     id: raw.id,
-    name: "name" in raw ? raw.name ?? "" : "",
+    name: "name" in raw ? (raw.name ?? "") : "",
     guildId: raw.guild_id ?? "",
     type: raw.type,
   };

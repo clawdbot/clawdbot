@@ -1,9 +1,12 @@
 import type { MatrixClient } from "matrix-js-sdk";
 
-import { chunkMarkdownText } from "../../../../../src/auto-reply/chunk.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
-import { danger, logVerbose } from "../../../../../src/globals.js";
-import type { RuntimeEnv } from "../../../../../src/runtime.js";
+import {
+  chunkMarkdownText,
+  danger,
+  logVerbose,
+  type ReplyPayload,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import { sendMessageMatrix } from "../send.js";
 
 export async function deliverMatrixReplies(params: {

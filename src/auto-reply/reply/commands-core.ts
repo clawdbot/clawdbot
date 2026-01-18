@@ -13,12 +13,14 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
+import { handleSubagentsCommand } from "./commands-subagents.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
   handleRestartCommand,
   handleSendPolicyCommand,
   handleStopCommand,
+  handleUsageCommand,
 } from "./commands-session.js";
 import type {
   CommandHandler,
@@ -30,12 +32,14 @@ const HANDLERS: CommandHandler[] = [
   handleBashCommand,
   handleActivationCommand,
   handleSendPolicyCommand,
+  handleUsageCommand,
   handleRestartCommand,
   handleHelpCommand,
   handleCommandsListCommand,
   handleStatusCommand,
   handleContextCommand,
   handleWhoamiCommand,
+  handleSubagentsCommand,
   handleConfigCommand,
   handleDebugCommand,
   handleStopCommand,

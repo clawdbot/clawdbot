@@ -43,7 +43,6 @@ final class MacNodeModeCoordinator {
     private func run() async {
         var retryDelay: UInt64 = 1_000_000_000
         var lastCameraEnabled: Bool?
-        var lastSystemRunPolicy: SystemRunPolicy?
         let defaults = UserDefaults.standard
         while !Task.isCancelled {
             if await MainActor.run(body: { AppStateStore.shared.isPaused }) {
@@ -56,15 +55,6 @@ final class MacNodeModeCoordinator {
                 lastCameraEnabled = cameraEnabled
             } else if lastCameraEnabled != cameraEnabled {
                 lastCameraEnabled = cameraEnabled
-                await self.session.disconnect()
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-
-            let systemRunPolicy = SystemRunPolicy.load()
-            if lastSystemRunPolicy == nil {
-                lastSystemRunPolicy = systemRunPolicy
-            } else if lastSystemRunPolicy != systemRunPolicy {
-                lastSystemRunPolicy = systemRunPolicy
                 await self.session.disconnect()
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
@@ -89,8 +79,13 @@ final class MacNodeModeCoordinator {
                         if let mainSessionKey {
                             await self?.runtime.updateMainSessionKey(mainSessionKey)
                         }
+                        await self?.runtime.setEventSender { [weak self] event, payload in
+                            guard let self else { return }
+                            try? await self.session.sendEvent(event: event, payloadJSON: payload)
+                        }
                     },
-                    onDisconnected: { reason in
+                    onDisconnected: { [weak self] reason in
+                        await self?.runtime.setEventSender(nil)
                         await MacNodeModeCoordinator.handleBridgeDisconnect(reason: reason)
                     },
                     onInvoke: { [weak self] req in
@@ -161,12 +156,9 @@ final class MacNodeModeCoordinator {
             ClawdbotCanvasA2UICommand.reset.rawValue,
             MacNodeScreenCommand.record.rawValue,
             ClawdbotSystemCommand.notify.rawValue,
+            ClawdbotSystemCommand.which.rawValue,
+            ClawdbotSystemCommand.run.rawValue,
         ]
-
-        if SystemRunPolicy.load() != .never {
-            commands.append(ClawdbotSystemCommand.which.rawValue)
-            commands.append(ClawdbotSystemCommand.run.rawValue)
-        }
 
         let capsSet = Set(caps)
         if capsSet.contains(ClawdbotCapability.camera.rawValue) {

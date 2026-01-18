@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { MSTeamsConfig } from "../../../src/config/types.js";
+import type { MSTeamsConfig } from "clawdbot/plugin-sdk";
 
 const hostMockState = vi.hoisted(() => ({
   tokenError: null as Error | null,

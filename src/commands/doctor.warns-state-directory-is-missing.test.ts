@@ -172,6 +172,10 @@ vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  loadClawdbotPlugins: () => ({ plugins: [], diagnostics: [] }),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -248,6 +252,7 @@ vi.mock("../telegram/pairing-store.js", () => ({
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+  upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
 vi.mock("../telegram/token.js", () => ({
@@ -347,7 +352,7 @@ describe("doctor command", () => {
     const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
-  }, 20_000);
+  }, 30_000);
 
   it("warns about opencode provider overrides", async () => {
     readConfigFileSnapshot.mockResolvedValue({

@@ -14,9 +14,9 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveMentionGating } from "../../channels/mention-gating.js";
+import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
 import { sendMessageDiscord } from "../send.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
   allowListMatches,
   isDiscordGroupAllowedByPolicy,
@@ -347,6 +347,7 @@ export async function preflightDiscordMessage(
     cfg: params.cfg,
     surface: "discord",
   });
+  const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
 
   if (!isDirectMessage) {
     const ownerAllowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:"]);
@@ -368,36 +369,35 @@ export async function preflightDiscordMessage(
           })
         : false;
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-    commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+    const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: ownerAllowList != null, allowed: ownerOk },
         { configured: Array.isArray(channelUsers) && channelUsers.length > 0, allowed: usersOk },
       ],
       modeWhenAccessGroupsOff: "configured",
+      allowTextCommands,
+      hasControlCommand: hasControlCommandInMessage,
     });
+    commandAuthorized = commandGate.commandAuthorized;
 
-    if (allowTextCommands && hasControlCommand(baseText, params.cfg) && !commandAuthorized) {
+    if (commandGate.shouldBlock) {
       logVerbose(`Blocked discord control command from unauthorized sender ${author.id}`);
       return null;
     }
   }
 
-  const shouldBypassMention =
-    allowTextCommands &&
-    isGuildMessage &&
-    shouldRequireMention &&
-    !wasMentioned &&
-    !hasAnyMention &&
-    commandAuthorized &&
-    hasControlCommand(baseText, params.cfg);
   const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
-  const mentionGate = resolveMentionGating({
+  const mentionGate = resolveMentionGatingWithBypass({
+    isGroup: isGuildMessage,
     requireMention: Boolean(shouldRequireMention),
     canDetectMention,
     wasMentioned,
     implicitMention,
-    shouldBypassMention,
+    hasAnyMention,
+    allowTextCommands,
+    hasControlCommand: hasControlCommandInMessage,
+    commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGuildMessage && shouldRequireMention) {
@@ -504,7 +504,7 @@ export async function preflightDiscordMessage(
     shouldRequireMention,
     hasAnyMention,
     allowTextCommands,
-    shouldBypassMention,
+    shouldBypassMention: mentionGate.shouldBypassMention,
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,

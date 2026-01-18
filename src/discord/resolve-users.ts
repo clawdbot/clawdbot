@@ -81,11 +81,7 @@ async function listGuilds(token: string, fetcher: typeof fetch): Promise<Discord
 function scoreDiscordMember(member: DiscordMember, query: string): number {
   const q = query.toLowerCase();
   const user = member.user;
-  const candidates = [
-    user.username,
-    user.global_name,
-    member.nick ?? undefined,
-  ]
+  const candidates = [user.username, user.global_name, member.nick ?? undefined]
     .map((value) => value?.toLowerCase())
     .filter(Boolean) as string[];
   let score = 0;

@@ -1,6 +1,6 @@
 import { ClientEvent, type MatrixClient, SyncState } from "matrix-js-sdk";
 
-import { loadConfig } from "../../../../src/config/config.js";
+import { loadConfig } from "clawdbot/plugin-sdk";
 import type { CoreConfig } from "../types.js";
 
 export type MatrixResolvedConfig = {

@@ -40,10 +40,3 @@ export type ResolvedZaloAccount = {
   tokenSource: ZaloTokenSource;
   config: ZaloAccountConfig;
 };
-
-export type CoreConfig = {
-  channels?: {
-    zalo?: ZaloConfig;
-  };
-  [key: string]: unknown;
-};

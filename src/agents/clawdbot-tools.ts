@@ -9,7 +9,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./tools/memory-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -33,6 +32,7 @@ export function createClawdbotTools(options?: {
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
+  pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -49,14 +49,6 @@ export function createClawdbotTools(options?: {
         sandboxRoot: options?.sandboxRoot,
       })
     : null;
-  const memorySearchTool = createMemorySearchTool({
-    config: options?.config,
-    agentSessionKey: options?.agentSessionKey,
-  });
-  const memoryGetTool = createMemoryGetTool({
-    config: options?.config,
-    agentSessionKey: options?.agentSessionKey,
-  });
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
@@ -74,7 +66,10 @@ export function createClawdbotTools(options?: {
       allowedControlPorts: options?.allowedControlPorts,
     }),
     createCanvasTool(),
-    createNodesTool(),
+    createNodesTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
@@ -116,7 +111,6 @@ export function createClawdbotTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
-    ...(memorySearchTool && memoryGetTool ? [memorySearchTool, memoryGetTool] : []),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
@@ -137,6 +131,7 @@ export function createClawdbotTools(options?: {
       sandboxed: options?.sandboxed,
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
+    toolAllowlist: options?.pluginToolAllowlist,
   });
 
   return [...tools, ...pluginTools];

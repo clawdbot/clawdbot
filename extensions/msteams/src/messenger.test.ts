@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN } from "clawdbot/plugin-sdk";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
   type MSTeamsAdapter,

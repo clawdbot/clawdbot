@@ -74,10 +74,6 @@ struct MacNodeRuntimeTests {
             {
                 CLLocation(latitude: 0, longitude: 0)
             }
-
-            func confirmSystemRun(command: String, cwd: String?) async -> SystemRunDecision {
-                .allowOnce
-            }
         }
 
         let services = await MainActor.run { FakeMainActorServices() }

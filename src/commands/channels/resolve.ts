@@ -22,7 +22,9 @@ type ResolveResult = {
   note?: string;
 };
 
-function resolvePreferredKind(kind?: ChannelsResolveOptions["kind"]): ChannelResolveKind | undefined {
+function resolvePreferredKind(
+  kind?: ChannelsResolveOptions["kind"],
+): ChannelResolveKind | undefined {
   if (!kind || kind === "auto") return undefined;
   if (kind === "user") return "user";
   return "group";
@@ -46,10 +48,7 @@ function formatResolveResult(result: ResolveResult): string {
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
-export async function channelsResolveCommand(
-  opts: ChannelsResolveOptions,
-  runtime: RuntimeEnv,
-) {
+export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const cfg = loadConfig();
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {

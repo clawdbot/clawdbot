@@ -54,6 +54,7 @@ type StatusArgs = {
   usageLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: MediaUnderstandingDecision[];
+  subagentsLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -367,6 +368,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,
+    args.subagentsLine,
     `⚙️ ${optionsLine}`,
     activationLine,
   ]
@@ -381,7 +383,7 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
     "/reasoning on|off",
     "/elevated on|off",
     "/model <id>",
-    "/cost on|off",
+    "/usage off|tokens|full",
   ];
   if (cfg?.commands?.config === true) options.push("/config show");
   if (cfg?.commands?.debug === true) options.push("/debug show");

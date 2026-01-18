@@ -1,5 +1,9 @@
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
-import { resolveDefaultAgentId, resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveDefaultAgentId,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";

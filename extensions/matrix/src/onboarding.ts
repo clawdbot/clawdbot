@@ -1,11 +1,11 @@
-import { addWildcardAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
-import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import {
+  addWildcardAllowFrom,
+  formatDocsLink,
+  promptChannelAccessConfig,
+  type ChannelOnboardingAdapter,
+  type ChannelOnboardingDmPolicy,
+  type WizardPrompter,
+} from "clawdbot/plugin-sdk";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";

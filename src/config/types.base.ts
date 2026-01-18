@@ -55,6 +55,20 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
+export type SessionResetMode = "daily" | "idle";
+export type SessionResetConfig = {
+  mode?: SessionResetMode;
+  /** Local hour (0-23) for the daily reset boundary. */
+  atHour?: number;
+  /** Sliding idle window (minutes). When set with daily mode, whichever expires first wins. */
+  idleMinutes?: number;
+};
+export type SessionResetByTypeConfig = {
+  dm?: SessionResetConfig;
+  group?: SessionResetConfig;
+  thread?: SessionResetConfig;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -64,6 +78,8 @@ export type SessionConfig = {
   resetTriggers?: string[];
   idleMinutes?: number;
   heartbeatIdleMinutes?: number;
+  reset?: SessionResetConfig;
+  resetByType?: SessionResetByTypeConfig;
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;

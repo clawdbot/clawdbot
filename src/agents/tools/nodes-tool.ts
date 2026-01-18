@@ -17,12 +17,14 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -86,7 +88,15 @@ const NodesToolSchema = Type.Object({
   needsScreenRecording: Type.Optional(Type.Boolean()),
 });
 
-export function createNodesTool(): AnyAgentTool {
+export function createNodesTool(options?: {
+  agentSessionKey?: string;
+  config?: ClawdbotConfig;
+}): AnyAgentTool {
+  const sessionKey = options?.agentSessionKey?.trim() || undefined;
+  const agentId = resolveSessionAgentId({
+    sessionKey: options?.agentSessionKey,
+    config: options?.config,
+  });
   return {
     label: "Nodes",
     name: "nodes",
@@ -375,7 +385,22 @@ export function createNodesTool(): AnyAgentTool {
         }
         case "run": {
           const node = readStringParam(params, "node", { required: true });
-          const nodeId = await resolveNodeId(gatewayOpts, node);
+          const nodes = await listNodes(gatewayOpts);
+          if (nodes.length === 0) {
+            throw new Error(
+              "system.run requires a paired macOS companion app (no nodes available).",
+            );
+          }
+          const nodeId = resolveNodeIdFromList(nodes, node);
+          const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
+          const supportsSystemRun = Array.isArray(nodeInfo?.commands)
+            ? nodeInfo?.commands?.includes("system.run")
+            : false;
+          if (!supportsSystemRun) {
+            throw new Error(
+              "system.run requires the macOS companion app; the selected node does not support system.run.",
+            );
+          }
           const commandRaw = params.command;
           if (!commandRaw) {
             throw new Error("command required (argv array, e.g. ['echo', 'Hello'])");
@@ -405,6 +430,8 @@ export function createNodesTool(): AnyAgentTool {
               env,
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
+              agentId,
+              sessionKey,
             },
             timeoutMs: invokeTimeoutMs,
             idempotencyKey: crypto.randomUUID(),

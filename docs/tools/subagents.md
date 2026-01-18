@@ -9,6 +9,17 @@ read_when:
 
 Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel.
 
+## Slash command
+
+Use `/subagents` to inspect or control sub-agent runs for the **current session**:
+- `/subagents list`
+- `/subagents stop <id|#|all>`
+- `/subagents log <id|#> [limit] [tools]`
+- `/subagents info <id|#>`
+- `/subagents send <id|#> <message>`
+
+`/subagents info` shows run metadata (status, timestamps, session id, transcript path, cleanup).
+
 Primary goals:
 - Parallelize “research / long task / slow tool” work without blocking the main run.
 - Keep sub-agents isolated by default (session separation + optional sandboxing).

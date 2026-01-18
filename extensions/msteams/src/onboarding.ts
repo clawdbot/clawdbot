@@ -1,14 +1,16 @@
-import type { ClawdbotConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
-import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
-import { addWildcardAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
+  ClawdbotConfig,
+  DmPolicy,
+  WizardPrompter,
+} from "clawdbot/plugin-sdk";
+import {
+  addWildcardAllowFrom,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  promptChannelAccessConfig,
+} from "clawdbot/plugin-sdk";
 
 import { resolveMSTeamsCredentials } from "./token.js";
 import {

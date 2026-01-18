@@ -1,13 +1,14 @@
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
+  formatPairingApproveHint,
+  normalizeAccountId,
+  PAIRING_APPROVED_MESSAGE,
   setAccountEnabledInConfigSection,
-} from "../../../src/channels/plugins/config-helpers.js";
-import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
-import { formatPairingApproveHint } from "../../../src/channels/plugins/helpers.js";
-import { PAIRING_APPROVED_MESSAGE } from "../../../src/channels/plugins/pairing-message.js";
-import { applyAccountNameToChannelSection } from "../../../src/channels/plugins/setup-helpers.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  type ChannelPlugin,
+} from "clawdbot/plugin-sdk";
 
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";

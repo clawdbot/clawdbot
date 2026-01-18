@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MSTeamsConfig } from "../../../src/config/types.js";
+import type { MSTeamsConfig } from "clawdbot/plugin-sdk";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
@@ -31,6 +31,8 @@ describe("msteams policy", () => {
       expect(res.channelConfig?.requireMention).toBe(true);
       expect(res.allowlistConfigured).toBe(true);
       expect(res.allowed).toBe(true);
+      expect(res.channelMatchKey).toBe("chan456");
+      expect(res.channelMatchSource).toBe("direct");
     });
 
     it("returns undefined configs when teamId is missing", () => {

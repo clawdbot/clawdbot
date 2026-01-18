@@ -9,6 +9,7 @@
     ]
   },
   "dependencies": {
+    "clawdbot": "workspace:*",
     "undici": "7.18.2"
   }
 }

@@ -7,6 +7,7 @@ import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger } from "./logger.js";
 import { loggingState } from "./state.js";
+import { clearActiveProgressLine } from "../terminal/progress-line.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -163,6 +164,7 @@ function formatConsoleLine(opts: {
 }
 
 function writeConsoleLine(level: LogLevel, line: string) {
+  clearActiveProgressLine();
   const sanitized =
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")

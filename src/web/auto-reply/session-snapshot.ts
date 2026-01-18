@@ -1,7 +1,9 @@
 import type { loadConfig } from "../../config/config.js";
 import {
-  DEFAULT_IDLE_MINUTES,
+  evaluateSessionFreshness,
   loadSessionStore,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
   resolveSessionKey,
   resolveStorePath,
 } from "../../config/sessions.js";
@@ -21,12 +23,24 @@ export function getSessionSnapshot(
   );
   const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
   const entry = store[key];
-  const idleMinutes = Math.max(
-    (isHeartbeat
-      ? (sessionCfg?.heartbeatIdleMinutes ?? sessionCfg?.idleMinutes)
-      : sessionCfg?.idleMinutes) ?? DEFAULT_IDLE_MINUTES,
-    1,
-  );
-  const fresh = !!(entry && Date.now() - entry.updatedAt <= idleMinutes * 60_000);
-  return { key, entry, fresh, idleMinutes };
+  const resetType = resolveSessionResetType({ sessionKey: key });
+  const idleMinutesOverride = isHeartbeat ? sessionCfg?.heartbeatIdleMinutes : undefined;
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    idleMinutesOverride,
+  });
+  const now = Date.now();
+  const freshness = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+    : { fresh: false };
+  return {
+    key,
+    entry,
+    fresh: freshness.fresh,
+    resetPolicy,
+    resetType,
+    dailyResetAt: freshness.dailyResetAt,
+    idleExpiresAt: freshness.idleExpiresAt,
+  };
 }

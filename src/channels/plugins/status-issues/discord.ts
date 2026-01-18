@@ -1,5 +1,5 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { appendMatchMetadata, asString, isRecord } from "./shared.js";
 
 type DiscordIntentSummary = {
   messageContent?: "enabled" | "limited" | "disabled";
@@ -128,15 +128,15 @@ export function collectDiscordStatusIssues(
       if (channel.ok === true) continue;
       const missing = channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : "";
       const error = channel.error ? `: ${channel.error}` : "";
-      const matchMeta =
-        channel.matchKey || channel.matchSource
-          ? ` (matchKey=${channel.matchKey ?? "none"} matchSource=${channel.matchSource ?? "none"})`
-          : "";
+      const baseMessage = `Channel ${channel.channelId} permission check failed.${missing}${error}`;
       issues.push({
         channel: "discord",
         accountId,
         kind: "permissions",
-        message: `Channel ${channel.channelId} permission check failed.${missing}${error}${matchMeta}`,
+        message: appendMatchMetadata(baseMessage, {
+          matchKey: channel.matchKey,
+          matchSource: channel.matchSource,
+        }),
         fix: "Ensure the bot role can view + send in this channel (and that channel overrides don't deny it).",
       });
     }

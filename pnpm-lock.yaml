@@ -238,6 +238,8 @@ importers:
         specifier: 3.14.5
         version: 3.14.5(typescript@5.9.3)
 
+  extensions/bluebubbles: {}
+
   extensions/copilot-proxy: {}
 
   extensions/google-antigravity-auth: {}
@@ -246,12 +248,21 @@ importers:
 
   extensions/matrix:
     dependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
       markdown-it:
         specifier: 14.1.0
         version: 14.1.0
       matrix-js-sdk:
         specifier: 40.0.0
         version: 40.0.0
+
+  extensions/memory-core:
+    dependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/msteams:
     dependencies:
@@ -264,6 +275,9 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.1.1
         version: 1.1.1
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -285,6 +299,9 @@ importers:
 
   extensions/zalo:
     dependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
       undici:
         specifier: 7.18.2
         version: 7.18.2
@@ -294,6 +311,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   ui:
     dependencies:

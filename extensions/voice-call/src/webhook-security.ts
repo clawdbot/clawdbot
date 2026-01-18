@@ -98,6 +98,25 @@ export function reconstructWebhookUrl(ctx: WebhookContext): string {
   return `${proto}://${host}${path}`;
 }
 
+function buildTwilioVerificationUrl(
+  ctx: WebhookContext,
+  publicUrl?: string,
+): string {
+  if (!publicUrl) {
+    return reconstructWebhookUrl(ctx);
+  }
+
+  try {
+    const base = new URL(publicUrl);
+    const requestUrl = new URL(ctx.url);
+    base.pathname = requestUrl.pathname;
+    base.search = requestUrl.search;
+    return base.toString();
+  } catch {
+    return publicUrl;
+  }
+}
+
 /**
  * Get a header value, handling both string and string[] types.
  */
@@ -154,7 +173,7 @@ export function verifyTwilioWebhook(
   }
 
   // Reconstruct the URL Twilio used
-  const verificationUrl = options?.publicUrl || reconstructWebhookUrl(ctx);
+  const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl);
 
   // Parse the body as URL-encoded params
   const params = new URLSearchParams(ctx.rawBody);

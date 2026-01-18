@@ -9,9 +9,11 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  DEFAULT_IDLE_MINUTES,
+  evaluateSessionFreshness,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
   resolveSessionKey,
   resolveStorePath,
   type SessionEntry,
@@ -38,8 +40,6 @@ export function resolveSession(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const idleMinutes = Math.max(sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES, 1);
-  const idleMs = idleMinutes * 60_000;
   const explicitSessionKey = opts.sessionKey?.trim();
   const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
   const storePath = resolveStorePath(sessionCfg?.store, {
@@ -68,7 +68,11 @@ export function resolveSession(opts: {
     }
   }
 
-  const fresh = sessionEntry && sessionEntry.updatedAt >= now - idleMs;
+  const resetType = resolveSessionResetType({ sessionKey });
+  const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
+  const fresh = sessionEntry
+    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy }).fresh
+    : false;
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !opts.sessionId;

@@ -1,3 +1,5 @@
+import type { AllowlistMatch } from "../../channels/allowlist-match.js";
+
 export function normalizeSlackSlug(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
   if (!trimmed) return "";
@@ -14,18 +16,9 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
   return normalizeAllowList(list).map((entry) => entry.toLowerCase());
 }
 
-export type SlackAllowListMatch = {
-  allowed: boolean;
-  matchKey?: string;
-  matchSource?:
-    | "wildcard"
-    | "id"
-    | "prefixed-id"
-    | "prefixed-user"
-    | "name"
-    | "prefixed-name"
-    | "slug";
-};
+export type SlackAllowListMatch = AllowlistMatch<
+  "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug"
+>;
 
 export function resolveSlackAllowListMatch(params: {
   allowList: string[];

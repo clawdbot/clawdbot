@@ -17,6 +17,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
 - [iMessage](/channels/imessage) — macOS only; native integration.
+- [BlueBubbles](/channels/bluebubbles) — iMessage via BlueBubbles macOS server (bundled plugin, disabled by default).
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support (plugin, installed separately).
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).

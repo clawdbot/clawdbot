@@ -1,5 +1,9 @@
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import { formatThinkingLevels, normalizeUsageDisplay } from "../auto-reply/thinking.js";
+import {
+  formatThinkingLevels,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../auto-reply/thinking.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
@@ -317,23 +321,25 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`reasoning failed: ${String(err)}`);
         }
         break;
-      case "cost": {
+      case "usage": {
         const normalized = args ? normalizeUsageDisplay(args) : undefined;
         if (args && !normalized) {
-          chatLog.addSystem("usage: /cost <on|off>");
+          chatLog.addSystem("usage: /usage <off|tokens|full>");
           break;
         }
-        const current = state.sessionInfo.responseUsage === "on" ? "on" : "off";
-        const next = normalized ?? (current === "on" ? "off" : "on");
+        const currentRaw = state.sessionInfo.responseUsage;
+        const current = resolveResponseUsageMode(currentRaw);
+        const next =
+          normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           await client.patchSession({
             key: state.currentSessionKey,
             responseUsage: next === "off" ? null : next,
           });
-          chatLog.addSystem(next === "on" ? "usage line enabled" : "usage line disabled");
+          chatLog.addSystem(`usage footer: ${next}`);
           await refreshSessionInfo();
         } catch (err) {
-          chatLog.addSystem(`cost failed: ${String(err)}`);
+          chatLog.addSystem(`usage failed: ${String(err)}`);
         }
         break;
       }

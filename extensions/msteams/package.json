@@ -9,6 +9,7 @@
     ]
   },
   "dependencies": {
+    "clawdbot": "workspace:*",
     "@microsoft/agents-hosting": "^1.1.1",
     "@microsoft/agents-hosting-express": "^1.1.1",
     "@microsoft/agents-hosting-extensions-teams": "^1.1.1",

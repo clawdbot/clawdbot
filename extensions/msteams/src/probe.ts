@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "../../../src/config/types.js";
+import type { MSTeamsConfig } from "clawdbot/plugin-sdk";
 import { formatUnknownError } from "./errors.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";

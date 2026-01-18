@@ -117,7 +117,7 @@ export async function runEmbeddedPiAgent(
         );
       }
 
-      const authStore = ensureAuthProfileStore(agentDir);
+      const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const explicitProfileId = params.authProfileIdSource === "user" ? params.authProfileId?.trim() : undefined;
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
@@ -225,6 +225,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
             runId: params.runId,
@@ -329,6 +330,19 @@ export async function runEmbeddedPiAgent(
               );
               thinkLevel = fallbackThinking;
               continue;
+            }
+            // FIX: Throw FailoverError for prompt errors when fallbacks configured
+            // This enables model fallback for quota/rate limit errors during prompt submission
+            const promptFallbackConfigured =
+              (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+            if (promptFallbackConfigured && isFailoverErrorMessage(errorText)) {
+              throw new FailoverError(errorText, {
+                reason: promptFailoverReason ?? "unknown",
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
+              });
             }
             throw promptError;
           }

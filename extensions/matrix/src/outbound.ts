@@ -1,10 +1,11 @@
-import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "clawdbot/plugin-sdk";
+
+import { getMatrixRuntime } from "./runtime.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkMarkdownText,
+  chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
   textChunkLimit: 4000,
   sendText: async ({ to, text, deps, replyToId, threadId }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;

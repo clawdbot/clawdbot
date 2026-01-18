@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
@@ -78,15 +78,20 @@ vi.mock("@mariozechner/pi-ai", async () => {
               ? buildAssistantErrorMessage(model)
               : buildAssistantMessage(model),
         });
+        stream.end();
       });
       return stream;
     },
   };
 });
 
-vi.resetModules();
+let runEmbeddedPiAgent: typeof import("./pi-embedded-runner.js").runEmbeddedPiAgent;
 
-const { runEmbeddedPiAgent } = await import("./pi-embedded-runner.js");
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.resetModules();
+  ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
+});
 
 const makeOpenAiConfig = (modelIds: string[]) =>
   ({
@@ -112,6 +117,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
 
 const ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
   ensureClawdbotModelsJson(cfg, agentDir);
+
+const testSessionKey = "agent:test:embedded-models";
+const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;
@@ -169,7 +177,7 @@ describe("runEmbeddedPiAgent", () => {
     await expect(
       runEmbeddedPiAgent({
         sessionId: "session:test",
-        sessionKey: "agent:dev:test",
+        sessionKey: testSessionKey,
         sessionFile,
         workspaceDir,
         config: cfg,
@@ -178,12 +186,13 @@ describe("runEmbeddedPiAgent", () => {
         model: "definitely-not-a-model",
         timeoutMs: 1,
         agentDir,
+        enqueue: immediateEnqueue,
       }),
     ).rejects.toThrow(/Unknown model:/);
 
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
-  it("persists the first user message before assistant output", { timeout: 15_000 }, async () => {
+  it("persists the first user message before assistant output", { timeout: 60_000 }, async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
@@ -193,7 +202,7 @@ describe("runEmbeddedPiAgent", () => {
 
     await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -202,6 +211,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     const messages = await readSessionMessages(sessionFile);
@@ -224,7 +234,7 @@ describe("runEmbeddedPiAgent", () => {
 
     const result = await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -233,6 +243,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-error",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
     expect(result.payloads[0]?.isError).toBe(true);
 

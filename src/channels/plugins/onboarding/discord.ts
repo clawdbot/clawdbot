@@ -310,13 +310,13 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
               token: accountWithTokens.token,
               entries: accessConfig.entries,
             });
-            const resolvedChannels = resolved.filter(
-              (entry) => entry.resolved && entry.channelId,
-            );
+            const resolvedChannels = resolved.filter((entry) => entry.resolved && entry.channelId);
             const resolvedGuilds = resolved.filter(
               (entry) => entry.resolved && entry.guildId && !entry.channelId,
             );
-            const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
+            const unresolved = resolved
+              .filter((entry) => !entry.resolved)
+              .map((entry) => entry.input);
             if (resolvedChannels.length > 0 || resolvedGuilds.length > 0 || unresolved.length > 0) {
               const summary: string[] = [];
               if (resolvedChannels.length > 0) {

@@ -80,7 +80,9 @@ export async function listSlackDirectoryPeersLive(
     const name = member.profile?.display_name || member.profile?.real_name || member.real_name;
     const handle = member.name;
     const email = member.profile?.email;
-    const candidates = [name, handle, email].map((item) => item?.trim().toLowerCase()).filter(Boolean);
+    const candidates = [name, handle, email]
+      .map((item) => item?.trim().toLowerCase())
+      .filter(Boolean);
     if (!query) return true;
     return candidates.some((candidate) => candidate?.includes(query));
   });

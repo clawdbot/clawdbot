@@ -1,5 +1,5 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { appendMatchMetadata, asString, isRecord } from "./shared.js";
 
 type TelegramAccountStatus = {
   accountId?: unknown;
@@ -111,15 +111,15 @@ export function collectTelegramStatusIssues(
       if (group.ok === true) continue;
       const status = group.status ? ` status=${group.status}` : "";
       const err = group.error ? `: ${group.error}` : "";
-      const matchMeta =
-        group.matchKey || group.matchSource
-          ? ` (matchKey=${group.matchKey ?? "none"} matchSource=${group.matchSource ?? "none"})`
-          : "";
+      const baseMessage = `Group ${group.chatId} not reachable by bot.${status}${err}`;
       issues.push({
         channel: "telegram",
         accountId,
         kind: "runtime",
-        message: `Group ${group.chatId} not reachable by bot.${status}${err}${matchMeta}`,
+        message: appendMatchMetadata(baseMessage, {
+          matchKey: group.matchKey,
+          matchSource: group.matchSource,
+        }),
         fix: "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
       });
     }

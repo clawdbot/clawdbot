@@ -5,12 +5,14 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
+import { registerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveUserPath } from "../utils.js";
 import type {
   ClawdbotPluginApi,
   ClawdbotPluginChannelRegistration,
   ClawdbotPluginCliRegistrar,
   ClawdbotPluginHttpHandler,
+  ClawdbotPluginHookOptions,
   ProviderPlugin,
   ClawdbotPluginService,
   ClawdbotPluginToolContext,
@@ -19,12 +21,17 @@ import type {
   PluginDiagnostic,
   PluginLogger,
   PluginOrigin,
+  PluginKind,
 } from "./types.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import type { HookEntry } from "../hooks/types.js";
+import path from "node:path";
 
 export type PluginToolRegistration = {
   pluginId: string;
   factory: ClawdbotPluginToolFactory;
   names: string[];
+  optional: boolean;
   source: string;
 };
 
@@ -54,6 +61,13 @@ export type PluginProviderRegistration = {
   source: string;
 };
 
+export type PluginHookRegistration = {
+  pluginId: string;
+  entry: HookEntry;
+  events: string[];
+  source: string;
+};
+
 export type PluginServiceRegistration = {
   pluginId: string;
   service: ClawdbotPluginService;
@@ -65,6 +79,7 @@ export type PluginRecord = {
   name: string;
   version?: string;
   description?: string;
+  kind?: PluginKind;
   source: string;
   origin: PluginOrigin;
   workspaceDir?: string;
@@ -72,6 +87,7 @@ export type PluginRecord = {
   status: "loaded" | "disabled" | "error";
   error?: string;
   toolNames: string[];
+  hookNames: string[];
   channelIds: string[];
   providerIds: string[];
   gatewayMethods: string[];
@@ -86,6 +102,7 @@ export type PluginRecord = {
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
+  hooks: PluginHookRegistration[];
   channels: PluginChannelRegistration[];
   providers: PluginProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
@@ -98,12 +115,14 @@ export type PluginRegistry = {
 export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
+  runtime: PluginRuntime;
 };
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry: PluginRegistry = {
     plugins: [],
     tools: [],
+    hooks: [],
     channels: [],
     providers: [],
     gatewayHandlers: {},
@@ -121,9 +140,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerTool = (
     record: PluginRecord,
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
-    opts?: { name?: string; names?: string[] },
+    opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
+    const optional = opts?.optional === true;
     const factory: ClawdbotPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: ClawdbotPluginToolContext) => tool;
 
@@ -139,8 +159,79 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       factory,
       names: normalized,
+      optional,
       source: record.source,
     });
+  };
+
+  const registerHook = (
+    record: PluginRecord,
+    events: string | string[],
+    handler: Parameters<typeof registerInternalHook>[1],
+    opts: ClawdbotPluginHookOptions | undefined,
+    config: ClawdbotPluginApi["config"],
+  ) => {
+    const eventList = Array.isArray(events) ? events : [events];
+    const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
+    const entry = opts?.entry ?? null;
+    const name = entry?.hook.name ?? opts?.name?.trim();
+    if (!name) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "hook registration missing name",
+      });
+      return;
+    }
+
+    const description = entry?.hook.description ?? opts?.description ?? "";
+    const hookEntry: HookEntry = entry
+      ? {
+          ...entry,
+          hook: {
+            ...entry.hook,
+            name,
+            description,
+            source: "clawdbot-plugin",
+            pluginId: record.id,
+          },
+          clawdbot: {
+            ...entry.clawdbot,
+            events: normalizedEvents,
+          },
+        }
+      : {
+          hook: {
+            name,
+            description,
+            source: "clawdbot-plugin",
+            pluginId: record.id,
+            filePath: record.source,
+            baseDir: path.dirname(record.source),
+            handlerPath: record.source,
+          },
+          frontmatter: {},
+          clawdbot: { events: normalizedEvents },
+          invocation: { enabled: true },
+        };
+
+    record.hookNames.push(name);
+    registry.hooks.push({
+      pluginId: record.id,
+      entry: hookEntry,
+      events: normalizedEvents,
+      source: record.source,
+    });
+
+    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
+    if (!hookSystemEnabled || opts?.register === false) {
+      return;
+    }
+
+    for (const event of normalizedEvents) {
+      registerInternalHook(event, handler);
+    }
   };
 
   const registerGatewayMethod = (
@@ -277,8 +368,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       config: params.config,
       pluginConfig: params.pluginConfig,
+      runtime: registryParams.runtime,
       logger: normalizeLogger(registryParams.logger),
       registerTool: (tool, opts) => registerTool(record, tool, opts),
+      registerHook: (events, handler, opts) =>
+        registerHook(record, events, handler, opts, params.config),
       registerHttpHandler: (handler) => registerHttpHandler(record, handler),
       registerChannel: (registration) => registerChannel(record, registration),
       registerProvider: (provider) => registerProvider(record, provider),

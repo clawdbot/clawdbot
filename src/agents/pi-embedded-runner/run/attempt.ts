@@ -17,9 +17,9 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import {
-  buildBootstrapContextFiles,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   validateAnthropicTurns,
@@ -41,7 +41,6 @@ import {
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "../../workspace.js";
 
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
@@ -65,7 +64,7 @@ import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../../date-time.js";
-import { mapThinkingLevel, resolveExecToolDefaults } from "../utils.js";
+import { mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -120,21 +119,21 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
     });
 
-    const bootstrapFiles = filterBootstrapFilesForSession(
-      await loadWorkspaceBootstrapFiles(effectiveWorkspace),
-      params.sessionKey ?? params.sessionId,
-    );
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
-      maxChars: resolveBootstrapMaxChars(params.config),
-      warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
-    });
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+      await resolveBootstrapContextForRun({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+      });
 
     const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
 
     const toolsRaw = createClawdbotCodingTools({
       exec: {
-        ...resolveExecToolDefaults(params.config),
+        ...params.execOverrides,
         elevated: params.bashElevated,
       },
       sandbox,
@@ -251,7 +250,7 @@ export async function runEmbeddedAttempt(
         return { mode: runtime.mode, sandboxed: runtime.sandboxed };
       })(),
       systemPrompt: appendPrompt,
-      bootstrapFiles,
+      bootstrapFiles: hookAdjustedBootstrapFiles,
       injectedFiles: contextFiles,
       skillsPrompt,
       tools,
@@ -359,6 +358,33 @@ export async function runEmbeddedAttempt(
         runAbortController.abort();
         void activeSession.abort();
       };
+      const abortable = <T>(promise: Promise<T>): Promise<T> => {
+        const signal = runAbortController.signal;
+        if (signal.aborted) {
+          const err = new Error("aborted");
+          (err as { name?: string }).name = "AbortError";
+          return Promise.reject(err);
+        }
+        return new Promise<T>((resolve, reject) => {
+          const onAbort = () => {
+            const err = new Error("aborted");
+            (err as { name?: string }).name = "AbortError";
+            signal.removeEventListener("abort", onAbort);
+            reject(err);
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          promise.then(
+            (value) => {
+              signal.removeEventListener("abort", onAbort);
+              resolve(value);
+            },
+            (err) => {
+              signal.removeEventListener("abort", onAbort);
+              reject(err);
+            },
+          );
+        });
+      };
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
@@ -454,7 +480,7 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          await activeSession.prompt(params.prompt, { images: params.images });
+          await abortable(activeSession.prompt(params.prompt, { images: params.images }));
         } catch (err) {
           promptError = err;
         } finally {

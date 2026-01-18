@@ -1,13 +1,16 @@
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../../src/channels/plugins/types.js";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ClawdbotConfig,
+} from "clawdbot/plugin-sdk";
+import { jsonResult, readStringParam } from "clawdbot/plugin-sdk";
 
-import type { CoreConfig } from "./types.js";
 import { listEnabledZaloAccounts } from "./accounts.js";
 import { sendMessageZalo } from "./send.js";
-import { jsonResult, readStringParam } from "./tool-helpers.js";
 
 const providerId = "zalo";
 
-function listEnabledAccounts(cfg: CoreConfig) {
+function listEnabledAccounts(cfg: ClawdbotConfig) {
   return listEnabledZaloAccounts(cfg).filter(
     (account) => account.enabled && account.tokenSource !== "none",
   );
@@ -15,7 +18,7 @@ function listEnabledAccounts(cfg: CoreConfig) {
 
 export const zaloMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg as CoreConfig);
+    const accounts = listEnabledAccounts(cfg as ClawdbotConfig);
     if (accounts.length === 0) return [];
     const actions = new Set<ChannelMessageActionName>(["send"]);
     return Array.from(actions);
@@ -41,7 +44,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
-        cfg: cfg as CoreConfig,
+        cfg: cfg as ClawdbotConfig,
       });
 
       if (!result.ok) {

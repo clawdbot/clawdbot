@@ -4,6 +4,11 @@
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin-sdk": "./dist/plugin-sdk/index.js",
+    "./plugin-sdk/*": "./dist/plugin-sdk/*"
+  },
   "bin": {
     "clawdbot": "dist/entry.js"
   },
@@ -29,6 +34,7 @@
     "dist/media-understanding/**",
     "dist/process/**",
     "dist/plugins/**",
+    "dist/plugin-sdk/**",
     "dist/security/**",
     "dist/sessions/**",
     "dist/providers/**",

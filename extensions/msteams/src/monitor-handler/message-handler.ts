@@ -1,27 +1,27 @@
-import { hasControlCommand } from "../../../../src/auto-reply/command-detection.js";
-import { formatAgentEnvelope } from "../../../../src/auto-reply/envelope.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../../../src/auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../../../src/auto-reply/reply/dispatch-from-config.js";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
+  createInboundDebouncer,
+  danger,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
-  type HistoryEntry,
-} from "../../../../src/auto-reply/reply/history.js";
-import { resolveMentionGating } from "../../../../src/channels/mention-gating.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
-import {
   readChannelAllowFromStore,
+  recordSessionMetaFromInbound,
+  recordPendingHistoryEntry,
+  resolveAgentRoute,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveInboundDebounceMs,
+  resolveMentionGating,
+  resolveStorePath,
+  dispatchReplyFromConfig,
+  finalizeInboundContext,
+  formatAgentEnvelope,
+  formatAllowlistMatchMeta,
+  hasControlCommand,
+  logVerbose,
+  shouldLogVerbose,
   upsertChannelPairingRequest,
-} from "../../../../src/pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
+  type HistoryEntry,
+} from "clawdbot/plugin-sdk";
 
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -41,6 +41,7 @@ import {
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import {
   isMSTeamsGroupAllowed,
+  resolveMSTeamsAllowlistMatch,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "../policy.js";
@@ -141,19 +142,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
 
       if (dmPolicy !== "open") {
-        const effectiveAllowFrom = [
-          ...allowFrom.map((v) => String(v).toLowerCase()),
-          ...storedAllowFrom,
-        ];
+        const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
+        const allowMatch = resolveMSTeamsAllowlistMatch({
+          allowFrom: effectiveAllowFrom,
+          senderId,
+          senderName,
+        });
 
-        const senderLower = senderId.toLowerCase();
-        const senderNameLower = senderName.toLowerCase();
-        const allowed =
-          effectiveAllowFrom.includes("*") ||
-          effectiveAllowFrom.includes(senderLower) ||
-          effectiveAllowFrom.includes(senderNameLower);
-
-        if (!allowed) {
+        if (!allowMatch.allowed) {
           if (dmPolicy === "pairing") {
             const request = await upsertChannelPairingRequest({
               channel: "msteams",
@@ -170,6 +166,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           log.debug("dropping dm (not allowlisted)", {
             sender: senderId,
             label: senderName,
+            allowlistMatch: formatAllowlistMatchMeta(allowMatch),
           });
           return;
         }
@@ -213,6 +210,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (channelGate.allowlistConfigured && !channelGate.allowed) {
           log.debug("dropping group message (not in team/channel allowlist)", {
             conversationId,
+            teamKey: channelGate.teamKey ?? "none",
+            channelKey: channelGate.channelKey ?? "none",
+            channelMatchKey: channelGate.channelMatchKey ?? "none",
+            channelMatchSource: channelGate.channelMatchSource ?? "none",
           });
           return;
         }
@@ -223,16 +224,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           return;
         }
         if (effectiveGroupAllowFrom.length > 0) {
-          const allowed = isMSTeamsGroupAllowed({
+          const allowMatch = resolveMSTeamsAllowlistMatch({
             groupPolicy,
             allowFrom: effectiveGroupAllowFrom,
             senderId,
             senderName,
           });
-          if (!allowed) {
+          if (!allowMatch.allowed) {
             log.debug("dropping group message (not in groupAllowFrom)", {
               sender: senderId,
               label: senderName,
+              allowlistMatch: formatAllowlistMatchMeta(allowMatch),
             });
             return;
           }
@@ -455,6 +457,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 	      OriginatingTo: teamsTo,
 	      ...mediaPayload,
 	    });
+
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    void recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      ctx: ctxPayload,
+    }).catch((err) => {
+      logVerbose(`msteams: failed updating session meta: ${String(err)}`);
+    });
 
     if (shouldLogVerbose()) {
       logVerbose(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);

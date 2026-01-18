@@ -9,7 +9,7 @@
 
 import type { TimelineEvents } from "matrix-js-sdk/lib/@types/event.js";
 import type { ExtensibleAnyMessageEventContent } from "matrix-js-sdk/lib/@types/extensible_events.js";
-import type { PollInput } from "../../../../src/polls.js";
+import type { PollInput } from "clawdbot/plugin-sdk";
 
 export const M_POLL_START = "m.poll.start" as const;
 export const M_POLL_RESPONSE = "m.poll.response" as const;

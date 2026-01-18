@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
+import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
@@ -257,6 +259,121 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
       expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("includes conversation history when multiple messages are provided", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "I am Claude" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postChatCompletions(port, {
+        model: "clawdbot",
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Hello, who are you?" },
+          { role: "assistant", content: "I am Claude." },
+          { role: "user", content: "What did I just ask you?" },
+        ],
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      const message = (opts as { message?: string } | undefined)?.message ?? "";
+      expect(message).toContain(HISTORY_CONTEXT_MARKER);
+      expect(message).toContain("User: Hello, who are you?");
+      expect(message).toContain("Assistant: I am Claude.");
+      expect(message).toContain(CURRENT_MESSAGE_MARKER);
+      expect(message).toContain("User: What did I just ask you?");
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("does not include history markers for single message", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postChatCompletions(port, {
+        model: "clawdbot",
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Hello" },
+        ],
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      const message = (opts as { message?: string } | undefined)?.message ?? "";
+      expect(message).not.toContain(HISTORY_CONTEXT_MARKER);
+      expect(message).not.toContain(CURRENT_MESSAGE_MARKER);
+      expect(message).toBe("Hello");
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("treats developer role same as system role", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postChatCompletions(port, {
+        model: "clawdbot",
+        messages: [
+          { role: "developer", content: "You are a helpful assistant." },
+          { role: "user", content: "Hello" },
+        ],
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      const extraSystemPrompt =
+        (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+      expect(extraSystemPrompt).toBe("You are a helpful assistant.");
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("includes tool output when it is the latest message", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postChatCompletions(port, {
+        model: "clawdbot",
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "What's the weather?" },
+          { role: "assistant", content: "Checking the weather." },
+          { role: "tool", content: "Sunny, 70F." },
+        ],
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      const message = (opts as { message?: string } | undefined)?.message ?? "";
+      expect(message).toContain(HISTORY_CONTEXT_MARKER);
+      expect(message).toContain("User: What's the weather?");
+      expect(message).toContain("Assistant: Checking the weather.");
+      expect(message).toContain(CURRENT_MESSAGE_MARKER);
+      expect(message).toContain("Tool: Sunny, 70F.");
     } finally {
       await server.close({ reason: "test done" });
     }

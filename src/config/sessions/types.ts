@@ -11,6 +11,17 @@ export type SessionChannelId = ChannelId | "webchat";
 
 export type SessionChatType = NormalizedChatType;
 
+export type SessionOrigin = {
+  label?: string;
+  provider?: string;
+  surface?: string;
+  chatType?: SessionChatType;
+  from?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -31,7 +42,11 @@ export type SessionEntry = {
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-  responseUsage?: "on" | "off";
+  execHost?: string;
+  execSecurity?: string;
+  execAsk?: string;
+  execNode?: string;
+  responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
   authProfileOverride?: string;
@@ -69,6 +84,7 @@ export type SessionEntry = {
   subject?: string;
   groupChannel?: string;
   space?: string;
+  origin?: SessionOrigin;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;

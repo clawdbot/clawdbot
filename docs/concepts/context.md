@@ -21,7 +21,7 @@ Context is *not the same thing* as “memory”: memory can be stored on disk an
 - `/status` → quick “how full is my window?” view + session settings.
 - `/context list` → what’s injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
-- `/cost on` → append per-reply usage line to normal replies.
+- `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/token-use), [Compaction](/concepts/compaction).
@@ -149,4 +149,3 @@ Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session
 - `System prompt (estimate)` = computed on the fly when no run report exists (or when running via a CLI backend that doesn’t generate the report).
 
 Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas.
-

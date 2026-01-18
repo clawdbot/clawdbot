@@ -88,11 +88,7 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
   if (match.email && user.email === match.email) score += 5;
   if (match.name) {
     const target = match.name.toLowerCase();
-    const candidates = [
-      user.name,
-      user.displayName,
-      user.realName,
-    ]
+    const candidates = [user.name, user.displayName, user.realName]
       .map((value) => value?.toLowerCase())
       .filter(Boolean) as string[];
     if (candidates.some((value) => value === target)) score += 2;
@@ -147,11 +143,7 @@ export async function resolveSlackUserAllowlist(params: {
     if (parsed.name) {
       const target = parsed.name.toLowerCase();
       const matches = users.filter((user) => {
-        const candidates = [
-          user.name,
-          user.displayName,
-          user.realName,
-        ]
+        const candidates = [user.name, user.displayName, user.realName]
           .map((value) => value?.toLowerCase())
           .filter(Boolean) as string[];
         return candidates.includes(target);

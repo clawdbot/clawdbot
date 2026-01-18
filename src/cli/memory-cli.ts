@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { setVerbose } from "../globals.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
@@ -14,6 +15,7 @@ type MemoryCommandOptions = {
   json?: boolean;
   deep?: boolean;
   index?: boolean;
+  verbose?: boolean;
 };
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
@@ -41,7 +43,9 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
+    .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
+      setVerbose(Boolean(opts.verbose));
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
       await withManager<MemoryManager>({
@@ -67,7 +71,11 @@ export function registerMemoryCli(program: Command) {
             });
             if (opts.index) {
               await withProgressTotals(
-                { label: "Indexing memory…", total: 0 },
+                {
+                  label: "Indexing memory…",
+                  total: 0,
+                  fallback: opts.verbose ? "line" : undefined,
+                },
                 async (update, progress) => {
                   try {
                     await manager.sync({
@@ -176,6 +184,37 @@ export function registerMemoryCli(program: Command) {
             }
             if (status.vector.loadError) {
               lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+            }
+          }
+          if (status.fts) {
+            const ftsState = status.fts.enabled
+              ? status.fts.available
+                ? "ready"
+                : "unavailable"
+              : "disabled";
+            const ftsColor =
+              ftsState === "ready"
+                ? theme.success
+                : ftsState === "unavailable"
+                  ? theme.warn
+                  : theme.muted;
+            lines.push(`${label("FTS")} ${colorize(rich, ftsColor, ftsState)}`);
+            if (status.fts.error) {
+              lines.push(`${label("FTS error")} ${warn(status.fts.error)}`);
+            }
+          }
+          if (status.cache) {
+            const cacheState = status.cache.enabled ? "enabled" : "disabled";
+            const cacheColor = status.cache.enabled ? theme.success : theme.muted;
+            const suffix =
+              status.cache.enabled && typeof status.cache.entries === "number"
+                ? ` (${status.cache.entries} entries)`
+                : "";
+            lines.push(
+              `${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`,
+            );
+            if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
+              lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
             }
           }
           if (status.fallback?.reason) {

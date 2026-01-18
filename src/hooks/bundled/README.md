@@ -32,6 +32,21 @@ Logs all command events to a centralized audit file.
 clawdbot hooks enable command-logger
 ```
 
+### 😈 soul-evil
+
+Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
+
+**Events**: `agent:bootstrap`
+**What it does**: Overrides the injected SOUL content before the system prompt is built.
+**Output**: No files written; swaps happen in-memory only.
+**Docs**: https://docs.clawd.bot/hooks/soul-evil
+
+**Enable**:
+
+```bash
+clawdbot hooks enable soul-evil
+```
+
 ## Hook Structure
 
 Each hook is a directory containing:
@@ -140,6 +155,7 @@ Currently supported events:
 - **command:new**: `/new` command specifically
 - **command:reset**: `/reset` command
 - **command:stop**: `/stop` command
+- **agent:bootstrap**: Before workspace bootstrap files are injected
 
 More event types coming soon (session lifecycle, agent errors, etc.).
 

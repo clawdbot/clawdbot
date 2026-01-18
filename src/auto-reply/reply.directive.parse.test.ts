@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { extractStatusDirective } from "./reply/directives.js";
 import {
   extractElevatedDirective,
+  extractExecDirective,
   extractQueueDirective,
   extractReasoningDirective,
   extractReplyToTag,
@@ -112,6 +113,26 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("");
   });
 
+  it("matches exec directive with options", () => {
+    const res = extractExecDirective(
+      "please /exec host=gateway security=allowlist ask=on-miss node=mac-mini now",
+    );
+    expect(res.hasDirective).toBe(true);
+    expect(res.execHost).toBe("gateway");
+    expect(res.execSecurity).toBe("allowlist");
+    expect(res.execAsk).toBe("on-miss");
+    expect(res.execNode).toBe("mac-mini");
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("captures invalid exec host values", () => {
+    const res = extractExecDirective("/exec host=spaceship");
+    expect(res.hasDirective).toBe(true);
+    expect(res.execHost).toBeUndefined();
+    expect(res.rawExecHost).toBe("spaceship");
+    expect(res.invalidHost).toBe(true);
+  });
+
   it("matches queue directive", () => {
     const res = extractQueueDirective("please /queue interrupt now");
     expect(res.hasDirective).toBe(true);
@@ -144,10 +165,10 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("thats not /tmp/hello");
   });
 
-  it("preserves spacing when stripping usage directives before paths", () => {
+  it("does not treat /usage as a status directive", () => {
     const res = extractStatusDirective("thats not /usage:/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
   });
 
   it("parses queue options and modes", () => {

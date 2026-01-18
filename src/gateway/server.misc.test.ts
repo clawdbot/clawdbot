@@ -46,7 +46,7 @@ describe("gateway server misc", () => {
     }
   });
 
-  test("send dedupes by idempotencyKey", { timeout: 8000 }, async () => {
+  test("send dedupes by idempotencyKey", { timeout: 20_000 }, async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 

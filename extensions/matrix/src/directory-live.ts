@@ -1,4 +1,4 @@
-import type { ChannelDirectoryEntry } from "../../../src/channels/plugins/types.js";
+import type { ChannelDirectoryEntry } from "clawdbot/plugin-sdk";
 
 import { resolveMatrixAuth } from "./matrix/client.js";
 

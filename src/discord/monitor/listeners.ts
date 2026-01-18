@@ -30,7 +30,7 @@ export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) 
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
-const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 1000;
+const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
 function logSlowDiscordListener(params: {

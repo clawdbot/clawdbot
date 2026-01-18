@@ -64,6 +64,8 @@ export async function statusCommand(
     agentStatus,
     channels,
     summary,
+    memory,
+    memoryPlugin,
   } = scan;
 
   const securityAudit = await withProgress(
@@ -114,6 +116,8 @@ export async function statusCommand(
           ...summary,
           os: osSummary,
           update,
+          memory,
+          memoryPlugin,
           gateway: {
             mode: gatewayMode,
             url: gatewayConnection.url,
@@ -232,6 +236,51 @@ export async function statusCommand(
       ? `${summary.sessions.paths.length} stores`
       : (summary.sessions.paths[0] ?? "unknown");
 
+  const memoryValue = (() => {
+    if (!memoryPlugin.enabled) {
+      const suffix = memoryPlugin.reason ? ` (${memoryPlugin.reason})` : "";
+      return muted(`disabled${suffix}`);
+    }
+    if (!memory) {
+      const slot = memoryPlugin.slot ? `plugin ${memoryPlugin.slot}` : "plugin";
+      return muted(`enabled (${slot}) · unavailable`);
+    }
+    const parts: string[] = [];
+    const dirtySuffix = memory.dirty ? ` · ${warn("dirty")}` : "";
+    parts.push(`${memory.files} files · ${memory.chunks} chunks${dirtySuffix}`);
+    if (memory.sources?.length) parts.push(`sources ${memory.sources.join(", ")}`);
+    if (memoryPlugin.slot) parts.push(`plugin ${memoryPlugin.slot}`);
+    const vector = memory.vector;
+    parts.push(
+      vector?.enabled === false
+        ? muted("vector off")
+        : vector?.available
+          ? ok("vector ready")
+          : vector?.available === false
+            ? warn("vector unavailable")
+            : muted("vector unknown"),
+    );
+    const fts = memory.fts;
+    if (fts) {
+      parts.push(
+        fts.enabled === false
+          ? muted("fts off")
+          : fts.available
+            ? ok("fts ready")
+            : warn("fts unavailable"),
+      );
+    }
+    const cache = memory.cache;
+    if (cache) {
+      parts.push(
+        cache.enabled
+          ? ok(`cache on${typeof cache.entries === "number" ? ` (${cache.entries})` : ""}`)
+          : muted("cache off"),
+      );
+    }
+    return parts.join(" · ");
+  })();
+
   const updateAvailability = resolveUpdateAvailability(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
 
@@ -254,6 +303,7 @@ export async function statusCommand(
     { Item: "Gateway", Value: gatewayValue },
     { Item: "Daemon", Value: daemonValue },
     { Item: "Agents", Value: agentsValue },
+    { Item: "Memory", Value: memoryValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },

@@ -1,3 +1,4 @@
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -21,6 +22,7 @@ import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<ClawdbotConfig["agents"]>["defaults"];
+type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 export type ReplyDirectiveContinuation = {
   commandSource: string;
@@ -38,6 +40,7 @@ export type ReplyDirectiveContinuation = {
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  execOverrides?: ExecOverrides;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
     minChars: number;
@@ -58,6 +61,21 @@ export type ReplyDirectiveContinuation = {
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
 };
+
+function resolveExecOverrides(params: {
+  directives: InlineDirectives;
+  sessionEntry?: SessionEntry;
+}): ExecOverrides | undefined {
+  const host =
+    params.directives.execHost ?? (params.sessionEntry?.execHost as ExecOverrides["host"]);
+  const security =
+    params.directives.execSecurity ??
+    (params.sessionEntry?.execSecurity as ExecOverrides["security"]);
+  const ask = params.directives.execAsk ?? (params.sessionEntry?.execAsk as ExecOverrides["ask"]);
+  const node = params.directives.execNode ?? params.sessionEntry?.execNode;
+  if (!host && !security && !ask && !node) return undefined;
+  return { host, security, ask, node };
+}
 
 export type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -190,11 +208,33 @@ export async function resolveReplyDirectives(params: {
       };
     }
   }
+  if (isGroup && ctx.WasMentioned !== true && parsedDirectives.hasExecDirective) {
+    if (parsedDirectives.execSecurity !== "deny") {
+      parsedDirectives = {
+        ...parsedDirectives,
+        hasExecDirective: false,
+        execHost: undefined,
+        execSecurity: undefined,
+        execAsk: undefined,
+        execNode: undefined,
+        rawExecHost: undefined,
+        rawExecSecurity: undefined,
+        rawExecAsk: undefined,
+        rawExecNode: undefined,
+        hasExecOptions: false,
+        invalidExecHost: false,
+        invalidExecSecurity: false,
+        invalidExecAsk: false,
+        invalidExecNode: false,
+      };
+    }
+  }
   const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
+    parsedDirectives.hasExecDirective ||
     parsedDirectives.hasModelDirective ||
     parsedDirectives.hasQueueDirective;
   if (hasInlineDirective) {
@@ -405,6 +445,7 @@ export async function resolveReplyDirectives(params: {
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
+  const execOverrides = resolveExecOverrides({ directives, sessionEntry });
 
   return {
     kind: "continue",
@@ -424,6 +465,7 @@ export async function resolveReplyDirectives(params: {
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,
+      execOverrides,
       blockStreamingEnabled,
       blockReplyChunking,
       resolvedBlockStreamingBreak,

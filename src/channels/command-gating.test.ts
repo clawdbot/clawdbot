@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveCommandAuthorizedFromAuthorizers } from "./command-gating.js";
+import {
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveControlCommandGate,
+} from "./command-gating.js";
 
 describe("resolveCommandAuthorizedFromAuthorizers", () => {
   it("denies when useAccessGroups is enabled and no authorizer is configured", () => {
@@ -68,5 +71,28 @@ describe("resolveCommandAuthorizedFromAuthorizers", () => {
         modeWhenAccessGroupsOff: "configured",
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveControlCommandGate", () => {
+  it("blocks control commands when unauthorized", () => {
+    const result = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: false }],
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
+    expect(result.commandAuthorized).toBe(false);
+    expect(result.shouldBlock).toBe(true);
+  });
+
+  it("does not block when control commands are disabled", () => {
+    const result = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: false }],
+      allowTextCommands: false,
+      hasControlCommand: true,
+    });
+    expect(result.shouldBlock).toBe(false);
   });
 });

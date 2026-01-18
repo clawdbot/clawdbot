@@ -18,6 +18,7 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: NormalizedChatType;
+  origin?: SessionEntry["origin"];
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;
@@ -30,7 +31,7 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
-  responseUsage?: "on" | "off";
+  responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
   contextTokens?: number;

@@ -147,6 +147,47 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+  it("shows current exec defaults when /exec has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/exec",
+          From: "+1222",
+          To: "+1222",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          tools: {
+            exec: {
+              host: "gateway",
+              security: "allowlist",
+              ask: "always",
+              node: "mac-1",
+            },
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain(
+        "Current exec defaults: host=gateway, security=allowlist, ask=always, node=mac-1.",
+      );
+      expect(text).toContain(
+        "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+      );
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("persists elevated off and reflects it in /status (even when default is on)", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();

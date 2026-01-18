@@ -12,14 +12,18 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
-import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../config/sessions.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveMentionGating } from "../channels/mention-gating.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -269,10 +273,16 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+  const hasControlCommandInMessage = hasControlCommand(msg.text ?? msg.caption ?? "", cfg, {
+    botUsername,
+  });
+  const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommandInMessage,
   });
+  const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   let placeholder = "";
@@ -300,11 +310,7 @@ export const buildTelegramMessageContext = async ({
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
-  if (
-    isGroup &&
-    hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername }) &&
-    !commandAuthorized
-  ) {
+  if (isGroup && commandGate.shouldBlock) {
     logVerbose(`telegram: drop control command from unauthorized sender ${senderId ?? "unknown"}`);
     return null;
   }
@@ -325,20 +331,17 @@ export const buildTelegramMessageContext = async ({
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
   const implicitMention = botId != null && replyFromId === botId;
-  const shouldBypassMention =
-    isGroup &&
-    requireMention &&
-    !wasMentioned &&
-    !hasAnyMention &&
-    commandAuthorized &&
-    hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername });
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-  const mentionGate = resolveMentionGating({
+  const mentionGate = resolveMentionGatingWithBypass({
+    isGroup,
     requireMention: Boolean(requireMention),
     canDetectMention,
     wasMentioned,
     implicitMention: isGroup && Boolean(requireMention) && implicitMention,
-    shouldBypassMention,
+    hasAnyMention,
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommandInMessage,
+    commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention) {
@@ -501,6 +504,17 @@ export const buildTelegramMessageContext = async ({
     OriginatingTo: `telegram:${chatId}`,
   });
 
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: route.agentId,
+  });
+  void recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+  });
+
   if (replyTarget && shouldLogVerbose()) {
     const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);
     logVerbose(
@@ -515,10 +529,6 @@ export const buildTelegramMessageContext = async ({
   }
 
   if (!isGroup) {
-    const sessionCfg = cfg.session;
-    const storePath = resolveStorePath(sessionCfg?.store, {
-      agentId: route.agentId,
-    });
     await updateLastRoute({
       storePath,
       sessionKey: route.mainSessionKey,
@@ -527,6 +537,7 @@ export const buildTelegramMessageContext = async ({
         to: String(chatId),
         accountId: route.accountId,
       },
+      ctx: ctxPayload,
     });
   }
 

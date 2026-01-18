@@ -1,8 +1,12 @@
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../../src/agents/identity.js";
-import { createReplyDispatcherWithTyping } from "../../../src/auto-reply/reply/reply-dispatcher.js";
-import type { ClawdbotConfig, MSTeamsReplyStyle } from "../../../src/config/types.js";
-import { danger } from "../../../src/globals.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import {
+  createReplyDispatcherWithTyping,
+  danger,
+  resolveEffectiveMessagesConfig,
+  resolveHumanDelayConfig,
+  type ClawdbotConfig,
+  type MSTeamsReplyStyle,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
   classifyMSTeamsSendError,

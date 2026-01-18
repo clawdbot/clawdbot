@@ -302,7 +302,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           guildEntries = nextGuilds;
           summarizeMapping("discord channel users", mapping, unresolved, runtime);
         } catch (err) {
-          runtime.log?.(`discord channel user resolve failed; using config entries. ${String(err)}`);
+          runtime.log?.(
+            `discord channel user resolve failed; using config entries. ${String(err)}`,
+          );
         }
       }
     }

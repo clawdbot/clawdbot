@@ -17,6 +17,38 @@ export const SessionSchema = z
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),
+    reset: z
+      .object({
+        mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+        atHour: z.number().int().min(0).max(23).optional(),
+        idleMinutes: z.number().int().positive().optional(),
+      })
+      .optional(),
+    resetByType: z
+      .object({
+        dm: z
+          .object({
+            mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+            atHour: z.number().int().min(0).max(23).optional(),
+            idleMinutes: z.number().int().positive().optional(),
+          })
+          .optional(),
+        group: z
+          .object({
+            mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+            atHour: z.number().int().min(0).max(23).optional(),
+            idleMinutes: z.number().int().positive().optional(),
+          })
+          .optional(),
+        thread: z
+          .object({
+            mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+            atHour: z.number().int().min(0).max(23).optional(),
+            idleMinutes: z.number().int().positive().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: z

@@ -146,7 +146,11 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
   // Session behavior
   session: {
     scope: "per-sender",
-    idleMinutes: 60,
+    reset: {
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 60
+    },
     heartbeatIdleMinutes: 120,
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdbot/agents/default/sessions/sessions.json",

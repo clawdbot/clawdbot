@@ -20,7 +20,11 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -140,11 +144,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       OriginatingTo: signalTo,
     });
 
+    const storePath = resolveStorePath(deps.cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    void recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      ctx: ctxPayload,
+    }).catch((err) => {
+      logVerbose(`signal: failed updating session meta: ${String(err)}`);
+    });
+
     if (!entry.isGroup) {
-      const sessionCfg = deps.cfg.session;
-      const storePath = resolveStorePath(sessionCfg?.store, {
-        agentId: route.agentId,
-      });
       await updateLastRoute({
         storePath,
         sessionKey: route.mainSessionKey,
@@ -153,6 +164,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           to: entry.senderRecipient,
           accountId: route.accountId,
         },
+        ctx: ctxPayload,
       });
     }
 

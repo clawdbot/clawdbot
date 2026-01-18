@@ -2,8 +2,8 @@ import type {
   ChannelDirectoryEntry,
   ChannelResolveKind,
   ChannelResolveResult,
-} from "../../../src/channels/plugins/types.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+  RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 
 import {
   listMatrixDirectoryGroupsLive,

@@ -880,14 +880,19 @@ Send `/new` or `/reset` as a standalone message. See [Session management](/conce
 
 ### Do sessions reset automatically if I never send `/new`?
 
-Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
-message starts a fresh session id for that chat key. This does not delete
-transcripts — it just starts a new session.
+Yes. By default sessions reset daily at **4:00 AM local time** on the gateway host.
+You can also add an idle window; when both daily and idle resets are configured,
+whichever expires first starts a new session id on the next message. This does
+not delete transcripts — it just starts a new session.
 
 ```json5
 {
   session: {
-    idleMinutes: 240
+    reset: {
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 240
+    }
   }
 }
 ```

@@ -1,9 +1,10 @@
-import type { ClawdbotConfig } from "../../../src/config/config.js";
-import { MSTeamsConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
-import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
-import { PAIRING_APPROVED_MESSAGE } from "../../../src/channels/plugins/pairing-message.js";
-import type { ChannelMessageActionName, ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import type { ChannelMessageActionName, ChannelPlugin, ClawdbotConfig } from "clawdbot/plugin-sdk";
+import {
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
+  MSTeamsConfigSchema,
+  PAIRING_APPROVED_MESSAGE,
+} from "clawdbot/plugin-sdk";
 
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";

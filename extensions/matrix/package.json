@@ -9,6 +9,7 @@
     ]
   },
   "dependencies": {
+    "clawdbot": "workspace:*",
     "markdown-it": "14.1.0",
     "matrix-js-sdk": "40.0.0"
   }
