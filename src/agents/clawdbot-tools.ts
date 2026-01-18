@@ -41,12 +41,15 @@ export function createClawdbotTools(options?: {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** If true, the model has native vision capability */
+  modelHasVision?: boolean;
 }): AnyAgentTool[] {
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
         sandboxRoot: options?.sandboxRoot,
+        modelHasVision: options?.modelHasVision,
       })
     : null;
   const webSearchTool = createWebSearchTool({

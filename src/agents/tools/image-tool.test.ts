@@ -102,7 +102,11 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("disables image tool when primary model already supports images", async () => {
+  it("keeps image tool available when primary model supports images (for explicit requests)", async () => {
+    // When the primary model supports images, we still keep the tool available
+    // because images are auto-injected into prompts. The tool description is
+    // adjusted via modelHasVision to discourage redundant usage.
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-image-"));
     const cfg: ClawdbotConfig = {
       agents: {
@@ -119,8 +123,13 @@ describe("image tool implicit imageModel config", () => {
         },
       },
     };
-    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
-    expect(createImageTool({ config: cfg, agentDir })).toBeNull();
+    // Tool should still be available for explicit image analysis requests
+    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+      primary: "openai/gpt-5-mini",
+    });
+    const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
+    expect(tool).not.toBeNull();
+    expect(tool?.description).toContain("Only use this tool when the image was NOT already provided");
   });
 
   it("sandboxes image paths like the read tool", async () => {

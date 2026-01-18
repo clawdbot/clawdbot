@@ -28,6 +28,98 @@ async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
   return (buffer) => sharp(buffer, { failOnError: false });
 }
 
+/**
+ * Reads EXIF orientation from JPEG buffer.
+ * Returns orientation value 1-8, or null if not found/not JPEG.
+ *
+ * EXIF orientation values:
+ * 1 = Normal, 2 = Flip H, 3 = Rotate 180, 4 = Flip V,
+ * 5 = Rotate 270 CW + Flip H, 6 = Rotate 90 CW, 7 = Rotate 90 CW + Flip H, 8 = Rotate 270 CW
+ */
+function readJpegExifOrientation(buffer: Buffer): number | null {
+  // Check JPEG magic bytes
+  if (buffer.length < 2 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+
+  let offset = 2;
+  while (offset < buffer.length - 4) {
+    // Look for marker
+    if (buffer[offset] !== 0xff) {
+      offset++;
+      continue;
+    }
+
+    const marker = buffer[offset + 1];
+    // Skip padding FF bytes
+    if (marker === 0xff) {
+      offset++;
+      continue;
+    }
+
+    // APP1 marker (EXIF)
+    if (marker === 0xe1) {
+      const segmentLength = buffer.readUInt16BE(offset + 2);
+      const exifStart = offset + 4;
+
+      // Check for "Exif\0\0" header
+      if (
+        buffer.length > exifStart + 6 &&
+        buffer.toString("ascii", exifStart, exifStart + 4) === "Exif" &&
+        buffer[exifStart + 4] === 0 &&
+        buffer[exifStart + 5] === 0
+      ) {
+        const tiffStart = exifStart + 6;
+        if (buffer.length < tiffStart + 8) return null;
+
+        // Check byte order (II = little-endian, MM = big-endian)
+        const byteOrder = buffer.toString("ascii", tiffStart, tiffStart + 2);
+        const isLittleEndian = byteOrder === "II";
+
+        const readU16 = (pos: number) =>
+          isLittleEndian ? buffer.readUInt16LE(pos) : buffer.readUInt16BE(pos);
+        const readU32 = (pos: number) =>
+          isLittleEndian ? buffer.readUInt32LE(pos) : buffer.readUInt32BE(pos);
+
+        // Read IFD0 offset
+        const ifd0Offset = readU32(tiffStart + 4);
+        const ifd0Start = tiffStart + ifd0Offset;
+        if (buffer.length < ifd0Start + 2) return null;
+
+        const numEntries = readU16(ifd0Start);
+        for (let i = 0; i < numEntries; i++) {
+          const entryOffset = ifd0Start + 2 + i * 12;
+          if (buffer.length < entryOffset + 12) break;
+
+          const tag = readU16(entryOffset);
+          // Orientation tag = 0x0112
+          if (tag === 0x0112) {
+            const value = readU16(entryOffset + 8);
+            return value >= 1 && value <= 8 ? value : null;
+          }
+        }
+      }
+      return null;
+    }
+
+    // Skip other segments
+    if (marker >= 0xe0 && marker <= 0xef) {
+      const segmentLength = buffer.readUInt16BE(offset + 2);
+      offset += 2 + segmentLength;
+      continue;
+    }
+
+    // SOF, SOS, or other marker - stop searching
+    if (marker === 0xc0 || marker === 0xda) {
+      break;
+    }
+
+    offset++;
+  }
+
+  return null;
+}
+
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-img-"));
   try {
@@ -108,6 +200,81 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   }
 }
 
+/**
+ * Applies rotation/flip to image buffer using sips based on EXIF orientation.
+ */
+async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promise<Buffer> {
+  // Map EXIF orientation to sips operations
+  // sips -r rotates clockwise, -f flips (horizontal/vertical)
+  const ops: string[] = [];
+  switch (orientation) {
+    case 2: // Flip horizontal
+      ops.push("-f", "horizontal");
+      break;
+    case 3: // Rotate 180
+      ops.push("-r", "180");
+      break;
+    case 4: // Flip vertical
+      ops.push("-f", "vertical");
+      break;
+    case 5: // Rotate 270 CW + flip horizontal
+      ops.push("-r", "270", "-f", "horizontal");
+      break;
+    case 6: // Rotate 90 CW
+      ops.push("-r", "90");
+      break;
+    case 7: // Rotate 90 CW + flip horizontal
+      ops.push("-r", "90", "-f", "horizontal");
+      break;
+    case 8: // Rotate 270 CW
+      ops.push("-r", "270");
+      break;
+    default:
+      // Orientation 1 or unknown - no change needed
+      return buffer;
+  }
+
+  return await withTempDir(async (dir) => {
+    const input = path.join(dir, "in.jpg");
+    const output = path.join(dir, "out.jpg");
+    await fs.writeFile(input, buffer);
+    await runExec(
+      "/usr/bin/sips",
+      [...ops, input, "--out", output],
+      { timeoutMs: 20_000, maxBuffer: 1024 * 1024 },
+    );
+    return await fs.readFile(output);
+  });
+}
+
+/**
+ * Normalizes EXIF orientation in an image buffer.
+ * Returns the buffer with correct pixel orientation (rotated if needed).
+ * Falls back to original buffer if normalization fails.
+ */
+export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
+  if (prefersSips()) {
+    try {
+      const orientation = readJpegExifOrientation(buffer);
+      if (!orientation || orientation === 1) {
+        return buffer; // No rotation needed
+      }
+      return await sipsApplyOrientation(buffer, orientation);
+    } catch {
+      return buffer;
+    }
+  }
+
+  try {
+    const sharp = await loadSharp();
+    // .rotate() with no args auto-rotates based on EXIF orientation
+    return await sharp(buffer).rotate().toBuffer();
+  } catch {
+    // Sharp not available or failed - return original buffer
+    return buffer;
+  }
+}
+
 export async function resizeToJpeg(params: {
   buffer: Buffer;
   maxSide: number;
@@ -115,14 +282,17 @@ export async function resizeToJpeg(params: {
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
   if (prefersSips()) {
+    // Normalize EXIF orientation BEFORE resizing (sips resize doesn't auto-rotate)
+    const normalized = await normalizeExifOrientationSips(params.buffer);
+
     // Avoid enlarging by checking dimensions first (sips has no withoutEnlargement flag).
     if (params.withoutEnlargement !== false) {
-      const meta = await getImageMetadata(params.buffer);
+      const meta = await getImageMetadata(normalized);
       if (meta) {
         const maxDim = Math.max(meta.width, meta.height);
         if (maxDim > 0 && maxDim <= params.maxSide) {
           return await sipsResizeToJpeg({
-            buffer: params.buffer,
+            buffer: normalized,
             maxSide: maxDim,
             quality: params.quality,
           });
@@ -130,14 +300,16 @@ export async function resizeToJpeg(params: {
       }
     }
     return await sipsResizeToJpeg({
-      buffer: params.buffer,
+      buffer: normalized,
       maxSide: params.maxSide,
       quality: params.quality,
     });
   }
 
   const sharp = await loadSharp();
+  // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
   return await sharp(params.buffer)
+    .rotate() // Auto-rotate based on EXIF before resizing
     .resize({
       width: params.maxSide,
       height: params.maxSide,
@@ -146,4 +318,20 @@ export async function resizeToJpeg(params: {
     })
     .jpeg({ quality: params.quality, mozjpeg: true })
     .toBuffer();
+}
+
+/**
+ * Internal sips-only EXIF normalization (no sharp fallback).
+ * Used by resizeToJpeg to normalize before sips resize.
+ */
+async function normalizeExifOrientationSips(buffer: Buffer): Promise<Buffer> {
+  try {
+    const orientation = readJpegExifOrientation(buffer);
+    if (!orientation || orientation === 1) {
+      return buffer;
+    }
+    return await sipsApplyOrientation(buffer, orientation);
+  } catch {
+    return buffer;
+  }
 }

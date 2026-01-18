@@ -307,9 +307,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const messageText = (message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    const firstAttachment = attachments?.find((entry) => entry?.original_path && !entry?.missing);
+    // Filter to valid attachments with paths
+    const validAttachments = attachments.filter(
+      (entry) => entry?.original_path && !entry?.missing,
+    );
+    const firstAttachment = validAttachments[0];
     const mediaPath = firstAttachment?.original_path ?? undefined;
     const mediaType = firstAttachment?.mime_type ?? undefined;
+    // Build arrays for all attachments (for multi-image support)
+    const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
+    const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
     const kind = mediaKindFromMime(mediaType ?? undefined);
     const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
     const bodyText = messageText || placeholder;
@@ -445,6 +452,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       MediaPath: mediaPath,
       MediaType: mediaType,
       MediaUrl: mediaPath,
+      MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+      MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+      MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
       MediaRemoteHost: remoteHost,
       WasMentioned: effectiveWasMentioned,
       CommandAuthorized: commandAuthorized,
