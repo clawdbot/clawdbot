@@ -17,9 +17,11 @@
 ## Proposed Config Surface
 - New config section: `security.secretScanning`.
   - `mode: "off" | "redact" | "block"` (default: "off").
-  - `maxChars: number` (cap; block if exceeded).
-  - `overflow: "truncate" | "block"` (default: "block" or "truncate").
+  - `maxChars: number` (cap; block if exceeded). **Default: 32768**.
+  - `overflow: "truncate" | "block"` (default: "truncate").
   - `logSecretMatches: "off" | "redacted"` (default: "off").
+  - **Warning**: when `overflow: "truncate"` and input exceeds `maxChars`, emit a warning
+    like “Secret scan truncated to ${maxChars} chars (set security.secretScanning.maxChars to increase).”
 
 ## Core Module (PR 1)
 - New module: `src/security/secret-scan/`.
