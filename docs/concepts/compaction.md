@@ -16,7 +16,23 @@ Compaction **summarizes older conversation** into a compact summary entry and ke
 Compaction **persists** in the session’s JSONL history.
 
 ## Configuration
-See [Compaction config & modes](/concepts/compaction) for the `agents.defaults.compaction` settings.
+
+Configure compaction via `agents.defaults.compaction`:
+
+```yaml
+agents:
+  defaults:
+    compaction:
+      mode: safeguard          # or "basic"
+      reserveTokensFloor: 20000
+      memoryFlush:
+        enabled: true
+```
+
+### Compaction modes
+
+- **safeguard** (default): Chunks large contexts into smaller pieces before summarizing. Handles cases where context exceeds API limits by summarizing in multiple passes. Falls back to truncation if summarization fails.
+- **basic**: Uses the SDK's built-in single-pass summarization. May fail if context is too large to fit in one API request.
 
 ## Auto-compaction (default on)
 When a session nears or exceeds the model’s context window, Clawdbot triggers auto-compaction and may retry the original request using the compacted context.

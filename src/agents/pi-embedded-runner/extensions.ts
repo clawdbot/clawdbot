@@ -59,8 +59,9 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: ClawdbotConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+function resolveCompactionMode(cfg?: ClawdbotConfig): "basic" | "safeguard" {
+  // Default to safeguard mode to handle context overflow during compaction (issue #699)
+  return cfg?.agents?.defaults?.compaction?.mode === "basic" ? "basic" : "safeguard";
 }
 
 export function buildEmbeddedExtensionPaths(params: {
