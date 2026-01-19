@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - TUI: show generic empty-state text for searchable pickers. (#1201) — thanks @vignesh07.
 - Doctor: canonicalize legacy session keys in session stores to prevent stale metadata. (#1169)
 - CLI: centralize CLI command registration to keep fast-path routing and program wiring in sync. (#1207) — thanks @gumadeiras.
+- Config: allow custom fields under `skills.entries` for user-authored skill credentials/config. (#1226) — thanks @VACInc. (fixes #1225)
 
 ## 2026.1.18-5
 
