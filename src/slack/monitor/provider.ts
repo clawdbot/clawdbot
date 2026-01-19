@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import SlackBolt from "@slack/bolt";
+import SlackBoltDefault, * as SlackBoltModule from "@slack/bolt";
 
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -26,16 +26,23 @@ import { normalizeAllowList } from "./allow-list.js";
 
 import type { MonitorSlackOpts } from "./types.js";
 
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
-};
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-const slackBolt = slackBoltModule.default || slackBoltModule;
-const App = slackBolt.App || (slackBolt.default && slackBolt.default.App) || slackBoltModule.App;
-const HTTPReceiver =
-  slackBolt.HTTPReceiver ||
-  (slackBolt.default && slackBolt.default.HTTPReceiver) ||
-  slackBoltModule.HTTPReceiver;
+type SlackBoltNamespace = typeof import("@slack/bolt");
+
+const slackBoltDefault = SlackBoltDefault as unknown;
+const slackBoltNamespace =
+  (typeof slackBoltDefault === "object" && slackBoltDefault
+    ? ("default" in slackBoltDefault
+        ? (slackBoltDefault as { default?: unknown }).default
+        : slackBoltDefault)
+    : undefined) as SlackBoltNamespace | undefined;
+// Bun allows named imports from CJS; Node ESM doesn't. Resolve default/module shapes for compatibility.
+const App =
+  ((typeof slackBoltDefault === "function"
+    ? slackBoltDefault
+    : slackBoltNamespace?.App) ??
+    SlackBoltModule.App) as SlackBoltNamespace["App"];
+const HTTPReceiver = (slackBoltNamespace?.HTTPReceiver ??
+  SlackBoltModule.HTTPReceiver) as SlackBoltNamespace["HTTPReceiver"];
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
   if (!token) return undefined;
