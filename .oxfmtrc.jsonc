@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "indentWidth": 2,
-  "printWidth": 100
+  "experimentalSortPackageJson": {
+    "sortScripts": true,
+  },
+  "ignorePatterns": ["src/canvas-host/a2ui/a2ui.bundle.js"],
 }
