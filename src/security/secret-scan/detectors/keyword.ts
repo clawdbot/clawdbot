@@ -1,13 +1,8 @@
 import type { RegexDetector } from "./types.js";
 
-const KEYWORD_PATTERN =
-  String.raw`\w*(?:api_?key|auth_?key|service_?key|account_?key|db_?key|database_?key|priv_?key|private_?key|client_?key|db_?pass|database_?pass|key_?pass|password|passwd|pwd|secret)\w*`;
+const KEYWORD_PATTERN = String.raw`\w*(?:api_?key|auth_?key|service_?key|account_?key|db_?key|database_?key|priv_?key|private_?key|client_?key|db_?pass|database_?pass|key_?pass|password|passwd|pwd|secret)\w*`;
 const KEYWORD_MAX_VALUE_LENGTH = 200;
-const QUOTED_VALUE_PATTERNS = [
-  "\"([^\"\\r\\n]+)\"",
-  "'([^'\\r\\n]+)'",
-  "`([^`\\r\\n]+)`",
-];
+const QUOTED_VALUE_PATTERNS = ['"([^"\\r\\n]+)"', "'([^'\\r\\n]+)'", "`([^`\\r\\n]+)`"];
 const KEYWORD_FAKE_RE = /fake/i;
 const KEYWORD_TEMPLATE_RE = /\$\{[^}]+\}/;
 const KEYWORD_ALNUM_RE = /[A-Za-z0-9]/;
@@ -22,8 +17,7 @@ function isLikelyKeywordSecret(value: string): boolean {
   return true;
 }
 
-const KEYWORD_ASSIGN_PREFIX =
-  `\\b${KEYWORD_PATTERN}\\b(?:\\[[0-9]*\\])?\\s*(?::=|:|=|==|!=|===|!==)\\s*@?`;
+const KEYWORD_ASSIGN_PREFIX = `\\b${KEYWORD_PATTERN}\\b(?:\\[[0-9]*\\])?\\s*(?::=|:|=|==|!=|===|!==)\\s*@?`;
 const KEYWORD_COMPARE_SUFFIX = `\\s*(?:==|!=|===|!==)\\s*\\b${KEYWORD_PATTERN}\\b`;
 const KEYWORD_CALL_PREFIX = `\\b${KEYWORD_PATTERN}\\b\\s*\\(\\s*`;
 const KEYWORD_BARE_PREFIX = `\\b${KEYWORD_PATTERN}\\b\\s+`;

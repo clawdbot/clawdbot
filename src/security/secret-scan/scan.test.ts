@@ -51,7 +51,7 @@ describe("scanText", () => {
     expect(result.blocked).toBe(false);
     expect(result.redactedText).toBeDefined();
     expect(result.redactedText).toContain("my_password");
-    expect(result.redactedText).not.toContain("\"password\"");
+    expect(result.redactedText).not.toContain('"password"');
   });
 
   it("blocks on overflow when overflow policy is block", () => {
