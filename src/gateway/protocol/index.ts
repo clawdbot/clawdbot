@@ -181,7 +181,7 @@ import {
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
   allErrors: true,
   strict: false,
-  removeAdditional: false,
+  removeAdditional: true, // Temporarily allow extra properties - remove to debug which fields are extra
 });
 
 export const validateConnectParams = ajv.compile<ConnectParams>(ConnectParamsSchema);
@@ -297,7 +297,14 @@ export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLog
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors) return "unknown validation error";
-  return ajv.errorsText(errors, { separator: "; " });
+  // Include path and params for additional property errors
+  const detailed = errors.map((e) => {
+    if (e.keyword === "additionalProperties" && e.params?.additionalProperty) {
+      return `${e.instancePath || "data"} has extra property '${e.params.additionalProperty}'`;
+    }
+    return `${e.instancePath || "data"} ${e.message}`;
+  });
+  return detailed.join("; ");
 }
 
 export {
