@@ -51,7 +51,6 @@ struct UsageMenuLabelView: View {
                         .padding(.leading, 2)
                 }
             }
-
         }
         .padding(.vertical, 10)
         .padding(.leading, self.paddingLeading)

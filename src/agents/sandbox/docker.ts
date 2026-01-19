@@ -256,8 +256,7 @@ export async function ensureSandboxContainer(params: {
     registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
     currentHash = await readContainerConfigHash(containerName);
     if (!currentHash) {
-      currentHash =
-        registryEntry?.configHash ?? null;
+      currentHash = registryEntry?.configHash ?? null;
     }
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
@@ -296,7 +295,7 @@ export async function ensureSandboxContainer(params: {
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
-    configHash: hashMismatch && running ? currentHash ?? undefined : expectedHash,
+    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
   });
   return containerName;
 }

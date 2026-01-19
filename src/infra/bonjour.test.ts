@@ -4,22 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as logging from "../logging.js";
 
-const mocks = vi.hoisted(() => ({
-  createService: vi.fn(),
-  shutdown: vi.fn(),
-  registerUnhandledRejectionHandler: vi.fn(),
-  logWarn: vi.fn(),
-  logDebug: vi.fn(),
-}));
-const { createService, shutdown, registerUnhandledRejectionHandler, logWarn, logDebug } = mocks;
+const createService = vi.fn();
+const shutdown = vi.fn();
+const registerUnhandledRejectionHandler = vi.fn();
+
+const logWarn = vi.fn();
+const logDebug = vi.fn();
+const getLoggerInfo = vi.fn();
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
 
-vi.mock("../logger.js", async () => {
-  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+vi.mock("../logger.js", () => {
   return {
-    ...actual,
     logWarn: (message: string) => logWarn(message),
     logDebug: (message: string) => logDebug(message),
     logInfo: vi.fn(),
@@ -76,6 +73,7 @@ describe("gateway bonjour advertiser", () => {
     registerUnhandledRejectionHandler.mockReset();
     logWarn.mockReset();
     logDebug.mockReset();
+    getLoggerInfo.mockReset();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

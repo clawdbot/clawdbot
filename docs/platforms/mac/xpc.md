@@ -5,7 +5,9 @@ read_when:
 ---
 # Clawdbot macOS IPC architecture
 
-**Current model:** a local Unix socket connects the **node service** to the **macOS app** for exec approvals + `system.run`. There is no `clawdbot-mac` CLI; agent actions still flow through the Gateway WebSocket and `node.invoke`. UI automation uses PeekabooBridge.
+**Current model:** there is **no local control socket** and no `clawdbot-mac` CLI. All agent actions go through the Gateway WebSocket and `node.invoke`. UI automation still uses PeekabooBridge.
+
+**Planned model:** add a local Unix socket between the **node service** and the **macOS app**. The app owns `system.run` (UI/TCC context); the node service forwards exec requests over IPC.
 
 ## Goals
 - Single GUI app instance that owns all TCC-facing work (notifications, screen recording, mic, speech, AppleScript).
@@ -13,11 +15,11 @@ read_when:
 - Predictable permissions: always the same signed bundle ID, launched by launchd, so TCC grants stick.
 
 ## How it works
-### Gateway + node bridge
+### Gateway + node bridge (current)
 - The app runs the Gateway (local mode) and connects to it as a node.
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
 
-### Node service + app IPC
+### Node service + app IPC (planned)
 - A headless node service connects to the Gateway bridge.
 - `system.run` requests are forwarded to the macOS app over a local Unix socket.
 - The app performs the exec in UI context, prompts if needed, and returns output.
@@ -36,6 +38,10 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - Security: bridge hosts require an allowed TeamID; DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
 - See: [PeekabooBridge usage](/platforms/mac/peekaboo) for details.
 
+### Mach/XPC
+- Not required for automation; `node.invoke` + PeekabooBridge cover current needs.
+- Planned IPC keeps Unix sockets (no XPC helper).
+
 ## Operational flows
 - Restart/rebuild: `SIGN_IDENTITY="Apple Development: <Developer Name> (<TEAMID>)" scripts/restart-mac.sh`
   - Kills existing instances
@@ -48,4 +54,4 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
 - TCC prompts originate only from the GUI app bundle; keep the signed bundle ID stable across rebuilds.
-- IPC hardening: socket mode `0600`, token, peer-UID checks, HMAC challenge/response, short TTL.
+- Planned IPC hardening: socket mode `0600`, token, peer-UID checks, HMAC challenge/response, short TTL.

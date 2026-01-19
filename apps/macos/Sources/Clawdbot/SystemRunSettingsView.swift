@@ -81,8 +81,9 @@ struct SystemRunSettingsView: View {
             .pickerStyle(.menu)
 
             Text(self.model.isDefaultsScope
-                 ? "Defaults apply when an agent has no overrides. Ask controls prompt behavior; fallback is used when no companion UI is reachable."
-                 : "Security controls whether system.run can execute on this Mac when paired as a node. Ask controls prompt behavior; fallback is used when no companion UI is reachable.")
+                ? "Defaults apply when an agent has no overrides. Ask controls prompt behavior; fallback is used when no companion UI is reachable."
+                :
+                "Security controls whether system.run can execute on this Mac when paired as a node. Ask controls prompt behavior; fallback is used when no companion UI is reachable.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

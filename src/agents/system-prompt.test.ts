@@ -94,7 +94,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+      "Skills provide task-specific instructions. Use `Read` to load the SKILL.md at the location listed for that skill.",
+    );
+    expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
+    expect(prompt).toContain(
+      "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
+    );
+  });
+
+  it("includes docs guidance when docsPath is provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      docsPath: "/tmp/clawd/docs",
+    });
+
+    expect(prompt).toContain("## Documentation");
+    expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
+    expect(prompt).toContain(
+      "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
     );
     expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
     expect(prompt).toContain(
@@ -188,7 +205,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "Skills provide task-specific instructions. Use `read` to load the SKILL.md at the location listed for that skill.",
     );
   });
 

@@ -72,8 +72,7 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       isError?: unknown;
     };
     if (toolResult.isError !== true) continue;
-    const toolCallId =
-      typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
+    const toolCallId = typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
     if (!toolCallId || seen.has(toolCallId)) continue;
     seen.add(toolCallId);
 

@@ -148,18 +148,47 @@ export function resolveEntriesWithActiveFallback(params: {
     providerRegistry: params.providerRegistry,
   });
   if (entries.length > 0) return entries;
-  if (params.config?.enabled !== true) return entries;
-  const activeProviderRaw = params.activeModel?.provider?.trim();
-  if (!activeProviderRaw) return entries;
-  const activeProvider = normalizeMediaProviderId(activeProviderRaw);
-  if (!activeProvider) return entries;
-  const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
-  if (!capabilities || !capabilities.includes(params.capability)) return entries;
-  return [
-    {
-      type: "provider",
-      provider: activeProvider,
-      model: params.activeModel?.model,
-    },
-  ];
+
+  // Fallback 1: Use activeModel if provided and configured
+  if (params.config?.enabled === true) {
+    const activeProviderRaw = params.activeModel?.provider?.trim();
+    if (activeProviderRaw) {
+      const activeProvider = normalizeMediaProviderId(activeProviderRaw);
+      if (activeProvider) {
+        const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
+        if (capabilities && capabilities.includes(params.capability)) {
+          return [
+            {
+              type: "provider",
+              provider: activeProvider,
+              model: params.activeModel?.model,
+            },
+          ];
+        }
+      }
+    }
+  }
+
+  // Fallback 2: Auto-detect providers with configured API keys
+  for (const [providerId, provider] of params.providerRegistry.entries()) {
+    const capabilities = provider.capabilities;
+    if (!capabilities || !capabilities.includes(params.capability)) continue;
+
+    // Check if this provider has a configured API key
+    const providerConfig = params.cfg.models?.providers?.[providerId];
+    if (
+      providerConfig &&
+      typeof providerConfig.apiKey === "string" &&
+      providerConfig.apiKey.trim()
+    ) {
+      return [
+        {
+          type: "provider",
+          provider: providerId,
+        },
+      ];
+    }
+  }
+
+  return entries;
 }

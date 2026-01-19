@@ -48,7 +48,10 @@ import Testing
 
     @Test func expectedGatewayVersionFromStringUsesParser() {
         #expect(GatewayEnvironment.expectedGatewayVersion(from: "v9.1.2") == Semver(major: 9, minor: 1, patch: 2))
-        #expect(GatewayEnvironment.expectedGatewayVersion(from: "2026.1.11-4") == Semver(major: 2026, minor: 1, patch: 11))
+        #expect(GatewayEnvironment.expectedGatewayVersion(from: "2026.1.11-4") == Semver(
+            major: 2026,
+            minor: 1,
+            patch: 11))
         #expect(GatewayEnvironment.expectedGatewayVersion(from: nil) == nil)
     }
 }

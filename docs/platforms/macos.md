@@ -17,9 +17,12 @@ capabilities to the agent as a node.
   Speech Recognition, Automation/AppleScript).
 - Runs or connects to the Gateway (local or remote).
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
-- Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
 - Optionally hosts **PeekabooBridge** for UI automation.
 - Installs the global CLI (`clawdbot`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
+
+Planned:
+- Run a headless **node service** locally (launchd).
+- Keep `system.run` in the app (UI/TCC context), with the node service forwarding via IPC.
 
 ## Local vs remote mode
 
@@ -27,7 +30,6 @@ capabilities to the agent as a node.
   otherwise it enables the launchd service via `clawdbot daemon`.
 - **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
   a local process.
-  The app starts the local **node host service** so the remote Gateway can reach this Mac.
 The app does not spawn the Gateway as a child process.
 
 ## Launchd control
@@ -56,9 +58,9 @@ The macOS app presents itself as a node. Common commands:
 
 The node reports a `permissions` map so agents can decide what’s allowed.
 
-Node service + app IPC:
-- When the headless node service is running (remote mode), it connects to the Gateway bridge.
-- `system.run` executes in the macOS app (UI/TCC context) over a local Unix socket; prompts + output stay in-app.
+Planned split:
+- Node service advertises the node surface to the Gateway.
+- macOS app performs `system.run` in UI context over IPC.
 
 Diagram (SCI):
 ```

@@ -7,7 +7,7 @@ import {
 import type { WebSocketServer } from "ws";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { createSubsystemLogger } from "../logging.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {

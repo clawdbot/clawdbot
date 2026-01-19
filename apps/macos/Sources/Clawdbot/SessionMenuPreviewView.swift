@@ -168,7 +168,6 @@ struct SessionMenuPreviewView: View {
             .font(.caption)
             .foregroundStyle(self.primaryColor)
     }
-
 }
 
 enum SessionMenuPreviewLoader {
@@ -182,7 +181,7 @@ enum SessionMenuPreviewLoader {
 
     static func load(sessionKey: String, maxItems: Int) async -> SessionMenuPreviewSnapshot {
         if let cached = await SessionPreviewCache.shared.cachedItems(for: sessionKey, maxAge: cacheMaxAgeSeconds) {
-            return Self.snapshot(from: cached)
+            return self.snapshot(from: cached)
         }
 
         do {

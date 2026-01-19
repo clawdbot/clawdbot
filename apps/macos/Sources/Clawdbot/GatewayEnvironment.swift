@@ -120,8 +120,8 @@ enum GatewayEnvironment {
                 kind: .missingNode,
                 nodeVersion: nil,
                 gatewayVersion: nil,
-                    requiredGateway: expectedString,
-                    message: RuntimeLocator.describeFailure(err))
+                requiredGateway: expectedString,
+                message: RuntimeLocator.describeFailure(err))
         case let .success(runtime):
             let gatewayBin = CommandResolver.clawdbotExecutable()
 
@@ -237,11 +237,10 @@ enum GatewayEnvironment {
     static func installGlobal(versionString: String?, statusHandler: @escaping @Sendable (String) -> Void) async {
         let preferred = CommandResolver.preferredPaths().joined(separator: ":")
         let trimmed = versionString?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let target: String
-        if let trimmed, !trimmed.isEmpty {
-            target = trimmed
+        let target: String = if let trimmed, !trimmed.isEmpty {
+            trimmed
         } else {
-            target = "latest"
+            "latest"
         }
         let npm = CommandResolver.findExecutable(named: "npm")
         let pnpm = CommandResolver.findExecutable(named: "pnpm")

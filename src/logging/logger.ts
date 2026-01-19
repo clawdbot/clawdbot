@@ -4,10 +4,9 @@ import path from "node:path";
 
 import { Logger as TsLogger } from "tslog";
 
-import type { ClawdbotConfig } from "../config/types.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import type { ConsoleStyle } from "./console.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
-import { readLoggingConfig } from "./config.js";
 import { loggingState } from "./state.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
@@ -37,9 +36,10 @@ type ResolvedSettings = {
 export type LoggerResolvedSettings = ResolvedSettings;
 
 function resolveSettings(): ResolvedSettings {
-  let cfg: ClawdbotConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  let cfg: ClawdbotConfig["logging"] | undefined;
+  if (loggingState.overrideSettings) {
+    cfg = loggingState.overrideSettings as LoggerSettings;
+  } else {
     try {
       const loaded = requireConfig("../config/config.js") as {
         loadConfig?: () => ClawdbotConfig;

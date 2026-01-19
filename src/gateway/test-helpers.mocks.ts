@@ -1,17 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-
-import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import type { AgentBinding } from "../config/types.agents.js";
-import type { HooksConfig } from "../config/types.hooks.js";
-import type { PluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export type BridgeClientInfo = {
   nodeId: string;
@@ -41,136 +33,6 @@ export type BridgeStartOpts = {
     | { ok: false; error: { code: string; message: string; details?: unknown } }
   >;
 };
-
-type StubChannelOptions = {
-  id: ChannelPlugin["id"];
-  label: string;
-  summary?: Record<string, unknown>;
-};
-
-const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
-  sendText: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-  sendMedia: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-});
-
-const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => ({
-  id: params.id,
-  meta: {
-    id: params.id,
-    label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [DEFAULT_ACCOUNT_ID],
-    resolveAccount: () => ({}),
-    isConfigured: async () => false,
-  },
-  status: {
-    buildChannelSummary: async () => ({
-      configured: false,
-      ...(params.summary ? params.summary : {}),
-    }),
-  },
-  outbound: createStubOutboundAdapter(params.id),
-  messaging: {
-    normalizeTarget: (raw) => raw,
-  },
-  gateway: {
-    logoutAccount: async () => ({
-      cleared: false,
-      envToken: false,
-      loggedOut: false,
-    }),
-  },
-});
-
-const createStubPluginRegistry = (): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels: [
-    {
-      pluginId: "whatsapp",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
-    },
-    {
-      pluginId: "telegram",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "telegram",
-        label: "Telegram",
-        summary: { tokenSource: "none", lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "discord",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-    },
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-    },
-    {
-      pluginId: "signal",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "signal",
-        label: "Signal",
-        summary: { lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "imessage",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-    },
-    {
-      pluginId: "msteams",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "msteams", label: "Microsoft Teams" }),
-    },
-    {
-      pluginId: "matrix",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "matrix", label: "Matrix" }),
-    },
-    {
-      pluginId: "zalo",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalo", label: "Zalo" }),
-    },
-    {
-      pluginId: "zalouser",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
-    },
-    {
-      pluginId: "bluebubbles",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
-    },
-  ],
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
 
 const hoisted = vi.hoisted(() => ({
   bridgeStartCalls: [] as BridgeStartOpts[],
@@ -208,21 +70,6 @@ const hoisted = vi.hoisted(() => ({
   sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 
-const pluginRegistryState = {
-  registry: createStubPluginRegistry(),
-};
-setActivePluginRegistry(pluginRegistryState.registry);
-
-export const setTestPluginRegistry = (registry: PluginRegistry) => {
-  pluginRegistryState.registry = registry;
-  setActivePluginRegistry(registry);
-};
-
-export const resetTestPluginRegistry = () => {
-  pluginRegistryState.registry = createStubPluginRegistry();
-  setActivePluginRegistry(pluginRegistryState.registry);
-};
-
 const testConfigRoot = {
   value: path.join(os.tmpdir(), `clawdbot-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 };
@@ -244,7 +91,7 @@ export const agentCommand = hoisted.agentCommand;
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,
   agentsConfig: undefined as Record<string, unknown> | undefined,
-  bindingsConfig: undefined as AgentBinding[] | undefined,
+  bindingsConfig: undefined as Array<Record<string, unknown>> | undefined,
   channelsConfig: undefined as Record<string, unknown> | undefined,
   sessionStorePath: undefined as string | undefined,
   sessionConfig: undefined as Record<string, unknown> | undefined,
@@ -253,7 +100,7 @@ export const testState = {
   cronEnabled: false as boolean | undefined,
   gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
   gatewayAuth: undefined as Record<string, unknown> | undefined,
-  hooksConfig: undefined as HooksConfig | undefined,
+  hooksConfig: undefined as Record<string, unknown> | undefined,
   canvasHostPort: undefined as number | undefined,
   legacyIssues: [] as Array<{ path: string; message: string }>,
   legacyParsed: {} as Record<string, unknown>,
@@ -415,124 +262,61 @@ vi.mock("../config/config.js", async () => {
       changes: testState.migrationChanges,
     }),
     loadConfig: () => {
-      const configPath = resolveConfigPath();
-      let fileConfig: Record<string, unknown> = {};
-      try {
-        if (fsSync.existsSync(configPath)) {
-          const raw = fsSync.readFileSync(configPath, "utf-8");
-          fileConfig = JSON.parse(raw) as Record<string, unknown>;
-        }
-      } catch {
-        fileConfig = {};
-      }
-
-      const fileAgents =
-        fileConfig.agents &&
-        typeof fileConfig.agents === "object" &&
-        !Array.isArray(fileConfig.agents)
-          ? (fileConfig.agents as Record<string, unknown>)
-          : {};
-      const fileDefaults =
-        fileAgents.defaults &&
-        typeof fileAgents.defaults === "object" &&
-        !Array.isArray(fileAgents.defaults)
-          ? (fileAgents.defaults as Record<string, unknown>)
-          : {};
-      const defaults = {
-        model: { primary: "anthropic/claude-opus-4-5" },
-        workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
-        ...fileDefaults,
-        ...testState.agentConfig,
-      };
-      const agents = testState.agentsConfig
-        ? { ...fileAgents, ...testState.agentsConfig, defaults }
-        : { ...fileAgents, defaults };
-
-      const fileBindings = Array.isArray(fileConfig.bindings)
-        ? (fileConfig.bindings as AgentBinding[])
-        : undefined;
-
-      const fileChannels =
-        fileConfig.channels &&
-        typeof fileConfig.channels === "object" &&
-        !Array.isArray(fileConfig.channels)
-          ? ({ ...(fileConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      const overrideChannels =
-        testState.channelsConfig && typeof testState.channelsConfig === "object"
-          ? { ...(testState.channelsConfig as Record<string, unknown>) }
-          : {};
-      const mergedChannels = { ...fileChannels, ...overrideChannels };
-      if (testState.allowFrom !== undefined) {
-        const existing =
-          mergedChannels.whatsapp &&
-          typeof mergedChannels.whatsapp === "object" &&
-          !Array.isArray(mergedChannels.whatsapp)
-            ? (mergedChannels.whatsapp as Record<string, unknown>)
-            : {};
-        mergedChannels.whatsapp = {
-          ...existing,
-          allowFrom: testState.allowFrom,
-        };
-      }
-      const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
-
-      const fileSession =
-        fileConfig.session &&
-        typeof fileConfig.session === "object" &&
-        !Array.isArray(fileConfig.session)
-          ? (fileConfig.session as Record<string, unknown>)
-          : {};
-      const session: Record<string, unknown> = {
-        ...fileSession,
-        mainKey: fileSession.mainKey ?? "main",
-      };
-      if (typeof testState.sessionStorePath === "string")
-        session.store = testState.sessionStorePath;
-      if (testState.sessionConfig) Object.assign(session, testState.sessionConfig);
-
-      const fileGateway =
-        fileConfig.gateway &&
-        typeof fileConfig.gateway === "object" &&
-        !Array.isArray(fileConfig.gateway)
-          ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      if (testState.gatewayBind) fileGateway.bind = testState.gatewayBind;
-      if (testState.gatewayAuth) fileGateway.auth = testState.gatewayAuth;
-      const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
-
-      const fileCanvasHost =
-        fileConfig.canvasHost &&
-        typeof fileConfig.canvasHost === "object" &&
-        !Array.isArray(fileConfig.canvasHost)
-          ? ({ ...(fileConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      if (typeof testState.canvasHostPort === "number")
-        fileCanvasHost.port = testState.canvasHostPort;
-      const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
-
-      const hooks = testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
-
-      const fileCron =
-        fileConfig.cron && typeof fileConfig.cron === "object" && !Array.isArray(fileConfig.cron)
-          ? ({ ...(fileConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      if (typeof testState.cronEnabled === "boolean") fileCron.enabled = testState.cronEnabled;
-      if (typeof testState.cronStorePath === "string") fileCron.store = testState.cronStorePath;
-      const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
-
-      const config = {
-        ...fileConfig,
-        agents,
-        bindings: testState.bindingsConfig ?? fileBindings,
-        channels,
-        session,
-        gateway,
-        canvasHost,
-        hooks,
-        cron,
-      };
-      return applyPluginAutoEnable({ config, env: process.env }).config;
+      const base = {
+        agents: (() => {
+          const defaults = {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
+            ...testState.agentConfig,
+          };
+          if (testState.agentsConfig) {
+            return { ...testState.agentsConfig, defaults };
+          }
+          return { defaults };
+        })(),
+        bindings: testState.bindingsConfig,
+        channels: (() => {
+          const baseChannels =
+            testState.channelsConfig && typeof testState.channelsConfig === "object"
+              ? { ...testState.channelsConfig }
+              : {};
+          const existing = baseChannels.whatsapp;
+          const mergedWhatsApp: Record<string, unknown> =
+            existing && typeof existing === "object" && !Array.isArray(existing)
+              ? { ...existing }
+              : {};
+          if (testState.allowFrom !== undefined) {
+            mergedWhatsApp.allowFrom = testState.allowFrom;
+          }
+          baseChannels.whatsapp = mergedWhatsApp;
+          return baseChannels;
+        })(),
+        session: {
+          mainKey: "main",
+          store: testState.sessionStorePath,
+          ...testState.sessionConfig,
+        },
+        gateway: (() => {
+          const gateway: Record<string, unknown> = {};
+          if (testState.gatewayBind) gateway.bind = testState.gatewayBind;
+          if (testState.gatewayAuth) gateway.auth = testState.gatewayAuth;
+          return Object.keys(gateway).length > 0 ? gateway : undefined;
+        })(),
+        canvasHost: (() => {
+          const canvasHost: Record<string, unknown> = {};
+          if (typeof testState.canvasHostPort === "number")
+            canvasHost.port = testState.canvasHostPort;
+          return Object.keys(canvasHost).length > 0 ? canvasHost : undefined;
+        })(),
+        hooks: testState.hooksConfig,
+        cron: (() => {
+          const cron: Record<string, unknown> = {};
+          if (typeof testState.cronEnabled === "boolean") cron.enabled = testState.cronEnabled;
+          if (typeof testState.cronStorePath === "string") cron.store = testState.cronStorePath;
+          return Object.keys(cron).length > 0 ? cron : undefined;
+        })(),
+      } as ReturnType<typeof actual.loadConfig>;
+      return applyPluginAutoEnable({ config: base }).config;
     },
     parseConfigJson5: (raw: string) => {
       try {
@@ -604,6 +388,233 @@ vi.mock("../cli/deps.js", async () => {
       sendMessageWhatsApp: (...args: unknown[]) =>
         (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
+  };
+});
+
+vi.mock("../channels/plugins/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
+  );
+
+  const createMinimalPlugin = (id: string, order: number) => ({
+    id,
+    meta: { order, label: id },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: (cfg: Record<string, unknown>) => {
+        const channels = cfg.channels as Record<string, unknown> | undefined;
+        return (channels?.[id] as Record<string, unknown>) ?? {};
+      },
+      defaultAccountId: () => "default",
+      resolveAllowFrom: () => [],
+      isEnabled: () => true,
+      isConfigured: async (account: unknown) => {
+        return account && typeof account === "object" && Object.keys(account as object).length > 0;
+      },
+    },
+    status: {
+      buildAccountSnapshot: async (params: { account: unknown }) => ({
+        accountId: "default",
+        configured:
+          params.account &&
+          typeof params.account === "object" &&
+          Object.keys(params.account as object).length > 0,
+        tokenSource: "none",
+        lastProbeAt: null,
+      }),
+      buildChannelSummary: async (params: {
+        snapshot?: { configured?: boolean; tokenSource?: string; lastProbeAt?: number | null };
+      }) => ({
+        configured: params.snapshot?.configured ?? false,
+        tokenSource: params.snapshot?.tokenSource ?? "none",
+        lastProbeAt: params.snapshot?.lastProbeAt ?? null,
+      }),
+    },
+    gateway: {
+      logoutAccount: async (params: { account: unknown }) => ({
+        cleared:
+          params.account &&
+          typeof params.account === "object" &&
+          Object.keys(params.account as object).length > 0,
+        envToken: false,
+      }),
+    },
+    outbound: { resolveTarget: () => ({ ok: false, error: { code: "UNCONFIGURED" } }) },
+  });
+
+  const whatsappPlugin = {
+    id: "whatsapp",
+    meta: { order: 1, label: "whatsapp" },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: (cfg: Record<string, unknown>) => {
+        const channels = cfg.channels as Record<string, unknown> | undefined;
+        return (channels?.whatsapp as Record<string, unknown>) ?? {};
+      },
+      defaultAccountId: () => "default",
+      resolveAllowFrom: ({ cfg }: { cfg: Record<string, unknown>; accountId?: string }) => {
+        const channels = cfg.channels as Record<string, unknown> | undefined;
+        const whatsapp = channels?.whatsapp as Record<string, unknown> | undefined;
+        return (whatsapp?.allowFrom as string[] | undefined) ?? [];
+      },
+      isEnabled: () => true,
+      isConfigured: async (account: unknown) => {
+        return account && typeof account === "object" && Object.keys(account as object).length > 0;
+      },
+    },
+    status: {
+      buildAccountSnapshot: async (params: { account: unknown }) => ({
+        accountId: "default",
+        configured:
+          params.account &&
+          typeof params.account === "object" &&
+          Object.keys(params.account as object).length > 0,
+        tokenSource: "none",
+        lastProbeAt: null,
+      }),
+      buildChannelSummary: async (params: {
+        snapshot?: { configured?: boolean; tokenSource?: string; lastProbeAt?: number | null };
+      }) => ({
+        configured: params.snapshot?.configured ?? false,
+        tokenSource: params.snapshot?.tokenSource ?? "none",
+        lastProbeAt: params.snapshot?.lastProbeAt ?? null,
+      }),
+    },
+    gateway: {
+      logoutAccount: async (params: { account: unknown }) => ({
+        cleared:
+          params.account &&
+          typeof params.account === "object" &&
+          Object.keys(params.account as object).length > 0,
+        envToken: false,
+      }),
+    },
+    outbound: {
+      resolveTarget: ({ to, allowFrom }: { to?: string; allowFrom?: string[]; mode?: string }) => {
+        const trimmed = to?.trim() ?? "";
+        const allowList = (allowFrom ?? [])
+          .map((entry) => String(entry).trim())
+          .filter((entry) => entry.length > 0 && entry !== "*");
+        if (!trimmed && allowList.length > 0) {
+          return { ok: true, to: allowList[0] };
+        }
+        if (trimmed) {
+          return { ok: true, to: trimmed };
+        }
+        return { ok: false, error: { code: "MISSING_TARGET", message: "No target provided" } };
+      },
+    },
+  } as unknown;
+
+  const telegramPlugin = {
+    id: "telegram",
+    meta: { order: 2, label: "telegram" },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: (cfg: Record<string, unknown>) => {
+        const channels = cfg.channels as Record<string, unknown> | undefined;
+        const token = channels?.telegram
+          ? (channels.telegram as Record<string, unknown>).botToken
+          : undefined;
+        return { token, tokenSource: token ? "config" : "none", accountId: "default" };
+      },
+      defaultAccountId: () => "default",
+      resolveAllowFrom: () => [],
+      isEnabled: () => true,
+      isConfigured: async (account: unknown) => {
+        return !!(
+          account &&
+          typeof account === "object" &&
+          (account as Record<string, unknown>).token
+        );
+      },
+    },
+    status: {
+      buildAccountSnapshot: async (params: { account: unknown }) => ({
+        accountId: "default",
+        configured: !!(
+          params.account &&
+          typeof params.account === "object" &&
+          (params.account as Record<string, unknown>).token
+        ),
+        tokenSource:
+          (params.account && typeof params.account === "object"
+            ? (params.account as Record<string, unknown>).tokenSource
+            : "none") ?? "none",
+        running: false,
+        lastStartAt: null,
+        lastStopAt: null,
+        lastError: null,
+      }),
+      buildChannelSummary: async (params: {
+        snapshot?: { configured?: boolean; tokenSource?: string; lastProbeAt?: number | null };
+      }) => ({
+        configured: params.snapshot?.configured ?? false,
+        tokenSource: params.snapshot?.tokenSource ?? "none",
+        running: false,
+        mode: null,
+        lastStartAt: null,
+        lastStopAt: null,
+        lastError: null,
+        probe: undefined,
+        lastProbeAt: params.snapshot?.lastProbeAt ?? null,
+      }),
+    },
+    gateway: {
+      logoutAccount: async (params: { cfg?: Record<string, unknown>; account?: unknown }) => {
+        const nextCfg = { ...params.cfg } as any;
+        const nextTelegram =
+          params.cfg &&
+          typeof params.cfg === "object" &&
+          (params.cfg as Record<string, unknown>).channels
+            ? {
+                ...(((params.cfg as Record<string, unknown>).channels as Record<string, unknown>)
+                  ?.telegram as Record<string, unknown>),
+              }
+            : undefined;
+        let cleared = false;
+        if (nextTelegram?.botToken) {
+          delete nextTelegram.botToken;
+          cleared = true;
+          const channels =
+            ((params.cfg && typeof params.cfg === "object"
+              ? (params.cfg as Record<string, unknown>).channels
+              : {}) as Record<string, unknown>) || {};
+          nextCfg.channels = { ...channels, telegram: nextTelegram };
+          try {
+            const { writeConfigFile } = await import("../config/config.js");
+            await writeConfigFile(nextCfg);
+          } catch {
+            // ignore import errors in test
+          }
+        }
+        return { cleared, envToken: false };
+      },
+    },
+    outbound: { resolveTarget: () => ({ ok: false, error: { code: "UNCONFIGURED" } }) },
+  } as unknown;
+  const signalPlugin = createMinimalPlugin("signal", 3) as unknown;
+
+  return {
+    ...actual,
+    listChannelPlugins: () => {
+      if (process.env.CLAWDBOT_SKIP_CHANNELS === "1") {
+        return [whatsappPlugin as any, telegramPlugin as any, signalPlugin as any];
+      }
+      return actual.listChannelPlugins();
+    },
+    getChannelPlugin: (id: string) => {
+      if (id === "whatsapp") return whatsappPlugin;
+      if (id === "telegram") return telegramPlugin;
+      if (id === "signal") return signalPlugin;
+      return actual.getChannelPlugin(id);
+    },
+    normalizeChannelId: (raw?: string | null) => {
+      if (!raw) return null;
+      const normalized = String(raw).trim().toLowerCase();
+      const validChannels = ["whatsapp", "telegram", "signal"];
+      return validChannels.includes(normalized) ? (normalized as any) : null;
+    },
   };
 });
 

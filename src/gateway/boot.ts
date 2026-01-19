@@ -6,7 +6,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { agentCommand } from "../commands/agent.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 
 const log = createSubsystemLogger("gateway/boot");

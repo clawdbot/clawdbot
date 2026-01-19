@@ -28,7 +28,7 @@ private struct ExecApprovalSocketDecision: Codable {
     var decision: ExecApprovalDecision
 }
 
-fileprivate struct ExecHostSocketRequest: Codable {
+private struct ExecHostSocketRequest: Codable {
     var type: String
     var id: String
     var nonce: String
@@ -37,7 +37,7 @@ fileprivate struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-fileprivate struct ExecHostRequest: Codable {
+private struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
     var cwd: String?
@@ -48,7 +48,7 @@ fileprivate struct ExecHostRequest: Codable {
     var sessionKey: String?
 }
 
-fileprivate struct ExecHostRunResult: Codable {
+private struct ExecHostRunResult: Codable {
     var exitCode: Int?
     var timedOut: Bool
     var success: Bool
@@ -57,13 +57,13 @@ fileprivate struct ExecHostRunResult: Codable {
     var error: String?
 }
 
-fileprivate struct ExecHostError: Codable {
+private struct ExecHostError: Codable {
     var code: String
     var message: String
     var reason: String?
 }
 
-fileprivate struct ExecHostResponse: Codable {
+private struct ExecHostResponse: Codable {
     var type: String
     var id: String
     var ok: Bool
@@ -74,14 +74,14 @@ fileprivate struct ExecHostResponse: Codable {
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
-        var errorDescription: String? { message }
+        var errorDescription: String? { self.message }
     }
 
     static func requestDecision(
         socketPath: String,
         token: String,
         request: ExecApprovalPromptRequest,
-        timeoutMs: Int = 15_000) async -> ExecApprovalDecision?
+        timeoutMs: Int = 15000) async -> ExecApprovalDecision?
     {
         let trimmedPath = socketPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -254,7 +254,7 @@ enum ExecApprovalsPromptPresenter {
 }
 
 @MainActor
-fileprivate enum ExecHostExecutor {
+private enum ExecHostExecutor {
     private static let blockedEnvKeys: Set<String> = [
         "PATH",
         "NODE_OPTIONS",
@@ -313,12 +313,15 @@ fileprivate enum ExecHostExecutor {
                 id: UUID().uuidString,
                 ok: false,
                 payload: nil,
-                error: ExecHostError(code: "UNAVAILABLE", message: "SYSTEM_RUN_DISABLED: security=deny", reason: "security=deny"))
+                error: ExecHostError(
+                    code: "UNAVAILABLE",
+                    message: "SYSTEM_RUN_DISABLED: security=deny",
+                    reason: "security=deny"))
         }
 
         let requiresAsk: Bool = {
             if ask == .always { return true }
-            if ask == .onMiss && security == .allowlist && allowlistMatch == nil && !skillAllow { return true }
+            if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
             return false
         }()
 
@@ -341,7 +344,10 @@ fileprivate enum ExecHostExecutor {
                     id: UUID().uuidString,
                     ok: false,
                     payload: nil,
-                    error: ExecHostError(code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: user denied", reason: "user-denied"))
+                    error: ExecHostError(
+                        code: "UNAVAILABLE",
+                        message: "SYSTEM_RUN_DENIED: user denied",
+                        reason: "user-denied"))
             case .allowAlways:
                 approvedByAsk = true
                 if security == .allowlist {
@@ -355,13 +361,16 @@ fileprivate enum ExecHostExecutor {
             }
         }
 
-        if security == .allowlist && allowlistMatch == nil && !skillAllow && !approvedByAsk {
+        if security == .allowlist, allowlistMatch == nil, !skillAllow, !approvedByAsk {
             return ExecHostResponse(
                 type: "exec-res",
                 id: UUID().uuidString,
                 ok: false,
                 payload: nil,
-                error: ExecHostError(code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: allowlist miss", reason: "allowlist-miss"))
+                error: ExecHostError(
+                    code: "UNAVAILABLE",
+                    message: "SYSTEM_RUN_DENIED: allowlist miss",
+                    reason: "allowlist-miss"))
         }
 
         if let match = allowlistMatch {
@@ -381,7 +390,10 @@ fileprivate enum ExecHostExecutor {
                     id: UUID().uuidString,
                     ok: false,
                     payload: nil,
-                    error: ExecHostError(code: "UNAVAILABLE", message: "PERMISSION_MISSING: screenRecording", reason: "permission:screenRecording"))
+                    error: ExecHostError(
+                        code: "UNAVAILABLE",
+                        message: "PERMISSION_MISSING: screenRecording",
+                        reason: "permission:screenRecording"))
             }
         }
 
@@ -621,7 +633,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
 
     private func handleExecRequest(_ request: ExecHostSocketRequest) async -> ExecHostResponse {
         let nowMs = Int(Date().timeIntervalSince1970 * 1000)
-        if abs(nowMs - request.ts) > 10_000 {
+        if abs(nowMs - request.ts) > 10000 {
             return ExecHostResponse(
                 type: "exec-res",
                 id: request.id,

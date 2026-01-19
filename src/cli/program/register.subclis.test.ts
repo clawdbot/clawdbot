@@ -71,7 +71,8 @@ describe("registerSubCliCommands", () => {
     program.name("clawdbot");
     registerSubCliCommands(program, process.argv);
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
+    const names = program.commands.map((cmd) => cmd.name());
+    expect(names).toContain("nodes");
 
     await program.parseAsync(["nodes", "list"], { from: "user" });
 

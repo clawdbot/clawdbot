@@ -53,11 +53,11 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     static func from(security: ExecSecurity, ask: ExecAsk) -> ExecApprovalQuickMode {
         switch security {
         case .deny:
-            return .deny
+            .deny
         case .full:
-            return .allow
+            .allow
         case .allowlist:
-            return .ask
+            .ask
         }
     }
 }
@@ -106,7 +106,8 @@ struct ExecApprovalsAgent: Codable {
     var allowlist: [ExecAllowlistEntry]?
 
     var isEmpty: Bool {
-        security == nil && ask == nil && askFallback == nil && autoAllowSkills == nil && (allowlist?.isEmpty ?? true)
+        self.security == nil && self.ask == nil && self.askFallback == nil && self
+            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true)
     }
 }
 
@@ -467,8 +468,8 @@ struct ExecCommandResolution: Sendable {
         command: [String],
         rawCommand: String?,
         cwd: String?,
-        env: [String: String]?
-    ) -> ExecCommandResolution? {
+        env: [String: String]?) -> ExecCommandResolution?
+    {
         let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedRaw.isEmpty, let token = self.parseFirstToken(trimmedRaw) {
             return self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
@@ -486,8 +487,8 @@ struct ExecCommandResolution: Sendable {
     private static func resolveExecutable(
         rawExecutable: String,
         cwd: String?,
-        env: [String: String]?
-    ) -> ExecCommandResolution? {
+        env: [String: String]?) -> ExecCommandResolution?
+    {
         let expanded = rawExecutable.hasPrefix("~") ? (rawExecutable as NSString).expandingTildeInPath : rawExecutable
         let hasPathSeparator = expanded.contains("/") || expanded.contains("\\")
         let resolvedPath: String? = {
@@ -503,7 +504,11 @@ struct ExecCommandResolution: Sendable {
             return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
         }()
         let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
-        return ExecCommandResolution(rawExecutable: expanded, resolvedPath: resolvedPath, executableName: name, cwd: cwd)
+        return ExecCommandResolution(
+            rawExecutable: expanded,
+            resolvedPath: resolvedPath,
+            executableName: name,
+            cwd: cwd)
     }
 
     private static func parseFirstToken(_ command: String) -> String? {
@@ -624,7 +629,7 @@ struct ExecEventPayload: Codable, Sendable {
     var output: String?
     var reason: String?
 
-    static func truncateOutput(_ raw: String, maxChars: Int = 20_000) -> String? {
+    static func truncateOutput(_ raw: String, maxChars: Int = 20000) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if trimmed.count <= maxChars { return trimmed }

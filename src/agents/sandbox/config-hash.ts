@@ -16,7 +16,9 @@ function isPrimitive(value: unknown): value is string | number | boolean | bigin
 function normalizeForHash(value: unknown): unknown {
   if (value === undefined) return undefined;
   if (Array.isArray(value)) {
-    const normalized = value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
+    const normalized = value
+      .map(normalizeForHash)
+      .filter((item): item is unknown => item !== undefined);
     const primitives = normalized.filter(isPrimitive);
     if (primitives.length === normalized.length) {
       return [...primitives].sort((a, b) => String(a).localeCompare(String(b)));
