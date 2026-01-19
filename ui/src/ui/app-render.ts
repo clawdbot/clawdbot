@@ -400,6 +400,7 @@ export function renderApp(state: AppViewState) {
                 state.toggleToolOutput(id, expanded),
               focusMode: state.settings.chatFocusMode,
               useNewChatLayout: state.settings.useNewChatLayout,
+              enterToSubmit: state.settings.enterToSubmit,
               onRefresh: () => {
                 state.resetToolStream();
                 return loadChatHistory(state);

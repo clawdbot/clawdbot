@@ -13,6 +13,7 @@ export type UiSettings = {
   useNewChatLayout: boolean; // Slack-style grouped messages layout
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  enterToSubmit: boolean; // true: Enter submits, false: Cmd/Ctrl+Enter submits
 };
 
 export function loadSettings(): UiSettings {
@@ -32,6 +33,7 @@ export function loadSettings(): UiSettings {
     useNewChatLayout: true, // Enabled by default
     navCollapsed: false,
     navGroupsCollapsed: {},
+    enterToSubmit: true, // Enter to send, Shift+Enter for line breaks
   };
 
   try {
@@ -84,6 +86,10 @@ export function loadSettings(): UiSettings {
         parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      enterToSubmit:
+        typeof parsed.enterToSubmit === "boolean"
+          ? parsed.enterToSubmit
+          : defaults.enterToSubmit,
     };
   } catch {
     return defaults;

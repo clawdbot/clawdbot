@@ -47,6 +47,8 @@ export type ChatProps = {
   sidebarContent?: string | null;
   sidebarError?: string | null;
   splitRatio?: number;
+  // Submit behavior: true = Enter sends, false = Cmd/Ctrl+Enter sends
+  enterToSubmit?: boolean;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -71,8 +73,11 @@ export function renderChat(props: ChatProps) {
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = reasoningLevel !== "off";
 
+  const enterToSubmit = props.enterToSubmit ?? true;
   const composePlaceholder = props.connected
-    ? "Message (↩ to send, Shift+↩ for line breaks)"
+    ? enterToSubmit
+      ? "Message (↩ to send, Shift+↩ for line breaks)"
+      : "Message (⌘↩ to send, ↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -212,7 +217,11 @@ export function renderChat(props: ChatProps) {
             @keydown=${(e: KeyboardEvent) => {
               if (e.key !== "Enter") return;
               if (e.isComposing || e.keyCode === 229) return;
-              if (e.shiftKey) return; // Allow Shift+Enter for line breaks
+              if (enterToSubmit) {
+                if (e.shiftKey) return; // Shift+Enter for line breaks
+              } else {
+                if (!e.metaKey && !e.ctrlKey) return; // Only Cmd/Ctrl+Enter submits
+              }
               if (!props.connected) return;
               e.preventDefault();
               if (canCompose) props.onSend();
