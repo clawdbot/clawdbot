@@ -74,7 +74,8 @@ describe("scanText", () => {
     expect(result.truncated).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]?.message).toContain("truncated");
-    expect(result.redactedText?.length).toBe(input.length);
+    expect(result.redactedText).toBeDefined();
+    expect(result.redactedText?.endsWith(input.slice(10))).toBe(true);
   });
 
   it("detects high-entropy hex strings", () => {
