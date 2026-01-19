@@ -59,12 +59,70 @@ TIME_DIFF=$((EXPIRES_AT_SEC - CURRENT_TIME))
 HOURS_LEFT=$((TIME_DIFF / 3600))
 MINS_LEFT=$(((TIME_DIFF % 3600) / 60))
 
-# Check if expired
+# Check if expired or expiring soon
+NEEDS_REAUTH=false
+
 if [ $TIME_DIFF -lt 0 ]; then
-  error "Token EXPIRED $((-TIME_DIFF / 3600)) hours ago"
+  warn "Token appears EXPIRED ($((-TIME_DIFF / 3600)) hours ago by timestamp)"
+  NEEDS_REAUTH=true
+elif [ $TIME_DIFF -lt 3600 ]; then
+  warn "Token expiring soon: ${MINS_LEFT} minutes left"
+  # Don't auto-reauth for expiring tokens, just sync
+fi
+
+# If token appears expired, verify by actually testing Claude Code
+if [ "$NEEDS_REAUTH" = true ]; then
+  info "Verifying token status by testing Claude Code..."
   
+  # Try a simple claude command with timeout (using background job + kill)
+  TEST_OUTPUT=$(mktemp)
+  (echo "test" | claude --print "reply: ok" > "$TEST_OUTPUT" 2>&1) &
+  TEST_PID=$!
+  
+  # Wait up to 10 seconds
+  for i in {1..20}; do
+    if ! kill -0 $TEST_PID 2>/dev/null; then
+      break
+    fi
+    sleep 0.5
+  done
+  
+  # Kill if still running
+  kill -9 $TEST_PID 2>/dev/null || true
+  wait $TEST_PID 2>/dev/null || true
+  
+  # Check output
+  if grep -q "ok" "$TEST_OUTPUT" 2>/dev/null; then
+    info "✅ Claude Code still works! Token might have auto-refreshed."
+    NEEDS_REAUTH=false
+    
+    # Re-read token data (it might have been refreshed)
+    TOKEN_DATA=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a "dydo" -w 2>/dev/null)
+    EXPIRES_AT=$(echo "$TOKEN_DATA" | jq -r '.claudeAiOauth.expiresAt // 0')
+    EXPIRES_AT_SEC=$((EXPIRES_AT / 1000))
+    TIME_DIFF=$((EXPIRES_AT_SEC - CURRENT_TIME))
+    HOURS_LEFT=$((TIME_DIFF / 3600))
+    MINS_LEFT=$(((TIME_DIFF % 3600) / 60))
+    
+    info "Updated token valid for ${HOURS_LEFT}h ${MINS_LEFT}m"
+  else
+    error "❌ Claude Code failed - token is truly expired"
+    NEEDS_REAUTH=true
+  fi
+  
+  rm -f "$TEST_OUTPUT"
+fi
+
+# Exit early if no reauth needed
+if [ "$NEEDS_REAUTH" = false ]; then
   if [ "$MODE" = "check" ]; then
-    warn "Token expired (check mode, not re-authenticating)"
+    exit 0
+  fi
+  # Continue to sync section below
+else
+  # Token is truly expired, need to re-authenticate
+  if [ "$MODE" = "check" ]; then
+    warn "Token expired and Claude Code not working (check mode, not re-authenticating)"
     exit 1
   fi
   
@@ -161,19 +219,25 @@ APPLESCRIPT
   
   # Cleanup
   [ -n "${RESPONDER_PID:-}" ] && kill "$RESPONDER_PID" 2>/dev/null || true
-  
+fi
+
+# At this point, either token is valid or has been refreshed
+# Check final status for logging
+if [ $TIME_DIFF -lt 0 ]; then
+  # This shouldn't happen after reauth, but just in case
+  error "Token still expired after reauth attempt"
+  exit 1
 elif [ $TIME_DIFF -lt 3600 ]; then
-  warn "Token expiring soon: ${MINS_LEFT} minutes left"
-  if [ "$MODE" = "check" ]; then
-    exit 2
-  fi
-elif [ $MODE = "force" ] || [ $MODE = "check" ]; then
+  warn "Token valid but expiring soon: ${MINS_LEFT} minutes left"
+elif [ "$MODE" = "force" ] || [ "$MODE" = "check" ]; then
   info "Token valid for ${HOURS_LEFT}h ${MINS_LEFT}m"
-  if [ "$MODE" = "check" ]; then
-    exit 0
-  fi
 else
   log "Token valid for ${HOURS_LEFT}h ${MINS_LEFT}m (OK)"
+fi
+
+# Exit if check-only mode
+if [ "$MODE" = "check" ]; then
+  exit 0
 fi
 
 # Sync to Clawdbot
