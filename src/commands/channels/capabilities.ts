@@ -79,6 +79,11 @@ function formatSupport(capabilities?: ChannelCapabilities) {
   }
   if (capabilities.polls) bits.push("polls");
   if (capabilities.reactions) bits.push("reactions");
+  if (capabilities.edit) bits.push("edit");
+  if (capabilities.unsend) bits.push("unsend");
+  if (capabilities.reply) bits.push("reply");
+  if (capabilities.effects) bits.push("effects");
+  if (capabilities.groupManagement) bits.push("groupManagement");
   if (capabilities.threads) bits.push("threads");
   if (capabilities.media) bits.push("media");
   if (capabilities.nativeCommands) bits.push("nativeCommands");

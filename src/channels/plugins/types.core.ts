@@ -144,6 +144,11 @@ export type ChannelCapabilities = {
   chatTypes: Array<NormalizedChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  effects?: boolean;
+  groupManagement?: boolean;
   threads?: boolean;
   media?: boolean;
   nativeCommands?: boolean;
