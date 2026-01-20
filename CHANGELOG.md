@@ -27,6 +27,7 @@ Docs: https://docs.clawd.bot
 - Exec: merge login-shell PATH for host=gateway exec while keeping daemon PATH minimal. (#1304)
 - Plugins: add Nextcloud Talk manifest for plugin config validation. (#1297) — thanks @ysqander.
 - Anthropic: default API prompt caching to 1h with configurable TTL override; ignore TTL for OAuth.
+- Discord: make resolve warnings avoid raw JSON payloads on rate limits.
 
 ## 2026.1.19-3
 

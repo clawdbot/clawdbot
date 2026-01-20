@@ -61,6 +61,54 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   return `${sample.join(", ")}${suffix}`;
 }
 
+type DiscordApiErrorPayload = {
+  message?: string;
+  retry_after?: number;
+  code?: number;
+  global?: boolean;
+};
+
+function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    const payload = JSON.parse(trimmed);
+    if (payload && typeof payload === "object") return payload as DiscordApiErrorPayload;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function formatRetryAfterSeconds(value: number | undefined): string | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
+  const rounded = value < 10 ? value.toFixed(1) : Math.round(value).toString();
+  return `${rounded}s`;
+}
+
+function formatDiscordResolveError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const match = raw.match(/^(Discord API [^]+ failed \(\d+\))(?:\s*:\s*(.*))?$/);
+  if (!match) return raw;
+  const prefix = match[1];
+  const detail = match[2]?.trim();
+  if (!detail) return prefix;
+  const payload = parseDiscordApiErrorPayload(detail);
+  if (!payload) {
+    const looksJson = detail.startsWith("{") && detail.endsWith("}");
+    return looksJson ? `${prefix}: unknown error` : `${prefix}: ${detail}`;
+  }
+  const message =
+    typeof payload.message === "string" && payload.message.trim()
+      ? payload.message.trim()
+      : "unknown error";
+  const retryAfter = formatRetryAfterSeconds(
+    typeof payload.retry_after === "number" ? payload.retry_after : undefined,
+  );
+  const retryHint = retryAfter ? ` (retry after ${retryAfter})` : "";
+  return `${prefix}: ${message}${retryHint}`;
+}
+
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const account = resolveDiscordAccount({
@@ -196,7 +244,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           summarizeMapping("discord channels", mapping, unresolved, runtime);
         }
       } catch (err) {
-        runtime.log?.(`discord channel resolve failed; using config entries. ${String(err)}`);
+        runtime.log?.(
+          `discord channel resolve failed; using config entries. ${formatDiscordResolveError(err)}`,
+        );
       }
     }
 
@@ -222,7 +272,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
         summarizeMapping("discord users", mapping, unresolved, runtime);
       } catch (err) {
-        runtime.log?.(`discord user resolve failed; using config entries. ${String(err)}`);
+        runtime.log?.(
+          `discord user resolve failed; using config entries. ${formatDiscordResolveError(err)}`,
+        );
       }
     }
 
@@ -303,7 +355,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           summarizeMapping("discord channel users", mapping, unresolved, runtime);
         } catch (err) {
           runtime.log?.(
-            `discord channel user resolve failed; using config entries. ${String(err)}`,
+            `discord channel user resolve failed; using config entries. ${formatDiscordResolveError(
+              err,
+            )}`,
           );
         }
       }
