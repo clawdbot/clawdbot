@@ -6,18 +6,12 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Repo: remove the Peekaboo git submodule now that the SPM release is used.
-- Gateway: raise default lane concurrency for main and sub-agent runs.
-- Config: centralize default agent concurrency limits.
+- Plugins: require manifest-embedded config schemas, validate configs without loading plugin code, and surface plugin config warnings. (#1272) — thanks @thewilloftheshadow.
 
 ### Fixes
-- Cron: serialize scheduler operations per store path to prevent duplicate runs across hot reloads. (#1216) — thanks @carlulsoe.
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
-- Agents: treat OAuth refresh failures as auth errors to trigger model fallback. (#1261) — thanks @zknicker.
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
 - CLI: avoid duplicating --profile/--dev flags when formatting commands.
-- Auth: dedupe codex-cli profiles when tokens match custom openai-codex entries. (#1264) — thanks @odrobnik.
-- Agents: avoid misclassifying context-window-too-small errors as context overflow. (#1266) — thanks @humanwritten.
-- Slack: resolve Bolt default-export shapes for monitor startup. (#1208) — thanks @24601.
 
 ## 2026.1.19-3
 

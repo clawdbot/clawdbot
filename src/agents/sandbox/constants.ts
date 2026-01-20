@@ -48,6 +48,7 @@ export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
-export const SANDBOX_STATE_DIR = path.join(STATE_DIR_CLAWDBOT, "sandbox");
+const resolvedSandboxStateDir = STATE_DIR_CLAWDBOT ?? path.join(os.homedir(), ".clawdbot");
+export const SANDBOX_STATE_DIR = path.join(resolvedSandboxStateDir, "sandbox");
 export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
 export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");

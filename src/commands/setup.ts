@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 
 import JSON5 from "json5";
 
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import { type ClawdbotConfig, CONFIG_PATH_CLAWDBOT } from "../config/config.js";
-import { applyModelDefaults } from "../config/defaults.js";
+import { type ClawdbotConfig, CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -24,12 +22,6 @@ async function readConfigFileRaw(): Promise<{
   } catch {
     return { exists: false, parsed: {} };
   }
-}
-
-async function writeConfigFile(cfg: ClawdbotConfig) {
-  await fs.mkdir(path.dirname(CONFIG_PATH_CLAWDBOT), { recursive: true });
-  const json = JSON.stringify(applyModelDefaults(cfg), null, 2).trimEnd().concat("\n");
-  await fs.writeFile(CONFIG_PATH_CLAWDBOT, json, "utf-8");
 }
 
 export async function setupCommand(

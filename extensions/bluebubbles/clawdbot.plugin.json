@@ -1,0 +1,11 @@
+{
+  "id": "bluebubbles",
+  "channels": [
+    "bluebubbles"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

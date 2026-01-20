@@ -105,5 +105,6 @@ export type ConfigFileSnapshot = {
   config: ClawdbotConfig;
   hash?: string;
   issues: ConfigValidationIssue[];
+  warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];
 };

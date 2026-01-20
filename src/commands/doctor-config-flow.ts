@@ -128,6 +128,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
     note("Config invalid; doctor will run with best-effort config.", "Config");
   }
+  const warnings = snapshot.warnings ?? [];
+  if (warnings.length > 0) {
+    const lines = warnings.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
+    note(lines, "Config warnings");
+  }
 
   if (snapshot.legacyIssues.length > 0) {
     note(

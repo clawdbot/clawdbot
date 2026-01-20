@@ -1,0 +1,9 @@
+{
+  "id": "memory-core",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

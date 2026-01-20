@@ -1,0 +1,405 @@
+{
+  "id": "voice-call",
+  "uiHints": {
+    "provider": {
+      "label": "Provider",
+      "help": "Use twilio, telnyx, or mock for dev/no-network."
+    },
+    "fromNumber": {
+      "label": "From Number",
+      "placeholder": "+15550001234"
+    },
+    "toNumber": {
+      "label": "Default To Number",
+      "placeholder": "+15550001234"
+    },
+    "inboundPolicy": {
+      "label": "Inbound Policy"
+    },
+    "allowFrom": {
+      "label": "Inbound Allowlist"
+    },
+    "inboundGreeting": {
+      "label": "Inbound Greeting",
+      "advanced": true
+    },
+    "telnyx.apiKey": {
+      "label": "Telnyx API Key",
+      "sensitive": true
+    },
+    "telnyx.connectionId": {
+      "label": "Telnyx Connection ID"
+    },
+    "telnyx.publicKey": {
+      "label": "Telnyx Public Key",
+      "sensitive": true
+    },
+    "twilio.accountSid": {
+      "label": "Twilio Account SID"
+    },
+    "twilio.authToken": {
+      "label": "Twilio Auth Token",
+      "sensitive": true
+    },
+    "outbound.defaultMode": {
+      "label": "Default Call Mode"
+    },
+    "outbound.notifyHangupDelaySec": {
+      "label": "Notify Hangup Delay (sec)",
+      "advanced": true
+    },
+    "serve.port": {
+      "label": "Webhook Port"
+    },
+    "serve.bind": {
+      "label": "Webhook Bind"
+    },
+    "serve.path": {
+      "label": "Webhook Path"
+    },
+    "tailscale.mode": {
+      "label": "Tailscale Mode",
+      "advanced": true
+    },
+    "tailscale.path": {
+      "label": "Tailscale Path",
+      "advanced": true
+    },
+    "tunnel.provider": {
+      "label": "Tunnel Provider",
+      "advanced": true
+    },
+    "tunnel.ngrokAuthToken": {
+      "label": "ngrok Auth Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tunnel.ngrokDomain": {
+      "label": "ngrok Domain",
+      "advanced": true
+    },
+    "tunnel.allowNgrokFreeTier": {
+      "label": "Allow ngrok Free Tier",
+      "advanced": true
+    },
+    "streaming.enabled": {
+      "label": "Enable Streaming",
+      "advanced": true
+    },
+    "streaming.openaiApiKey": {
+      "label": "OpenAI Realtime API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "streaming.sttModel": {
+      "label": "Realtime STT Model",
+      "advanced": true
+    },
+    "streaming.streamPath": {
+      "label": "Media Stream Path",
+      "advanced": true
+    },
+    "tts.model": {
+      "label": "TTS Model",
+      "advanced": true
+    },
+    "tts.voice": {
+      "label": "TTS Voice",
+      "advanced": true
+    },
+    "tts.instructions": {
+      "label": "TTS Instructions",
+      "advanced": true
+    },
+    "publicUrl": {
+      "label": "Public Webhook URL",
+      "advanced": true
+    },
+    "skipSignatureVerification": {
+      "label": "Skip Signature Verification",
+      "advanced": true
+    },
+    "store": {
+      "label": "Call Log Store Path",
+      "advanced": true
+    },
+    "responseModel": {
+      "label": "Response Model",
+      "advanced": true
+    },
+    "responseSystemPrompt": {
+      "label": "Response System Prompt",
+      "advanced": true
+    },
+    "responseTimeoutMs": {
+      "label": "Response Timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "provider": {
+        "type": "string",
+        "enum": [
+          "telnyx",
+          "twilio",
+          "plivo",
+          "mock"
+        ]
+      },
+      "telnyx": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "connectionId": {
+            "type": "string"
+          },
+          "publicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "twilio": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountSid": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": "string"
+          }
+        }
+      },
+      "plivo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authId": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": "string"
+          }
+        }
+      },
+      "fromNumber": {
+        "type": "string",
+        "pattern": "^\\+[1-9]\\d{1,14}$"
+      },
+      "toNumber": {
+        "type": "string",
+        "pattern": "^\\+[1-9]\\d{1,14}$"
+      },
+      "inboundPolicy": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "allowlist",
+          "pairing",
+          "open"
+        ]
+      },
+      "allowFrom": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        }
+      },
+      "inboundGreeting": {
+        "type": "string"
+      },
+      "outbound": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultMode": {
+            "type": "string",
+            "enum": [
+              "notify",
+              "conversation"
+            ]
+          },
+          "notifyHangupDelaySec": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "maxDurationSeconds": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "silenceTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "transcriptTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "ringTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "maxConcurrentCalls": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "serve": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "tailscale": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "serve",
+              "funnel"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "tunnel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "none",
+              "ngrok",
+              "tailscale-serve",
+              "tailscale-funnel"
+            ]
+          },
+          "ngrokAuthToken": {
+            "type": "string"
+          },
+          "ngrokDomain": {
+            "type": "string"
+          },
+          "allowNgrokFreeTier": {
+            "type": "boolean"
+          }
+        }
+      },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "sttProvider": {
+            "type": "string",
+            "enum": [
+              "openai-realtime"
+            ]
+          },
+          "openaiApiKey": {
+            "type": "string"
+          },
+          "sttModel": {
+            "type": "string"
+          },
+          "silenceDurationMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "vadThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "streamPath": {
+            "type": "string"
+          }
+        }
+      },
+      "publicUrl": {
+        "type": "string"
+      },
+      "skipSignatureVerification": {
+        "type": "boolean"
+      },
+      "stt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai"
+            ]
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "tts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "voice": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          }
+        }
+      },
+      "store": {
+        "type": "string"
+      },
+      "responseModel": {
+        "type": "string"
+      },
+      "responseSystemPrompt": {
+        "type": "string"
+      },
+      "responseTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

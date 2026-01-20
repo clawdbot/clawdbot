@@ -48,8 +48,11 @@ See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 - Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
-Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
-register:
+Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. **Config
+validation does not execute plugin code**; it uses the plugin manifest and JSON
+Schema instead. See [Plugin manifest](/plugins/manifest).
+
+Plugins can register:
 
 - Gateway RPC methods
 - Gateway HTTP handlers
@@ -82,6 +85,10 @@ Clawdbot scans, in order:
 Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
 or `clawdbot plugins enable <id>`. Installed plugins are enabled by default,
 but can be disabled the same way.
+
+Each plugin must include a `clawdbot.plugin.json` file in its root. If a path
+points at a file, the plugin root is the file's directory and must contain the
+manifest.
 
 If multiple plugins resolve to the same id, the first match in the order above
 wins and lower-precedence copies are ignored.
@@ -140,6 +147,14 @@ Fields:
 
 Config changes **require a gateway restart**.
 
+Validation rules (strict):
+- Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
+- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
+  the channel id.
+- Plugin config is validated using the JSON Schema embedded in
+  `clawdbot.plugin.json` (`configSchema`).
+- If a plugin is disabled, its config is preserved and a **warning** is emitted.
+
 ## Plugin slots (exclusive categories)
 
 Some plugin categories are **exclusive** (only one active at a time). Use
@@ -169,22 +184,26 @@ Clawdbot augments `uiHints` at runtime based on discovered plugins:
   `plugins.entries.<id>.config.<field>`
 
 If you want your plugin config fields to show good labels/placeholders (and mark secrets as sensitive),
-provide `configSchema.uiHints`.
+provide `uiHints` alongside your JSON Schema in the plugin manifest.
 
 Example:
 
-```ts
-export default {
-  id: "my-plugin",
-  configSchema: {
-    parse: (v) => v,
-    uiHints: {
-      "apiKey": { label: "API Key", sensitive: true },
-      "region": { label: "Region", placeholder: "us-east-1" },
-    },
+```json
+{
+  "id": "my-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string" },
+      "region": { "type": "string" }
+    }
   },
-  register(api) {},
-};
+  "uiHints": {
+    "apiKey": { "label": "API Key", "sensitive": true },
+    "region": { "label": "Region", "placeholder": "us-east-1" }
+  }
+}
 ```
 
 ## CLI

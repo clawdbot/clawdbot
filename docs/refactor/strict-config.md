@@ -22,17 +22,20 @@ read_when:
 - Unknown keys are validation errors (no passthrough at root or nested).
 - `plugins.entries.<id>.config` must be validated by the plugin’s schema.
   - If a plugin lacks a schema, **reject plugin load** and surface a clear error.
+- Unknown `channels.<id>` keys are errors unless a plugin manifest declares the channel id.
+- Plugin manifests (`clawdbot.plugin.json`) are required for all plugins.
 
 ## Plugin schema enforcement
-- Each plugin provides a strict schema for its config (no passthrough).
+- Each plugin provides a strict JSON Schema for its config (inline in the manifest).
 - Plugin load flow:
-  1) Resolve plugin schema by plugin id.
+  1) Resolve plugin manifest + schema (`clawdbot.plugin.json`).
   2) Validate config against the schema.
   3) If missing schema or invalid config: block plugin load, record error.
 - Error message includes:
   - Plugin id
   - Reason (missing schema / invalid config)
   - Path(s) that failed validation
+- Disabled plugins keep their config, but Doctor + logs surface a warning.
 
 ## Doctor flow
 - Doctor runs **every time** config is loaded (dry-run by default).

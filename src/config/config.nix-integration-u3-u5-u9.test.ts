@@ -96,6 +96,25 @@ describe("Nix integration (U3, U5, U9)", () => {
       await withTempHome(async (home) => {
         const configDir = path.join(home, ".clawdbot");
         await fs.mkdir(configDir, { recursive: true });
+        const pluginDir = path.join(home, "plugins", "demo-plugin");
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "index.js"),
+          'export default { id: "demo-plugin", register() {} };',
+          "utf-8",
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "clawdbot.plugin.json"),
+          JSON.stringify(
+            {
+              id: "demo-plugin",
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
         await fs.writeFile(
           path.join(configDir, "clawdbot.json"),
           JSON.stringify(

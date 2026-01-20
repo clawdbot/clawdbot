@@ -12,7 +12,7 @@ describe("config backup rotation", () => {
       const configPath = resolveConfigPath();
       const buildConfig = (version: number): ClawdbotConfig =>
         ({
-          identity: { name: `v${version}` },
+          agents: { list: [{ id: `v${version}` }] },
         }) as ClawdbotConfig;
 
       for (let version = 0; version <= 6; version += 1) {
@@ -21,7 +21,10 @@ describe("config backup rotation", () => {
 
       const readName = async (suffix = "") => {
         const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
-        return (JSON.parse(raw) as { identity?: { name?: string } }).identity?.name ?? null;
+        return (
+          (JSON.parse(raw) as { agents?: { list?: Array<{ id?: string }> } }).agents?.list?.[0]
+            ?.id ?? null
+        );
       };
 
       await expect(readName()).resolves.toBe("v6");

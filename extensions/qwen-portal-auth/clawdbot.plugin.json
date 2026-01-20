@@ -1,0 +1,11 @@
+{
+  "id": "qwen-portal-auth",
+  "providers": [
+    "qwen-portal"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

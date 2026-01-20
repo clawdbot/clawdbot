@@ -30,5 +30,5 @@ export const ChannelsSchema = z
     imessage: IMessageConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
   })
-  .strict()
+  .passthrough()
   .optional();

@@ -10,15 +10,25 @@ import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
-const EMPTY_CONFIG_SCHEMA = `configSchema: {
-  validate: () => ({ ok: true }),
-  jsonSchema: { type: "object", additionalProperties: true },
-  uiHints: {}
-}`;
+const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
-  const file = path.join(params.dir, `${params.id}.mjs`);
+  const pluginDir = path.join(params.dir, params.id);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const file = path.join(pluginDir, `${params.id}.mjs`);
   fs.writeFileSync(file, params.body, "utf-8");
+  fs.writeFileSync(
+    path.join(pluginDir, "clawdbot.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
   return file;
 }
 
@@ -63,7 +73,7 @@ describe("tool_result_persist hook", () => {
     const pluginA = writeTempPlugin({
       dir: tmp,
       id: "persist-a",
-      body: `export default { id: "persist-a", ${EMPTY_CONFIG_SCHEMA}, register(api) {
+      body: `export default { id: "persist-a", register(api) {
   api.on("tool_result_persist", (event, ctx) => {
     const msg = event.message;
     // Example: remove large diagnostic payloads before persistence.
@@ -76,7 +86,7 @@ describe("tool_result_persist hook", () => {
     const pluginB = writeTempPlugin({
       dir: tmp,
       id: "persist-b",
-      body: `export default { id: "persist-b", ${EMPTY_CONFIG_SCHEMA}, register(api) {
+      body: `export default { id: "persist-b", register(api) {
   api.on("tool_result_persist", (event) => {
     const prior = (event.message && event.message.persistOrder) ? event.message.persistOrder : [];
     return { message: { ...event.message, persistOrder: [...prior, "b"] } };

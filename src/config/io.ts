@@ -30,8 +30,7 @@ import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { ClawdbotConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
-import { validateConfigObject } from "./validation.js";
-import { ClawdbotSchema } from "./zod-schema.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 import { compareClawdbotVersions } from "./version.js";
 
 // Re-export for backwards compatibility
@@ -233,21 +232,34 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfig = substituted;
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) return {};
-      const validated = ClawdbotSchema.safeParse(resolvedConfig);
-      if (!validated.success) {
-        deps.logger.error("Invalid config:");
-        for (const iss of validated.error.issues) {
-          deps.logger.error(`- ${iss.path.join(".")}: ${iss.message}`);
-        }
-        return {};
+      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as ClawdbotConfig, {
+        env: deps.env,
+        homedir: deps.homedir,
+      });
+      if (preValidationDuplicates.length > 0) {
+        throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      warnIfConfigFromFuture(validated.data as ClawdbotConfig, deps.logger);
+      const validated = validateConfigObjectWithPlugins(resolvedConfig);
+      if (!validated.ok) {
+        const details = validated.issues
+          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .join("\n");
+        deps.logger.error(`Invalid config:\\n${details}`);
+        throw new Error("Invalid config");
+      }
+      if (validated.warnings.length > 0) {
+        const details = validated.warnings
+          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .join("\n");
+        deps.logger.warn(`Config warnings:\\n${details}`);
+      }
+      warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = applyModelDefaults(
         applyCompactionDefaults(
           applyContextPruningDefaults(
             applyAgentDefaults(
               applySessionDefaults(
-                applyLoggingDefaults(applyMessageDefaults(validated.data as ClawdbotConfig)),
+                applyLoggingDefaults(applyMessageDefaults(validated.config)),
               ),
             ),
           ),
@@ -310,6 +322,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         config,
         hash,
         issues: [],
+        warnings: [],
         legacyIssues,
       };
     }
@@ -328,6 +341,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: {},
           hash,
           issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
+          warnings: [],
           legacyIssues: [],
         };
       }
@@ -353,6 +367,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: coerceConfig(parsedRes.parsed),
           hash,
           issues: [{ path: "", message }],
+          warnings: [],
           legacyIssues: [],
         };
       }
@@ -375,6 +390,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: coerceConfig(resolved),
           hash,
           issues: [{ path: "", message }],
+          warnings: [],
           legacyIssues: [],
         };
       }
@@ -382,7 +398,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = substituted;
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
-      const validated = validateConfigObject(resolvedConfigRaw);
+      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
       if (!validated.ok) {
         return {
           path: configPath,
@@ -393,6 +409,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: coerceConfig(resolvedConfigRaw),
           hash,
           issues: validated.issues,
+          warnings: validated.warnings,
           legacyIssues,
         };
       }
@@ -415,6 +432,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         ),
         hash,
         issues: [],
+        warnings: validated.warnings,
         legacyIssues,
       };
     } catch (err) {
@@ -427,6 +445,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         config: {},
         hash: hashConfigRaw(null),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
+        warnings: [],
         legacyIssues: [],
       };
     }
@@ -434,6 +453,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
   async function writeConfigFile(cfg: ClawdbotConfig) {
     clearConfigCache();
+    const validated = validateConfigObjectWithPlugins(cfg);
+    if (!validated.ok) {
+      const issue = validated.issues[0];
+      const pathLabel = issue?.path ? issue.path : "<root>";
+      throw new Error(`Config validation failed: ${pathLabel}: ${issue?.message ?? "invalid"}`);
+    }
+    if (validated.warnings.length > 0) {
+      const details = validated.warnings
+        .map((warning) => `- ${warning.path}: ${warning.message}`)
+        .join("\n");
+      deps.logger.warn(`Config warnings:\n${details}`);
+    }
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)

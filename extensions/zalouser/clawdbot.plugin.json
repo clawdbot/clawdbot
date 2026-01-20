@@ -1,0 +1,11 @@
+{
+  "id": "zalouser",
+  "channels": [
+    "zalouser"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

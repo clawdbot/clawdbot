@@ -5,7 +5,7 @@ import {
   parseConfigJson5,
   readConfigFileSnapshot,
   resolveConfigSnapshotHash,
-  validateConfigObject,
+  validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
@@ -170,7 +170,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    const validated = validateConfigObject(parsedRes.parsed);
+    const validated = validateConfigObjectWithPlugins(parsedRes.parsed);
     if (!validated.ok) {
       respond(
         false,
@@ -248,7 +248,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed);
     const migrated = applyLegacyMigrations(merged);
     const resolved = migrated.next ?? merged;
-    const validated = validateConfigObject(resolved);
+    const validated = validateConfigObjectWithPlugins(resolved);
     if (!validated.ok) {
       respond(
         false,
@@ -303,7 +303,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    const validated = validateConfigObject(parsedRes.parsed);
+    const validated = validateConfigObjectWithPlugins(parsedRes.parsed);
     if (!validated.ok) {
       respond(
         false,

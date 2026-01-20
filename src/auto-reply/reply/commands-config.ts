@@ -1,6 +1,6 @@
 import {
   readConfigFileSnapshot,
-  validateConfigObject,
+  validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
 import {
@@ -120,7 +120,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         reply: { text: `⚙️ No config value found for ${configCommand.path}.` },
       };
     }
-    const validated = validateConfigObject(parsedBase);
+    const validated = validateConfigObjectWithPlugins(parsedBase);
     if (!validated.ok) {
       const issue = validated.issues[0];
       return {
@@ -146,7 +146,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
       };
     }
     setConfigValueAtPath(parsedBase, parsedPath.path, configCommand.value);
-    const validated = validateConfigObject(parsedBase);
+    const validated = validateConfigObjectWithPlugins(parsedBase);
     if (!validated.ok) {
       const issue = validated.issues[0];
       return {

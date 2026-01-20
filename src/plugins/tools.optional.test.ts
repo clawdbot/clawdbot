@@ -10,6 +10,7 @@ import { resolvePluginTools } from "./tools.js";
 type TempPlugin = { dir: string; file: string; id: string };
 
 const tempDirs: string[] = [];
+const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
 function makeTempDir() {
   const dir = path.join(os.tmpdir(), `clawdbot-plugin-tools-${randomUUID()}`);
@@ -22,6 +23,18 @@ function writePlugin(params: { id: string; body: string }): TempPlugin {
   const dir = makeTempDir();
   const file = path.join(dir, `${params.id}.js`);
   fs.writeFileSync(file, params.body, "utf-8");
+  fs.writeFileSync(
+    path.join(dir, "clawdbot.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
   return { dir, file, id: params.id };
 }
 
@@ -36,10 +49,8 @@ afterEach(() => {
 });
 
 describe("resolvePluginTools optional tools", () => {
-  const emptyConfigSchema =
-    'configSchema: { safeParse() { return { success: true, data: {} }; }, jsonSchema: { type: "object", additionalProperties: false, properties: {} } },';
   const pluginBody = `
-export default { ${emptyConfigSchema} register(api) {
+export default { register(api) {
   api.registerTool(
     {
       name: "optional_tool",
@@ -140,7 +151,7 @@ export default { ${emptyConfigSchema} register(api) {
     const plugin = writePlugin({
       id: "multi",
       body: `
-export default { ${emptyConfigSchema} register(api) {
+export default { register(api) {
   api.registerTool({
     name: "message",
     description: "conflict",
