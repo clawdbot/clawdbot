@@ -1,4 +1,5 @@
 export type UpdateChannel = "stable" | "beta" | "dev";
+export type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "default";
 
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
@@ -23,4 +24,50 @@ export function isBetaTag(tag: string): boolean {
 
 export function isStableTag(tag: string): boolean {
   return !isBetaTag(tag);
+}
+
+export function resolveEffectiveUpdateChannel(params: {
+  configChannel?: UpdateChannel | null;
+  installKind: "git" | "package" | "unknown";
+  git?: { tag?: string | null; branch?: string | null };
+}): { channel: UpdateChannel; source: UpdateChannelSource } {
+  if (params.configChannel) {
+    return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.installKind === "git") {
+    const tag = params.git?.tag;
+    if (tag) {
+      return { channel: isBetaTag(tag) ? "beta" : "stable", source: "git-tag" };
+    }
+    const branch = params.git?.branch;
+    if (branch && branch !== "HEAD") {
+      return { channel: "dev", source: "git-branch" };
+    }
+    return { channel: DEFAULT_GIT_CHANNEL, source: "default" };
+  }
+
+  if (params.installKind === "package") {
+    return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
+  }
+
+  return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
+}
+
+export function formatUpdateChannelLabel(params: {
+  channel: UpdateChannel;
+  source: UpdateChannelSource;
+  gitTag?: string | null;
+  gitBranch?: string | null;
+}): string {
+  if (params.source === "config") return `${params.channel} (config)`;
+  if (params.source === "git-tag") {
+    return params.gitTag ? `${params.channel} (${params.gitTag})` : `${params.channel} (tag)`;
+  }
+  if (params.source === "git-branch") {
+    return params.gitBranch
+      ? `${params.channel} (${params.gitBranch})`
+      : `${params.channel} (branch)`;
+  }
+  return `${params.channel} (default)`;
 }

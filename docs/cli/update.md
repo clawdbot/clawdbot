@@ -15,6 +15,7 @@ If you installed via **npm/pnpm** (global install, no git metadata), use the pac
 
 ```bash
 clawdbot update
+clawdbot update status
 clawdbot update --channel beta
 clawdbot update --channel dev
 clawdbot update --tag beta
@@ -32,6 +33,20 @@ clawdbot --update
 - `--timeout <seconds>`: per-step timeout (default is 1200s).
 
 Note: downgrades require confirmation because older versions can break configuration.
+
+## `update status`
+
+Show the active update channel + git tag/branch/SHA (for source checkouts), plus update availability.
+
+```bash
+clawdbot update status
+clawdbot update status --json
+clawdbot update status --timeout 10
+```
+
+Options:
+- `--json`: print machine-readable status JSON.
+- `--timeout <seconds>`: timeout for checks (default is 3s).
 
 ## What it does (git checkout)
 

@@ -33,6 +33,11 @@ import {
 } from "./status.update.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { statusAllCommand } from "./status-all.js";
+import {
+  formatUpdateChannelLabel,
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+} from "../infra/update-channels.js";
 
 export async function statusCommand(
   opts: {
@@ -116,6 +121,13 @@ export async function statusCommand(
       )
     : undefined;
 
+  const configChannel = normalizeUpdateChannel(cfg.update?.channel);
+  const channelInfo = resolveEffectiveUpdateChannel({
+    configChannel,
+    installKind: update.installKind,
+    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
+  });
+
   if (opts.json) {
     const [daemon, nodeDaemon] = await Promise.all([
       getDaemonStatusSummary(),
@@ -127,6 +139,8 @@ export async function statusCommand(
           ...summary,
           os: osSummary,
           update,
+          updateChannel: channelInfo.channel,
+          updateChannelSource: channelInfo.source,
           memory,
           memoryPlugin,
           gateway: {
@@ -295,6 +309,27 @@ export async function statusCommand(
 
   const updateAvailability = resolveUpdateAvailability(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+  const channelLabel = formatUpdateChannelLabel({
+    channel: channelInfo.channel,
+    source: channelInfo.source,
+    gitTag: update.git?.tag ?? null,
+    gitBranch: update.git?.branch ?? null,
+  });
+  const gitLabel =
+    update.installKind === "git"
+      ? (() => {
+          const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
+          const branch =
+            update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
+          const tag = update.git?.tag ?? null;
+          const parts = [
+            branch ?? (tag ? "detached" : "git"),
+            tag ? `tag ${tag}` : null,
+            shortSha ? `@ ${shortSha}` : null,
+          ].filter(Boolean);
+          return parts.join(" · ");
+        })()
+      : null;
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
@@ -308,6 +343,8 @@ export async function statusCommand(
             ? `${tailscaleMode} · ${tailscaleDns} · ${tailscaleHttpsUrl}`
             : warn(`${tailscaleMode} · magicdns unknown`),
     },
+    { Item: "Channel", Value: channelLabel },
+    ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
       Value: updateAvailability.available ? warn(`available · ${updateLine}`) : updateLine,

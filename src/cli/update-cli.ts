@@ -5,7 +5,11 @@ import type { Command } from "commander";
 
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
-import { compareSemverStrings, fetchNpmTagVersion } from "../infra/update-check.js";
+import {
+  checkUpdateStatus,
+  compareSemverStrings,
+  fetchNpmTagVersion,
+} from "../infra/update-check.js";
 import { parseSemver } from "../infra/runtime-guard.js";
 import {
   runGatewayUpdate,
@@ -17,19 +21,32 @@ import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
+  formatUpdateChannelLabel,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+  type UpdateChannel,
 } from "../infra/update-channels.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { formatCliCommand } from "./command-format.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
+import { renderTable } from "../terminal/table.js";
+import {
+  formatUpdateAvailableHint,
+  formatUpdateOneLiner,
+  resolveUpdateAvailability,
+} from "../commands/status.update.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
   restart?: boolean;
   channel?: string;
   tag?: string;
+  timeout?: string;
+};
+export type UpdateStatusOptions = {
+  json?: boolean;
   timeout?: string;
 };
 
@@ -110,6 +127,125 @@ async function isGitCheckout(root: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+function formatGitStatusLine(params: {
+  branch: string | null;
+  tag: string | null;
+  sha: string | null;
+}): string {
+  const shortSha = params.sha ? params.sha.slice(0, 8) : null;
+  const branch = params.branch && params.branch !== "HEAD" ? params.branch : null;
+  const tag = params.tag;
+  const parts = [
+    branch ?? (tag ? "detached" : "git"),
+    tag ? `tag ${tag}` : null,
+    shortSha ? `@ ${shortSha}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
+  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
+  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+    defaultRuntime.error("--timeout must be a positive integer (seconds)");
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const root =
+    (await resolveClawdbotPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    })) ?? process.cwd();
+  const configSnapshot = await readConfigFileSnapshot();
+  const configChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+
+  const update = await checkUpdateStatus({
+    root,
+    timeoutMs: timeoutMs ?? 3500,
+    fetchGit: true,
+    includeRegistry: true,
+  });
+  const channelInfo = resolveEffectiveUpdateChannel({
+    configChannel,
+    installKind: update.installKind,
+    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
+  });
+  const channelLabel = formatUpdateChannelLabel({
+    channel: channelInfo.channel,
+    source: channelInfo.source,
+    gitTag: update.git?.tag ?? null,
+    gitBranch: update.git?.branch ?? null,
+  });
+  const gitLabel =
+    update.installKind === "git"
+      ? formatGitStatusLine({
+          branch: update.git?.branch ?? null,
+          tag: update.git?.tag ?? null,
+          sha: update.git?.sha ?? null,
+        })
+      : null;
+  const updateAvailability = resolveUpdateAvailability(update);
+  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+
+  if (opts.json) {
+    defaultRuntime.log(
+      JSON.stringify(
+        {
+          update,
+          channel: {
+            value: channelInfo.channel,
+            source: channelInfo.source,
+            label: channelLabel,
+            config: configChannel,
+          },
+          availability: updateAvailability,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const installLabel =
+    update.installKind === "git"
+      ? `git (${update.root ?? "unknown"})`
+      : update.installKind === "package"
+        ? update.packageManager
+        : "unknown";
+  const rows = [
+    { Item: "Install", Value: installLabel },
+    { Item: "Channel", Value: channelLabel },
+    ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
+    {
+      Item: "Update",
+      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
+    },
+  ];
+
+  defaultRuntime.log(theme.heading("Clawdbot update status"));
+  defaultRuntime.log("");
+  defaultRuntime.log(
+    renderTable({
+      width: tableWidth,
+      columns: [
+        { key: "Item", header: "Item", minWidth: 10 },
+        { key: "Value", header: "Value", flex: true, minWidth: 24 },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+  defaultRuntime.log("");
+  const updateHint = formatUpdateAvailableHint(update);
+  if (updateHint) {
+    defaultRuntime.log(theme.warn(updateHint));
   }
 }
 
@@ -433,7 +569,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 }
 
 export function registerUpdateCli(program: Command) {
-  program
+  const update = program
     .command("update")
     .description("Update Clawdbot to the latest version")
     .option("--json", "Output result as JSON", false)
@@ -469,6 +605,38 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/upda
           restart: Boolean(opts.restart),
           channel: opts.channel as string | undefined,
           tag: opts.tag as string | undefined,
+          timeout: opts.timeout as string | undefined,
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  update
+    .command("status")
+    .description("Show update channel and version status")
+    .option("--json", "Output result as JSON", false)
+    .option("--timeout <seconds>", "Timeout for update checks in seconds (default: 3)")
+    .addHelpText(
+      "after",
+      () =>
+        `
+Examples:
+  clawdbot update status
+  clawdbot update status --json
+  clawdbot update status --timeout 10
+
+Notes:
+  - Shows current update channel (stable/beta/dev) and source
+  - Includes git tag/branch/SHA for source checkouts
+
+${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,
+    )
+    .action(async (opts) => {
+      try {
+        await updateStatusCommand({
+          json: Boolean(opts.json),
           timeout: opts.timeout as string | undefined,
         });
       } catch (err) {

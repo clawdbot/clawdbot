@@ -8,6 +8,8 @@ export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
 export type GitUpdateStatus = {
   root: string;
+  sha: string | null;
+  tag: string | null;
   branch: string | null;
   upstream: string | null;
   dirty: boolean | null;
@@ -90,6 +92,8 @@ export async function checkGitUpdateStatus(params: {
 
   const base: GitUpdateStatus = {
     root,
+    sha: null,
+    tag: null,
     branch: null,
     upstream: null,
     dirty: null,
@@ -106,6 +110,17 @@ export async function checkGitUpdateStatus(params: {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
+
+  const shaRes = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
+    timeoutMs,
+  }).catch(() => null);
+  const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
+
+  const tagRes = await runCommandWithTimeout(
+    ["git", "-C", root, "describe", "--tags", "--exact-match"],
+    { timeoutMs },
+  ).catch(() => null);
+  const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
   const upstreamRes = await runCommandWithTimeout(
     ["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"],
@@ -144,6 +159,8 @@ export async function checkGitUpdateStatus(params: {
 
   return {
     root,
+    sha,
+    tag,
     branch,
     upstream,
     dirty,

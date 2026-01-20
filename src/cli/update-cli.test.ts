@@ -25,6 +25,7 @@ vi.mock("../infra/update-check.js", async () => {
   );
   return {
     ...actual,
+    checkUpdateStatus: vi.fn(),
     fetchNpmTagVersion: vi.fn(),
   };
 });
@@ -72,12 +73,37 @@ describe("update-cli", () => {
     vi.clearAllMocks();
     const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
     const { readConfigFileSnapshot } = await import("../config/config.js");
-    const { fetchNpmTagVersion } = await import("../infra/update-check.js");
+    const { checkUpdateStatus, fetchNpmTagVersion } = await import("../infra/update-check.js");
     vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
       version: "9999.0.0",
+    });
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/test/path",
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root: "/test/path",
+        sha: "abcdef1234567890",
+        tag: "v1.2.3",
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: "/test/path/pnpm-lock.yaml",
+        markerPath: "/test/path/node_modules",
+      },
+      registry: {
+        latestVersion: "1.2.3",
+      },
     });
     setTty(false);
     setStdoutTty(false);
@@ -118,6 +144,28 @@ describe("update-cli", () => {
 
     expect(runGatewayUpdate).toHaveBeenCalled();
     expect(defaultRuntime.log).toHaveBeenCalled();
+  });
+
+  it("updateStatusCommand prints table output", async () => {
+    const { defaultRuntime } = await import("../runtime.js");
+    const { updateStatusCommand } = await import("./update-cli.js");
+
+    await updateStatusCommand({ json: false });
+
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
+    expect(logs.join("\n")).toContain("Clawdbot update status");
+  });
+
+  it("updateStatusCommand emits JSON", async () => {
+    const { defaultRuntime } = await import("../runtime.js");
+    const { updateStatusCommand } = await import("./update-cli.js");
+
+    await updateStatusCommand({ json: true });
+
+    const last = vi.mocked(defaultRuntime.log).mock.calls.at(-1)?.[0];
+    expect(typeof last).toBe("string");
+    const parsed = JSON.parse(String(last));
+    expect(parsed.channel.value).toBe("stable");
   });
 
   it("defaults to dev channel for git installs when unset", async () => {
