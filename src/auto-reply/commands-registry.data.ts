@@ -446,6 +446,20 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
+    defineChatCommand({
+      key: "claude",
+      nativeName: "claude",
+      description: "Start or manage Claude Code sessions.",
+      textAlias: "/claude",
+      args: [
+        {
+          name: "project",
+          description: "Project name (e.g. juzi, juzi @experimental)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
     ...listChannelDocks()
       .filter((dock) => dock.capabilities.nativeCommands)
       .map((dock) => defineDockCommand(dock)),

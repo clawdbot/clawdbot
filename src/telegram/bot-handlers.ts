@@ -16,6 +16,7 @@ import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
+import { handleClaudeCodeCallback, isClaudeCodeCallback } from "./claude-code-callbacks.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -183,6 +184,12 @@ export const registerTelegramHandlers = ({
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
       if (!data || !callbackMessage) return;
+
+      // Handle Claude Code callbacks first (before regular message processing)
+      if (isClaudeCodeCallback(data)) {
+        const handled = await handleClaudeCodeCallback(ctx, bot.api, data);
+        if (handled) return;
+      }
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,

@@ -4,6 +4,7 @@ import { shouldHandleTextCommands } from "../commands-registry.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { routeReply } from "./route-reply.js";
 import { handleBashCommand } from "./commands-bash.js";
+import { handleClaudeCommand } from "./commands-claude.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import {
@@ -30,6 +31,7 @@ import type {
 
 const HANDLERS: CommandHandler[] = [
   handleBashCommand,
+  handleClaudeCommand,
   handleActivationCommand,
   handleSendPolicyCommand,
   handleUsageCommand,
