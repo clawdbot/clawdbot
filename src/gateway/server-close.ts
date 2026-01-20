@@ -107,8 +107,11 @@ export function createGatewayCloseHandler(params: {
       await params.browserControl.stop().catch(() => {});
     }
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
-    if ("closeIdleConnections" in params.httpServer) {
-      params.httpServer.closeIdleConnections();
+    const httpServer = params.httpServer as HttpServer & {
+      closeIdleConnections?: () => void;
+    };
+    if (typeof httpServer.closeIdleConnections === "function") {
+      httpServer.closeIdleConnections();
     }
     await new Promise<void>((resolve, reject) =>
       params.httpServer.close((err) => (err ? reject(err) : resolve())),
