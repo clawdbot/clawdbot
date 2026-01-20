@@ -63,6 +63,7 @@ Docs: https://docs.clawd.bot
 - Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
 - Agents: clarify node_modules read-only guidance in agent instructions.
 - TUI: add syntax highlighting for code blocks. (#1200) — thanks @vignesh07.
+- TUI: session picker shows derived titles, fuzzy search, relative times, and last message preview.
 
 ### Fixes
 - UI: enable shell mode for sync Windows spawns to avoid `pnpm ui:build` EINVAL. (#1212) — thanks @longmaba.

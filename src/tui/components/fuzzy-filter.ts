@@ -101,9 +101,9 @@ export function fuzzyFilterLower<T extends { searchTextLower?: string }>(
 /**
  * Prepare items for fuzzy filtering by pre-computing lowercase search text.
  */
-export function prepareSearchItems<
-	T extends { label?: string; description?: string; searchText?: string },
->(items: T[]): (T & { searchTextLower: string })[] {
+export function prepareSearchItems<T extends { label?: string; description?: string; searchText?: string }>(
+	items: T[],
+): (T & { searchTextLower: string })[] {
 	return items.map((item) => {
 		const parts: string[] = [];
 		if (item.label) parts.push(item.label);
