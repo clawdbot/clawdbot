@@ -5,10 +5,7 @@ import {
   selectListTheme,
   settingsListTheme,
 } from "../theme/theme.js";
-import {
-  FilterableSelectList,
-  type FilterableSelectItem,
-} from "./filterable-select-list.js";
+import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 import { SearchableSelectList } from "./searchable-select-list.js";
 
 export function createSelectList(items: SelectItem[], maxVisible = 7) {

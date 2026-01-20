@@ -473,6 +473,7 @@ public struct AgentParams: Codable, Sendable {
     public let replychannel: String?
     public let accountid: String?
     public let replyaccountid: String?
+    public let threadid: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -494,6 +495,7 @@ public struct AgentParams: Codable, Sendable {
         replychannel: String?,
         accountid: String?,
         replyaccountid: String?,
+        threadid: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
@@ -514,6 +516,7 @@ public struct AgentParams: Codable, Sendable {
         self.replychannel = replychannel
         self.accountid = accountid
         self.replyaccountid = replyaccountid
+        self.threadid = threadid
         self.timeout = timeout
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
@@ -535,6 +538,7 @@ public struct AgentParams: Codable, Sendable {
         case replychannel = "replyChannel"
         case accountid = "accountId"
         case replyaccountid = "replyAccountId"
+        case threadid = "threadId"
         case timeout
         case lane
         case extrasystemprompt = "extraSystemPrompt"
@@ -835,35 +839,47 @@ public struct SessionsListParams: Codable, Sendable {
     public let activeminutes: Int?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let includederivedtitles: Bool?
+    public let includelastmessage: Bool?
     public let label: String?
     public let spawnedby: String?
     public let agentid: String?
+    public let search: String?
 
     public init(
         limit: Int?,
         activeminutes: Int?,
         includeglobal: Bool?,
         includeunknown: Bool?,
+        includederivedtitles: Bool?,
+        includelastmessage: Bool?,
         label: String?,
         spawnedby: String?,
-        agentid: String?
+        agentid: String?,
+        search: String?
     ) {
         self.limit = limit
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.includederivedtitles = includederivedtitles
+        self.includelastmessage = includelastmessage
         self.label = label
         self.spawnedby = spawnedby
         self.agentid = agentid
+        self.search = search
     }
     private enum CodingKeys: String, CodingKey {
         case limit
         case activeminutes = "activeMinutes"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case includederivedtitles = "includeDerivedTitles"
+        case includelastmessage = "includeLastMessage"
         case label
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
+        case search
     }
 }
 
