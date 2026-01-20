@@ -111,9 +111,12 @@ export async function sendBlueBubblesAttachment(params: {
   filename: string;
   contentType?: string;
   caption?: string;
+  replyToMessageGuid?: string;
+  replyToPartIndex?: number;
   opts?: BlueBubblesAttachmentOpts;
 }): Promise<SendBlueBubblesAttachmentResult> {
-  const { to, buffer, filename, contentType, caption, opts = {} } = params;
+  const { to, buffer, filename, contentType, caption, replyToMessageGuid, replyToPartIndex, opts = {} } =
+    params;
   const { baseUrl, password } = resolveAccount(opts);
 
   const target = resolveSendTarget(to);
@@ -166,6 +169,15 @@ export async function sendBlueBubblesAttachment(params: {
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
   addField("method", "private-api");
+
+  const trimmedReplyTo = replyToMessageGuid?.trim();
+  if (trimmedReplyTo) {
+    addField("selectedMessageGuid", trimmedReplyTo);
+    addField(
+      "partIndex",
+      typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0",
+    );
+  }
 
   // Add optional caption
   if (caption) {

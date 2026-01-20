@@ -139,6 +139,7 @@ export async function sendBlueBubblesMedia(params: {
     buffer,
     filename: resolvedFilename ?? "attachment",
     contentType: resolvedContentType ?? undefined,
+    replyToMessageGuid: replyToId?.trim() || undefined,
     opts: {
       cfg,
       accountId,
