@@ -1,6 +1,7 @@
 import type { ChannelDirectoryEntry } from "clawdbot/plugin-sdk";
 
 import { resolveMatrixAuth } from "./matrix/client.js";
+import { getMatrixRuntime } from "./runtime.js";
 
 type MatrixUserResult = {
   user_id?: string;
@@ -23,6 +24,14 @@ type MatrixAliasLookup = {
   room_id?: string;
 };
 
+const getDirectoryLogger = () =>
+  getMatrixRuntime().logging.getChildLogger({ module: "matrix-directory" });
+const logDirectoryVerbose = (message: string) => {
+  const core = getMatrixRuntime();
+  if (!core.logging.shouldLogVerbose()) return;
+  getDirectoryLogger().debug(message);
+};
+
 async function fetchMatrixJson<T>(params: {
   homeserver: string;
   path: string;
@@ -39,7 +48,12 @@ async function fetchMatrixJson<T>(params: {
     body: params.body ? JSON.stringify(params.body) : undefined,
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await res.text().catch((err) => {
+      logDirectoryVerbose(
+        `matrix: failed reading error body for ${params.path}: ${String(err)}`,
+      );
+      return "";
+    });
     throw new Error(`Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`);
   }
   return (await res.json()) as T;
@@ -95,7 +109,10 @@ async function resolveMatrixRoomAlias(
       path: `/_matrix/client/v3/directory/room/${encodeURIComponent(alias)}`,
     });
     return res.room_id?.trim() || null;
-  } catch {
+  } catch (err) {
+    logDirectoryVerbose(
+      `matrix: room alias lookup failed alias=${alias}: ${String(err)}`,
+    );
     return null;
   }
 }
@@ -112,7 +129,8 @@ async function fetchMatrixRoomName(
       path: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
     });
     return res.name?.trim() || null;
-  } catch {
+  } catch (err) {
+    logDirectoryVerbose(`matrix: room name lookup failed room=${roomId}: ${String(err)}`);
     return null;
   }
 }

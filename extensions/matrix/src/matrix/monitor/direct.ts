@@ -25,7 +25,8 @@ export function createDirectRoomTracker(
     if (cachedSelfUserId) return cachedSelfUserId;
     try {
       cachedSelfUserId = await client.getUserId();
-    } catch {
+    } catch (err) {
+      log(`matrix: failed to resolve self user id (${String(err)})`);
       cachedSelfUserId = null;
     }
     return cachedSelfUserId;
@@ -65,7 +66,8 @@ export function createDirectRoomTracker(
     try {
       const state = await client.getRoomStateEvent(roomId, "m.room.member", target);
       return state?.is_direct === true;
-    } catch {
+    } catch (err) {
+      log(`matrix: direct flag lookup failed room=${roomId} user=${target} (${String(err)})`);
       return false;
     }
   };

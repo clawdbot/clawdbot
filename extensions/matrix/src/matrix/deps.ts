@@ -7,13 +7,20 @@ import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 import { getMatrixRuntime } from "../runtime.js";
 
 const MATRIX_SDK_PACKAGE = "matrix-bot-sdk";
+const getDepsLogger = () => getMatrixRuntime().logging.getChildLogger({ module: "matrix-deps" });
+const logDepsVerbose = (message: string) => {
+  const core = getMatrixRuntime();
+  if (!core.logging.shouldLogVerbose()) return;
+  getDepsLogger().debug(message);
+};
 
 export function isMatrixSdkAvailable(): boolean {
   try {
     const req = createRequire(import.meta.url);
     req.resolve(MATRIX_SDK_PACKAGE);
     return true;
-  } catch {
+  } catch (err) {
+    logDepsVerbose(`matrix: dependency check failed for ${MATRIX_SDK_PACKAGE}: ${String(err)}`);
     return false;
   }
 }

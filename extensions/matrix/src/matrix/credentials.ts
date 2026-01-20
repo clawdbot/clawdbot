@@ -14,6 +14,13 @@ export type MatrixStoredCredentials = {
 };
 
 const CREDENTIALS_FILENAME = "credentials.json";
+const getCredentialsLogger = () =>
+  getMatrixRuntime().logging.getChildLogger({ module: "matrix-credentials" });
+const logCredentialsVerbose = (message: string) => {
+  const core = getMatrixRuntime();
+  if (!core.logging.shouldLogVerbose()) return;
+  getCredentialsLogger().debug(message);
+};
 
 export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -45,7 +52,8 @@ export function loadMatrixCredentials(
       return null;
     }
     return parsed as MatrixStoredCredentials;
-  } catch {
+  } catch (err) {
+    logCredentialsVerbose(`matrix: failed to load credentials: ${String(err)}`);
     return null;
   }
 }
@@ -86,8 +94,8 @@ export function clearMatrixCredentials(env: NodeJS.ProcessEnv = process.env): vo
     if (fs.existsSync(credPath)) {
       fs.unlinkSync(credPath);
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    logCredentialsVerbose(`matrix: failed to clear credentials at ${credPath}: ${String(err)}`);
   }
 }
 
