@@ -92,6 +92,7 @@ export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve
 export { resolveMentionGating } from "../channels/mention-gating.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
+  resolveBlueBubblesGroupRequireMention,
   resolveDiscordGroupRequireMention,
   resolveIMessageGroupRequireMention,
   resolveSlackGroupRequireMention,

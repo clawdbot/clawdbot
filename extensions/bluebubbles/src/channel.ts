@@ -23,6 +23,7 @@ import { sendMessageBlueBubbles } from "./send.js";
 import { normalizeBlueBubblesHandle } from "./targets.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
+import { blueBubblesOnboardingAdapter } from "./onboarding.js";
 
 const meta = {
   id: "bluebubbles",
@@ -44,6 +45,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   },
   reload: { configPrefixes: ["channels.bluebubbles"] },
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
+  onboarding: blueBubblesOnboardingAdapter,
   config: {
     listAccountIds: (cfg) => listBlueBubblesAccountIds(cfg as ClawdbotConfig),
     resolveAccount: (cfg, accountId) =>
@@ -152,6 +154,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
               enabled: true,
               ...(input.httpUrl ? { serverUrl: input.httpUrl } : {}),
               ...(input.password ? { password: input.password } : {}),
+              ...(input.webhookPath ? { webhookPath: input.webhookPath } : {}),
             },
           },
         } as ClawdbotConfig;
@@ -170,6 +173,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
                 enabled: true,
                 ...(input.httpUrl ? { serverUrl: input.httpUrl } : {}),
                 ...(input.password ? { password: input.password } : {}),
+                ...(input.webhookPath ? { webhookPath: input.webhookPath } : {}),
               },
             },
           },

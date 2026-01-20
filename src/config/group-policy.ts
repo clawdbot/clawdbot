@@ -1,7 +1,7 @@
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
 
-export type GroupPolicyChannel = "whatsapp" | "telegram" | "imessage";
+export type GroupPolicyChannel = "whatsapp" | "telegram" | "imessage" | "bluebubbles";
 
 export type ChannelGroupConfig = {
   requireMention?: boolean;

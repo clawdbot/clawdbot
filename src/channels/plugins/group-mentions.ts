@@ -183,3 +183,12 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   }
   return true;
 }
+
+export function resolveBlueBubblesGroupRequireMention(params: GroupMentionParams): boolean {
+  return resolveChannelGroupRequireMention({
+    cfg: params.cfg,
+    channel: "bluebubbles",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}

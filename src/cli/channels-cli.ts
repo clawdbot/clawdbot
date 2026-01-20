@@ -34,6 +34,7 @@ const optionNamesAdd = [
   "httpUrl",
   "httpHost",
   "httpPort",
+  "webhookPath",
   "useEnv",
   "homeserver",
   "userId",
@@ -163,6 +164,7 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
+    .option("--webhook-path <path>", "BlueBubbles webhook path")
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")

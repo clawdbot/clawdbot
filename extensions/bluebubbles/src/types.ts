@@ -1,6 +1,11 @@
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 
+export type BlueBubblesGroupConfig = {
+  /** If true, only respond in this group when mentioned. */
+  requireMention?: boolean;
+};
+
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -36,6 +41,10 @@ export type BlueBubblesAccountConfig = {
   blockStreamingCoalesce?: Record<string, unknown>;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /** Send read receipts for incoming messages (default: true). */
+  sendReadReceipts?: boolean;
+  /** Per-group configuration keyed by chat GUID or identifier. */
+  groups?: Record<string, BlueBubblesGroupConfig>;
 };
 
 export type BlueBubblesActionConfig = {

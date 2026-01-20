@@ -781,6 +781,79 @@ async function processMessage(
     },
   });
 
+  // Mention gating for group chats (parity with iMessage/WhatsApp)
+  const messageText = text;
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
+  const wasMentioned = message.isGroup
+    ? core.channel.mentions.matchesMentionPatterns(messageText, mentionRegexes)
+    : true;
+  const canDetectMention = mentionRegexes.length > 0;
+  const requireMention = core.channel.groups.resolveRequireMention({
+    cfg: config,
+    channel: "bluebubbles",
+    groupId: peerId,
+    accountId: account.accountId,
+  });
+
+  // Command gating (parity with iMessage/WhatsApp)
+  const useAccessGroups = config.commands?.useAccessGroups !== false;
+  const hasControlCmd = core.channel.text.hasControlCommand(messageText, config);
+  const ownerAllowedForCommands =
+    effectiveAllowFrom.length > 0
+      ? isAllowedBlueBubblesSender({
+          allowFrom: effectiveAllowFrom,
+          sender: message.senderId,
+          chatId: message.chatId ?? undefined,
+          chatGuid: message.chatGuid ?? undefined,
+          chatIdentifier: message.chatIdentifier ?? undefined,
+        })
+      : false;
+  const groupAllowedForCommands =
+    effectiveGroupAllowFrom.length > 0
+      ? isAllowedBlueBubblesSender({
+          allowFrom: effectiveGroupAllowFrom,
+          sender: message.senderId,
+          chatId: message.chatId ?? undefined,
+          chatGuid: message.chatGuid ?? undefined,
+          chatIdentifier: message.chatIdentifier ?? undefined,
+        })
+      : false;
+  const dmAuthorized = dmPolicy === "open" || ownerAllowedForCommands;
+  const commandAuthorized = message.isGroup
+    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [
+          { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+        ],
+      })
+    : dmAuthorized;
+
+  // Block control commands from unauthorized senders in groups
+  if (message.isGroup && hasControlCmd && !commandAuthorized) {
+    logVerbose(
+      core,
+      runtime,
+      `bluebubbles: drop control command from unauthorized sender ${message.senderId}`,
+    );
+    return;
+  }
+
+  // Allow control commands to bypass mention gating when authorized (parity with iMessage)
+  const shouldBypassMention =
+    message.isGroup &&
+    requireMention &&
+    !wasMentioned &&
+    commandAuthorized &&
+    hasControlCmd;
+  const effectiveWasMentioned = wasMentioned || shouldBypassMention;
+
+  // Skip group messages that require mention but weren't mentioned
+  if (message.isGroup && requireMention && canDetectMention && !wasMentioned && !shouldBypassMention) {
+    logVerbose(core, runtime, `bluebubbles: skipping group message (no mention)`);
+    return;
+  }
+
   const baseUrl = account.config.serverUrl?.trim();
   const password = account.config.password?.trim();
   const maxBytes =
@@ -870,7 +943,9 @@ async function processMessage(
     }
   }
 
-  if (chatGuidForActions && baseUrl && password) {
+  // Respect sendReadReceipts config (parity with WhatsApp)
+  const sendReadReceipts = account.config.sendReadReceipts !== false;
+  if (chatGuidForActions && baseUrl && password && sendReadReceipts) {
     try {
       await markBlueBubblesChatRead(chatGuidForActions, {
         cfg: config,
@@ -880,6 +955,8 @@ async function processMessage(
     } catch (err) {
       runtime.error?.(`[bluebubbles] mark read failed: ${String(err)}`);
     }
+  } else if (!sendReadReceipts) {
+    logVerbose(core, runtime, "mark read skipped (sendReadReceipts=false)");
   } else {
     logVerbose(core, runtime, "mark read skipped (missing chatGuid or credentials)");
   }
@@ -920,6 +997,8 @@ async function processMessage(
     Timestamp: message.timestamp,
     OriginatingChannel: "bluebubbles",
     OriginatingTo: `bluebubbles:${outboundTarget}`,
+    WasMentioned: effectiveWasMentioned,
+    CommandAuthorized: commandAuthorized,
   };
 
   if (chatGuidForActions && baseUrl && password) {
@@ -982,6 +1061,12 @@ async function processMessage(
         onError: (err, info) => {
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
         },
+      },
+      replyOptions: {
+        disableBlockStreaming:
+          typeof account.config.blockStreaming === "boolean"
+            ? !account.config.blockStreaming
+            : undefined,
       },
     });
   } finally {
