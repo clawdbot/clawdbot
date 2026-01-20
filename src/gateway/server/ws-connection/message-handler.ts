@@ -551,7 +551,7 @@ export function attachGatewayWsMessageHandler(params: {
             deviceFamily: connectParams.client.deviceFamily,
             modelIdentifier: connectParams.client.modelIdentifier,
             mode: connectParams.client.mode,
-            instanceId: instanceId ?? connectParams.device?.id,
+            instanceId: connectParams.device?.id ?? instanceId,
             reason: "connect",
           });
           incrementPresenceVersion();

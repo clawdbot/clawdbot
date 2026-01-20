@@ -73,7 +73,7 @@ describe("gateway server auth/connect", () => {
   });
 
   test("rejects invalid token", async () => {
-    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const { server, ws, prevToken } = await startServerWithClient("secret");
     const res = await connectReq(ws, { token: "wrong" });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("unauthorized");

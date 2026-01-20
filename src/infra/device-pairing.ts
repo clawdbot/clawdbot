@@ -399,7 +399,8 @@ export async function verifyDeviceToken(params: {
       return { ok: false, reason: "scope-mismatch" };
     }
     entry.lastUsedAtMs = Date.now();
-    device.tokens = { ...(device.tokens ?? {}), [role]: entry };
+    device.tokens ??= {};
+    device.tokens[role] = entry;
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir);
     return { ok: true };
