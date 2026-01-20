@@ -136,7 +136,10 @@ export async function initSessionState(params: {
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
-  const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim().toLowerCase();
+  // IMPORTANT: do NOT lowercase the entire command body.
+  // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
+  // Command parsing downstream lowercases only the command token for matching.
+  const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim();
 
   // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
   const rawBody = commandSource;
@@ -152,17 +155,27 @@ export async function initSessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
+
+  // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
+  // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
+  const trimmedBodyLower = trimmedBody.toLowerCase();
+  const strippedForResetLower = strippedForReset.toLowerCase();
+
   for (const trigger of resetTriggers) {
     if (!trigger) continue;
     if (!resetAuthorized) break;
-    if (trimmedBody === trigger || strippedForReset === trigger) {
+    const triggerLower = trigger.toLowerCase();
+    if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
       break;
     }
-    const triggerPrefix = `${trigger} `;
-    if (trimmedBody.startsWith(triggerPrefix) || strippedForReset.startsWith(triggerPrefix)) {
+    const triggerPrefixLower = `${triggerLower} `;
+    if (
+      trimmedBodyLower.startsWith(triggerPrefixLower) ||
+      strippedForResetLower.startsWith(triggerPrefixLower)
+    ) {
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       resetTriggered = true;

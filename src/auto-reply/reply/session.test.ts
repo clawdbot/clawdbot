@@ -151,6 +151,34 @@ describe("initSessionState RawBody", () => {
     expect(result.bodyStripped).toBe("");
   });
 
+  it("preserves argument casing while still matching reset triggers case-insensitively", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-rawbody-reset-case-"));
+    const storePath = path.join(root, "sessions.json");
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as ClawdbotConfig;
+
+    const ctx = {
+      RawBody: "/NEW KeepThisCase",
+      ChatType: "direct",
+      SessionKey: "agent:main:whatsapp:dm:S1",
+    };
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("KeepThisCase");
+    expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
+  });
+
   it("falls back to Body when RawBody is undefined", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-rawbody-fallback-"));
     const storePath = path.join(root, "sessions.json");
