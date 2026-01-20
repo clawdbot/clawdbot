@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import type { ClawdbotManifest, PackageManifest } from "./manifest.js";
+import type { ClawdbotPackageManifest, PackageManifest } from "./manifest.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -18,7 +18,7 @@ export type PluginCandidate = {
   packageVersion?: string;
   packageDescription?: string;
   packageDir?: string;
-  packageClawdbot?: ClawdbotManifest;
+  packageClawdbot?: ClawdbotPackageManifest;
 };
 
 export type PluginDiscoveryResult = {

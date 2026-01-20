@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { discoverClawdbotPlugins } from "../../plugins/discovery.js";
 import type { PluginOrigin } from "../../plugins/types.js";
-import type { ClawdbotManifest } from "../../plugins/manifest.js";
+import type { ClawdbotPackageManifest } from "../../plugins/manifest.js";
 import type { ChannelMeta } from "./types.js";
 
 export type ChannelPluginCatalogEntry = {
@@ -27,7 +27,7 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
 };
 
 function toChannelMeta(params: {
-  channel: NonNullable<ClawdbotManifest["channel"]>;
+  channel: NonNullable<ClawdbotPackageManifest["channel"]>;
   id: string;
 }): ChannelMeta | null {
   const label = params.channel.label?.trim();
@@ -70,7 +70,7 @@ function toChannelMeta(params: {
 }
 
 function resolveInstallInfo(params: {
-  manifest: ClawdbotManifest;
+  manifest: ClawdbotPackageManifest;
   packageName?: string;
   packageDir?: string;
   workspaceDir?: string;
@@ -93,7 +93,7 @@ function buildCatalogEntry(candidate: {
   packageName?: string;
   packageDir?: string;
   workspaceDir?: string;
-  packageClawdbot?: ClawdbotManifest;
+  packageClawdbot?: ClawdbotPackageManifest;
 }): ChannelPluginCatalogEntry | null {
   const manifest = candidate.packageClawdbot;
   if (!manifest?.channel) return null;
