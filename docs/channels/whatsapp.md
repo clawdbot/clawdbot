@@ -286,6 +286,11 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
     - CLI: `clawdbot message send --media <mp4> --gif-playback`
     - Gateway: `send` params include `gifPlayback: true`
 
+## Voice notes
+- WhatsApp voice notes are OGG/Opus. Convert WAV/MP3 before sending.
+- To force a voice bubble (instead of a file), include `[[audio_as_voice]]` and
+  send media with an OGG/Opus file (for example, `voice.ogg`).
+
 ## Media limits + optimization
 - Default outbound cap: 5 MB (per media item).
 - Override: `agents.defaults.mediaMaxMb`.

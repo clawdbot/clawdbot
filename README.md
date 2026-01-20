@@ -80,6 +80,15 @@ Upgrading? [Updating guide](https://docs.clawd.bot/install/updating) (and run `c
 Switch channels (git + npm): `clawdbot update --channel stable|beta|dev`.
 Details: [Development channels](https://docs.clawd.bot/install/development-channels).
 
+## WSL2 remote nodes (quick notes)
+
+- WSL IPs change after restarts; keep your Windows portproxy pointing at the current WSL IP.
+- SSH from another machine goes to the Windows host IP and forwards to WSL (for example, `-p 2222`).
+- Remote nodes must point at a reachable Gateway URL (not loopback).
+- `clawdbot status --all` is the fastest way to confirm Gateway reachability.
+
+See [Windows (WSL2)](https://docs.clawd.bot/platforms/windows) for the full checklist.
+
 ## From source (development)
 
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
