@@ -5,9 +5,9 @@ import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 import { readJsonBody } from "./hooks.js";
 
 type OpenAiHttpOptions = {
@@ -32,20 +32,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
-}
-
-function getHeader(req: IncomingMessage, name: string): string | undefined {
-  const raw = req.headers[name.toLowerCase()];
-  if (typeof raw === "string") return raw;
-  if (Array.isArray(raw)) return raw[0];
-  return undefined;
-}
-
-function getBearerToken(req: IncomingMessage): string | undefined {
-  const raw = getHeader(req, "authorization")?.trim() ?? "";
-  if (!raw.toLowerCase().startsWith("bearer ")) return undefined;
-  const token = raw.slice(7).trim();
-  return token || undefined;
 }
 
 function writeSse(res: ServerResponse, data: unknown) {
@@ -154,50 +140,12 @@ function buildAgentPrompt(messagesUnknown: unknown): {
   };
 }
 
-function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
-  const raw =
-    getHeader(req, "x-clawdbot-agent-id")?.trim() ||
-    getHeader(req, "x-clawdbot-agent")?.trim() ||
-    "";
-  if (!raw) return undefined;
-  return normalizeAgentId(raw);
-}
-
-function resolveAgentIdFromModel(model: string | undefined): string | undefined {
-  const raw = model?.trim();
-  if (!raw) return undefined;
-
-  const m =
-    raw.match(/^clawdbot[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
-    raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
-  const agentId = m?.groups?.agentId;
-  if (!agentId) return undefined;
-  return normalizeAgentId(agentId);
-}
-
-function resolveAgentIdForRequest(params: {
-  req: IncomingMessage;
-  model: string | undefined;
-}): string {
-  const fromHeader = resolveAgentIdFromHeader(params.req);
-  if (fromHeader) return fromHeader;
-
-  const fromModel = resolveAgentIdFromModel(params.model);
-  return fromModel ?? "main";
-}
-
-function resolveSessionKey(params: {
+function resolveOpenAiSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;
 }): string {
-  const explicit = getHeader(params.req, "x-clawdbot-session-key")?.trim();
-  if (explicit) return explicit;
-
-  // Default: stateless per-request session key, but stable if OpenAI "user" is provided.
-  const user = params.user?.trim();
-  const mainKey = user ? `openai-user:${user}` : `openai:${randomUUID()}`;
-  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+  return resolveSessionKey({ ...params, prefix: "openai" });
 }
 
 function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
@@ -248,7 +196,7 @@ export async function handleOpenAiHttpRequest(
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
   const agentId = resolveAgentIdForRequest({ req, model });
-  const sessionKey = resolveSessionKey({ req, agentId, user });
+  const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
     sendJson(res, 400, {

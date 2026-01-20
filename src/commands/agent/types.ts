@@ -8,6 +8,12 @@ export type ImageContent = {
   mimeType: string;
 };
 
+export type AgentStreamParams = {
+  /** Provider stream params override (best-effort). */
+  temperature?: number;
+  maxTokens?: number;
+};
+
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -53,4 +59,6 @@ export type AgentCommandOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  /** Per-call stream param overrides (best-effort). */
+  streamParams?: AgentStreamParams;
 };

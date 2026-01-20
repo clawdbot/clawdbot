@@ -358,6 +358,182 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("moves input_file content into extraSystemPrompt", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postResponses(port, {
+        model: "clawdbot",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "read this" },
+              {
+                type: "input_file",
+                source: {
+                  type: "base64",
+                  media_type: "text/plain",
+                  data: Buffer.from("hello").toString("base64"),
+                  filename: "hello.txt",
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      const message = (opts as { message?: string } | undefined)?.message ?? "";
+      const extraSystemPrompt =
+        (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+      expect(message).toBe("read this");
+      expect(extraSystemPrompt).toContain('<file name="hello.txt">');
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("applies tool_choice=none by dropping tools", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postResponses(port, {
+        model: "clawdbot",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            function: { name: "get_weather", description: "Get weather" },
+          },
+        ],
+        tool_choice: "none",
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect((opts as { clientTools?: unknown[] } | undefined)?.clientTools).toBeUndefined();
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("applies tool_choice to a specific tool", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postResponses(port, {
+        model: "clawdbot",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            function: { name: "get_weather", description: "Get weather" },
+          },
+          {
+            type: "function",
+            function: { name: "get_time", description: "Get time" },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "get_time" } },
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      const clientTools =
+        (opts as { clientTools?: Array<{ function?: { name?: string } }> })?.clientTools ?? [];
+      expect(clientTools).toHaveLength(1);
+      expect(clientTools[0]?.function?.name).toBe("get_time");
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("rejects tool_choice that references an unknown tool", async () => {
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postResponses(port, {
+        model: "clawdbot",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            function: { name: "get_weather", description: "Get weather" },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "unknown_tool" } },
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("passes max_output_tokens through to the agent stream params", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postResponses(port, {
+        model: "clawdbot",
+        input: "hi",
+        max_output_tokens: 123,
+      });
+      expect(res.status).toBe(200);
+
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect(
+        (opts as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams?.maxTokens,
+      ).toBe(123);
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("returns usage when available", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },
+        },
+      },
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postResponses(port, {
+        stream: false,
+        model: "clawdbot",
+        input: "hi",
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
   it("returns a non-streaming response with correct shape", async () => {
     agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "hello" }],
@@ -436,6 +612,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const eventTypes = events.map((e) => e.event).filter(Boolean);
       expect(eventTypes).toContain("response.created");
       expect(eventTypes).toContain("response.output_item.added");
+      expect(eventTypes).toContain("response.in_progress");
       expect(eventTypes).toContain("response.content_part.added");
       expect(eventTypes).toContain("response.output_text.delta");
       expect(eventTypes).toContain("response.output_text.done");

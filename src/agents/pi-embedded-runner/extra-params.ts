@@ -63,13 +63,21 @@ export function applyExtraParamsToAgent(
   cfg: ClawdbotConfig | undefined,
   provider: string,
   modelId: string,
+  extraParamsOverride?: Record<string, unknown>,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
     provider,
     modelId,
   });
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, extraParams);
+  const override =
+    extraParamsOverride && Object.keys(extraParamsOverride).length > 0
+      ? Object.fromEntries(
+          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+        )
+      : undefined;
+  const merged = Object.assign({}, extraParams, override);
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged);
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);

@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Android: remove legacy bridge transport code now that nodes use the gateway protocol.
 - Android: send structured payloads in node events/invokes and include user-agent metadata in gateway connects.
+- Gateway: expand `/v1/responses` to support file/image inputs, tool_choice, usage, and output limits. (#1229) — thanks @RyanLisse.
 - Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) — thanks @steipete.
 
 ### Fixes

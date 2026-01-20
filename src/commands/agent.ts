@@ -396,6 +396,7 @@ export async function agentCommand(
               extraSystemPrompt: opts.extraSystemPrompt,
               cliSessionId,
               images: opts.images,
+              streamParams: opts.streamParams,
             });
           }
           const authProfileId =
@@ -429,6 +430,7 @@ export async function agentCommand(
             lane: opts.lane,
             abortSignal: opts.abortSignal,
             extraSystemPrompt: opts.extraSystemPrompt,
+            streamParams: opts.streamParams,
             agentDir,
             onAgentEvent: (evt) => {
               if (

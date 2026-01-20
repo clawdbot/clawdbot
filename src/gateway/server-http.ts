@@ -194,6 +194,7 @@ export function createGatewayHttpServer(opts: {
   controlUiBasePath: string;
   openAiChatCompletionsEnabled: boolean;
   openResponsesEnabled: boolean;
+  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
@@ -205,6 +206,7 @@ export function createGatewayHttpServer(opts: {
     controlUiBasePath,
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
+    openResponsesConfig,
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth,
@@ -226,7 +228,13 @@ export function createGatewayHttpServer(opts: {
       if (await handleSlackHttpRequest(req, res)) return;
       if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
       if (openResponsesEnabled) {
-        if (await handleOpenResponsesHttpRequest(req, res, { auth: resolvedAuth })) return;
+        if (
+          await handleOpenResponsesHttpRequest(req, res, {
+            auth: resolvedAuth,
+            config: openResponsesConfig,
+          })
+        )
+          return;
       }
       if (openAiChatCompletionsEnabled) {
         if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth })) return;
