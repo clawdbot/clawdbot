@@ -24,6 +24,7 @@ export type SessionsProps = {
   onPatch: (
     key: string,
     patch: {
+      label?: string | null;
       thinkingLevel?: string | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
@@ -195,7 +196,17 @@ function renderRow(
       <div class="mono">${canLink
         ? html`<a href=${chatUrl} class="session-link">${displayName}</a>`
         : displayName}</div>
-      <div>${row.label ?? ""}</div>
+      <div>
+        <input
+          .value=${row.label ?? ""}
+          ?disabled=${disabled}
+          placeholder="(optional)"
+          @change=${(e: Event) => {
+            const value = (e.target as HTMLInputElement).value.trim();
+            onPatch(row.key, { label: value || null });
+          }}
+        />
+      </div>
       <div>${row.kind}</div>
       <div>${updated}</div>
       <div>${formatSessionTokens(row)}</div>
