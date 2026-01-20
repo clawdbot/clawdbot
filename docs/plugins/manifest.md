@@ -61,3 +61,6 @@ Optional keys:
 - The manifest is **required for all plugins**, including local filesystem loads.
 - Runtime still loads the plugin module separately; the manifest is only for
   discovery + validation.
+- If your plugin depends on native modules, document the build steps and any
+  package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
+  + `pnpm rebuild <package>`).

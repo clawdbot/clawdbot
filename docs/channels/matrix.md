@@ -117,6 +117,10 @@ Enable with `channels.matrix.encryption: true`:
 - Verify the device in another Matrix client (Element, etc.) to enable key sharing.
 - If the crypto module cannot be loaded, E2EE is disabled and encrypted rooms will not decrypt;
   Clawdbot logs a warning.
+- If you see missing crypto module errors (for example, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
+  allow build scripts for `@matrix-org/matrix-sdk-crypto-nodejs` and run
+  `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` or fetch the binary with
+  `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js`.
 
 Crypto state is stored per account + access token in
 `~/.clawdbot/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
