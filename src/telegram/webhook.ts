@@ -5,6 +5,13 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  logWebhookError,
+  logWebhookProcessed,
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "../logging/diagnostic.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 
@@ -38,6 +45,8 @@ export async function startTelegramWebhook(opts: {
     secretToken: opts.secret,
   });
 
+  startDiagnosticHeartbeat();
+
   const server = createServer((req, res) => {
     if (req.url === healthPath) {
       res.writeHead(200);
@@ -49,13 +58,29 @@ export async function startTelegramWebhook(opts: {
       res.end();
       return;
     }
+    const startTime = Date.now();
+    logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
     const handled = handler(req, res);
     if (handled && typeof (handled as Promise<void>).catch === "function") {
-      void (handled as Promise<void>).catch((err) => {
-        runtime.log?.(`webhook handler failed: ${formatErrorMessage(err)}`);
-        if (!res.headersSent) res.writeHead(500);
-        res.end();
-      });
+      void (handled as Promise<void>)
+        .then(() => {
+          logWebhookProcessed({
+            channel: "telegram",
+            updateType: "telegram-post",
+            durationMs: Date.now() - startTime,
+          });
+        })
+        .catch((err) => {
+          const errMsg = formatErrorMessage(err);
+          logWebhookError({
+            channel: "telegram",
+            updateType: "telegram-post",
+            error: errMsg,
+          });
+          runtime.log?.(`webhook handler failed: ${errMsg}`);
+          if (!res.headersSent) res.writeHead(500);
+          res.end();
+        });
     }
   });
 
@@ -73,6 +98,7 @@ export async function startTelegramWebhook(opts: {
   const shutdown = () => {
     server.close();
     void bot.stop();
+    stopDiagnosticHeartbeat();
   };
   if (opts.abortSignal) {
     opts.abortSignal.addEventListener("abort", shutdown, { once: true });

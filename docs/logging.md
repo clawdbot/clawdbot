@@ -138,17 +138,45 @@ Redaction affects **console output only** and does not alter file logs.
 
 ## Diagnostics + OpenTelemetry
 
-Diagnostics are **opt-in** structured events for model runs (usage + cost +
-context + duration). They do **not** replace logs; they exist to feed metrics,
-traces, and other exporters.
+Diagnostics are structured, machine-readable events for model runs **and**
+message-flow telemetry (webhooks, queueing, session state). They do **not**
+replace logs; they exist to feed metrics, traces, and other exporters.
 
-Clawdbot currently emits a `model.usage` event after each agent run with:
+Diagnostics events are emitted in-process, but exporters only attach when
+diagnostics + the exporter plugin are enabled.
 
-- Token counts (input/output/cache/prompt/total)
-- Estimated cost (USD)
-- Context window used/limit
-- Duration (ms)
-- Provider/channel/model + session identifiers
+### OpenTelemetry vs OTLP
+
+- **OpenTelemetry (OTel)**: the data model + SDKs for traces, metrics, and logs.
+- **OTLP**: the wire protocol used to export OTel data to a collector/backend.
+- Clawdbot exports via **OTLP/HTTP (protobuf)** today.
+
+### Signals exported
+
+- **Metrics**: counters + histograms (token usage, message flow, queueing).
+- **Traces**: spans for model usage + webhook/message processing.
+- **Logs**: exported over OTLP when `diagnostics.otel.logs` is enabled. Log
+  volume can be high; keep `logging.level` and exporter filters in mind.
+
+### Diagnostic event catalog
+
+Model usage:
+- `model.usage`: tokens, cost, duration, context, provider/model/channel, session ids.
+
+Message flow:
+- `webhook.received`: webhook ingress per channel.
+- `webhook.processed`: webhook handled + duration.
+- `webhook.error`: webhook handler errors.
+- `message.queued`: message enqueued for processing.
+- `message.processed`: outcome + duration + optional error.
+
+Queue + session:
+- `queue.lane.enqueue`: command queue lane enqueue + depth.
+- `queue.lane.dequeue`: command queue lane dequeue + wait time.
+- `session.state`: session state transition + reason.
+- `session.stuck`: session stuck warning + age.
+- `run.attempt`: run retry/attempt metadata.
+- `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
 
 ### Enable diagnostics (no exporter)
 
@@ -186,6 +214,7 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "serviceName": "clawdbot-gateway",
       "traces": true,
       "metrics": true,
+      "logs": true,
       "sampleRate": 0.2,
       "flushIntervalMs": 60000
     }
@@ -195,12 +224,90 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 
 Notes:
 - You can also enable the plugin with `clawdbot plugins enable diagnostics-otel`.
-- `protocol` currently supports `http/protobuf`.
-- Metrics include token usage, cost, context size, and run duration.
-- Traces/metrics can be toggled with `traces` / `metrics` (default: on).
+- `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
+- Metrics include token usage, cost, context size, run duration, and message-flow
+  counters/histograms (webhooks, queueing, session state, queue depth/wait).
+- Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
+  include model usage spans plus webhook/message processing spans when enabled.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+
+### Exported metrics (names + types)
+
+Model usage:
+- `clawdbot.tokens` (counter, attrs: `clawdbot.token`, `clawdbot.channel`,
+  `clawdbot.provider`, `clawdbot.model`)
+- `clawdbot.cost.usd` (counter, attrs: `clawdbot.channel`, `clawdbot.provider`,
+  `clawdbot.model`)
+- `clawdbot.run.duration_ms` (histogram, attrs: `clawdbot.channel`,
+  `clawdbot.provider`, `clawdbot.model`)
+- `clawdbot.context.tokens` (histogram, attrs: `clawdbot.context`,
+  `clawdbot.channel`, `clawdbot.provider`, `clawdbot.model`)
+
+Message flow:
+- `clawdbot.webhook.received` (counter, attrs: `clawdbot.channel`,
+  `clawdbot.webhook`)
+- `clawdbot.webhook.error` (counter, attrs: `clawdbot.channel`,
+  `clawdbot.webhook`)
+- `clawdbot.webhook.duration_ms` (histogram, attrs: `clawdbot.channel`,
+  `clawdbot.webhook`)
+- `clawdbot.message.queued` (counter, attrs: `clawdbot.channel`,
+  `clawdbot.source`)
+- `clawdbot.message.processed` (counter, attrs: `clawdbot.channel`,
+  `clawdbot.outcome`)
+- `clawdbot.message.duration_ms` (histogram, attrs: `clawdbot.channel`,
+  `clawdbot.outcome`)
+
+Queues + sessions:
+- `clawdbot.queue.lane.enqueue` (counter, attrs: `clawdbot.lane`)
+- `clawdbot.queue.lane.dequeue` (counter, attrs: `clawdbot.lane`)
+- `clawdbot.queue.depth` (histogram, attrs: `clawdbot.lane` or
+  `clawdbot.channel=heartbeat`)
+- `clawdbot.queue.wait_ms` (histogram, attrs: `clawdbot.lane`)
+- `clawdbot.session.state` (counter, attrs: `clawdbot.state`, `clawdbot.reason`)
+- `clawdbot.session.stuck` (counter, attrs: `clawdbot.state`)
+- `clawdbot.session.stuck_age_ms` (histogram, attrs: `clawdbot.state`)
+- `clawdbot.run.attempt` (counter, attrs: `clawdbot.attempt`)
+
+### Exported spans (names + key attributes)
+
+- `clawdbot.model.usage`
+  - `clawdbot.channel`, `clawdbot.provider`, `clawdbot.model`
+  - `clawdbot.sessionKey`, `clawdbot.sessionId`
+  - `clawdbot.tokens.*` (input/output/cache_read/cache_write/total)
+- `clawdbot.webhook.processed`
+  - `clawdbot.channel`, `clawdbot.webhook`, `clawdbot.chatId`
+- `clawdbot.webhook.error`
+  - `clawdbot.channel`, `clawdbot.webhook`, `clawdbot.chatId`,
+    `clawdbot.error`
+- `clawdbot.message.processed`
+  - `clawdbot.channel`, `clawdbot.outcome`, `clawdbot.chatId`,
+    `clawdbot.messageId`, `clawdbot.sessionKey`, `clawdbot.sessionId`,
+    `clawdbot.reason`
+- `clawdbot.session.stuck`
+  - `clawdbot.state`, `clawdbot.ageMs`, `clawdbot.queueDepth`,
+    `clawdbot.sessionKey`, `clawdbot.sessionId`
+
+### Sampling + flushing
+
+- Trace sampling: `diagnostics.otel.sampleRate` (0.0–1.0, root spans only).
+- Metric export interval: `diagnostics.otel.flushIntervalMs` (min 1000ms).
+
+### Protocol notes
+
+- OTLP/HTTP endpoints can be set via `diagnostics.otel.endpoint` or
+  `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
+- If the endpoint already contains `/v1/logs`, it is used as-is for logs.
+- `diagnostics.otel.logs` enables OTLP log export for the main logger output.
+
+### Log export behavior
+
+- OTLP logs use the same structured records written to `logging.file`.
+- Respect `logging.level` (file log level). Console redaction does **not** apply
+  to OTLP logs.
+- High-volume installs should prefer OTLP collector sampling/filtering.
 
 ## Troubleshooting tips
 

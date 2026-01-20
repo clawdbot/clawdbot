@@ -1,4 +1,5 @@
 import { CommandLane } from "./lanes.js";
+import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
 
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
@@ -49,16 +50,27 @@ function drainLane(lane: string) {
       const waitedMs = Date.now() - entry.enqueuedAt;
       if (waitedMs >= entry.warnAfterMs) {
         entry.onWait?.(waitedMs, state.queue.length);
+        diag.warn(
+          `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
+        );
       }
+      logLaneDequeue(lane, waitedMs, state.queue.length);
       state.active += 1;
       void (async () => {
+        const startTime = Date.now();
         try {
           const result = await entry.task();
           state.active -= 1;
+          diag.debug(
+            `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.active} queued=${state.queue.length}`,
+          );
           pump();
           entry.resolve(result);
         } catch (err) {
           state.active -= 1;
+          diag.error(
+            `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+          );
           pump();
           entry.reject(err);
         }
@@ -97,6 +109,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
+    logLaneEnqueue(cleaned, state.queue.length + state.active);
     drainLane(cleaned);
   });
 }

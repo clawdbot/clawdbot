@@ -1,8 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const diagnosticMocks = vi.hoisted(() => ({
+  logLaneEnqueue: vi.fn(),
+  logLaneDequeue: vi.fn(),
+  diag: {
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("../logging/diagnostic.js", () => ({
+  logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
+  logLaneDequeue: diagnosticMocks.logLaneDequeue,
+  diagnosticLogger: diagnosticMocks.diag,
+}));
 
 import { enqueueCommand, getQueueSize } from "./command-queue.js";
 
 describe("command queue", () => {
+  beforeEach(() => {
+    diagnosticMocks.logLaneEnqueue.mockClear();
+    diagnosticMocks.logLaneDequeue.mockClear();
+    diagnosticMocks.diag.debug.mockClear();
+    diagnosticMocks.diag.warn.mockClear();
+    diagnosticMocks.diag.error.mockClear();
+  });
+
   it("runs tasks one at a time in order", async () => {
     let active = 0;
     let maxActive = 0;
@@ -27,6 +51,15 @@ describe("command queue", () => {
     expect(calls).toEqual([1, 2, 3]);
     expect(maxActive).toBe(1);
     expect(getQueueSize()).toBe(0);
+  });
+
+  it("logs enqueue depth after push", async () => {
+    const task = enqueueCommand(async () => {});
+
+    expect(diagnosticMocks.logLaneEnqueue).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logLaneEnqueue.mock.calls[0]?.[1]).toBe(1);
+
+    await task;
   });
 
   it("invokes onWait callback when a task waits past the threshold", async () => {

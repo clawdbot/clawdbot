@@ -35,6 +35,21 @@ type ResolvedSettings = {
   file: string;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
+export type LogTransportRecord = Record<string, unknown>;
+export type LogTransport = (logObj: LogTransportRecord) => void;
+
+const externalTransports = new Set<LogTransport>();
+
+function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
+  logger.attachTransport((logObj: LogObj) => {
+    if (!externalTransports.has(transport)) return;
+    try {
+      transport(logObj as LogTransportRecord);
+    } catch {
+      // never block on logging failures
+    }
+  });
+}
 
 function resolveSettings(): ResolvedSettings {
   let cfg: ClawdbotConfig["logging"] | undefined =
@@ -87,6 +102,9 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       // never block on logging failures
     }
   });
+  for (const transport of externalTransports) {
+    attachExternalTransport(logger, transport);
+  }
 
   return logger;
 }
@@ -166,6 +184,17 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
+}
+
+export function registerLogTransport(transport: LogTransport): () => void {
+  externalTransports.add(transport);
+  const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
+  if (logger) {
+    attachExternalTransport(logger, transport);
+  }
+  return () => {
+    externalTransports.delete(transport);
+  };
 }
 
 function defaultRollingPathForToday(): string {
