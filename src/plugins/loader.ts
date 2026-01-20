@@ -335,6 +335,12 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     ...(pluginSdkAlias ? { alias: { "clawdbot/plugin-sdk": pluginSdkAlias } } : {}),
   });
 
+  const bundledIds = new Set(
+    discovery.candidates
+      .filter((candidate) => candidate.origin === "bundled")
+      .map((candidate) => candidate.idHint),
+  );
+
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
@@ -442,6 +448,22 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
         : undefined;
 
     if (!definition?.configSchema) {
+      const hasBundledFallback =
+        candidate.origin !== "bundled" && bundledIds.has(candidate.idHint);
+      if (hasBundledFallback) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = "missing config schema (using bundled plugin)";
+        registry.plugins.push(record);
+        registry.diagnostics.push({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: record.error,
+        });
+        continue;
+      }
+
       logger.error(`[plugins] ${record.id} missing config schema`);
       record.status = "error";
       record.error = "missing config schema";
