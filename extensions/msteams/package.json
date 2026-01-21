@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/msteams",
-  "version": "2026.1.17-1",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot Microsoft Teams channel plugin",
   "clawdbot": {
@@ -14,7 +14,9 @@
       "docsPath": "/channels/msteams",
       "docsLabel": "msteams",
       "blurb": "Bot Framework; enterprise support.",
-      "aliases": ["teams"],
+      "aliases": [
+        "teams"
+      ],
       "order": 60
     },
     "install": {

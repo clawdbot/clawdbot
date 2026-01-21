@@ -1,10 +1,12 @@
 {
   "name": "@clawdbot/nextcloud-talk",
-  "version": "2026.1.17-1",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot Nextcloud Talk channel plugin",
   "clawdbot": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "channel": {
       "id": "nextcloud-talk",
       "label": "Nextcloud Talk",
@@ -12,7 +14,10 @@
       "docsPath": "/channels/nextcloud-talk",
       "docsLabel": "nextcloud-talk",
       "blurb": "Self-hosted chat via Nextcloud Talk webhook bots.",
-      "aliases": ["nc-talk", "nc"],
+      "aliases": [
+        "nc-talk",
+        "nc"
+      ],
       "order": 65,
       "quickstartAllowFrom": true
     },

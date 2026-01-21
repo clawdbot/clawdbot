@@ -1,10 +1,12 @@
 {
   "name": "@clawdbot/bluebubbles",
-  "version": "2026.1.15",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot BlueBubbles channel plugin",
   "clawdbot": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "channel": {
       "id": "bluebubbles",
       "label": "BlueBubbles",

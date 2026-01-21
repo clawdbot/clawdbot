@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/zalouser",
-  "version": "2026.1.17-1",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot Zalo Personal Account plugin via zca-cli",
   "dependencies": {

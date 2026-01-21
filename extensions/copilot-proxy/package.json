@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/copilot-proxy",
-  "version": "2026.1.17-1",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot Copilot Proxy provider plugin",
   "clawdbot": {

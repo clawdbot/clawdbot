@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/zalo",
-  "version": "2026.1.17-1",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot Zalo channel plugin",
   "clawdbot": {
@@ -14,7 +14,9 @@
       "docsPath": "/channels/zalo",
       "docsLabel": "zalo",
       "blurb": "Vietnam-focused messaging platform with Bot API.",
-      "aliases": ["zl"],
+      "aliases": [
+        "zl"
+      ],
       "order": 80,
       "quickstartAllowFrom": true
     },

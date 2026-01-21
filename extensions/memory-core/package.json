@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/memory-core",
-  "version": "2026.1.17-1",
+  "version": "2026.1.20",
   "type": "module",
   "description": "Clawdbot core memory search plugin",
   "clawdbot": {
