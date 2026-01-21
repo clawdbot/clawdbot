@@ -89,6 +89,9 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
 }
 
 export function registerExecApprovalsCli(program: Command) {
+  const formatExample = (cmd: string, desc: string) =>
+    `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
+
   const approvals = program
     .command("approvals")
     .alias("exec-approvals")
@@ -151,7 +154,23 @@ export function registerExecApprovalsCli(program: Command) {
     });
   nodesCallOpts(setCmd);
 
-  const allowlist = approvals.command("allowlist").description("Edit the per-agent allowlist");
+  const allowlist = approvals
+    .command("allowlist")
+    .description("Edit the per-agent allowlist")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatExample(
+          'clawdbot approvals allowlist add "~/Projects/**/bin/rg"',
+          "Allowlist a local binary pattern for the default agent.",
+        )}\n${formatExample(
+          'clawdbot approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
+          "Allowlist on a specific node/agent.",
+        )}\n${formatExample(
+          'clawdbot approvals allowlist remove "~/Projects/**/bin/rg"',
+          "Remove an allowlist pattern.",
+        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.clawd.bot/cli/approvals")}\n`,
+    );
 
   const allowlistAdd = allowlist
     .command("add <pattern>")
