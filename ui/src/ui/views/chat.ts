@@ -211,17 +211,6 @@ export function renderChat(props: ChatProps) {
           >
             New session
           </button>
-          ${props.onAbort
-            ? html`
-                <button
-                  class="btn danger"
-                  ?disabled=${!props.connected || !isBusy || props.canAbort === false}
-                  @click=${props.onAbort}
-                >
-                  Stop
-                </button>
-              `
-            : nothing}
           <button
             class="btn primary"
             ?disabled=${!props.connected}

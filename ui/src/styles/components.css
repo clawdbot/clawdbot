@@ -680,7 +680,6 @@
 
 .shell--chat .chat {
   flex: 1;
-  max-height: calc(100vh - 180px); /* Constrain height for sticky compose */
 }
 
 .chat-header {
