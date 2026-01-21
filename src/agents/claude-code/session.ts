@@ -313,17 +313,27 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
     }
 
     // Also try to find by scanning the session directory
+    // IMPORTANT: Only pick up files created AFTER this session started
+    // to avoid picking up old session files from previous runs
     if (!session.sessionFile) {
       const sessionDir = getSessionDir(session.workingDir);
       if (fs.existsSync(sessionDir)) {
         const files = fs
           .readdirSync(sessionDir)
           .filter((f) => f.endsWith(".jsonl"))
-          .map((f) => ({
-            name: f,
-            path: path.join(sessionDir, f),
-            mtime: fs.statSync(path.join(sessionDir, f)).mtime.getTime(),
-          }))
+          .map((f) => {
+            const filePath = path.join(sessionDir, f);
+            const stat = fs.statSync(filePath);
+            return {
+              name: f,
+              path: filePath,
+              mtime: stat.mtime.getTime(),
+              // Use birthtime (creation time) if available, otherwise mtime
+              ctime: stat.birthtime?.getTime() ?? stat.mtime.getTime(),
+            };
+          })
+          // Only consider files created AFTER session started (with 5s grace)
+          .filter((f) => f.ctime >= session.startedAt - 5000)
           .sort((a, b) => b.mtime - a.mtime);
 
         if (files.length > 0) {
