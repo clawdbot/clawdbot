@@ -282,11 +282,20 @@ export function resolveDiscordChannelConfigWithFallback(params: {
 export function resolveDiscordShouldRequireMention(params: {
   isGuildMessage: boolean;
   isThread: boolean;
+  botId?: string | null;
+  threadOwnerId?: string | null;
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
 }): boolean {
   if (!params.isGuildMessage) return false;
-  if (params.isThread && params.channelConfig?.autoThread) return false;
+  // Only skip mention requirement in threads created by the bot (when autoThread is enabled).
+  if (params.isThread && params.channelConfig?.autoThread) {
+    const botId = params.botId?.trim();
+    const threadOwnerId = params.threadOwnerId?.trim();
+    if (botId && threadOwnerId && botId === threadOwnerId) {
+      return false;
+    }
+  }
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 

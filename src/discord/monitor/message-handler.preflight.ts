@@ -328,9 +328,12 @@ export async function preflightDiscordMessage(
         } satisfies HistoryEntry)
       : undefined;
 
+  const threadOwnerId = threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined;
   const shouldRequireMention = resolveDiscordShouldRequireMention({
     isGuildMessage,
     isThread: Boolean(threadChannel),
+    botId,
+    threadOwnerId,
     channelConfig,
     guildInfo,
   });

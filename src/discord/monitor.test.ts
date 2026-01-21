@@ -377,10 +377,61 @@ describe("discord mention gating", () => {
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,
         isThread: true,
+        botId: "bot123",
+        threadOwnerId: "bot123",
         channelConfig,
         guildInfo,
       }),
     ).toBe(false);
+  });
+
+  it("requires mention inside user-created threads with autoThread enabled", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: true,
+      channels: {
+        general: { allow: true, autoThread: true },
+      },
+    };
+    const channelConfig = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "1",
+      channelName: "General",
+      channelSlug: "general",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        botId: "bot123",
+        threadOwnerId: "user456",
+        channelConfig,
+        guildInfo,
+      }),
+    ).toBe(true);
+  });
+
+  it("requires mention when thread owner is unknown", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: true,
+      channels: {
+        general: { allow: true, autoThread: true },
+      },
+    };
+    const channelConfig = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "1",
+      channelName: "General",
+      channelSlug: "general",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        botId: "bot123",
+        channelConfig,
+        guildInfo,
+      }),
+    ).toBe(true);
   });
 
   it("inherits parent channel mention rules for threads", () => {

@@ -14,6 +14,7 @@ export type DiscordThreadChannel = {
   name?: string | null;
   parentId?: string | null;
   parent?: { id?: string; name?: string };
+  ownerId?: string | null;
 };
 
 export type DiscordThreadStarter = {
@@ -63,6 +64,7 @@ export function resolveDiscordThreadChannel(params: {
     name: channelInfo?.name ?? undefined,
     parentId: channelInfo?.parentId ?? undefined,
     parent: undefined,
+    ownerId: channelInfo?.ownerId ?? undefined,
   };
 }
 
