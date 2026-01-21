@@ -1,4 +1,5 @@
 import type { startGatewayServer } from "../../gateway/server.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -14,6 +15,7 @@ export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: typeof defaultRuntime;
 }) {
+  const lock = await acquireGatewayLock();
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -96,6 +98,7 @@ export async function runGatewayLoop(params: {
       });
     }
   } finally {
+    await lock?.release();
     cleanupSignals();
   }
 }

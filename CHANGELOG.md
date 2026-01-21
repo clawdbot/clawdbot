@@ -20,6 +20,7 @@ Docs: https://docs.clawd.bot
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - macOS: allow SSH agent auth when no identity file is set. (#1384) Thanks @ameno-.
+- Gateway: prevent multiple gateways from sharing the same config/state at once (singleton lock).
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 - Typing: start instant typing indicators at run start so DMs and mentions show immediately.
 - Configure: restrict the model allowlist picker to OAuth-compatible Anthropic models and preselect Opus 4.5.
