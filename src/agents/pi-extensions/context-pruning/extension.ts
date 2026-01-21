@@ -29,6 +29,11 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
     });
 
     if (next === event.messages) return undefined;
+
+    if (runtime.settings.mode === "cache-ttl") {
+      runtime.lastCacheTouchAt = Date.now();
+    }
+
     return { messages: next };
   });
 }
