@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { formatHelpExamples } from "../help-format.js";
 import { createDefaultDeps } from "../deps.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "./helpers.js";
@@ -48,13 +49,24 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "after",
       () =>
         `
-Examples:
-  clawdbot agent --to +15555550123 --message "status update"
-  clawdbot agent --agent ops --message "Summarize logs"
-  clawdbot agent --session-id 1234 --message "Summarize inbox" --thinking medium
-  clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json
-  clawdbot agent --to +15555550123 --message "Summon reply" --deliver
-  clawdbot agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ['clawdbot agent --to +15555550123 --message "status update"', "Start a new session."],
+  ['clawdbot agent --agent ops --message "Summarize logs"', "Use a specific agent."],
+  [
+    'clawdbot agent --session-id 1234 --message "Summarize inbox" --thinking medium',
+    "Target a session with explicit thinking level.",
+  ],
+  [
+    'clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json',
+    "Enable verbose logging and JSON output.",
+  ],
+  ['clawdbot agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
+  [
+    'clawdbot agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
+    "Send reply to a different channel/target.",
+  ],
+])}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent")}`,
     )
@@ -140,10 +152,15 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
       "after",
       () =>
         `
-Examples:
-  clawdbot agents set-identity --agent main --name "Clawd" --emoji "🦞"
-  clawdbot agents set-identity --workspace ~/clawd --from-identity
-  clawdbot agents set-identity --identity-file ~/clawd/IDENTITY.md --agent main
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ['clawdbot agents set-identity --agent main --name "Clawd" --emoji "🦞"', "Set name + emoji."],
+  ["clawdbot agents set-identity --workspace ~/clawd --from-identity", "Load from IDENTITY.md."],
+  [
+    "clawdbot agents set-identity --identity-file ~/clawd/IDENTITY.md --agent main",
+    "Use a specific IDENTITY.md.",
+  ],
+])}
 `,
     )
     .action(async (opts) => {

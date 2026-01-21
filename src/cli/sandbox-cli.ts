@@ -5,6 +5,7 @@ import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatHelpExamples } from "./help-format.js";
 
 // --- Types ---
 
@@ -12,58 +13,34 @@ type CommandOptions = Record<string, unknown>;
 
 // --- Helpers ---
 
-const EXAMPLES = {
-  main: `
-Examples:
-  clawdbot sandbox list                     # List all sandbox containers
-  clawdbot sandbox list --browser           # List only browser containers
-  clawdbot sandbox recreate --all           # Recreate all containers
-  clawdbot sandbox recreate --session main  # Recreate specific session
-  clawdbot sandbox recreate --agent mybot   # Recreate agent containers
-  clawdbot sandbox explain                  # Explain effective sandbox config`,
-
-  list: `
-Examples:
-  clawdbot sandbox list              # List all sandbox containers
-  clawdbot sandbox list --browser    # List only browser containers
-  clawdbot sandbox list --json       # JSON output
-
-Output includes:
-  • Container name and status (running/stopped)
-  • Docker image and whether it matches current config
-  • Age (time since creation)
-  • Idle time (time since last use)
-  • Associated session/agent ID`,
-
-  recreate: `
-Examples:
-  clawdbot sandbox recreate --all              # Recreate all containers
-  clawdbot sandbox recreate --session main     # Specific session
-  clawdbot sandbox recreate --agent mybot      # Specific agent (includes sub-agents)
-  clawdbot sandbox recreate --browser --all    # All browser containers only
-  clawdbot sandbox recreate --all --force      # Skip confirmation
-
-Why use this?
-  After updating Docker images or sandbox configuration, existing containers
-  continue running with old settings. This command removes them so they'll be
-  recreated automatically with current config when next needed.
-
-Filter options:
-  --all          Remove all sandbox containers
-  --session      Remove container for specific session key
-  --agent        Remove containers for agent (includes agent:id:* variants)
-  
-Modifiers:
-  --browser      Only affect browser containers (not regular sandbox)
-  --force        Skip confirmation prompt`,
-
-  explain: `
-Examples:
-  clawdbot sandbox explain
-  clawdbot sandbox explain --session agent:main:main
-  clawdbot sandbox explain --agent work
-  clawdbot sandbox explain --json`,
-};
+const SANDBOX_EXAMPLES = {
+  main: [
+    ["clawdbot sandbox list", "List all sandbox containers."],
+    ["clawdbot sandbox list --browser", "List only browser containers."],
+    ["clawdbot sandbox recreate --all", "Recreate all containers."],
+    ["clawdbot sandbox recreate --session main", "Recreate a specific session."],
+    ["clawdbot sandbox recreate --agent mybot", "Recreate agent containers."],
+    ["clawdbot sandbox explain", "Explain effective sandbox config."],
+  ],
+  list: [
+    ["clawdbot sandbox list", "List all sandbox containers."],
+    ["clawdbot sandbox list --browser", "List only browser containers."],
+    ["clawdbot sandbox list --json", "JSON output."],
+  ],
+  recreate: [
+    ["clawdbot sandbox recreate --all", "Recreate all containers."],
+    ["clawdbot sandbox recreate --session main", "Recreate a specific session."],
+    ["clawdbot sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
+    ["clawdbot sandbox recreate --browser --all", "Recreate only browser containers."],
+    ["clawdbot sandbox recreate --all --force", "Skip confirmation."],
+  ],
+  explain: [
+    ["clawdbot sandbox explain", "Show effective sandbox config."],
+    ["clawdbot sandbox explain --session agent:main:main", "Explain a specific session."],
+    ["clawdbot sandbox explain --agent work", "Explain an agent sandbox."],
+    ["clawdbot sandbox explain --json", "JSON output."],
+  ],
+} as const;
 
 function createRunner(
   commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
@@ -84,7 +61,10 @@ export function registerSandboxCli(program: Command) {
   const sandbox = program
     .command("sandbox")
     .description("Manage sandbox containers (Docker-based agent isolation)")
-    .addHelpText("after", EXAMPLES.main)
+    .addHelpText(
+      "after",
+      () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.main)}\n`,
+    )
     .addHelpText(
       "after",
       () =>
@@ -101,7 +81,17 @@ export function registerSandboxCli(program: Command) {
     .description("List sandbox containers and their status")
     .option("--json", "Output result as JSON", false)
     .option("--browser", "List browser containers only", false)
-    .addHelpText("after", EXAMPLES.list)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.list)}\n\n${theme.heading(
+          "Output includes:",
+        )}\n${theme.muted("- Container name and status (running/stopped)")}\n${theme.muted(
+          "- Docker image and whether it matches current config",
+        )}\n${theme.muted("- Age (time since creation)")}\n${theme.muted(
+          "- Idle time (time since last use)",
+        )}\n${theme.muted("- Associated session/agent ID")}`,
+    )
     .action(
       createRunner((opts) =>
         sandboxListCommand(
@@ -124,7 +114,25 @@ export function registerSandboxCli(program: Command) {
     .option("--agent <id>", "Recreate containers for specific agent")
     .option("--browser", "Only recreate browser containers", false)
     .option("--force", "Skip confirmation prompt", false)
-    .addHelpText("after", EXAMPLES.recreate)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.recreate)}\n\n${theme.heading(
+          "Why use this?",
+        )}\n${theme.muted(
+          "After updating Docker images or sandbox configuration, existing containers continue running with old settings.",
+        )}\n${theme.muted(
+          "This command removes them so they'll be recreated automatically with current config when next needed.",
+        )}\n\n${theme.heading("Filter options:")}\n${theme.muted(
+          "  --all          Remove all sandbox containers",
+        )}\n${theme.muted(
+          "  --session      Remove container for specific session key",
+        )}\n${theme.muted(
+          "  --agent        Remove containers for agent (includes agent:id:* variants)",
+        )}\n\n${theme.heading("Modifiers:")}\n${theme.muted(
+          "  --browser      Only affect browser containers (not regular sandbox)",
+        )}\n${theme.muted("  --force        Skip confirmation prompt")}`,
+    )
     .action(
       createRunner((opts) =>
         sandboxRecreateCommand(
@@ -148,7 +156,10 @@ export function registerSandboxCli(program: Command) {
     .option("--session <key>", "Session key to inspect (defaults to agent main)")
     .option("--agent <id>", "Agent id to inspect (defaults to derived agent)")
     .option("--json", "Output result as JSON", false)
-    .addHelpText("after", EXAMPLES.explain)
+    .addHelpText(
+      "after",
+      () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.explain)}\n`,
+    )
     .action(
       createRunner((opts) =>
         sandboxExplainCommand(

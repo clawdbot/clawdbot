@@ -32,6 +32,7 @@ import { formatCliCommand } from "./command-format.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
+import { formatHelpExamples } from "./help-format.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -734,17 +735,15 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/upda
     .addHelpText(
       "after",
       () =>
-        `
-Examples:
-  clawdbot update status
-  clawdbot update status --json
-  clawdbot update status --timeout 10
-
-Notes:
-  - Shows current update channel (stable/beta/dev) and source
-  - Includes git tag/branch/SHA for source checkouts
-
-${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["clawdbot update status", "Show channel + version status."],
+          ["clawdbot update status --json", "JSON output."],
+          ["clawdbot update status --timeout 10", "Custom timeout."],
+        ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
+          "- Shows current update channel (stable/beta/dev) and source",
+        )}\n${theme.muted("- Includes git tag/branch/SHA for source checkouts")}\n\n${theme.muted(
+          "Docs:",
+        )} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,
     )
     .action(async (opts) => {
       try {

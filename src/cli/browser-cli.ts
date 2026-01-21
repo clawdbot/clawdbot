@@ -5,6 +5,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatHelpExamples } from "./help-format.js";
 import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.js";
 import { registerBrowserActionObserveCommands } from "./browser-cli-actions-observe.js";
 import { registerBrowserDebugCommands } from "./browser-cli-debug.js";
@@ -26,7 +27,10 @@ export function registerBrowserCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\nExamples:\n  ${[...browserCoreExamples, ...browserActionExamples].join("\n  ")}\n\n${theme.muted("Docs:")} ${formatDocsLink(
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples(
+          [...browserCoreExamples, ...browserActionExamples].map((cmd) => [cmd, ""]),
+          true,
+        )}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/browser",
           "docs.clawd.bot/cli/browser",
         )}\n`,

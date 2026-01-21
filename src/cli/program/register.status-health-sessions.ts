@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatHelpExamples } from "../help-format.js";
 import { parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
@@ -36,15 +37,18 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
       "after",
-      `
-Examples:
-  clawdbot status                   # show linked account + session store summary
-  clawdbot status --all             # full diagnosis (read-only)
-  clawdbot status --json            # machine-readable output
-  clawdbot status --usage           # show model provider usage/quota snapshots
-  clawdbot status --deep            # run channel probes (WA + Telegram + Discord + Slack + Signal)
-  clawdbot status --deep --timeout 5000 # tighten probe timeout
-  clawdbot channels status          # gateway channel runtime + probes`,
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["clawdbot status", "Show channel health + session summary."],
+          ["clawdbot status --all", "Full diagnosis (read-only)."],
+          ["clawdbot status --json", "Machine-readable output."],
+          ["clawdbot status --usage", "Show model provider usage/quota snapshots."],
+          [
+            "clawdbot status --deep",
+            "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
+          ],
+          ["clawdbot status --deep --timeout 5000", "Tighten probe timeout."],
+        ])}`,
     )
     .addHelpText(
       "after",
@@ -113,14 +117,15 @@ Examples:
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
     .addHelpText(
       "after",
-      `
-Examples:
-  clawdbot sessions                 # list all sessions
-  clawdbot sessions --active 120    # only last 2 hours
-  clawdbot sessions --json          # machine-readable output
-  clawdbot sessions --store ./tmp/sessions.json
-
-Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to see % of your model window.`,
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["clawdbot sessions", "List all sessions."],
+          ["clawdbot sessions --active 120", "Only last 2 hours."],
+          ["clawdbot sessions --json", "Machine-readable output."],
+          ["clawdbot sessions --store ./tmp/sessions.json", "Use a specific session store."],
+        ])}\n\n${theme.muted(
+          "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to see % of your model window.",
+        )}`,
     )
     .addHelpText(
       "after",

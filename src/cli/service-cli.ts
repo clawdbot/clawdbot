@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatHelpExampleGroup } from "./help-format.js";
 import { createDefaultDeps } from "./deps.js";
 import {
   runDaemonInstall,
@@ -20,12 +21,6 @@ import {
 } from "./node-cli/daemon.js";
 
 export function registerServiceCli(program: Command) {
-  const formatExample = (cmd: string, desc: string) =>
-    `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
-
-  const formatGroup = (label: string, examples: Array<[string, string]>) =>
-    `${theme.muted(label)}\n${examples.map(([cmd, desc]) => formatExample(cmd, desc)).join("\n")}`;
-
   const gatewayExamples: Array<[string, string]> = [
     ["clawdbot service gateway status", "Show gateway service status + probe."],
     [
@@ -50,10 +45,12 @@ export function registerServiceCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.heading("Examples:")}\n${formatGroup("Gateway:", gatewayExamples)}\n\n${formatGroup(
-          "Node:",
-          nodeExamples,
-        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/service", "docs.clawd.bot/cli/service")}\n`,
+        `\n${theme.heading("Examples:")}\n${formatHelpExampleGroup(
+          "Gateway:",
+          gatewayExamples,
+        )}\n\n${formatHelpExampleGroup("Node:", nodeExamples)}\n\n${theme.muted(
+          "Docs:",
+        )} ${formatDocsLink("/cli/service", "docs.clawd.bot/cli/service")}\n`,
     );
 
   const gateway = service.command("gateway").description("Manage the Gateway service");
