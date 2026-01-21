@@ -7,7 +7,7 @@ settings:
 overrides:
   '@sinclair/typebox': 0.34.47
   hono: 4.11.4
-  tar: 7.5.3
+  tar: 7.5.4
 
 patchedDependencies:
   '@mariozechner/pi-ai@0.49.2':
@@ -151,8 +151,8 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
       tar:
-        specifier: 7.5.3
-        version: 7.5.3
+        specifier: 7.5.4
+        version: 7.5.4
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -4905,10 +4905,9 @@ packages:
   tailwindcss@4.1.17:
     resolution: {integrity: sha512-j9Ee2YjuQqYT9bbRTfTZht9W/ytp5H+jJpZKiYdP/bpnXARAuELt9ofP0lPnmHjbga7SNQIxdTAXCmtKVYjN+Q==}
 
-  tar@7.5.3:
-    resolution: {integrity: sha512-ENg5JUHUm2rDD7IvKNFGzyElLXNjachNLp6RaGf4+JOgxXHkqA+gq81ZAMCUmtMtqBsoU62lcp6S27g1LCYGGQ==}
+  tar@7.5.4:
+    resolution: {integrity: sha512-AN04xbWGrSTDmVwlI4/GTlIIwMFk/XEv7uL8aa57zuvRy6s4hdBed+lVq2fAZ89XDa7Us3ANXcE3Tvqvja1kTA==}
     engines: {node: '>=18'}
-    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exhorbitant rates) by contacting i@izs.me
 
   thenify-all@1.6.0:
     resolution: {integrity: sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==}
@@ -8269,7 +8268,7 @@ snapshots:
       npmlog: 6.0.2
       rc: 1.2.8
       semver: 7.7.3
-      tar: 7.5.3
+      tar: 7.5.4
       url-join: 4.0.1
       which: 2.0.2
       yargs: 17.7.2
@@ -10511,7 +10510,7 @@ snapshots:
 
   tailwindcss@4.1.17: {}
 
-  tar@7.5.3:
+  tar@7.5.4:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0

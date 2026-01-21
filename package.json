@@ -232,7 +232,7 @@
     "overrides": {
       "@sinclair/typebox": "0.34.47",
       "hono": "4.11.4",
-      "tar": "7.5.3"
+      "tar": "7.5.4"
     },
     "patchedDependencies": {
       "@mariozechner/pi-ai@0.49.2": "patches/@mariozechner__pi-ai@0.49.2.patch"
