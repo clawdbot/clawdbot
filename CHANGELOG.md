@@ -6,6 +6,11 @@ Docs: https://docs.clawd.bot
 
 ### Highlights
 - Nostr: add the Nostr channel plugin with profile management + onboarding defaults. (#1323) https://docs.clawd.bot/channels/nostr
+- Gateway: add the OpenResponses-compatible `/v1/responses` endpoint. (#1229) https://docs.clawd.bot/gateway/openresponses-http-api
+- Matrix: migrate to matrix-bot-sdk with E2EE support. (#1298) https://docs.clawd.bot/channels/matrix
+- TUI: session picker shows derived titles, fuzzy search, relative times, and last message preview. (#1271) https://docs.clawd.bot/tui
+- Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.clawd.bot/web/control-ui
+- Memory: add native Gemini embeddings provider for memory search. (#1151) https://docs.clawd.bot/concepts/memory
 
 ### Changes
 - Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.clawd.bot/web/control-ui
