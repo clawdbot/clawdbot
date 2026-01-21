@@ -1,5 +1,5 @@
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
-  return (input: RequestInfo | URL, init?: RequestInit) => {
+  const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
     const signal = init?.signal;
     if (!signal) return fetchImpl(input, init);
     if (typeof AbortSignal !== "undefined" && signal instanceof AbortSignal) {
@@ -25,5 +25,6 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
       });
     }
     return response;
-  };
+  }) as typeof fetch;
+  return Object.assign(wrapped, fetchImpl);
 }

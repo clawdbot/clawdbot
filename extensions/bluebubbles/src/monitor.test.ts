@@ -1860,6 +1860,12 @@ describe("BlueBubbles webhook monitor", () => {
     it("returns short ID unchanged when numeric but not in cache", () => {
       expect(resolveBlueBubblesMessageId("999")).toBe("999");
     });
+
+    it("throws when numeric short ID is missing and requireKnownShortId is set", () => {
+      expect(() =>
+        resolveBlueBubblesMessageId("999", { requireKnownShortId: true }),
+      ).toThrow(/short message id/i);
+    });
   });
 
   describe("fromMe messages", () => {

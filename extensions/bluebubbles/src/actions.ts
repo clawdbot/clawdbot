@@ -143,7 +143,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         );
       }
       // Resolve short ID (e.g., "1", "2") to full UUID
-      const messageId = resolveBlueBubblesMessageId(rawMessageId);
+      const messageId = resolveBlueBubblesMessageId(rawMessageId, { requireKnownShortId: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await resolveChatGuid();
 
@@ -183,7 +183,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         );
       }
       // Resolve short ID (e.g., "1", "2") to full UUID
-      const messageId = resolveBlueBubblesMessageId(rawMessageId);
+      const messageId = resolveBlueBubblesMessageId(rawMessageId, { requireKnownShortId: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
 
@@ -206,7 +206,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         );
       }
       // Resolve short ID (e.g., "1", "2") to full UUID
-      const messageId = resolveBlueBubblesMessageId(rawMessageId);
+      const messageId = resolveBlueBubblesMessageId(rawMessageId, { requireKnownShortId: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
       await unsendBlueBubblesMessage(messageId, {
@@ -233,7 +233,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         );
       }
       // Resolve short ID (e.g., "1", "2") to full UUID
-      const messageId = resolveBlueBubblesMessageId(rawMessageId);
+      const messageId = resolveBlueBubblesMessageId(rawMessageId, { requireKnownShortId: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
       const result = await sendMessageBlueBubbles(to, text, {
