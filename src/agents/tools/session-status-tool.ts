@@ -36,6 +36,7 @@ import {
   DEFAULT_AGENT_ID,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -240,6 +241,7 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown sessionKey: ${requestedKeyRaw}`);
       }
 
+      const configured = resolveDefaultModelForAgent({ cfg, agentId });
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
       if (typeof modelRaw === "string") {
@@ -249,33 +251,33 @@ export function createSessionStatusTool(opts?: {
           sessionEntry: resolved.entry,
           agentId,
         });
-        const nextEntry: SessionEntry = {
-          ...resolved.entry,
-          updatedAt: Date.now(),
-        };
-        if (selection.kind === "reset" || selection.isDefault) {
-          delete nextEntry.providerOverride;
-          delete nextEntry.modelOverride;
-          delete nextEntry.authProfileOverride;
-          delete nextEntry.authProfileOverrideSource;
-          delete nextEntry.authProfileOverrideCompactionCount;
-        } else {
-          nextEntry.providerOverride = selection.provider;
-          nextEntry.modelOverride = selection.model;
-          delete nextEntry.authProfileOverride;
-          delete nextEntry.authProfileOverrideSource;
-          delete nextEntry.authProfileOverrideCompactionCount;
-        }
-        store[resolved.key] = nextEntry;
-        await updateSessionStore(storePath, (nextStore) => {
-          nextStore[resolved.key] = nextEntry;
+        const nextEntry: SessionEntry = { ...resolved.entry };
+        const applied = applyModelOverrideToSessionEntry({
+          entry: nextEntry,
+          selection:
+            selection.kind === "reset"
+              ? {
+                  provider: configured.provider,
+                  model: configured.model,
+                  isDefault: true,
+                }
+              : {
+                  provider: selection.provider,
+                  model: selection.model,
+                  isDefault: selection.isDefault,
+                },
         });
-        resolved.entry = nextEntry;
-        changedModel = true;
+        if (applied.updated) {
+          store[resolved.key] = nextEntry;
+          await updateSessionStore(storePath, (nextStore) => {
+            nextStore[resolved.key] = nextEntry;
+          });
+          resolved.entry = nextEntry;
+          changedModel = true;
+        }
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const configured = resolveDefaultModelForAgent({ cfg, agentId });
       const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;

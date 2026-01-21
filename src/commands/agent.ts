@@ -50,6 +50,8 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
@@ -283,13 +285,16 @@ export async function agentCommand(
           allowedModelKeys.size > 0 &&
           !allowedModelKeys.has(key)
         ) {
-          delete entry.providerOverride;
-          delete entry.modelOverride;
-          entry.updatedAt = Date.now();
-          sessionStore[sessionKey] = entry;
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = entry;
+          const { updated } = applyModelOverrideToSessionEntry({
+            entry,
+            selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
           });
+          if (updated) {
+            sessionStore[sessionKey] = entry;
+            await updateSessionStore(storePath, (store) => {
+              store[sessionKey] = entry;
+            });
+          }
         }
       }
     }
@@ -315,14 +320,12 @@ export async function agentCommand(
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
         if (!profile || profile.provider !== provider) {
-          delete entry.authProfileOverride;
-          delete entry.authProfileOverrideSource;
-          delete entry.authProfileOverrideCompactionCount;
-          entry.updatedAt = Date.now();
           if (sessionStore && sessionKey) {
-            sessionStore[sessionKey] = entry;
-            await updateSessionStore(storePath, (store) => {
-              store[sessionKey] = entry;
+            await clearSessionAuthProfileOverride({
+              sessionEntry: entry,
+              sessionStore,
+              sessionKey,
+              storePath,
             });
           }
         }

@@ -92,13 +92,16 @@ const makeConfig = (): ClawdbotConfig =>
     },
   }) satisfies ClawdbotConfig;
 
-const writeAuthStore = async (agentDir: string) => {
+const writeAuthStore = async (agentDir: string, opts?: { includeAnthropic?: boolean }) => {
   const authPath = path.join(agentDir, "auth-profiles.json");
   const payload = {
     version: 1,
     profiles: {
       "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
       "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
+      ...(opts?.includeAnthropic
+        ? { "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-anth" } }
+        : {}),
     },
     usageStats: {
       "openai:p1": { lastUsed: 1 },
@@ -201,6 +204,45 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
       ) as { usageStats?: Record<string, { lastUsed?: number }> };
       expect(stored.usageStats?.["openai:p2"]?.lastUsed).toBe(2);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores user-locked profile when provider mismatches", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
+    try {
+      await writeAuthStore(agentDir, { includeAnthropic: true });
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:mismatch",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "anthropic:default",
+        authProfileIdSource: "user",
+        timeoutMs: 5_000,
+        runId: "run:mismatch",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });

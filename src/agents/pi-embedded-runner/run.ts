@@ -23,6 +23,7 @@ import {
   resolveAuthProfileOrder,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
+import { normalizeProviderId } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import {
   classifyFailoverReason,
@@ -116,8 +117,16 @@ export async function runEmbeddedPiAgent(
 
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const preferredProfileId = params.authProfileId?.trim();
-      const lockedProfileId =
-        params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      if (lockedProfileId) {
+        const lockedProfile = authStore.profiles[lockedProfileId];
+        if (
+          !lockedProfile ||
+          normalizeProviderId(lockedProfile.provider) !== normalizeProviderId(provider)
+        ) {
+          lockedProfileId = undefined;
+        }
+      }
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
         store: authStore,

@@ -5,16 +5,11 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
-import {
-  ensureAuthProfileStore,
-  isProfileInCooldown,
-  resolveAuthProfileOrder,
-} from "../../agents/auth-profiles.js";
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
-  saveSessionStore,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -107,92 +102,6 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
 };
-
-async function resolveSessionAuthProfileOverride(params: {
-  cfg: ClawdbotConfig;
-  provider: string;
-  agentDir: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  isNewSession: boolean;
-}): Promise<string | undefined> {
-  const {
-    cfg,
-    provider,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    isNewSession,
-  } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey) return sessionEntry?.authProfileOverride;
-
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const order = resolveAuthProfileOrder({ cfg, store, provider });
-  if (order.length === 0) return sessionEntry.authProfileOverride;
-
-  const pickFirstAvailable = () =>
-    order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
-  const pickNextAvailable = (current: string) => {
-    const startIndex = order.indexOf(current);
-    if (startIndex < 0) return pickFirstAvailable();
-    for (let offset = 1; offset <= order.length; offset += 1) {
-      const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) return candidate;
-    }
-    return order[startIndex] ?? order[0];
-  };
-
-  const compactionCount = sessionEntry.compactionCount ?? 0;
-  const storedCompaction =
-    typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? sessionEntry.authProfileOverrideCompactionCount
-      : compactionCount;
-
-  let current = sessionEntry.authProfileOverride?.trim();
-  if (current && !order.includes(current)) current = undefined;
-
-  const source =
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? "auto"
-      : current
-        ? "user"
-        : undefined);
-  if (source === "user" && current && !isNewSession) {
-    return current;
-  }
-
-  let next = current;
-  if (isNewSession) {
-    next = current ? pickNextAvailable(current) : pickFirstAvailable();
-  } else if (current && compactionCount > storedCompaction) {
-    next = pickNextAvailable(current);
-  } else if (!current || isProfileInCooldown(store, current)) {
-    next = pickFirstAvailable();
-  }
-
-  if (!next) return current;
-  const shouldPersist =
-    next !== sessionEntry.authProfileOverride ||
-    sessionEntry.authProfileOverrideSource !== "auto" ||
-    sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
-  if (shouldPersist) {
-    sessionEntry.authProfileOverride = next;
-    sessionEntry.authProfileOverrideSource = "auto";
-    sessionEntry.authProfileOverrideCompactionCount = compactionCount;
-    sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = sessionEntry;
-    if (storePath) {
-      await saveSessionStore(storePath, sessionStore);
-    }
-  }
-
-  return next;
-}
 
 export async function runPreparedReply(
   params: RunPreparedReplyParams,

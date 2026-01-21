@@ -19,6 +19,7 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -220,18 +221,23 @@ export async function applySessionsPatchToStore(params: {
 
   if ("model" in patch) {
     const raw = patch.model;
+    const resolvedDefault = resolveConfiguredModelRef({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
     if (raw === null) {
-      delete next.providerOverride;
-      delete next.modelOverride;
+      applyModelOverrideToSessionEntry({
+        entry: next,
+        selection: {
+          provider: resolvedDefault.provider,
+          model: resolvedDefault.model,
+          isDefault: true,
+        },
+      });
     } else if (raw !== undefined) {
       const trimmed = String(raw).trim();
       if (!trimmed) return invalid("invalid model: empty");
-
-      const resolvedDefault = resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
@@ -249,16 +255,17 @@ export async function applySessionsPatchToStore(params: {
       if ("error" in resolved) {
         return invalid(resolved.error);
       }
-      if (
+      const isDefault =
         resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model
-      ) {
-        delete next.providerOverride;
-        delete next.modelOverride;
-      } else {
-        next.providerOverride = resolved.ref.provider;
-        next.modelOverride = resolved.ref.model;
-      }
+        resolved.ref.model === resolvedDefault.model;
+      applyModelOverrideToSessionEntry({
+        entry: next,
+        selection: {
+          provider: resolved.ref.provider,
+          model: resolved.ref.model,
+          isDefault,
+        },
+      });
     }
   }
 

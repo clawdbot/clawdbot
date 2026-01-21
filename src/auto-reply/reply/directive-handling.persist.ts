@@ -16,6 +16,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { formatElevatedEvent, formatReasoningEvent } from "./directive-handling.shared.js";
@@ -164,22 +165,15 @@ export async function persistInlineDirectives(params: {
           }
           const isDefault =
             resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
-          if (isDefault) {
-            delete sessionEntry.providerOverride;
-            delete sessionEntry.modelOverride;
-          } else {
-            sessionEntry.providerOverride = resolved.ref.provider;
-            sessionEntry.modelOverride = resolved.ref.model;
-          }
-          if (profileOverride) {
-            sessionEntry.authProfileOverride = profileOverride;
-            sessionEntry.authProfileOverrideSource = "user";
-            delete sessionEntry.authProfileOverrideCompactionCount;
-          } else if (directives.hasModelDirective) {
-            delete sessionEntry.authProfileOverride;
-            delete sessionEntry.authProfileOverrideSource;
-            delete sessionEntry.authProfileOverrideCompactionCount;
-          }
+          const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+            entry: sessionEntry,
+            selection: {
+              provider: resolved.ref.provider,
+              model: resolved.ref.model,
+              isDefault,
+            },
+            profileOverride,
+          });
           provider = resolved.ref.provider;
           model = resolved.ref.model;
           const nextLabel = `${provider}/${model}`;
@@ -189,7 +183,7 @@ export async function persistInlineDirectives(params: {
               contextKey: `model:${nextLabel}`,
             });
           }
-          updated = true;
+          updated = updated || modelUpdated;
         }
       }
     }

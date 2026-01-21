@@ -11,6 +11,8 @@ import {
 } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -184,16 +186,19 @@ export async function createModelSelectionState(params: {
     if (overrideModel) {
       const key = modelKey(overrideProvider, overrideModel);
       if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
-        delete sessionEntry.providerOverride;
-        delete sessionEntry.modelOverride;
-        sessionEntry.updatedAt = Date.now();
-        sessionStore[sessionKey] = sessionEntry;
-        if (storePath) {
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = sessionEntry;
-          });
+        const { updated } = applyModelOverrideToSessionEntry({
+          entry: sessionEntry,
+          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        });
+        if (updated) {
+          sessionStore[sessionKey] = sessionEntry;
+          if (storePath) {
+            await updateSessionStore(storePath, (store) => {
+              store[sessionKey] = sessionEntry;
+            });
+          }
         }
-        resetModelOverride = true;
+        resetModelOverride = updated;
       }
     }
   }
@@ -215,17 +220,14 @@ export async function createModelSelectionState(params: {
       allowKeychainPrompt: false,
     });
     const profile = store.profiles[sessionEntry.authProfileOverride];
-    if (!profile || profile.provider !== provider) {
-      delete sessionEntry.authProfileOverride;
-      delete sessionEntry.authProfileOverrideSource;
-      delete sessionEntry.authProfileOverrideCompactionCount;
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
-      }
+    const providerKey = normalizeProviderId(provider);
+    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
+      await clearSessionAuthProfileOverride({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
     }
   }
 

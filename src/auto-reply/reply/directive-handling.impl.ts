@@ -10,6 +10,7 @@ import { type SessionEntry, updateSessionStore } from "../../config/sessions.js"
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -340,22 +341,11 @@ export async function handleDirectiveOnly(params: {
       }
     }
     if (modelSelection) {
-      if (modelSelection.isDefault) {
-        delete sessionEntry.providerOverride;
-        delete sessionEntry.modelOverride;
-      } else {
-        sessionEntry.providerOverride = modelSelection.provider;
-        sessionEntry.modelOverride = modelSelection.model;
-      }
-      if (profileOverride) {
-        sessionEntry.authProfileOverride = profileOverride;
-        sessionEntry.authProfileOverrideSource = "user";
-        delete sessionEntry.authProfileOverrideCompactionCount;
-      } else if (directives.hasModelDirective) {
-        delete sessionEntry.authProfileOverride;
-        delete sessionEntry.authProfileOverrideSource;
-        delete sessionEntry.authProfileOverrideCompactionCount;
-      }
+      applyModelOverrideToSessionEntry({
+        entry: sessionEntry,
+        selection: modelSelection,
+        profileOverride,
+      });
     }
     if (directives.hasQueueDirective && directives.queueReset) {
       delete sessionEntry.queueMode;

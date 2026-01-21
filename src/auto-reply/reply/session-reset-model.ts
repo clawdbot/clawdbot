@@ -12,6 +12,7 @@ import { updateSessionStore } from "../../config/sessions.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
 import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
@@ -62,25 +63,11 @@ function applySelectionToSession(params: {
 }) {
   const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) return;
-  let updated = false;
-  if (selection.isDefault) {
-    if (sessionEntry.providerOverride || sessionEntry.modelOverride) {
-      delete sessionEntry.providerOverride;
-      delete sessionEntry.modelOverride;
-      updated = true;
-    }
-  } else {
-    if (sessionEntry.providerOverride !== selection.provider) {
-      sessionEntry.providerOverride = selection.provider;
-      updated = true;
-    }
-    if (sessionEntry.modelOverride !== selection.model) {
-      sessionEntry.modelOverride = selection.model;
-      updated = true;
-    }
-  }
+  const { updated } = applyModelOverrideToSessionEntry({
+    entry: sessionEntry,
+    selection,
+  });
   if (!updated) return;
-  sessionEntry.updatedAt = Date.now();
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
     updateSessionStore(storePath, (store) => {

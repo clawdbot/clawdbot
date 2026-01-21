@@ -57,4 +57,32 @@ describe("gateway sessions patch", () => {
     if (res.ok) return;
     expect(res.error.message).toContain("invalid elevatedLevel");
   });
+
+  test("clears auth overrides when model patch changes", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-5",
+        authProfileOverride: "anthropic:default",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 3,
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as ClawdbotConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { model: "openai/gpt-5.2" },
+      loadGatewayModelCatalog: async () => [{ provider: "openai", id: "gpt-5.2" }],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.entry.providerOverride).toBe("openai");
+    expect(res.entry.modelOverride).toBe("gpt-5.2");
+    expect(res.entry.authProfileOverride).toBeUndefined();
+    expect(res.entry.authProfileOverrideSource).toBeUndefined();
+    expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
 });
