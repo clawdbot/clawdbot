@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
+import type { GatewayLockHandle } from "../infra/gateway-lock.js";
 
 declare const __CLAWDBOT_VERSION__: string;
 
@@ -58,7 +59,7 @@ async function main() {
     import("../infra/restart.js"),
     import("../runtime.js"),
     import("../logging.js"),
-  ]);
+  ] as const);
 
   enableConsoleCapture();
   setConsoleTimestampPrefix(true);
@@ -105,7 +106,7 @@ async function main() {
   if (token) process.env.CLAWDBOT_GATEWAY_TOKEN = token;
 
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>> | null = null;
+  let lock: GatewayLockHandle | null = null;
   let shuttingDown = false;
   let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
   let restartResolver: (() => void) | null = null;
@@ -203,7 +204,7 @@ async function main() {
       });
     }
   } finally {
-    await lock?.release();
+    await (lock as GatewayLockHandle | null)?.release();
     cleanupSignals();
   }
 }
