@@ -10,7 +10,7 @@ surface anything that needs attention without spamming you.
 
 ## Quick start (beginner)
 
-1. Leave heartbeats enabled (default is `30m`) or set your own cadence.
+1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
 2. Create a tiny `HEARTBEAT.md` checklist in the agent workspace (optional but recommended).
 3. Decide where heartbeat messages should go (`target: "last"` is the default).
 4. Optional: enable heartbeat reasoning delivery for transparency.
@@ -33,7 +33,7 @@ Example config:
 
 ## Defaults
 
-- Interval: `30m` (set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable).
+- Interval: `30m` (or `1h` when Anthropic OAuth/setup-token is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system

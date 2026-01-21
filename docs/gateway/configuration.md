@@ -1600,7 +1600,7 @@ Notes / current limitations:
 - After a prune, the TTL window resets so subsequent requests keep cache until `ttl` expires again.
 - For best results, match `contextPruning.ttl` to the model `cacheControlTtl` you set in `agents.defaults.models.*.params`.
 
-Default (off):
+Default (off, unless Anthropic auth profiles are detected):
 ```json5
 {
   agents: { defaults: { contextPruning: { mode: "off" } } }

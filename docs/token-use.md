@@ -65,6 +65,41 @@ These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
 `cacheWrite`. If pricing is missing, Clawdbot shows tokens only. OAuth tokens
 never show dollar cost.
 
+## Cache TTL and pruning impact
+
+Provider prompt caching only applies within the cache TTL window. Clawdbot can
+optionally run **cache-ttl pruning**: it prunes the session once the cache TTL
+has expired, then resets the cache window so subsequent requests can re-use the
+freshly cached context instead of re-caching the full history. This keeps cache
+write costs lower when a session goes idle past the TTL.
+
+Configure it in [Gateway configuration](/gateway/configuration) and see the
+behavior details in [Session pruning](/concepts/session-pruning).
+
+Heartbeat can keep the cache **warm** across idle gaps. If your model cache TTL
+is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can avoid
+re-caching the full prompt, reducing cache write costs.
+
+For Anthropic API pricing, cache reads are significantly cheaper than input
+tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
+prompt caching pricing for the latest rates and TTL multipliers:
+https://docs.anthropic.com/docs/build-with-claude/prompt-caching
+
+### Example: keep 1h cache warm with heartbeat
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "anthropic/claude-opus-4-5"
+    models:
+      "anthropic/claude-opus-4-5":
+        params:
+          cacheControlTtl: "1h"
+    heartbeat:
+      every: "55m"
+```
+
 ## Tips for reducing token pressure
 
 - Use `/compact` to summarize long sessions.
