@@ -201,7 +201,7 @@ const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) 
       }
       return null;
     })
-    .filter(Boolean);
+    .filter((part): part is string => part != null);
   if (parts.length === 0) return null;
   if (parts.every((part) => part.endsWith(" none"))) return null;
   return `📎 Media: ${parts.join(" · ")}`;
