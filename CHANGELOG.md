@@ -18,6 +18,8 @@ Docs: https://docs.clawd.bot
 - Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) — thanks @steipete.
 - Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) — thanks @suminhthanh.
 - Security: warn when <=300B models run without sandboxing and with web tools enabled.
+- Skills: add download installs with OS-filtered install options; add local sherpa-onnx-tts skill.
+- Docs: clarify WhatsApp voice notes and Windows WSL portproxy LAN access notes.
 ### Fixes
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
 - Agents: preserve subagent announce thread/topic routing + queued replies across channels. (#1241) — thanks @gnarco.
