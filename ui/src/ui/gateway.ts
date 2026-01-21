@@ -126,15 +126,29 @@ export class GatewayBrowserClient {
       window.clearTimeout(this.connectTimer);
       this.connectTimer = null;
     }
-    const deviceIdentity = await loadOrCreateDeviceIdentity();
+
+    // crypto.subtle is only available in secure contexts (HTTPS, localhost).
+    // When accessing the dashboard over plain HTTP (e.g., via Tailscale IP),
+    // we skip device identity and fall back to token-only auth.
+    const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
+
     const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
-    const storedToken = loadDeviceAuthToken({
-      deviceId: deviceIdentity.deviceId,
-      role,
-    })?.token;
-    const authToken = storedToken ?? this.opts.token;
-    const canFallbackToShared = Boolean(storedToken && this.opts.token);
+
+    let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
+    let canFallbackToShared = false;
+    let authToken = this.opts.token;
+
+    if (isSecureContext) {
+      deviceIdentity = await loadOrCreateDeviceIdentity();
+      const storedToken = loadDeviceAuthToken({
+        deviceId: deviceIdentity.deviceId,
+        role,
+      })?.token;
+      authToken = storedToken ?? this.opts.token;
+      canFallbackToShared = Boolean(storedToken && this.opts.token);
+    }
+
     const auth =
       authToken || this.opts.password
         ? {
@@ -142,19 +156,38 @@ export class GatewayBrowserClient {
             password: this.opts.password,
           }
         : undefined;
-    const signedAtMs = Date.now();
-    const nonce = this.connectNonce ?? undefined;
-    const payload = buildDeviceAuthPayload({
-      deviceId: deviceIdentity.deviceId,
-      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
-      role,
-      scopes,
-      signedAtMs,
-      token: authToken ?? null,
-      nonce,
-    });
-    const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+
+    let device: {
+      id: string;
+      publicKey: string;
+      signature: string;
+      signedAt: number;
+      nonce: string | undefined;
+    } | undefined;
+
+    if (isSecureContext && deviceIdentity) {
+      const signedAtMs = Date.now();
+      const nonce = this.connectNonce ?? undefined;
+      const payload = buildDeviceAuthPayload({
+        deviceId: deviceIdentity.deviceId,
+        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+        role,
+        scopes,
+        signedAtMs,
+        token: authToken ?? null,
+        nonce,
+      });
+      const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+      device = {
+        id: deviceIdentity.deviceId,
+        publicKey: deviceIdentity.publicKey,
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+    }
+
     const params = {
       minProtocol: 3,
       maxProtocol: 3,
@@ -167,13 +200,7 @@ export class GatewayBrowserClient {
       },
       role,
       scopes,
-      device: {
-        id: deviceIdentity.deviceId,
-        publicKey: deviceIdentity.publicKey,
-        signature,
-        signedAt: signedAtMs,
-        nonce,
-      },
+      device,
       caps: [],
       auth,
       userAgent: navigator.userAgent,
@@ -182,7 +209,7 @@ export class GatewayBrowserClient {
 
     void this.request<GatewayHelloOk>("connect", params)
       .then((hello) => {
-        if (hello?.auth?.deviceToken) {
+        if (hello?.auth?.deviceToken && deviceIdentity) {
           storeDeviceAuthToken({
             deviceId: deviceIdentity.deviceId,
             role: hello.auth.role ?? role,
@@ -194,7 +221,7 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch(() => {
-        if (canFallbackToShared) {
+        if (canFallbackToShared && deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
