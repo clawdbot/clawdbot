@@ -3022,6 +3022,9 @@ Template placeholders are expanded in `tools.media.*.models[].args` and `tools.m
 | `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per channel) |
 | `{{To}}` | Destination identifier |
 | `{{MessageSid}}` | Channel message id (when available) |
+| `{{MessageSidFull}}` | Provider-specific full message id when `MessageSid` is shortened |
+| `{{ReplyToId}}` | Reply-to message id (when available) |
+| `{{ReplyToIdFull}}` | Provider-specific full reply-to id when `ReplyToId` is shortened |
 | `{{SessionId}}` | Current session UUID |
 | `{{IsNewSession}}` | `"true"` when a new session was created |
 | `{{MediaUrl}}` | Inbound media pseudo-URL (if present) |

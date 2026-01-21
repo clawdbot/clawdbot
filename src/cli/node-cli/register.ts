@@ -6,7 +6,6 @@ import { runNodeHost } from "../../node-host/runner.js";
 import {
   runNodeDaemonInstall,
   runNodeDaemonRestart,
-  runNodeDaemonStart,
   runNodeDaemonStatus,
   runNodeDaemonStop,
   runNodeDaemonUninstall,

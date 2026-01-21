@@ -137,7 +137,7 @@ export async function sendBlueBubblesMedia(params: {
 
   // Resolve short ID (e.g., "5") to full UUID
   const replyToMessageGuid = replyToId?.trim()
-    ? resolveBlueBubblesMessageId(replyToId.trim())
+    ? resolveBlueBubblesMessageId(replyToId.trim(), { requireKnownShortId: true })
     : undefined;
 
   const attachmentResult = await sendBlueBubblesAttachment({

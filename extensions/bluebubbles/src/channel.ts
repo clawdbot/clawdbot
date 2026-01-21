@@ -240,7 +240,9 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
       // Resolve short ID (e.g., "5") to full UUID
-      const replyToMessageGuid = rawReplyToId ? resolveBlueBubblesMessageId(rawReplyToId) : "";
+      const replyToMessageGuid = rawReplyToId
+        ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
+        : "";
       const result = await sendMessageBlueBubbles(to, text, {
         cfg: cfg as ClawdbotConfig,
         accountId: accountId ?? undefined,

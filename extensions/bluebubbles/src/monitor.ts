@@ -119,7 +119,10 @@ function rememberBlueBubblesReplyCache(
  * Resolves a short message ID (e.g., "1", "2") to a full BlueBubbles UUID.
  * Returns the input unchanged if it's already a UUID or not found in the mapping.
  */
-export function resolveBlueBubblesMessageId(shortOrUuid: string): string {
+export function resolveBlueBubblesMessageId(
+  shortOrUuid: string,
+  opts?: { requireKnownShortId?: boolean },
+): string {
   const trimmed = shortOrUuid.trim();
   if (!trimmed) return trimmed;
 
@@ -127,6 +130,11 @@ export function resolveBlueBubblesMessageId(shortOrUuid: string): string {
   if (/^\d+$/.test(trimmed)) {
     const uuid = blueBubblesShortIdToUuid.get(trimmed);
     if (uuid) return uuid;
+    if (opts?.requireKnownShortId) {
+      throw new Error(
+        `BlueBubbles short message id "${trimmed}" is no longer available. Use MessageSidFull.`,
+      );
+    }
   }
 
   // Return as-is (either already a UUID or not found)
@@ -1646,7 +1654,7 @@ async function processMessage(
           const rawReplyToId = typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
           // Resolve short ID (e.g., "5") to full UUID
           const replyToMessageGuid = rawReplyToId
-            ? resolveBlueBubblesMessageId(rawReplyToId)
+            ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
             : "";
           const mediaList = payload.mediaUrls?.length
             ? payload.mediaUrls
