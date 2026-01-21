@@ -3,20 +3,19 @@ import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export function sanitizeToolCallId(id: string): string {
-  if (!id || typeof id !== "string") return "default_tool_id";
+  if (!id || typeof id !== "string") return "defaulttoolid";
 
-  const cloudCodeAssistPatternReplacement = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const trimmedInvalidStartChars = cloudCodeAssistPatternReplacement.replace(
-    /^[^a-zA-Z0-9_-]+/,
-    "",
-  );
+  // Some providers (e.g. Mistral via OpenRouter) require strictly alphanumeric tool call IDs.
+  // Strip all non-alphanumeric characters to ensure maximum compatibility.
+  const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
 
-  return trimmedInvalidStartChars.length > 0 ? trimmedInvalidStartChars : "sanitized_tool_id";
+  return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
 export function isValidCloudCodeAssistToolId(id: string): boolean {
   if (!id || typeof id !== "string") return false;
-  return /^[a-zA-Z0-9_-]+$/.test(id);
+  // Strictly alphanumeric for maximum provider compatibility (e.g. Mistral via OpenRouter).
+  return /^[a-zA-Z0-9]+$/.test(id);
 }
 
 function shortHash(text: string): string {
@@ -29,19 +28,20 @@ function makeUniqueToolId(params: { id: string; used: Set<string> }): string {
   const base = sanitizeToolCallId(params.id).slice(0, MAX_LEN);
   if (!params.used.has(base)) return base;
 
+  // Use alphanumeric-only suffixes to maintain strict compatibility.
   const hash = shortHash(params.id);
-  const maxBaseLen = MAX_LEN - 1 - hash.length;
+  const maxBaseLen = MAX_LEN - hash.length;
   const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
-  const candidate = `${clippedBase}_${hash}`;
+  const candidate = `${clippedBase}${hash}`;
   if (!params.used.has(candidate)) return candidate;
 
   for (let i = 2; i < 1000; i += 1) {
-    const suffix = `_${i}`;
+    const suffix = `x${i}`;
     const next = `${candidate.slice(0, MAX_LEN - suffix.length)}${suffix}`;
     if (!params.used.has(next)) return next;
   }
 
-  const ts = `_${Date.now()}`;
+  const ts = `t${Date.now()}`;
   return `${candidate.slice(0, MAX_LEN - ts.length)}${ts}`;
 }
 
@@ -101,9 +101,10 @@ function rewriteToolResultIds(params: {
 }
 
 export function sanitizeToolCallIdsForCloudCodeAssist(messages: AgentMessage[]): AgentMessage[] {
-  // Cloud Code Assist requires tool IDs matching ^[a-zA-Z0-9_-]+$.
-  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `a_b`).
-  // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
+  // Some providers (e.g. Mistral via OpenRouter) require strictly alphanumeric tool IDs.
+  // Use ^[a-zA-Z0-9]+$ pattern for maximum compatibility across all providers.
+  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`).
+  // Fix by applying a stable, transcript-wide mapping and de-duping via hash suffix.
   const map = new Map<string, string>();
   const used = new Set<string>();
 

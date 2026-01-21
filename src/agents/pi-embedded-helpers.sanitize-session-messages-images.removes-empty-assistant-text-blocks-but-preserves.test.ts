@@ -30,7 +30,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(content).toHaveLength(1);
     expect((content as Array<{ type?: string }>)[0]?.type).toBe("toolCall");
   });
-  it("sanitizes tool ids for assistant blocks and tool results when enabled", async () => {
+  it("sanitizes tool ids for assistant blocks and tool results when enabled (alphanumeric only)", async () => {
     const input = [
       {
         role: "assistant",
@@ -55,12 +55,13 @@ describe("sanitizeSessionMessagesImages", () => {
       sanitizeToolCallIds: true,
     });
 
+    // Sanitization strips all non-alphanumeric characters for Mistral/OpenRouter compatibility
     const assistant = out[0] as { content?: Array<{ id?: string }> };
-    expect(assistant.content?.[0]?.id).toBe("call_abc_item_123");
-    expect(assistant.content?.[1]?.id).toBe("call_abc_item_456");
+    expect(assistant.content?.[0]?.id).toBe("callabcitem123");
+    expect(assistant.content?.[1]?.id).toBe("callabcitem456");
 
     const toolResult = out[1] as { toolUseId?: string };
-    expect(toolResult.toolUseId).toBe("call_abc_item_123");
+    expect(toolResult.toolUseId).toBe("callabcitem123");
   });
   it("filters whitespace-only assistant text blocks", async () => {
     const input = [

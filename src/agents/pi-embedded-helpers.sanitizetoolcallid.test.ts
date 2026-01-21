@@ -10,13 +10,15 @@ const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstr
   ...overrides,
 });
 describe("sanitizeToolCallId", () => {
-  it("keeps valid tool call IDs", () => {
-    expect(sanitizeToolCallId("call_abc-123")).toBe("call_abc-123");
+  it("keeps valid alphanumeric tool call IDs", () => {
+    expect(sanitizeToolCallId("callabc123")).toBe("callabc123");
   });
-  it("replaces invalid characters with underscores", () => {
-    expect(sanitizeToolCallId("call_abc|item:456")).toBe("call_abc_item_456");
+  it("strips non-alphanumeric characters (Mistral/OpenRouter compatibility)", () => {
+    expect(sanitizeToolCallId("call_abc-123")).toBe("callabc123");
+    expect(sanitizeToolCallId("call_abc|item:456")).toBe("callabcitem456");
+    expect(sanitizeToolCallId("whatsapp_login_1768799841527_1")).toBe("whatsapplogin17687998415271");
   });
   it("returns default for empty IDs", () => {
-    expect(sanitizeToolCallId("")).toBe("default_tool_id");
+    expect(sanitizeToolCallId("")).toBe("defaulttoolid");
   });
 });

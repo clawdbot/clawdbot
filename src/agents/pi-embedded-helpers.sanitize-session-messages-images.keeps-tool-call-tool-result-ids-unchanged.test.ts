@@ -50,7 +50,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(toolResult.role).toBe("toolResult");
     expect(toolResult.toolCallId).toBe("call_123|fc_456");
   });
-  it("sanitizes tool call + tool result IDs when enabled", async () => {
+  it("sanitizes tool call + tool result IDs when enabled (alphanumeric only)", async () => {
     const input = [
       {
         role: "assistant",
@@ -82,14 +82,15 @@ describe("sanitizeSessionMessagesImages", () => {
     const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
       (b) => b.type === "toolCall",
     );
-    expect(toolCall?.id).toBe("call_123_fc_456");
+    // Sanitization strips all non-alphanumeric characters for Mistral/OpenRouter compatibility
+    expect(toolCall?.id).toBe("call123fc456");
 
     const toolResult = out[1] as unknown as {
       role?: string;
       toolCallId?: string;
     };
     expect(toolResult.role).toBe("toolResult");
-    expect(toolResult.toolCallId).toBe("call_123_fc_456");
+    expect(toolResult.toolCallId).toBe("call123fc456");
   });
   it("drops assistant blocks after a tool call when enforceToolCallLast is enabled", async () => {
     const input = [

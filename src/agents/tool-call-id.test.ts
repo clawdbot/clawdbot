@@ -7,15 +7,15 @@ import {
 } from "./tool-call-id.js";
 
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
-  it("is a no-op for already-valid non-colliding IDs", () => {
+  it("is a no-op for already-valid non-colliding alphanumeric IDs", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
       },
       {
         role: "toolResult",
-        toolCallId: "call_1",
+        toolCallId: "call1",
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
       },
@@ -23,6 +23,35 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     const out = sanitizeToolCallIdsForCloudCodeAssist(input);
     expect(out).toBe(input);
+  });
+
+  it("strips underscores from tool call IDs (Mistral/OpenRouter compatibility)", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "whatsapp_login_1768799841527_1", name: "login", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "whatsapp_login_1768799841527_1",
+        toolName: "login",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolCallIdsForCloudCodeAssist(input);
+    expect(out).not.toBe(input);
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = assistant.content?.[0] as { id?: string };
+    // ID should be alphanumeric only, no underscores
+    expect(toolCall.id).toBe("whatsapplogin17687998415271");
+    expect(isValidCloudCodeAssistToolId(toolCall.id as string)).toBe(true);
+
+    const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(result.toolCallId).toBe(toolCall.id);
   });
 
   it("avoids collisions when sanitization would produce duplicate IDs", () => {
