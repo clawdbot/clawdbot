@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - CLI: move gateway service commands under `clawdbot gateway` and add `gateway probe` for reachability.
 
 ### Fixes
+- Embedded runner: persist injected history images so attachments aren’t reloaded each turn. (#1374) Thanks @Nicell.
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - macOS: exec approvals now respect wildcard agent allowlists (`*`).
 - macOS: allow SSH agent auth when no identity file is set. (#1384) Thanks @ameno-.

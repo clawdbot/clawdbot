@@ -627,6 +627,7 @@ export async function runEmbeddedAttempt(
           // Inject history images into their original message positions.
           // This ensures the model sees images in context (e.g., "compare to the first image").
           if (imageResult.historyImagesByIndex.size > 0) {
+            let didMutate = false;
             for (const [msgIndex, images] of imageResult.historyImagesByIndex) {
               // Bounds check: ensure index is valid before accessing
               if (msgIndex < 0 || msgIndex >= activeSession.messages.length) continue;
@@ -635,6 +636,7 @@ export async function runEmbeddedAttempt(
                 // Convert string content to array format if needed
                 if (typeof msg.content === "string") {
                   msg.content = [{ type: "text", text: msg.content }];
+                  didMutate = true;
                 }
                 if (Array.isArray(msg.content)) {
                   // Check for existing image content to avoid duplicates across turns
@@ -653,10 +655,15 @@ export async function runEmbeddedAttempt(
                     // Only add if this image isn't already in the message
                     if (!existingImageData.has(img.data)) {
                       msg.content.push(img);
+                      didMutate = true;
                     }
                   }
                 }
               }
+            }
+            if (didMutate) {
+              // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
+              activeSession.agent.replaceMessages(activeSession.messages);
             }
           }
 
