@@ -556,7 +556,10 @@ actor GatewayEndpointStore {
         case "tailnet":
             tailscaleIP ?? "127.0.0.1"
         case "auto":
-            "127.0.0.1"
+            if let tailscaleIP, !tailscaleIP.isEmpty {
+                return tailscaleIP
+            }
+            return "127.0.0.1"
         case "custom":
             customBindHost ?? "127.0.0.1"
         default:
