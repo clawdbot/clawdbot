@@ -272,6 +272,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.customCommands": "Telegram Custom Commands",
   "channels.discord": "Discord",
   "channels.slack": "Slack",
+  "channels.mattermost": "Mattermost",
   "channels.signal": "Signal",
   "channels.imessage": "iMessage",
   "channels.bluebubbles": "BlueBubbles",
@@ -309,6 +310,11 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
+  "channels.mattermost.botToken": "Mattermost Bot Token",
+  "channels.mattermost.baseUrl": "Mattermost Base URL",
+  "channels.mattermost.chatmode": "Mattermost Chat Mode",
+  "channels.mattermost.oncharPrefixes": "Mattermost Onchar Prefixes",
+  "channels.mattermost.requireMention": "Mattermost Require Mention",
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
   "plugins.enabled": "Enable Plugins",
@@ -415,6 +421,15 @@ const FIELD_HELP: Record<string, string> = {
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":
     "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+  "channels.mattermost.botToken":
+    "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
+  "channels.mattermost.baseUrl":
+    "Base URL for your Mattermost server (e.g., https://chat.example.com).",
+  "channels.mattermost.chatmode":
+    'Reply to channel messages on mention ("oncall"), on trigger chars (">" or "!") ("onchar"), or on every message ("onmessage").',
+  "channels.mattermost.oncharPrefixes": 'Trigger prefixes for onchar mode (default: [">", "!"]).',
+  "channels.mattermost.requireMention":
+    "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "auth.cooldowns.billingBackoffHours":
@@ -532,6 +547,8 @@ const FIELD_HELP: Record<string, string> = {
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":
     "Allow Slack to write config in response to channel events/commands (default: true).",
+  "channels.mattermost.configWrites":
+    "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.discord.configWrites":
     "Allow Discord to write config in response to channel events/commands (default: true).",
   "channels.whatsapp.configWrites":
@@ -606,6 +623,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/clawdbot",
+  "channels.mattermost.baseUrl": "https://chat.example.com",
 };
 
 const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];

@@ -22,6 +22,7 @@ export type InboundDebounceByProvider = {
   telegram?: number;
   discord?: number;
   slack?: number;
+  mattermost?: number;
   signal?: number;
   imessage?: number;
   msteams?: number;

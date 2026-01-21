@@ -162,13 +162,14 @@ export type AgentDefaultsConfig = {
     every?: string;
     /** Heartbeat model override (provider/model). */
     model?: string;
-    /** Delivery target (last|whatsapp|telegram|discord|slack|msteams|signal|imessage|none). */
+    /** Delivery target (last|whatsapp|telegram|discord|slack|mattermost|msteams|signal|imessage|none). */
     target?:
       | "last"
       | "whatsapp"
       | "telegram"
       | "discord"
       | "slack"
+      | "mattermost"
       | "msteams"
       | "signal"
       | "imessage"

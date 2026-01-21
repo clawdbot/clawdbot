@@ -134,6 +134,14 @@
       "destination": "/cli/message"
     },
     {
+      "source": "/mattermost",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/mattermost/",
+      "destination": "/channels/mattermost"
+    },
+    {
       "source": "/providers/discord",
       "destination": "/channels/discord"
     },
@@ -164,6 +172,14 @@
     {
       "source": "/providers/location/",
       "destination": "/channels/location"
+    },
+    {
+      "source": "/providers/mattermost",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/providers/mattermost/",
+      "destination": "/channels/mattermost"
     },
     {
       "source": "/providers/msteams",
@@ -932,6 +948,7 @@
           "channels/grammy",
           "channels/discord",
           "channels/slack",
+          "channels/mattermost",
           "channels/signal",
           "channels/imessage",
           "channels/msteams",

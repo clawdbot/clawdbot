@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { DiscordConfig } from "../../config/types.js";
+import { resolveMattermostAccount } from "../../mattermost/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -181,6 +182,15 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   if (typeof resolved?.requireMention === "boolean") {
     return resolved.requireMention;
   }
+  return true;
+}
+
+export function resolveMattermostGroupRequireMention(params: GroupMentionParams): boolean {
+  const account = resolveMattermostAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (typeof account.requireMention === "boolean") return account.requireMention;
   return true;
 }
 

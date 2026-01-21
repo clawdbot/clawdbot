@@ -6,14 +6,14 @@ read_when:
 ---
 # Building a personal assistant with Clawdbot (Clawd-style)
 
-Clawdbot is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
+Clawdbot is a WhatsApp + Telegram + Discord + Mattermost gateway for **Pi** agents. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
 
 ## ⚠️ Safety first
 
 You’re putting an agent in a position to:
 - run commands on your machine (depending on your Pi tool setup)
 - read/write files in your workspace
-- send messages back out via WhatsApp/Telegram/Discord
+- send messages back out via WhatsApp/Telegram/Discord/Mattermost
 
 Start conservative:
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).

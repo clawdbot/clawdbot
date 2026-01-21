@@ -175,7 +175,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ### What is Clawdbot, in one paragraph?
 
-Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always‑on control plane; the assistant is the product.
+Clawdbot is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost, Discord, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
 
 ## Quick start and first-run setup
 
@@ -232,7 +232,7 @@ Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** fo
 - **Model/auth setup** (Anthropic **setup-token** recommended for Claude subscriptions, OpenAI Codex OAuth supported, API keys optional, LM Studio local models supported)
 - **Workspace** location + bootstrap files
 - **Gateway settings** (bind/port/auth/tailscale)
-- **Providers** (WhatsApp, Telegram, Discord, Signal, iMessage)
+- **Providers** (WhatsApp, Telegram, Discord, Mattermost, Signal, iMessage)
 - **Daemon install** (LaunchAgent on macOS; systemd user unit on Linux/WSL2)
 - **Health checks** and **skills** selection
 
@@ -360,7 +360,7 @@ lowest friction and you’re okay with sleep/restarts, run it locally.
 - **Pros:** always‑on, stable network, no laptop sleep issues, easier to keep running.
 - **Cons:** often run headless (use screenshots), remote file access only, you must SSH for updates.
 
-**Clawdbot‑specific note:** WhatsApp/Telegram/Slack/Discord all work fine from a VPS. The only real trade‑off is **headless browser** vs a visible window. See [Browser](/tools/browser).
+**Clawdbot-specific note:** WhatsApp/Telegram/Slack/Mattermost/Discord all work fine from a VPS. The only real trade-off is **headless browser** vs a visible window. See [Browser](/tools/browser).
 
 **Recommended default:** VPS if you had gateway disconnects before. Local is great when you’re actively using the Mac and want local file access or UI automation with a visible browser.
 

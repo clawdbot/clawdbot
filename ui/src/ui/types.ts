@@ -164,6 +164,39 @@ export type SlackStatus = {
   lastProbeAt?: number | null;
 };
 
+export type MattermostBot = {
+  id?: string | null;
+  username?: string | null;
+};
+
+export type MattermostProbe = {
+  ok: boolean;
+  status?: number | null;
+  error?: string | null;
+  elapsedMs?: number | null;
+  bot?: MattermostBot | null;
+};
+
+export type MattermostStatus = {
+  configured: boolean;
+  botTokenSource?: string | null;
+  running: boolean;
+  connected?: boolean | null;
+  lastConnectedAt?: number | null;
+  lastDisconnect?: {
+    at: number;
+    status?: number | null;
+    error?: string | null;
+    loggedOut?: boolean | null;
+  } | null;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  baseUrl?: string | null;
+  probe?: MattermostProbe | null;
+  lastProbeAt?: number | null;
+};
+
 export type SignalProbe = {
   ok: boolean;
   status?: number | null;
@@ -363,6 +396,7 @@ export type CronPayload =
         | "telegram"
         | "discord"
         | "slack"
+        | "mattermost"
         | "signal"
         | "imessage"
         | "msteams";

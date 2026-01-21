@@ -85,6 +85,40 @@ struct ChannelsStatusSnapshot: Codable {
         let lastProbeAt: Double?
     }
 
+    struct MattermostBot: Codable {
+        let id: String?
+        let username: String?
+    }
+
+    struct MattermostProbe: Codable {
+        let ok: Bool
+        let status: Int?
+        let error: String?
+        let elapsedMs: Double?
+        let bot: MattermostBot?
+    }
+
+    struct MattermostDisconnect: Codable {
+        let at: Double
+        let status: Int?
+        let error: String?
+    }
+
+    struct MattermostStatus: Codable {
+        let configured: Bool
+        let botTokenSource: String?
+        let running: Bool
+        let connected: Bool?
+        let lastConnectedAt: Double?
+        let lastDisconnect: MattermostDisconnect?
+        let lastStartAt: Double?
+        let lastStopAt: Double?
+        let lastError: String?
+        let baseUrl: String?
+        let probe: MattermostProbe?
+        let lastProbeAt: Double?
+    }
+
     struct SignalProbe: Codable {
         let ok: Bool
         let status: Int?

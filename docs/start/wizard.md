@@ -48,7 +48,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
   - Model/auth (OpenAI Code (Codex) subscription OAuth, Anthropic API key (recommended) or `claude setup-token`, plus MiniMax/GLM/Moonshot/AI Gateway options)
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
-- Providers (Telegram, WhatsApp, Discord, Signal)
+- Providers (Telegram, WhatsApp, Discord, Mattermost, Signal)
 - Daemon install (LaunchAgent / systemd user unit)
 - Health check
 - Skills (recommended)
@@ -118,6 +118,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - WhatsApp: optional QR login.
    - Telegram: bot token.
    - Discord: bot token.
+   - Mattermost: bot token + base URL.
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
   - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve <channel> <code>` or use allowlists.

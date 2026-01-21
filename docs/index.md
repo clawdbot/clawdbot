@@ -12,7 +12,7 @@ read_when:
 </p>
 
 <p align="center">
-  <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
+  <strong>Any OS + WhatsApp/Telegram/Discord/Mattermost/iMessage gateway for AI agents (Pi).</strong><br />
   Send a message, get an agent response — from your pocket.
 </p>
 
@@ -23,7 +23,7 @@ read_when:
   <a href="/start/clawd">Clawdbot assistant setup</a>
 </p>
 
-Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / channels.discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
+Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / channels.discord.js), Mattermost (Bot API + WebSocket), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
 Clawdbot also powers [Clawd](https://clawd.me), the space‑lobster assistant.
 
 ## Start here
@@ -44,7 +44,7 @@ Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 ## How it works
 
 ```
-WhatsApp / Telegram / Discord
+WhatsApp / Telegram / Discord / Mattermost
         │
         ▼
   ┌───────────────────────────┐
@@ -79,6 +79,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 📱 **WhatsApp Integration** — Uses Baileys for WhatsApp Web protocol
 - ✈️ **Telegram Bot** — DMs + groups via grammY
 - 🎮 **Discord Bot** — DMs + guild channels via channels.discord.js
+- 🧩 **Mattermost Bot** — Bot token + WebSocket events
 - 💬 **iMessage** — Local imsg CLI integration (macOS)
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
 - ⏱️ **Streaming + chunking** — Block streaming + Telegram draft streaming details ([/concepts/streaming](/concepts/streaming))
@@ -190,6 +191,7 @@ Example:
   - [Control UI (browser)](/web/control-ui)
   - [Telegram](/channels/telegram)
   - [Discord](/channels/discord)
+  - [Mattermost](/channels/mattermost)
   - [iMessage](/channels/imessage)
   - [Groups](/concepts/groups)
   - [WhatsApp group messages](/concepts/group-messages)

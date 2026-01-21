@@ -1,0 +1,270 @@
+import {
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
+  deleteAccountFromConfigSection,
+  getChatChannelMeta,
+  listMattermostAccountIds,
+  looksLikeMattermostTargetId,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
+  normalizeMattermostBaseUrl,
+  normalizeMattermostMessagingTarget,
+  resolveDefaultMattermostAccountId,
+  resolveMattermostAccount,
+  resolveMattermostGroupRequireMention,
+  setAccountEnabledInConfigSection,
+  mattermostOnboardingAdapter,
+  MattermostConfigSchema,
+  type ChannelPlugin,
+  type ResolvedMattermostAccount,
+} from "clawdbot/plugin-sdk";
+
+import { getMattermostRuntime } from "./runtime.js";
+
+const meta = getChatChannelMeta("mattermost");
+
+export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
+  id: "mattermost",
+  meta: {
+    ...meta,
+  },
+  onboarding: mattermostOnboardingAdapter,
+  capabilities: {
+    chatTypes: ["direct", "channel", "group", "thread"],
+    threads: true,
+    media: true,
+  },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
+  reload: { configPrefixes: ["channels.mattermost"] },
+  configSchema: buildChannelConfigSchema(MattermostConfigSchema),
+  config: {
+    listAccountIds: (cfg) => listMattermostAccountIds(cfg),
+    resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
+    defaultAccountId: (cfg) => resolveDefaultMattermostAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "mattermost",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "mattermost",
+        accountId,
+        clearBaseFields: ["botToken", "baseUrl", "name"],
+      }),
+    isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
+    describeAccount: (account) => ({
+      accountId: account.accountId,
+      name: account.name,
+      enabled: account.enabled,
+      configured: Boolean(account.botToken && account.baseUrl),
+      botTokenSource: account.botTokenSource,
+      baseUrl: account.baseUrl,
+    }),
+  },
+  groups: {
+    resolveRequireMention: resolveMattermostGroupRequireMention,
+  },
+  messaging: {
+    normalizeTarget: normalizeMattermostMessagingTarget,
+    targetResolver: {
+      looksLikeId: looksLikeMattermostTargetId,
+      hint: "<channelId|user:ID|channel:ID>",
+    },
+  },
+  outbound: {
+    deliveryMode: "direct",
+    chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+    textChunkLimit: 4000,
+    resolveTarget: ({ to }) => {
+      const trimmed = to?.trim();
+      if (!trimmed) {
+        return {
+          ok: false,
+          error: new Error(
+            "Delivering to Mattermost requires --to <channelId|user:ID|channel:ID>",
+          ),
+        };
+      }
+      return { ok: true, to: trimmed };
+    },
+    sendText: async ({ to, text, accountId, deps, replyToId }) => {
+      const send =
+        deps?.sendMattermost ?? getMattermostRuntime().channel.mattermost.sendMessageMattermost;
+      const result = await send(to, text, {
+        accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
+      });
+      return { channel: "mattermost", ...result };
+    },
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
+      const send =
+        deps?.sendMattermost ?? getMattermostRuntime().channel.mattermost.sendMessageMattermost;
+      const result = await send(to, text, {
+        accountId: accountId ?? undefined,
+        mediaUrl,
+        replyToId: replyToId ?? undefined,
+      });
+      return { channel: "mattermost", ...result };
+    },
+  },
+  status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      connected: false,
+      lastConnectedAt: null,
+      lastDisconnect: null,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
+    buildChannelSummary: ({ snapshot }) => ({
+      configured: snapshot.configured ?? false,
+      botTokenSource: snapshot.botTokenSource ?? "none",
+      running: snapshot.running ?? false,
+      connected: snapshot.connected ?? false,
+      lastStartAt: snapshot.lastStartAt ?? null,
+      lastStopAt: snapshot.lastStopAt ?? null,
+      lastError: snapshot.lastError ?? null,
+      baseUrl: snapshot.baseUrl ?? null,
+      probe: snapshot.probe,
+      lastProbeAt: snapshot.lastProbeAt ?? null,
+    }),
+    probeAccount: async ({ account, timeoutMs }) => {
+      const token = account.botToken?.trim();
+      const baseUrl = account.baseUrl?.trim();
+      if (!token || !baseUrl) {
+        return { ok: false, error: "bot token or baseUrl missing" };
+      }
+      return await getMattermostRuntime().channel.mattermost.probeMattermost(
+        baseUrl,
+        token,
+        timeoutMs,
+      );
+    },
+    buildAccountSnapshot: ({ account, runtime, probe }) => ({
+      accountId: account.accountId,
+      name: account.name,
+      enabled: account.enabled,
+      configured: Boolean(account.botToken && account.baseUrl),
+      botTokenSource: account.botTokenSource,
+      baseUrl: account.baseUrl,
+      running: runtime?.running ?? false,
+      connected: runtime?.connected ?? false,
+      lastConnectedAt: runtime?.lastConnectedAt ?? null,
+      lastDisconnect: runtime?.lastDisconnect ?? null,
+      lastStartAt: runtime?.lastStartAt ?? null,
+      lastStopAt: runtime?.lastStopAt ?? null,
+      lastError: runtime?.lastError ?? null,
+      probe,
+      lastInboundAt: runtime?.lastInboundAt ?? null,
+      lastOutboundAt: runtime?.lastOutboundAt ?? null,
+    }),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToChannelSection({
+        cfg,
+        channelKey: "mattermost",
+        accountId,
+        name,
+      }),
+    validateInput: ({ accountId, input }) => {
+      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+        return "Mattermost env vars can only be used for the default account.";
+      }
+      const token = input.botToken ?? input.token;
+      const baseUrl = input.httpUrl;
+      if (!input.useEnv && (!token || !baseUrl)) {
+        return "Mattermost requires --bot-token and --http-url (or --use-env).";
+      }
+      if (baseUrl && !normalizeMattermostBaseUrl(baseUrl)) {
+        return "Mattermost --http-url must include a valid base URL.";
+      }
+      return null;
+    },
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const token = input.botToken ?? input.token;
+      const baseUrl = input.httpUrl?.trim();
+      const namedConfig = applyAccountNameToChannelSection({
+        cfg,
+        channelKey: "mattermost",
+        accountId,
+        name: input.name,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              channelKey: "mattermost",
+            })
+          : namedConfig;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          channels: {
+            ...next.channels,
+            mattermost: {
+              ...next.channels?.mattermost,
+              enabled: true,
+              ...(input.useEnv
+                ? {}
+                : {
+                    ...(token ? { botToken: token } : {}),
+                    ...(baseUrl ? { baseUrl } : {}),
+                  }),
+            },
+          },
+        };
+      }
+      return {
+        ...next,
+        channels: {
+          ...next.channels,
+          mattermost: {
+            ...next.channels?.mattermost,
+            enabled: true,
+            accounts: {
+              ...next.channels?.mattermost?.accounts,
+              [accountId]: {
+                ...next.channels?.mattermost?.accounts?.[accountId],
+                enabled: true,
+                ...(token ? { botToken: token } : {}),
+                ...(baseUrl ? { baseUrl } : {}),
+              },
+            },
+          },
+        },
+      };
+    },
+  },
+  gateway: {
+    startAccount: async (ctx) => {
+      const account = ctx.account;
+      ctx.setStatus({
+        accountId: account.accountId,
+        baseUrl: account.baseUrl,
+        botTokenSource: account.botTokenSource,
+      });
+      ctx.log?.info(`[${account.accountId}] starting channel`);
+      return getMattermostRuntime().channel.mattermost.monitorMattermostProvider({
+        botToken: account.botToken ?? undefined,
+        baseUrl: account.baseUrl ?? undefined,
+        accountId: account.accountId,
+        config: ctx.cfg,
+        runtime: ctx.runtime,
+        abortSignal: ctx.abortSignal,
+        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+      });
+    },
+  },
+};

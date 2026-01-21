@@ -98,6 +98,10 @@ type ResolveSlackUserAllowlist =
 type SendMessageSlack = typeof import("../../slack/send.js").sendMessageSlack;
 type MonitorSlackProvider = typeof import("../../slack/index.js").monitorSlackProvider;
 type HandleSlackAction = typeof import("../../agents/tools/slack-actions.js").handleSlackAction;
+type ProbeMattermost = typeof import("../../mattermost/probe.js").probeMattermost;
+type SendMessageMattermost = typeof import("../../mattermost/send.js").sendMessageMattermost;
+type MonitorMattermostProvider =
+  typeof import("../../mattermost/monitor.js").monitorMattermostProvider;
 type AuditTelegramGroupMembership =
   typeof import("../../telegram/audit.js").auditTelegramGroupMembership;
 type CollectTelegramUnmentionedGroupIds =
@@ -241,6 +245,11 @@ export type PluginRuntime = {
       sendMessageSlack: SendMessageSlack;
       monitorSlackProvider: MonitorSlackProvider;
       handleSlackAction: HandleSlackAction;
+    };
+    mattermost: {
+      probeMattermost: ProbeMattermost;
+      sendMessageMattermost: SendMessageMattermost;
+      monitorMattermostProvider: MonitorMattermostProvider;
     };
     telegram: {
       auditGroupMembership: AuditTelegramGroupMembership;

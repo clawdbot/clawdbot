@@ -18,6 +18,10 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message: "slack config moved to channels.slack (auto-migrated on load).",
   },
   {
+    path: ["mattermost"],
+    message: "mattermost config moved to channels.mattermost (auto-migrated on load).",
+  },
+  {
     path: ["signal"],
     message: "signal config moved to channels.signal (auto-migrated on load).",
   },

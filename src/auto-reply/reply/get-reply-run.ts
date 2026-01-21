@@ -157,7 +157,10 @@ export async function runPreparedReply(
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
-  const wasMentioned = ctx.WasMentioned === true;
+  const originatingChannel =
+    (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider)?.toString().toLowerCase() ?? "";
+  const wasMentioned =
+    ctx.WasMentioned === true || (originatingChannel === "mattermost" && isGroupChat);
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingMode = resolveTypingMode({
     configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,

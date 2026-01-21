@@ -24,6 +24,7 @@ export type HookMappingConfig = {
     | "telegram"
     | "discord"
     | "slack"
+    | "mattermost"
     | "signal"
     | "imessage"
     | "msteams";

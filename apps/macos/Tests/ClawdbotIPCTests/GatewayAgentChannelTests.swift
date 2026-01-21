@@ -11,6 +11,7 @@ import Testing
         #expect(GatewayAgentChannel.last.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.whatsapp.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.telegram.shouldDeliver(true) == true)
+        #expect(GatewayAgentChannel.mattermost.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.bluebubbles.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.last.shouldDeliver(false) == false)
     }

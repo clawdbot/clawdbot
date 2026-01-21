@@ -121,7 +121,7 @@ Resolution priority:
 
 ### Delivery (channel + target)
 Isolated jobs can deliver output to a channel. The job payload can specify:
-- `channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `last`
+- `channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` / `signal` / `imessage` / `last`
 - `to`: channel-specific recipient target
 
 If `channel` or `to` is omitted, cron can fall back to the main session’s “last route”
@@ -133,7 +133,7 @@ Delivery notes:
 - Use `deliver: false` to keep output internal even if a `to` is present.
 
 Target format reminders:
-- Slack/Discord targets should use explicit prefixes (e.g. `channel:<id>`, `user:<id>`) to avoid ambiguity.
+- Slack/Discord/Mattermost targets should use explicit prefixes (e.g. `channel:<id>`, `user:<id>`) to avoid ambiguity.
 - Telegram topics should use the `:topic:` form (see below).
 
 #### Telegram delivery targets (topics / forum threads)

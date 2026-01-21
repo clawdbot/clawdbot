@@ -11,6 +11,7 @@ import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveIMessageGroupRequireMention,
+  resolveMattermostGroupRequireMention,
   resolveSlackGroupRequireMention,
   resolveTelegramGroupRequireMention,
   resolveWhatsAppGroupRequireMention,
@@ -233,6 +234,30 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           hasRepliedRef,
         };
       },
+    },
+  },
+  mattermost: {
+    id: "mattermost",
+    capabilities: {
+      chatTypes: ["direct", "channel", "group", "thread"],
+      media: true,
+      threads: true,
+    },
+    outbound: { textChunkLimit: 4000 },
+    streaming: {
+      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+    },
+    groups: {
+      resolveRequireMention: resolveMattermostGroupRequireMention,
+    },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.startsWith("channel:")
+          ? context.To.slice("channel:".length)
+          : undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
     },
   },
   signal: {

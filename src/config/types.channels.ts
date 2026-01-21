@@ -1,5 +1,6 @@
 import type { DiscordConfig } from "./types.discord.js";
 import type { IMessageConfig } from "./types.imessage.js";
+import type { MattermostConfig } from "./types.mattermost.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
 import type { SignalConfig } from "./types.signal.js";
 import type { SlackConfig } from "./types.slack.js";
@@ -17,6 +18,7 @@ export type ChannelsConfig = {
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
   slack?: SlackConfig;
+  mattermost?: MattermostConfig;
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;

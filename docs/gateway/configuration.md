@@ -529,7 +529,7 @@ Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
 
-### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
+### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
 Run multiple accounts per channel (each account has its own `accountId` and optional `name`):
 
@@ -1190,6 +1190,35 @@ Slack action groups (gate `slack` tool actions):
 | memberInfo | enabled | Member info |
 | emojiList | enabled | Custom emoji list |
 
+### `channels.mattermost` (bot token)
+
+Mattermost requires a bot token plus the base URL for your server:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      enabled: true,
+      botToken: "mm-token",
+      baseUrl: "https://chat.example.com",
+      chatmode: "oncall", // oncall | onmessage | onchar
+      oncharPrefixes: [">", "!"],
+      textChunkLimit: 4000
+    }
+  }
+}
+```
+
+Clawdbot starts Mattermost when the account is configured (bot token + base URL) and enabled. The token + base URL are resolved from `channels.mattermost.botToken` + `channels.mattermost.baseUrl` or `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` for the default account (unless `channels.mattermost.enabled` is `false`).
+
+Chat modes:
+- `oncall` (default): respond to channel messages only when @mentioned.
+- `onmessage`: respond to every channel message.
+- `onchar`: respond when a message starts with a trigger prefix (`channels.mattermost.oncharPrefixes`, default `[">", "!"]`).
+
+Multi-account support lives under `channels.mattermost.accounts` (see the multi-account section above). Env vars only apply to the default account.
+Use `channel:<id>` or `user:<id>` (or `@username`) when specifying delivery targets; bare ids are treated as channel ids.
+
 ### `channels.signal` (signal-cli)
 
 Signal reactions can emit system events (shared reaction tooling):
@@ -1709,8 +1738,9 @@ Block streaming:
   with `maxChars` capped to the channel text limit. Signal/Slack/Discord default
   to `minChars: 1500` unless overridden.
   Channel overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
-  `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.signal.blockStreamingCoalesce`,
-  `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce` (and per-account variants).
+  `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.mattermost.blockStreamingCoalesce`,
+  `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`
+  (and per-account variants).
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
   Per-agent override: `agents.list[].humanDelay`.

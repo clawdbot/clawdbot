@@ -67,6 +67,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Telegram (grammY notes)](/channels/grammy)
 - [Slack](/channels/slack)
 - [Discord](/channels/discord)
+- [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
 - [iMessage](/channels/imessage)
 - [Location parsing](/channels/location)

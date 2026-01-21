@@ -12,7 +12,7 @@ Goal: go from **zero** → **first working chat** (with sane defaults) as quickl
 Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It sets up:
 - model/auth (OAuth recommended)
 - gateway settings
-- channels (WhatsApp/Telegram/Discord/…)
+- channels (WhatsApp/Telegram/Discord/Mattermost/...)
 - pairing defaults (secure DMs)
 - workspace bootstrap + skills
 - optional background daemon
@@ -80,7 +80,7 @@ clawdbot onboard --install-daemon
 What you’ll choose:
 - **Local vs Remote** gateway
 - **Auth**: OpenAI Code (Codex) subscription (OAuth) or API keys. For Anthropic we recommend an API key; `claude setup-token` is also supported.
-- **Providers**: WhatsApp QR login, Telegram/Discord bot tokens, etc.
+- **Providers**: WhatsApp QR login, Telegram/Discord/Mattermost bot tokens, etc.
 - **Daemon**: background install (launchd/systemd; WSL2 uses systemd)
   - **Runtime**: Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
 - **Gateway token**: the wizard generates one by default (even on loopback) and stores it in `gateway.auth.token`.
@@ -140,6 +140,7 @@ WhatsApp doc: [WhatsApp](/channels/whatsapp)
 The wizard can write tokens/config for you. If you prefer manual config, start with:
 - Telegram: [Telegram](/channels/telegram)
 - Discord: [Discord](/channels/discord)
+- Mattermost: [Mattermost](/channels/mattermost)
 
 **Telegram DM tip:** your first DM returns a pairing code. Approve it (see next step) or the bot won’t respond.
 

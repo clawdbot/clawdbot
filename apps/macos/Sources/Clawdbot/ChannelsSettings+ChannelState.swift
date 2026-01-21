@@ -40,6 +40,17 @@ extension ChannelsSettings {
         return .orange
     }
 
+    var mattermostTint: Color {
+        guard let status = self.channelStatus("mattermost", as: ChannelsStatusSnapshot.MattermostStatus.self)
+        else { return .secondary }
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.connected == true { return .green }
+        if status.running { return .orange }
+        return .orange
+    }
+
     var signalTint: Color {
         guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
         else { return .secondary }
@@ -81,6 +92,15 @@ extension ChannelsSettings {
         guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
         else { return "Checking…" }
         if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
+    }
+
+    var mattermostSummary: String {
+        guard let status = self.channelStatus("mattermost", as: ChannelsStatusSnapshot.MattermostStatus.self)
+        else { return "Checking…" }
+        if !status.configured { return "Not configured" }
+        if status.connected == true { return "Connected" }
         if status.running { return "Running" }
         return "Configured"
     }
@@ -193,6 +213,38 @@ extension ChannelsSettings {
         return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
+    var mattermostDetails: String? {
+        guard let status = self.channelStatus("mattermost", as: ChannelsStatusSnapshot.MattermostStatus.self)
+        else { return nil }
+        var lines: [String] = []
+        if let source = status.botTokenSource {
+            lines.append("Token source: \(source)")
+        }
+        if let baseUrl = status.baseUrl, !baseUrl.isEmpty {
+            lines.append("Base URL: \(baseUrl)")
+        }
+        if let probe = status.probe {
+            if probe.ok {
+                if let name = probe.bot?.username {
+                    lines.append("Bot: @\(name)")
+                }
+                if let elapsed = probe.elapsedMs {
+                    lines.append("Probe \(Int(elapsed))ms")
+                }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
+            }
+        }
+        if let last = self.date(fromMs: status.lastProbeAt ?? status.lastConnectedAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
+    }
+
     var signalDetails: String? {
         guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
         else { return nil }
@@ -244,7 +296,7 @@ extension ChannelsSettings {
     }
 
     var orderedChannels: [ChannelItem] {
-        let fallback = ["whatsapp", "telegram", "discord", "slack", "signal", "imessage"]
+        let fallback = ["whatsapp", "telegram", "discord", "slack", "mattermost", "signal", "imessage"]
         let order = self.store.snapshot?.channelOrder ?? fallback
         let channels = order.enumerated().map { index, id in
             ChannelItem(
@@ -307,6 +359,8 @@ extension ChannelsSettings {
             return self.telegramTint
         case "discord":
             return self.discordTint
+        case "mattermost":
+            return self.mattermostTint
         case "signal":
             return self.signalTint
         case "imessage":
@@ -326,6 +380,8 @@ extension ChannelsSettings {
             return self.telegramSummary
         case "discord":
             return self.discordSummary
+        case "mattermost":
+            return self.mattermostSummary
         case "signal":
             return self.signalSummary
         case "imessage":
@@ -345,6 +401,8 @@ extension ChannelsSettings {
             return self.telegramDetails
         case "discord":
             return self.discordDetails
+        case "mattermost":
+            return self.mattermostDetails
         case "signal":
             return self.signalDetails
         case "imessage":
@@ -377,6 +435,10 @@ extension ChannelsSettings {
             return self
                 .date(fromMs: self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)?
                     .lastProbeAt)
+        case "mattermost":
+            guard let status = self.channelStatus("mattermost", as: ChannelsStatusSnapshot.MattermostStatus.self)
+            else { return nil }
+            return self.date(fromMs: status.lastProbeAt ?? status.lastConnectedAt)
         case "signal":
             return self
                 .date(fromMs: self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)?.lastProbeAt)
@@ -409,6 +471,10 @@ extension ChannelsSettings {
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case "discord":
             guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
+            else { return false }
+            return status.lastError?.isEmpty == false || status.probe?.ok == false
+        case "mattermost":
+            guard let status = self.channelStatus("mattermost", as: ChannelsStatusSnapshot.MattermostStatus.self)
             else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
         case "signal":
