@@ -45,6 +45,7 @@ export type UpdateCommandOptions = {
   channel?: string;
   tag?: string;
   timeout?: string;
+  yes?: boolean;
 };
 export type UpdateStatusOptions = {
   json?: boolean;
@@ -427,7 +428,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     const needsConfirm =
       currentVersion != null && (targetVersion == null || (cmp != null && cmp > 0));
 
-    if (needsConfirm) {
+    if (needsConfirm && !opts.yes) {
       if (!process.stdin.isTTY || opts.json) {
         defaultRuntime.error(
           [
@@ -667,10 +668,15 @@ export function registerUpdateCli(program: Command) {
     .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
     .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .addHelpText(
       "after",
       () =>
         `
+What this does:
+  - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
+  - npm installs: updates via detected package manager
+
 Examples:
   clawdbot update                   # Update a source checkout (git)
   clawdbot update --channel beta    # Switch to beta channel (git + npm)
@@ -678,10 +684,11 @@ Examples:
   clawdbot update --tag beta        # One-off update to a dist-tag or version
   clawdbot update --restart         # Update and restart the daemon
   clawdbot update --json            # Output result as JSON
+  clawdbot update --yes             # Non-interactive (accept downgrade prompts)
   clawdbot --update                 # Shorthand for clawdbot update
 
 Notes:
-  - For git installs: fetches, rebases, installs deps, builds, and runs doctor
+  - Switch channels with --channel stable|beta|dev
   - For global installs: auto-updates via detected package manager when possible (see docs/install/updating.md)
   - Downgrades require confirmation (can break configuration)
   - Skips update if the working directory has uncommitted changes
@@ -696,6 +703,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/upda
           channel: opts.channel as string | undefined,
           tag: opts.tag as string | undefined,
           timeout: opts.timeout as string | undefined,
+          yes: Boolean(opts.yes),
         });
       } catch (err) {
         defaultRuntime.error(String(err));

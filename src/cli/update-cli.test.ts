@@ -447,6 +447,7 @@ describe("update-cli", () => {
   it("requires confirmation on downgrade when non-interactive", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
     try {
+      setTty(false);
       await fs.writeFile(
         path.join(tempDir, "package.json"),
         JSON.stringify({ name: "clawdbot", version: "2.0.0" }),
@@ -479,6 +480,47 @@ describe("update-cli", () => {
         expect.stringContaining("Downgrade confirmation required."),
       );
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows downgrade with --yes in non-interactive mode", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
+    try {
+      setTty(false);
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "clawdbot", version: "2.0.0" }),
+        "utf-8",
+      );
+
+      const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+      const { resolveNpmChannelTag } = await import("../infra/update-check.js");
+      const { runGatewayUpdate } = await import("../infra/update-runner.js");
+      const { defaultRuntime } = await import("../runtime.js");
+      const { updateCommand } = await import("./update-cli.js");
+
+      vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+        tag: "latest",
+        version: "0.0.1",
+      });
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "npm",
+        steps: [],
+        durationMs: 100,
+      });
+      vi.mocked(defaultRuntime.error).mockClear();
+      vi.mocked(defaultRuntime.exit).mockClear();
+
+      await updateCommand({ yes: true });
+
+      expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("Downgrade confirmation required."),
+      );
+      expect(runGatewayUpdate).toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
