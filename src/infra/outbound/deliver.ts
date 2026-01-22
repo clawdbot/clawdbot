@@ -6,7 +6,6 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
-import type { sendMessageMattermost } from "../../mattermost/send.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
@@ -29,12 +28,18 @@ type SendMatrixMessage = (
   opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
 ) => Promise<{ messageId: string; roomId: string }>;
 
+type SendMattermostMessage = (
+  to: string,
+  text: string,
+  opts?: { accountId?: string; mediaUrl?: string; replyToId?: string },
+) => Promise<{ messageId: string; channelId: string }>;
+
 export type OutboundSendDeps = {
   sendWhatsApp?: typeof sendMessageWhatsApp;
   sendTelegram?: typeof sendMessageTelegram;
   sendDiscord?: typeof sendMessageDiscord;
   sendSlack?: typeof sendMessageSlack;
-  sendMattermost?: typeof sendMessageMattermost;
+  sendMattermost?: SendMattermostMessage;
   sendSignal?: typeof sendMessageSignal;
   sendIMessage?: typeof sendMessageIMessage;
   sendMatrix?: SendMatrixMessage;

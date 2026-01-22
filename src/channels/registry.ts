@@ -9,7 +9,6 @@ export const CHAT_CHANNEL_ORDER = [
   "whatsapp",
   "discord",
   "slack",
-  "mattermost",
   "signal",
   "imessage",
 ] as const;
@@ -67,16 +66,6 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "slack",
     blurb: "supported (Socket Mode).",
     systemImage: "number",
-  },
-  mattermost: {
-    id: "mattermost",
-    label: "Mattermost",
-    selectionLabel: "Mattermost (Bot Token)",
-    detailLabel: "Mattermost Bot",
-    docsPath: "/channels/mattermost",
-    docsLabel: "mattermost",
-    blurb: "self-hosted Slack-style chat (bot token + URL).",
-    systemImage: "bubble.left.and.bubble.right",
   },
   signal: {
     id: "signal",

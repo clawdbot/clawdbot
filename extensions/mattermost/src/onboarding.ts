@@ -1,14 +1,12 @@
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { ChannelOnboardingAdapter, ClawdbotConfig, WizardPrompter } from "clawdbot/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
+
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
-} from "../../../mattermost/accounts.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
-import { formatDocsLink } from "../../../terminal/links.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
-import { promptAccountId } from "./helpers.js";
+} from "./mattermost/accounts.js";
+import { promptAccountId } from "./onboarding-helpers.js";
 
 const channel = "mattermost" as const;
 
@@ -19,7 +17,7 @@ async function noteMattermostSetup(prompter: WizardPrompter): Promise<void> {
       "2) Create a bot + copy its token",
       "3) Use your server base URL (e.g., https://chat.example.com)",
       "Tip: the bot must be a member of any channel you want it to monitor.",
-      `Docs: ${formatDocsLink("/channels/mattermost", "mattermost")}`,
+      "Docs: https://docs.clawd.bot/channels/mattermost",
     ].join("\n"),
     "Mattermost bot token",
   );

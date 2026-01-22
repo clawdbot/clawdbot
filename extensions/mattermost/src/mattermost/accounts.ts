@@ -1,6 +1,7 @@
-import type { ClawdbotConfig } from "../config/config.js";
-import type { MattermostAccountConfig, MattermostChatMode } from "../config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
+
+import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";

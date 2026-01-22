@@ -1,52 +1,21 @@
 import WebSocket from "ws";
 
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  resolveIdentityName,
-} from "../agents/identity.js";
-import { chunkMarkdownText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
-import { shouldHandleTextCommands } from "../auto-reply/commands-registry.js";
-import { formatInboundEnvelope, formatInboundFromLabel } from "../auto-reply/envelope.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import type {
+  ChannelAccountSnapshot,
+  ClawdbotConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntry,
+  resolveChannelMediaMaxBytes,
   type HistoryEntry,
-} from "../auto-reply/reply/history.js";
-import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../auto-reply/reply/response-prefix-template.js";
-import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
-import { createDedupeCache } from "../infra/dedupe.js";
-import { rawDataToString } from "../infra/ws.js";
-import { recordChannelActivity } from "../infra/channel-activity.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { getChildLogger } from "../logging.js";
-import { mediaKindFromMime, type MediaKind } from "../media/constants.js";
-import { fetchRemoteMedia, type FetchLike } from "../media/fetch.js";
-import { saveMediaBuffer } from "../media/store.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+} from "clawdbot/plugin-sdk";
+
+import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -59,6 +28,15 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
+import {
+  createDedupeCache,
+  extractShortModelName,
+  formatInboundFromLabel,
+  rawDataToString,
+  resolveIdentityName,
+  resolveThreadSessionKeys,
+  type ResponsePrefixContext,
+} from "./monitor-helpers.js";
 import { sendMessageMattermost } from "./send.js";
 
 export type MonitorMattermostOpts = {
@@ -70,6 +48,9 @@ export type MonitorMattermostOpts = {
   abortSignal?: AbortSignal;
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
 };
+
+type FetchLike = typeof fetch;
+type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostEventPayload = {
   event?: string;
@@ -208,8 +189,9 @@ function buildMattermostWsUrl(baseUrl: string): string {
 }
 
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
+  const core = getMattermostRuntime();
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -235,7 +217,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
-  const logger = getChildLogger({ module: "mattermost" });
+  const logger = core.logging.getChildLogger({ module: "mattermost" });
+  const logVerboseMessage = (message: string) => {
+    if (!core.logging.shouldLogVerbose()) return;
+    logger.debug?.(message);
+  };
   const mediaMaxBytes =
     resolveChannelMediaMaxBytes({
       cfg,
@@ -262,13 +248,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
       try {
-        const fetched = await fetchRemoteMedia({
+        const fetched = await core.channel.media.fetchRemoteMedia({
           url: `${client.apiBaseUrl}/files/${fileId}`,
           fetchImpl: fetchWithAuth,
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
         });
-        const saved = await saveMediaBuffer(
+        const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
           fetched.contentType ?? undefined,
           "inbound",
@@ -278,7 +264,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         out.push({
           path: saved.path,
           contentType,
-          kind: mediaKindFromMime(contentType),
+          kind: core.media.mediaKindFromMime(contentType),
         });
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
@@ -366,7 +352,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
     const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
 
-    const route = resolveAgentRoute({
+    const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "mattermost",
       accountId: account.accountId,
@@ -387,12 +373,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const sessionKey = threadKeys.sessionKey;
     const historyKey = kind === "dm" ? null : sessionKey;
 
-    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
+    const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const rawText = post.message?.trim() || "";
     const wasMentioned =
       kind !== "dm" &&
       ((botUsername ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`) : false) ||
-        matchesMentionPatterns(rawText, mentionRegexes));
+        core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
     const pendingBody =
       rawText ||
       (post.file_ids?.length
@@ -416,11 +402,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
     };
 
-    const allowTextCommands = shouldHandleTextCommands({
+    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg,
       surface: "mattermost",
     });
-    const isControlCommand = allowTextCommands && hasControlCommand(rawText, cfg);
+    const isControlCommand = allowTextCommands && core.channel.text.hasControlCommand(rawText, cfg);
     const oncharEnabled = account.chatmode === "onchar" && kind !== "dm";
     const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];
     const oncharResult = oncharEnabled
@@ -456,7 +442,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const bodyText = normalizeMention(baseText, botUsername);
     if (!bodyText) return;
 
-    recordChannelActivity({
+    core.channel.activity.record({
       channel: "mattermost",
       accountId: account.accountId,
       direction: "inbound",
@@ -476,13 +462,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       kind === "dm"
         ? `Mattermost DM from ${senderName}`
         : `Mattermost message in ${roomLabel} from ${senderName}`;
-    enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
       sessionKey,
       contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
     });
 
     const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
-    const body = formatInboundEnvelope({
+    const body = core.channel.reply.formatInboundEnvelope({
       channel: "Mattermost",
       from: fromLabel,
       timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
@@ -498,7 +484,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          formatInboundEnvelope({
+          core.channel.reply.formatInboundEnvelope({
             channel: "Mattermost",
             from: fromLabel,
             timestamp: entry.timestamp,
@@ -513,11 +499,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const to = kind === "dm" ? `user:${senderId}` : `channel:${channelId}`;
     const mediaPayload = buildMattermostMediaPayload(mediaList);
-    const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+    const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
       useAccessGroups: cfg.commands?.useAccessGroups ?? false,
       authorizers: [],
     });
-    const ctxPayload = finalizeInboundContext({
+    const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       RawBody: bodyText,
       CommandBody: bodyText,
@@ -557,10 +543,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     if (kind === "dm") {
       const sessionCfg = cfg.session;
-      const storePath = resolveStorePath(sessionCfg?.store, {
+      const storePath = core.channel.session.resolveStorePath(sessionCfg?.store, {
         agentId: route.agentId,
       });
-      await updateLastRoute({
+      await core.channel.session.updateLastRoute({
         storePath,
         sessionKey: route.mainSessionKey,
         deliveryContext: {
@@ -571,14 +557,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
     }
 
-    if (shouldLogVerbose()) {
-      const previewLine = bodyText.slice(0, 200).replace(/\n/g, "\\n");
-      logVerbose(
-        `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
-      );
-    }
+    const previewLine = bodyText.slice(0, 200).replace(/\n/g, "\\n");
+    logVerboseMessage(
+      `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
+    );
 
-    const textLimit = resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
+    const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
       fallbackLimit: account.textChunkLimit ?? 4000,
     });
 
@@ -586,43 +570,45 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       identityName: resolveIdentityName(cfg, route.agentId),
     };
 
-    const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-      responsePrefixContextProvider: () => prefixContext,
-      humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-      deliver: async (payload: ReplyPayload) => {
-        const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-        const text = payload.text ?? "";
-        if (mediaUrls.length === 0) {
-          const chunks = chunkMarkdownText(text, textLimit);
-          for (const chunk of chunks.length > 0 ? chunks : [text]) {
-            if (!chunk) continue;
-            await sendMessageMattermost(to, chunk, {
-              accountId: account.accountId,
-              replyToId: threadRootId,
-            });
+    const { dispatcher, replyOptions, markDispatchIdle } =
+      core.channel.reply.createReplyDispatcherWithTyping({
+        responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
+        responsePrefixContextProvider: () => prefixContext,
+        humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+        deliver: async (payload: ReplyPayload) => {
+          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+          const text = payload.text ?? "";
+          if (mediaUrls.length === 0) {
+            const chunks = core.channel.text.chunkMarkdownText(text, textLimit);
+            for (const chunk of chunks.length > 0 ? chunks : [text]) {
+              if (!chunk) continue;
+              await sendMessageMattermost(to, chunk, {
+                accountId: account.accountId,
+                replyToId: threadRootId,
+              });
+            }
+          } else {
+            let first = true;
+            for (const mediaUrl of mediaUrls) {
+              const caption = first ? text : "";
+              first = false;
+              await sendMessageMattermost(to, caption, {
+                accountId: account.accountId,
+                mediaUrl,
+                replyToId: threadRootId,
+              });
+            }
           }
-        } else {
-          let first = true;
-          for (const mediaUrl of mediaUrls) {
-            const caption = first ? text : "";
-            first = false;
-            await sendMessageMattermost(to, caption, {
-              accountId: account.accountId,
-              mediaUrl,
-              replyToId: threadRootId,
-            });
-          }
-        }
-        runtime.log?.(`delivered reply to ${to}`);
-      },
-      onError: (err, info) => {
-        runtime.error?.(danger(`mattermost ${info.kind} reply failed: ${String(err)}`));
-      },
-      onReplyStart: () => sendTypingIndicator(channelId, threadRootId),
-    });
+          runtime.log?.(`delivered reply to ${to}`);
+        },
+        onError: (err, info) => {
+          runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
+        },
+        onReplyStart: () => sendTypingIndicator(channelId, threadRootId),
+      });
 
-    await dispatchReplyFromConfig({
+    await core.channel.reply.dispatchReplyFromConfig({
       ctx: ctxPayload,
       cfg,
       dispatcher,
@@ -644,8 +630,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
   };
 
-  const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "mattermost" });
-  const debouncer = createInboundDebouncer<{
+  const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
+    cfg,
+    channel: "mattermost",
+  });
+  const debouncer = core.channel.debounce.createInboundDebouncer<{
     post: MattermostPost;
     payload: MattermostEventPayload;
   }>({
@@ -664,7 +653,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (entry.post.file_ids && entry.post.file_ids.length > 0) return false;
       const text = entry.post.message?.trim() ?? "";
       if (!text) return false;
-      return !hasControlCommand(text, cfg);
+      return !core.channel.text.hasControlCommand(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -686,7 +675,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       await handlePost(mergedPost, last.payload, ids.length > 0 ? ids : undefined);
     },
     onError: (err) => {
-      runtime.error?.(danger(`mattermost debounce flush failed: ${String(err)}`));
+      runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
     },
   });
 
@@ -739,7 +728,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         try {
           await debouncer.enqueue({ post, payload });
         } catch (err) {
-          runtime.error?.(danger(`mattermost handler failed: ${String(err)}`));
+          runtime.error?.(`mattermost handler failed: ${String(err)}`);
         }
       });
 
@@ -758,7 +747,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
 
       ws.on("error", (err) => {
-        runtime.error?.(danger(`mattermost websocket error: ${String(err)}`));
+        runtime.error?.(`mattermost websocket error: ${String(err)}`);
         opts.statusSink?.({
           lastError: String(err),
         });

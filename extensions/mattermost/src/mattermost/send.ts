@@ -1,7 +1,4 @@
-import { loadConfig } from "../config/config.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { recordChannelActivity } from "../infra/channel-activity.js";
-import { loadWebMedia } from "../web/media.js";
+import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -33,6 +30,8 @@ type MattermostTarget =
 
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
+
+const getCore = () => getMattermostRuntime();
 
 function cacheKey(baseUrl: string, token: string): string {
   return `${baseUrl}::${token}`;
@@ -129,7 +128,9 @@ export async function sendMessageMattermost(
   text: string,
   opts: MattermostSendOpts = {},
 ): Promise<MattermostSendResult> {
-  const cfg = loadConfig();
+  const core = getCore();
+  const logger = core.logging.getChildLogger({ module: "mattermost" });
+  const cfg = core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -161,7 +162,7 @@ export async function sendMessageMattermost(
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
     try {
-      const media = await loadWebMedia(mediaUrl);
+      const media = await core.media.loadWebMedia(mediaUrl);
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
         buffer: media.buffer,
@@ -171,8 +172,8 @@ export async function sendMessageMattermost(
       fileIds = [fileInfo.id];
     } catch (err) {
       uploadError = err instanceof Error ? err : new Error(String(err));
-      if (shouldLogVerbose()) {
-        logVerbose(
+      if (core.logging.shouldLogVerbose()) {
+        logger.debug?.(
           `mattermost send: media upload failed, falling back to URL text: ${String(err)}`,
         );
       }
@@ -194,7 +195,7 @@ export async function sendMessageMattermost(
     fileIds,
   });
 
-  recordChannelActivity({
+  core.channel.activity.record({
     channel: "mattermost",
     accountId: account.accountId,
     direction: "outbound",

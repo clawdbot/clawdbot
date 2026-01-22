@@ -3,26 +3,42 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  getChatChannelMeta,
-  listMattermostAccountIds,
-  looksLikeMattermostTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-  normalizeMattermostBaseUrl,
-  normalizeMattermostMessagingTarget,
-  resolveDefaultMattermostAccountId,
-  resolveMattermostAccount,
-  resolveMattermostGroupRequireMention,
   setAccountEnabledInConfigSection,
-  mattermostOnboardingAdapter,
-  MattermostConfigSchema,
   type ChannelPlugin,
-  type ResolvedMattermostAccount,
 } from "clawdbot/plugin-sdk";
 
+import { MattermostConfigSchema } from "./config-schema.js";
+import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
+import {
+  looksLikeMattermostTargetId,
+  normalizeMattermostMessagingTarget,
+} from "./normalize.js";
+import { mattermostOnboardingAdapter } from "./onboarding.js";
+import {
+  listMattermostAccountIds,
+  resolveDefaultMattermostAccountId,
+  resolveMattermostAccount,
+  type ResolvedMattermostAccount,
+} from "./mattermost/accounts.js";
+import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+import { monitorMattermostProvider } from "./mattermost/monitor.js";
+import { probeMattermost } from "./mattermost/probe.js";
+import { sendMessageMattermost } from "./mattermost/send.js";
 import { getMattermostRuntime } from "./runtime.js";
 
-const meta = getChatChannelMeta("mattermost");
+const meta = {
+  id: "mattermost",
+  label: "Mattermost",
+  selectionLabel: "Mattermost (plugin)",
+  detailLabel: "Mattermost Bot",
+  docsPath: "/channels/mattermost",
+  docsLabel: "mattermost",
+  blurb: "self-hosted Slack-style chat; install the plugin to enable.",
+  systemImage: "bubble.left.and.bubble.right",
+  order: 65,
+} as const;
 
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
@@ -96,8 +112,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       return { ok: true, to: trimmed };
     },
     sendText: async ({ to, text, accountId, deps, replyToId }) => {
-      const send =
-        deps?.sendMattermost ?? getMattermostRuntime().channel.mattermost.sendMessageMattermost;
+      const send = deps?.sendMattermost ?? sendMessageMattermost;
       const result = await send(to, text, {
         accountId: accountId ?? undefined,
         replyToId: replyToId ?? undefined,
@@ -105,8 +120,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       return { channel: "mattermost", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
-      const send =
-        deps?.sendMattermost ?? getMattermostRuntime().channel.mattermost.sendMessageMattermost;
+      const send = deps?.sendMattermost ?? sendMessageMattermost;
       const result = await send(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
@@ -144,11 +158,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       if (!token || !baseUrl) {
         return { ok: false, error: "bot token or baseUrl missing" };
       }
-      return await getMattermostRuntime().channel.mattermost.probeMattermost(
-        baseUrl,
-        token,
-        timeoutMs,
-      );
+      return await probeMattermost(baseUrl, token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
@@ -256,7 +266,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         botTokenSource: account.botTokenSource,
       });
       ctx.log?.info(`[${account.accountId}] starting channel`);
-      return getMattermostRuntime().channel.mattermost.monitorMattermostProvider({
+      return monitorMattermostProvider({
         botToken: account.botToken ?? undefined,
         baseUrl: account.baseUrl ?? undefined,
         accountId: account.accountId,

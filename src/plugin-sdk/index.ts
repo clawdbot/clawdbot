@@ -81,7 +81,6 @@ export type {
 export {
   DiscordConfigSchema,
   IMessageConfigSchema,
-  MattermostConfigSchema,
   MSTeamsConfigSchema,
   SignalConfigSchema,
   SlackConfigSchema,
@@ -121,7 +120,6 @@ export {
   resolveBlueBubblesGroupRequireMention,
   resolveDiscordGroupRequireMention,
   resolveIMessageGroupRequireMention,
-  resolveMattermostGroupRequireMention,
   resolveSlackGroupRequireMention,
   resolveTelegramGroupRequireMention,
   resolveWhatsAppGroupRequireMention,
@@ -240,21 +238,6 @@ export {
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
 export { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-
-// Channel: Mattermost
-export {
-  listEnabledMattermostAccounts,
-  listMattermostAccountIds,
-  resolveDefaultMattermostAccountId,
-  resolveMattermostAccount,
-  type ResolvedMattermostAccount,
-} from "../mattermost/accounts.js";
-export { normalizeMattermostBaseUrl } from "../mattermost/client.js";
-export { mattermostOnboardingAdapter } from "../channels/plugins/onboarding/mattermost.js";
-export {
-  looksLikeMattermostTargetId,
-  normalizeMattermostMessagingTarget,
-} from "../channels/plugins/normalize/mattermost.js";
 
 // Channel: Telegram
 export {

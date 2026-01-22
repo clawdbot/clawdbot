@@ -57,9 +57,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
-import { monitorMattermostProvider } from "../../mattermost/monitor.js";
-import { probeMattermost } from "../../mattermost/probe.js";
-import { sendMessageMattermost } from "../../mattermost/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
@@ -232,11 +229,6 @@ export function createPluginRuntime(): PluginRuntime {
         sendMessageSlack,
         monitorSlackProvider,
         handleSlackAction,
-      },
-      mattermost: {
-        probeMattermost,
-        sendMessageMattermost,
-        monitorMattermostProvider,
       },
       telegram: {
         auditGroupMembership: auditTelegramGroupMembership,
