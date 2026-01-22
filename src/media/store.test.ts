@@ -161,4 +161,114 @@ describe("media store", () => {
       expect(path.extname(saved.path)).toBe(".xlsx");
     });
   });
+
+  describe("extractOriginalFilename", () => {
+    it("extracts original filename from embedded pattern", async () => {
+      await withTempStore(async (store) => {
+        // Pattern: {original}---{uuid}.{ext}
+        const filename = "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
+        const result = store.extractOriginalFilename(`/path/to/${filename}`);
+        expect(result).toBe("report.pdf");
+      });
+    });
+
+    it("handles uppercase UUID pattern", async () => {
+      await withTempStore(async (store) => {
+        const filename = "Document---A1B2C3D4-E5F6-7890-ABCD-EF1234567890.docx";
+        const result = store.extractOriginalFilename(`/media/inbound/${filename}`);
+        expect(result).toBe("Document.docx");
+      });
+    });
+
+    it("falls back to basename for non-matching patterns", async () => {
+      await withTempStore(async (store) => {
+        // UUID-only filename (legacy format)
+        const uuidOnly = "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
+        expect(store.extractOriginalFilename(`/path/${uuidOnly}`)).toBe(uuidOnly);
+
+        // Regular filename without embedded pattern
+        expect(store.extractOriginalFilename("/path/to/regular.txt")).toBe("regular.txt");
+
+        // Filename with --- but invalid UUID part
+        expect(store.extractOriginalFilename("/path/to/foo---bar.txt")).toBe("foo---bar.txt");
+      });
+    });
+
+    it("preserves original name with special characters", async () => {
+      await withTempStore(async (store) => {
+        const filename = "报告_2024---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
+        const result = store.extractOriginalFilename(`/media/${filename}`);
+        expect(result).toBe("报告_2024.pdf");
+      });
+    });
+  });
+
+  describe("saveMediaBuffer with originalFilename", () => {
+    it("embeds original filename in stored path when provided", async () => {
+      await withTempStore(async (store) => {
+        const buf = Buffer.from("test content");
+        const saved = await store.saveMediaBuffer(
+          buf,
+          "text/plain",
+          "inbound",
+          5 * 1024 * 1024,
+          "report.txt",
+        );
+
+        // Should contain the original name and a UUID pattern
+        expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.txt$/);
+        expect(saved.path).toContain("report---");
+
+        // Should be able to extract original name
+        const extracted = store.extractOriginalFilename(saved.path);
+        expect(extracted).toBe("report.txt");
+      });
+    });
+
+    it("sanitizes unsafe characters in original filename", async () => {
+      await withTempStore(async (store) => {
+        const buf = Buffer.from("test");
+        // Filename with unsafe chars: < > : " / \ | ? *
+        const saved = await store.saveMediaBuffer(
+          buf,
+          "text/plain",
+          "inbound",
+          5 * 1024 * 1024,
+          "my<file>:test.txt",
+        );
+
+        // Unsafe chars should be replaced with underscores
+        expect(saved.id).toMatch(/^my_file_test---[a-f0-9-]{36}\.txt$/);
+      });
+    });
+
+    it("truncates long original filenames", async () => {
+      await withTempStore(async (store) => {
+        const buf = Buffer.from("test");
+        const longName = "a".repeat(100) + ".txt";
+        const saved = await store.saveMediaBuffer(
+          buf,
+          "text/plain",
+          "inbound",
+          5 * 1024 * 1024,
+          longName,
+        );
+
+        // Original name should be truncated to 60 chars
+        const baseName = path.parse(saved.id).name.split("---")[0];
+        expect(baseName.length).toBeLessThanOrEqual(60);
+      });
+    });
+
+    it("falls back to UUID-only when originalFilename not provided", async () => {
+      await withTempStore(async (store) => {
+        const buf = Buffer.from("test");
+        const saved = await store.saveMediaBuffer(buf, "text/plain", "inbound");
+
+        // Should be UUID-only pattern (legacy behavior)
+        expect(saved.id).toMatch(/^[a-f0-9-]{36}\.txt$/);
+        expect(saved.id).not.toContain("---");
+      });
+    });
+  });
 });

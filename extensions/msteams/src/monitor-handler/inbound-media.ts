@@ -1,7 +1,7 @@
 import {
   buildMSTeamsGraphMessageUrls,
+  downloadMSTeamsAttachments,
   downloadMSTeamsGraphMedia,
-  downloadMSTeamsImageAttachments,
   type MSTeamsAccessTokenProvider,
   type MSTeamsAttachmentLike,
   type MSTeamsHtmlAttachmentSummary,
@@ -24,6 +24,8 @@ export async function resolveMSTeamsInboundMedia(params: {
   conversationMessageId?: string;
   activity: Pick<MSTeamsTurnContext["activity"], "id" | "replyToId" | "channelData">;
   log: MSTeamsLogger;
+  /** When true, embeds original filename in stored path for later extraction. */
+  preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
   const {
     attachments,
@@ -36,13 +38,15 @@ export async function resolveMSTeamsInboundMedia(params: {
     conversationMessageId,
     activity,
     log,
+    preserveFilenames,
   } = params;
 
-  let mediaList = await downloadMSTeamsImageAttachments({
+  let mediaList = await downloadMSTeamsAttachments({
     attachments,
     maxBytes,
     tokenProvider,
     allowHosts,
+    preserveFilenames,
   });
 
   if (mediaList.length === 0) {
@@ -81,6 +85,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             tokenProvider,
             maxBytes,
             allowHosts,
+            preserveFilenames,
           });
           attempts.push({
             url: messageUrl,
@@ -104,7 +109,7 @@ export async function resolveMSTeamsInboundMedia(params: {
   }
 
   if (mediaList.length > 0) {
-    log.debug("downloaded image attachments", { count: mediaList.length });
+    log.debug("downloaded attachments", { count: mediaList.length });
   } else if (htmlSummary?.imgTags) {
     log.debug("inline images detected but none downloaded", {
       imgTags: htmlSummary.imgTags,

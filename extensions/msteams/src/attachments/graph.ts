@@ -1,6 +1,6 @@
 import { getMSTeamsRuntime } from "../runtime.js";
-import { downloadMSTeamsImageAttachments } from "./download.js";
-import { GRAPH_ROOT, isRecord, normalizeContentType, resolveAllowedHosts } from "./shared.js";
+import { downloadMSTeamsAttachments } from "./download.js";
+import { GRAPH_ROOT, inferPlaceholder, isRecord, normalizeContentType, resolveAllowedHosts } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,
@@ -128,11 +128,16 @@ function normalizeGraphAttachment(att: GraphAttachment): MSTeamsAttachmentLike {
   };
 }
 
-async function downloadGraphHostedImages(params: {
+/**
+ * Download all hosted content from a Teams message (images, documents, etc.).
+ * Renamed from downloadGraphHostedImages to support all file types.
+ */
+async function downloadGraphHostedContent(params: {
   accessToken: string;
   messageUrl: string;
   maxBytes: number;
   fetchFn?: typeof fetch;
+  preserveFilenames?: boolean;
 }): Promise<{ media: MSTeamsInboundMedia[]; status: number; count: number }> {
   const hosted = await fetchGraphCollection<GraphHostedContent>({
     url: `${params.messageUrl}/hostedContents`,
@@ -158,7 +163,7 @@ async function downloadGraphHostedImages(params: {
       buffer,
       headerMime: item.contentType ?? undefined,
     });
-    if (mime && !mime.startsWith("image/")) continue;
+    // Download any file type, not just images
     try {
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         buffer,
@@ -169,7 +174,7 @@ async function downloadGraphHostedImages(params: {
       out.push({
         path: saved.path,
         contentType: saved.contentType,
-        placeholder: "<media:image>",
+        placeholder: inferPlaceholder({ contentType: saved.contentType }),
       });
     } catch {
       // Ignore save failures.
@@ -185,6 +190,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   maxBytes: number;
   allowHosts?: string[];
   fetchFn?: typeof fetch;
+  /** When true, embeds original filename in stored path for later extraction. */
+  preserveFilenames?: boolean;
 }): Promise<MSTeamsGraphMediaResult> {
   if (!params.messageUrl || !params.tokenProvider) return { media: [] };
   const allowHosts = resolveAllowedHosts(params.allowHosts);
@@ -196,11 +203,83 @@ export async function downloadMSTeamsGraphMedia(params: {
     return { media: [], messageUrl, tokenError: true };
   }
 
-  const hosted = await downloadGraphHostedImages({
+  // Fetch the full message to get SharePoint file attachments (for group chats)
+  const fetchFn = params.fetchFn ?? fetch;
+  const sharePointMedia: MSTeamsInboundMedia[] = [];
+  const downloadedReferenceUrls = new Set<string>();
+  try {
+    const msgRes = await fetchFn(messageUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (msgRes.ok) {
+      const msgData = (await msgRes.json()) as {
+        body?: { content?: string; contentType?: string };
+        attachments?: Array<{
+          id?: string;
+          contentUrl?: string;
+          contentType?: string;
+          name?: string;
+        }>;
+      };
+
+      // Extract SharePoint file attachments (contentType: "reference")
+      // Download any file type, not just images
+      const spAttachments = (msgData.attachments ?? []).filter(
+        (a) => a.contentType === "reference" && a.contentUrl && a.name,
+      );
+      for (const att of spAttachments) {
+        const name = att.name ?? "file";
+
+        try {
+          // SharePoint URLs need to be accessed via Graph shares API
+          const shareUrl = att.contentUrl!;
+          const encodedUrl = Buffer.from(shareUrl).toString("base64url");
+          const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
+
+          const spRes = await fetchFn(sharesUrl, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            redirect: "follow",
+          });
+
+          if (spRes.ok) {
+            const buffer = Buffer.from(await spRes.arrayBuffer());
+            if (buffer.byteLength <= params.maxBytes) {
+              const mime = await getMSTeamsRuntime().media.detectMime({
+                buffer,
+                headerMime: spRes.headers.get("content-type") ?? undefined,
+                filePath: name,
+              });
+              const originalFilename = params.preserveFilenames ? name : undefined;
+              const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
+                buffer,
+                mime ?? "application/octet-stream",
+                "inbound",
+                params.maxBytes,
+                originalFilename,
+              );
+              sharePointMedia.push({
+                path: saved.path,
+                contentType: saved.contentType,
+                placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
+              });
+              downloadedReferenceUrls.add(shareUrl);
+            }
+          }
+        } catch {
+          // Ignore SharePoint download failures.
+        }
+      }
+    }
+  } catch {
+    // Ignore message fetch failures.
+  }
+
+  const hosted = await downloadGraphHostedContent({
     accessToken,
     messageUrl,
     maxBytes: params.maxBytes,
     fetchFn: params.fetchFn,
+    preserveFilenames: params.preserveFilenames,
   });
 
   const attachments = await fetchGraphCollection<GraphAttachment>({
@@ -210,18 +289,29 @@ export async function downloadMSTeamsGraphMedia(params: {
   });
 
   const normalizedAttachments = attachments.items.map(normalizeGraphAttachment);
-  const attachmentMedia = await downloadMSTeamsImageAttachments({
-    attachments: normalizedAttachments,
+  const filteredAttachments =
+    sharePointMedia.length > 0
+      ? normalizedAttachments.filter((att) => {
+          const contentType = att.contentType?.toLowerCase();
+          if (contentType !== "reference") return true;
+          const url = typeof att.contentUrl === "string" ? att.contentUrl : "";
+          if (!url) return true;
+          return !downloadedReferenceUrls.has(url);
+        })
+      : normalizedAttachments;
+  const attachmentMedia = await downloadMSTeamsAttachments({
+    attachments: filteredAttachments,
     maxBytes: params.maxBytes,
     tokenProvider: params.tokenProvider,
     allowHosts,
     fetchFn: params.fetchFn,
+    preserveFilenames: params.preserveFilenames,
   });
 
   return {
-    media: [...hosted.media, ...attachmentMedia],
+    media: [...sharePointMedia, ...hosted.media, ...attachmentMedia],
     hostedCount: hosted.count,
-    attachmentCount: attachments.items.length,
+    attachmentCount: filteredAttachments.length + sharePointMedia.length,
     hostedStatus: hosted.status,
     attachmentStatus: attachments.status,
     messageUrl,

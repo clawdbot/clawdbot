@@ -32,9 +32,11 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/markdown": ".md",
 };
 
-const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
-  Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime]),
-);
+const MIME_BY_EXT: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
+  // Additional extension aliases
+  ".jpeg": "image/jpeg",
+};
 
 const AUDIO_FILE_EXTENSIONS = new Set([
   ".aac",

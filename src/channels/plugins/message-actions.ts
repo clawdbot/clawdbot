@@ -21,6 +21,13 @@ export function supportsChannelMessageButtons(cfg: ClawdbotConfig): boolean {
   return false;
 }
 
+export function supportsChannelMessageCards(cfg: ClawdbotConfig): boolean {
+  for (const plugin of listChannelPlugins()) {
+    if (plugin.actions?.supportsCards?.({ cfg })) return true;
+  }
+  return false;
+}
+
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {

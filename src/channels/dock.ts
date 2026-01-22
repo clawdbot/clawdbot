@@ -22,6 +22,7 @@ import type {
   ChannelElevatedAdapter,
   ChannelGroupAdapter,
   ChannelId,
+  ChannelAgentPromptAdapter,
   ChannelMentionAdapter,
   ChannelPlugin,
   ChannelThreadingAdapter,
@@ -51,6 +52,7 @@ export type ChannelDock = {
   groups?: ChannelGroupAdapter;
   mentions?: ChannelMentionAdapter;
   threading?: ChannelThreadingAdapter;
+  agentPrompt?: ChannelAgentPromptAdapter;
 };
 
 type ChannelDockStreaming = {
@@ -319,6 +321,7 @@ function buildDockFromPlugin(plugin: ChannelPlugin): ChannelDock {
     groups: plugin.groups,
     mentions: plugin.mentions,
     threading: plugin.threading,
+    agentPrompt: plugin.agentPrompt,
   };
 }
 

@@ -1,7 +1,7 @@
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
@@ -23,7 +23,7 @@ export function buildThreadingToolContext(params: {
   if (!config) return {};
   const rawProvider = sessionCtx.Provider?.trim().toLowerCase();
   if (!rawProvider) return {};
-  const provider = normalizeChannelId(rawProvider);
+  const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const dock = provider ? getChannelDock(provider) : undefined;
   if (!dock?.threading?.buildToolContext) {

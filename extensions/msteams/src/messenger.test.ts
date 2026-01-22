@@ -51,7 +51,7 @@ describe("msteams messenger", () => {
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
         { textChunkLimit: 4000 },
       );
-      expect(messages).toEqual(["hi", "https://example.com/a.png"]);
+      expect(messages).toEqual([{ text: "hi" }, { mediaUrl: "https://example.com/a.png" }]);
     });
 
     it("supports inline media mode", () => {
@@ -59,7 +59,7 @@ describe("msteams messenger", () => {
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
         { textChunkLimit: 4000, mediaMode: "inline" },
       );
-      expect(messages).toEqual(["hi\n\nhttps://example.com/a.png"]);
+      expect(messages).toEqual([{ text: "hi", mediaUrl: "https://example.com/a.png" }]);
     });
 
     it("chunks long text when enabled", () => {
@@ -101,7 +101,7 @@ describe("msteams messenger", () => {
         appId: "app123",
         conversationRef: baseRef,
         context: ctx,
-        messages: ["one", "two"],
+        messages: [{ text: "one" }, { text: "two" }],
       });
 
       expect(sent).toEqual(["one", "two"]);
@@ -129,7 +129,7 @@ describe("msteams messenger", () => {
         adapter,
         appId: "app123",
         conversationRef: baseRef,
-        messages: ["hello"],
+        messages: [{ text: "hello" }],
       });
 
       expect(seen.texts).toEqual(["hello"]);
@@ -168,7 +168,7 @@ describe("msteams messenger", () => {
         appId: "app123",
         conversationRef: baseRef,
         context: ctx,
-        messages: ["one"],
+        messages: [{ text: "one" }],
         retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
         onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
       });
@@ -196,7 +196,7 @@ describe("msteams messenger", () => {
           appId: "app123",
           conversationRef: baseRef,
           context: ctx,
-          messages: ["one"],
+          messages: [{ text: "one" }],
           retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }),
       ).rejects.toMatchObject({ statusCode: 400 });
@@ -227,7 +227,7 @@ describe("msteams messenger", () => {
         adapter,
         appId: "app123",
         conversationRef: baseRef,
-        messages: ["hello"],
+        messages: [{ text: "hello" }],
         retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
       });
 

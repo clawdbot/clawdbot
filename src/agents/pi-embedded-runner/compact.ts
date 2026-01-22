@@ -5,7 +5,7 @@ import { createAgentSession, SessionManager, SettingsManager } from "@mariozechn
 
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import { listChannelSupportedActions } from "../channel-tools.js";
+import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
@@ -245,6 +245,13 @@ export async function compactEmbeddedPiSession(params: {
               channel: runtimeChannel,
             })
           : undefined;
+        const messageToolHints = runtimeChannel
+          ? resolveChannelMessageToolHints({
+              cfg: params.config,
+              channel: runtimeChannel,
+              accountId: params.agentAccountId,
+            })
+          : undefined;
 
         const runtimeInfo = {
           host: machineName,
@@ -287,6 +294,7 @@ export async function compactEmbeddedPiSession(params: {
           docsPath: docsPath ?? undefined,
           promptMode,
           runtimeInfo,
+          messageToolHints,
           sandboxInfo,
           tools,
           modelAliasLines: buildModelAliasLines(params.config),

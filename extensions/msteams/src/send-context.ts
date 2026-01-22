@@ -1,29 +1,31 @@
-import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
+import { resolveChannelMediaMaxBytes, type ClawdbotConfig, type PluginRuntime } from "clawdbot/plugin-sdk";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
 } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type { MSTeamsAdapter } from "./messenger.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-type GetChildLogger = PluginRuntime["logging"]["getChildLogger"];
-
-let _log: ReturnType<GetChildLogger> | undefined;
-const getLog = async (): Promise<ReturnType<GetChildLogger>> => {
-  if (_log) return _log;
-  const { getChildLogger } = await import("../logging.js");
-  _log = getChildLogger({ name: "msteams:send" });
-  return _log;
-};
+export type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
 export type MSTeamsProactiveContext = {
   appId: string;
   conversationId: string;
   ref: StoredConversationReference;
   adapter: MSTeamsAdapter;
-  log: Awaited<ReturnType<typeof getLog>>;
+  log: ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
+  /** The type of conversation: personal (1:1), groupChat, or channel */
+  conversationType: MSTeamsConversationType;
+  /** Token provider for Graph API / OneDrive operations */
+  tokenProvider: MSTeamsAccessTokenProvider;
+  /** SharePoint site ID for file uploads in group chats/channels */
+  sharePointSiteId?: string;
+  /** Resolved media max bytes from config (default: 100MB) */
+  mediaMaxBytes?: number;
 };
 
 /**
@@ -110,10 +112,35 @@ export async function resolveMSTeamsSendContext(params: {
   }
 
   const { conversationId, ref } = found;
-  const log = await getLog();
+  const core = getMSTeamsRuntime();
+  const log = core.logging.getChildLogger({ name: "msteams:send" });
 
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const adapter = createMSTeamsAdapter(authConfig, sdk);
+
+  // Create token provider for Graph API / OneDrive operations
+  const tokenProvider = new sdk.MsalTokenProvider(authConfig) as MSTeamsAccessTokenProvider;
+
+  // Determine conversation type from stored reference
+  const storedConversationType = ref.conversation?.conversationType?.toLowerCase() ?? "";
+  let conversationType: MSTeamsConversationType;
+  if (storedConversationType === "personal") {
+    conversationType = "personal";
+  } else if (storedConversationType === "channel") {
+    conversationType = "channel";
+  } else {
+    // groupChat, or unknown defaults to groupChat behavior
+    conversationType = "groupChat";
+  }
+
+  // Get SharePoint site ID from config (required for file uploads in group chats/channels)
+  const sharePointSiteId = msteamsCfg.sharePointSiteId;
+
+  // Resolve media max bytes from config
+  const mediaMaxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+  });
 
   return {
     appId: creds.appId,
@@ -121,5 +148,9 @@ export async function resolveMSTeamsSendContext(params: {
     ref,
     adapter: adapter as unknown as MSTeamsAdapter,
     log,
+    conversationType,
+    tokenProvider,
+    sharePointSiteId,
+    mediaMaxBytes,
   };
 }

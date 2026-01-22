@@ -402,7 +402,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         channelData: activity.channelData,
       },
       log,
-	    });
+      preserveFilenames: cfg.media?.preserveFilenames,
+    });
 
 	    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
 	    const envelopeFrom = isDirectMessage ? senderName : conversationType;
@@ -476,6 +477,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
+    const sharePointSiteId = msteamsCfg?.sharePointSiteId;
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
@@ -492,6 +494,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           recordMSTeamsSentMessage(conversationId, id);
         }
       },
+      tokenProvider,
+      sharePointSiteId,
     });
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });

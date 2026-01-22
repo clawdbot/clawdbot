@@ -37,6 +37,15 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "statics.teams.cdn.office.net",
   "office.com",
   "office.net",
+  // Azure Media Services / Skype CDN for clipboard-pasted images
+  "asm.skype.com",
+  "ams.skype.com",
+  "media.ams.skype.com",
+  // Bot Framework attachment URLs
+  "trafficmanager.net",
+  "blob.core.windows.net",
+  "azureedge.net",
+  "microsoft.com",
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
@@ -80,6 +89,30 @@ export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
     if (fileType && IMAGE_EXT_RE.test(`x.${fileType}`)) return true;
     const fileName = typeof att.content.fileName === "string" ? att.content.fileName : "";
     if (fileName && IMAGE_EXT_RE.test(fileName)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Returns true if the attachment can be downloaded (any file type).
+ * Used when downloading all files, not just images.
+ */
+export function isDownloadableAttachment(att: MSTeamsAttachmentLike): boolean {
+  const contentType = normalizeContentType(att.contentType) ?? "";
+
+  // Teams file download info always has a downloadUrl
+  if (
+    contentType === "application/vnd.microsoft.teams.file.download.info" &&
+    isRecord(att.content) &&
+    typeof att.content.downloadUrl === "string"
+  ) {
+    return true;
+  }
+
+  // Any attachment with a contentUrl can be downloaded
+  if (typeof att.contentUrl === "string" && att.contentUrl.trim()) {
+    return true;
   }
 
   return false;

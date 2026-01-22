@@ -191,6 +191,12 @@ export const ClawdbotSchema = z
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
     audio: AudioSchema,
+    media: z
+      .object({
+        preserveFilenames: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     messages: MessagesSchema,
     commands: CommandsSchema,
     session: SessionSchema,

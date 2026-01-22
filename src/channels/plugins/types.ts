@@ -31,6 +31,7 @@ export type {
 export type {
   ChannelAccountSnapshot,
   ChannelAccountState,
+  ChannelAgentPromptAdapter,
   ChannelAgentTool,
   ChannelAgentToolFactory,
   ChannelCapabilities,

@@ -240,6 +240,10 @@ export type ChannelMessagingAdapter = {
   }) => string;
 };
 
+export type ChannelAgentPromptAdapter = {
+  messageToolHints?: (params: { cfg: ClawdbotConfig; accountId?: string | null }) => string[];
+};
+
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
 
 export type ChannelDirectoryEntry = {
@@ -281,6 +285,7 @@ export type ChannelMessageActionAdapter = {
   listActions?: (params: { cfg: ClawdbotConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
+  supportsCards?: (params: { cfg: ClawdbotConfig }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };

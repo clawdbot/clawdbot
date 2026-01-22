@@ -85,6 +85,7 @@ function buildMessagingSection(params: {
   messageChannelOptions: string;
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
+  messageToolHints?: string[];
 }) {
   if (params.isMinimal) return [];
   return [
@@ -105,6 +106,7 @@ function buildMessagingSection(params: {
             : params.runtimeChannel
               ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
+          ...(params.messageToolHints ?? []),
         ]
           .filter(Boolean)
           .join("\n")
@@ -159,6 +161,7 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
   };
+  messageToolHints?: string[];
   sandboxInfo?: {
     enabled: boolean;
     workspaceDir?: string;
@@ -468,6 +471,7 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       inlineButtonsEnabled,
       runtimeChannel,
+      messageToolHints: params.messageToolHints,
     }),
   ];
 

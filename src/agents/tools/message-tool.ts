@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
+  supportsChannelMessageCards,
 } from "../../channels/plugins/message-actions.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
@@ -36,7 +37,7 @@ function buildRoutingSchema() {
   };
 }
 
-function buildSendSchema(options: { includeButtons: boolean }) {
+function buildSendSchema(options: { includeButtons: boolean; includeCards: boolean }) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -77,8 +78,18 @@ function buildSendSchema(options: { includeButtons: boolean }) {
         },
       ),
     ),
+    card: Type.Optional(
+      Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description: "Adaptive Card JSON object (when supported by the channel)",
+        },
+      ),
+    ),
   };
   if (!options.includeButtons) delete props.buttons;
+  if (!options.includeCards) delete props.card;
   return props;
 }
 
@@ -192,7 +203,7 @@ function buildChannelManagementSchema() {
   };
 }
 
-function buildMessageToolSchemaProps(options: { includeButtons: boolean }) {
+function buildMessageToolSchemaProps(options: { includeButtons: boolean; includeCards: boolean }) {
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
@@ -211,7 +222,7 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean }) {
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
-  options: { includeButtons: boolean },
+  options: { includeButtons: boolean; includeCards: boolean },
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
@@ -222,6 +233,7 @@ function buildMessageToolSchemaFromActions(
 
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
+  includeCards: true,
 });
 
 type MessageToolOptions = {
@@ -238,8 +250,10 @@ type MessageToolOptions = {
 function buildMessageToolSchema(cfg: ClawdbotConfig) {
   const actions = listChannelMessageActions(cfg);
   const includeButtons = supportsChannelMessageButtons(cfg);
+  const includeCards = supportsChannelMessageCards(cfg);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
+    includeCards,
   });
 }
 

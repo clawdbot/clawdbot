@@ -1,18 +1,22 @@
+import { loadWebMedia, resolveChannelMediaMaxBytes } from "clawdbot/plugin-sdk";
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
-import type { StoredConversationReference } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
+import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
-  buildConversationReference,
-  type MSTeamsAdapter,
-  sendMSTeamsMessages,
-} from "./messenger.js";
+  getDriveItemProperties,
+  uploadAndShareOneDrive,
+  uploadAndShareSharePoint,
+} from "./graph-upload.js";
+import { extractFilename, extractMessageId } from "./media-helpers.js";
+import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
 import { buildMSTeamsPollCard } from "./polls.js";
-import { resolveMSTeamsSendContext } from "./send-context.js";
+import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
 export type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
@@ -28,7 +32,18 @@ export type SendMSTeamsMessageParams = {
 export type SendMSTeamsMessageResult = {
   messageId: string;
   conversationId: string;
+  /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
+  pendingUploadId?: string;
 };
+
+/** Threshold for large files that require FileConsentCard flow in personal chats */
+const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
+
+/**
+ * MSTeams-specific media size limit (100MB).
+ * Higher than the default because OneDrive upload handles large files well.
+ */
+const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 export type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
@@ -49,32 +64,19 @@ export type SendMSTeamsPollResult = {
   conversationId: string;
 };
 
-function extractMessageId(response: unknown): string | null {
-  if (!response || typeof response !== "object") return null;
-  if (!("id" in response)) return null;
-  const { id } = response as { id?: unknown };
-  if (typeof id !== "string" || !id) return null;
-  return id;
-}
+export type SendMSTeamsCardParams = {
+  /** Full config (for credentials) */
+  cfg: ClawdbotConfig;
+  /** Conversation ID or user ID to send to */
+  to: string;
+  /** Adaptive Card JSON object */
+  card: Record<string, unknown>;
+};
 
-async function sendMSTeamsActivity(params: {
-  adapter: MSTeamsAdapter;
-  appId: string;
-  conversationRef: StoredConversationReference;
-  activity: Record<string, unknown>;
-}): Promise<string> {
-  const baseRef = buildConversationReference(params.conversationRef);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-  let messageId = "unknown";
-  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-    const response = await ctx.sendActivity(params.activity);
-    messageId = extractMessageId(response) ?? "unknown";
-  });
-  return messageId;
-}
+export type SendMSTeamsCardResult = {
+  messageId: string;
+  conversationId: string;
+};
 
 /**
  * Send a message to a Teams conversation or user.
@@ -82,23 +84,225 @@ async function sendMSTeamsActivity(params: {
  * Uses the stored ConversationReference from previous interactions.
  * The bot must have received at least one message from the conversation
  * before proactive messaging works.
+ *
+ * File handling by conversation type:
+ * - Personal (1:1) chats: small images (<4MB) use base64, large files and non-images use FileConsentCard
+ * - Group chats / channels: files are uploaded to OneDrive and shared via link
  */
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
   const { cfg, to, text, mediaUrl } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
-    cfg,
-    to,
-  });
+  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const { adapter, appId, conversationId, ref, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   log.debug("sending proactive message", {
     conversationId,
+    conversationType,
     textLength: text.length,
     hasMedia: Boolean(mediaUrl),
   });
 
-  const message = mediaUrl ? (text ? `${text}\n\n${mediaUrl}` : mediaUrl) : text;
+  // Handle media if present
+  if (mediaUrl) {
+    const mediaMaxBytes = resolveChannelMediaMaxBytes({
+      cfg,
+      resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+    }) ?? MSTEAMS_MAX_MEDIA_BYTES;
+    const media = await loadWebMedia(mediaUrl, mediaMaxBytes);
+    const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
+    const isImage = media.contentType?.startsWith("image/") ?? false;
+    const fallbackFileName = await extractFilename(mediaUrl);
+    const fileName = media.fileName ?? fallbackFileName;
+
+    log.debug("processing media", {
+      fileName,
+      contentType: media.contentType,
+      size: media.buffer.length,
+      isLargeFile,
+      isImage,
+      conversationType,
+    });
+
+    // Personal chats: base64 only works for images; use FileConsentCard for large files or non-images
+    if (requiresFileConsent({
+      conversationType,
+      contentType: media.contentType,
+      bufferSize: media.buffer.length,
+      thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
+    })) {
+      const { activity, uploadId } = prepareFileConsentActivity({
+        media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
+        conversationId,
+        description: text || undefined,
+      });
+
+      log.debug("sending file consent card", { uploadId, fileName, size: media.buffer.length });
+
+      const baseRef = buildConversationReference(ref);
+      const proactiveRef = { ...baseRef, activityId: undefined };
+
+      let messageId = "unknown";
+      try {
+        await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
+          const response = await turnCtx.sendActivity(activity);
+          messageId = extractMessageId(response) ?? "unknown";
+        });
+      } catch (err) {
+        const classification = classifyMSTeamsSendError(err);
+        const hint = formatMSTeamsSendErrorHint(classification);
+        const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+        throw new Error(
+          `msteams consent card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+        );
+      }
+
+      log.info("sent file consent card", { conversationId, messageId, uploadId });
+
+      return {
+        messageId,
+        conversationId,
+        pendingUploadId: uploadId,
+      };
+    }
+
+    // Personal chat with small image: use base64 (only works for images)
+    if (conversationType === "personal") {
+      // Small image in personal chat: use base64 (only works for images)
+      const base64 = media.buffer.toString("base64");
+      const finalMediaUrl = `data:${media.contentType};base64,${base64}`;
+
+      return sendTextWithMedia(ctx, text, finalMediaUrl);
+    }
+
+    if (isImage && !sharePointSiteId) {
+      // Group chat/channel without SharePoint: send image inline (avoids OneDrive failures)
+      const base64 = media.buffer.toString("base64");
+      const finalMediaUrl = `data:${media.contentType};base64,${base64}`;
+      return sendTextWithMedia(ctx, text, finalMediaUrl);
+    }
+
+    // Group chat or channel: upload to SharePoint (if siteId configured) or OneDrive
+    try {
+      if (sharePointSiteId) {
+        // Use SharePoint upload + Graph API for native file card
+        log.debug("uploading to SharePoint for native file card", {
+          fileName,
+          conversationType,
+          siteId: sharePointSiteId,
+        });
+
+        const uploaded = await uploadAndShareSharePoint({
+          buffer: media.buffer,
+          filename: fileName,
+          contentType: media.contentType,
+          tokenProvider,
+          siteId: sharePointSiteId,
+          chatId: conversationId,
+          usePerUserSharing: conversationType === "groupChat",
+        });
+
+        log.debug("SharePoint upload complete", {
+          itemId: uploaded.itemId,
+          shareUrl: uploaded.shareUrl,
+        });
+
+        // Get driveItem properties needed for native file card
+        const driveItem = await getDriveItemProperties({
+          siteId: sharePointSiteId,
+          itemId: uploaded.itemId,
+          tokenProvider,
+        });
+
+        log.debug("driveItem properties retrieved", {
+          eTag: driveItem.eTag,
+          webDavUrl: driveItem.webDavUrl,
+        });
+
+        // Build native Teams file card attachment and send via Bot Framework
+        const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
+        const activity = {
+          type: "message",
+          text: text || undefined,
+          attachments: [fileCardAttachment],
+        };
+
+        const baseRef = buildConversationReference(ref);
+        const proactiveRef = { ...baseRef, activityId: undefined };
+
+        let messageId = "unknown";
+        await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
+          const response = await turnCtx.sendActivity(activity);
+          messageId = extractMessageId(response) ?? "unknown";
+        });
+
+        log.info("sent native file card", {
+          conversationId,
+          messageId,
+          fileName: driveItem.name,
+        });
+
+        return { messageId, conversationId };
+      }
+
+      // Fallback: no SharePoint site configured, use OneDrive with markdown link
+      log.debug("uploading to OneDrive (no SharePoint site configured)", { fileName, conversationType });
+
+      const uploaded = await uploadAndShareOneDrive({
+        buffer: media.buffer,
+        filename: fileName,
+        contentType: media.contentType,
+        tokenProvider,
+      });
+
+      log.debug("OneDrive upload complete", {
+        itemId: uploaded.itemId,
+        shareUrl: uploaded.shareUrl,
+      });
+
+      // Send message with file link (Bot Framework doesn't support "reference" attachment type for sending)
+      const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
+      const activity = {
+        type: "message",
+        text: text ? `${text}\n\n${fileLink}` : fileLink,
+      };
+
+      const baseRef = buildConversationReference(ref);
+      const proactiveRef = { ...baseRef, activityId: undefined };
+
+      let messageId = "unknown";
+      await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
+        const response = await turnCtx.sendActivity(activity);
+        messageId = extractMessageId(response) ?? "unknown";
+      });
+
+      log.info("sent message with OneDrive file link", { conversationId, messageId, shareUrl: uploaded.shareUrl });
+
+      return { messageId, conversationId };
+    } catch (err) {
+      const classification = classifyMSTeamsSendError(err);
+      const hint = formatMSTeamsSendErrorHint(classification);
+      const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+      throw new Error(
+        `msteams file send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      );
+    }
+  }
+
+  // No media: send text only
+  return sendTextWithMedia(ctx, text, undefined);
+}
+
+/**
+ * Send a text message with optional base64 media URL.
+ */
+async function sendTextWithMedia(
+  ctx: MSTeamsProactiveContext,
+  text: string,
+  mediaUrl: string | undefined,
+): Promise<SendMSTeamsMessageResult> {
+  const { adapter, appId, conversationId, ref, log, tokenProvider, sharePointSiteId, mediaMaxBytes } = ctx;
+
   let messageIds: string[];
   try {
     messageIds = await sendMSTeamsMessages({
@@ -106,12 +310,14 @@ export async function sendMessageMSTeams(
       adapter,
       appId,
       conversationRef: ref,
-      messages: [message],
-      // Enable default retry/backoff for throttling/transient failures.
+      messages: [{ text: text || undefined, mediaUrl }],
       retry: {},
       onRetry: (event) => {
         log.debug("retrying send", { conversationId, ...event });
       },
+      tokenProvider,
+      sharePointSiteId,
+      mediaMaxBytes,
     });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
@@ -121,8 +327,8 @@ export async function sendMessageMSTeams(
       `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
     );
   }
-  const messageId = messageIds[0] ?? "unknown";
 
+  const messageId = messageIds[0] ?? "unknown";
   log.info("sent proactive message", { conversationId, messageId });
 
   return {
@@ -157,7 +363,6 @@ export async function sendPollMSTeams(
 
   const activity = {
     type: "message",
-    text: pollCard.fallbackText,
     attachments: [
       {
         contentType: "application/vnd.microsoft.card.adaptive",
@@ -166,13 +371,18 @@ export async function sendPollMSTeams(
     ],
   };
 
-  let messageId: string;
+  // Send poll via proactive conversation (Adaptive Cards require direct activity send)
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = {
+    ...baseRef,
+    activityId: undefined,
+  };
+
+  let messageId = "unknown";
   try {
-    messageId = await sendMSTeamsActivity({
-      adapter,
-      appId,
-      conversationRef: ref,
-      activity,
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      const response = await ctx.sendActivity(activity);
+      messageId = extractMessageId(response) ?? "unknown";
     });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
@@ -187,6 +397,64 @@ export async function sendPollMSTeams(
 
   return {
     pollId: pollCard.pollId,
+    messageId,
+    conversationId,
+  };
+}
+
+/**
+ * Send an arbitrary Adaptive Card to a Teams conversation or user.
+ */
+export async function sendAdaptiveCardMSTeams(
+  params: SendMSTeamsCardParams,
+): Promise<SendMSTeamsCardResult> {
+  const { cfg, to, card } = params;
+  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+    cfg,
+    to,
+  });
+
+  log.debug("sending adaptive card", {
+    conversationId,
+    cardType: card.type,
+    cardVersion: card.version,
+  });
+
+  const activity = {
+    type: "message",
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        content: card,
+      },
+    ],
+  };
+
+  // Send card via proactive conversation
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = {
+    ...baseRef,
+    activityId: undefined,
+  };
+
+  let messageId = "unknown";
+  try {
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      const response = await ctx.sendActivity(activity);
+      messageId = extractMessageId(response) ?? "unknown";
+    });
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    throw new Error(
+      `msteams card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+    );
+  }
+
+  log.info("sent adaptive card", { conversationId, messageId });
+
+  return {
     messageId,
     conversationId,
   };

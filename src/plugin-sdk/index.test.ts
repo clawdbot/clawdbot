@@ -19,7 +19,6 @@ describe("plugin-sdk exports", () => {
       "writeConfigFile",
       "runCommandWithTimeout",
       "enqueueSystemEvent",
-      "detectMime",
       "fetchRemoteMedia",
       "saveMediaBuffer",
       "formatAgentEnvelope",

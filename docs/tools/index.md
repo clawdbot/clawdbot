@@ -322,7 +322,7 @@ Notes:
 Send messages and channel actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
 
 Core actions:
-- `send` (text + optional media)
+- `send` (text + optional media; MS Teams also supports `card` for Adaptive Cards)
 - `poll` (WhatsApp/Discord/MS Teams polls)
 - `react` / `reactions` / `read` / `edit` / `delete`
 - `pin` / `unpin` / `list-pins`

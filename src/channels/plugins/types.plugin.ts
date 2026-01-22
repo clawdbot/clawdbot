@@ -20,6 +20,7 @@ import type {
   ChannelAgentToolFactory,
   ChannelCapabilities,
   ChannelId,
+  ChannelAgentPromptAdapter,
   ChannelMentionAdapter,
   ChannelMessageActionAdapter,
   ChannelMessagingAdapter,
@@ -73,6 +74,7 @@ export type ChannelPlugin<ResolvedAccount = any> = {
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;
+  agentPrompt?: ChannelAgentPromptAdapter;
   directory?: ChannelDirectoryAdapter;
   resolver?: ChannelResolverAdapter;
   actions?: ChannelMessageActionAdapter;

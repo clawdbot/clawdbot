@@ -206,6 +206,8 @@ export type {
   DiagnosticWebhookProcessedEvent,
   DiagnosticWebhookReceivedEvent,
 } from "../infra/diagnostic-events.js";
+export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
+export { extractOriginalFilename } from "../media/store.js";
 
 // Channel: Discord
 export {
@@ -282,3 +284,6 @@ export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/w
 
 // Channel: BlueBubbles
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
+
+// Media utilities
+export { loadWebMedia, type WebMediaResult } from "../web/media.js";

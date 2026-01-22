@@ -78,4 +78,8 @@ export type MSTeamsConfig = {
   replyStyle?: MSTeamsReplyStyle;
   /** Per-team config. Key is team ID (from the /team/ URL path segment). */
   teams?: Record<string, MSTeamsTeamConfig>;
+  /** Max media size in MB (default: 100MB for OneDrive upload support). */
+  mediaMaxMb?: number;
+  /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2"). */
+  sharePointSiteId?: string;
 };

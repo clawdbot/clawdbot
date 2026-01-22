@@ -4,11 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
+import { resolveUserPath } from "../utils.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { convertHeicToJpeg, resizeToJpeg } from "../media/image-ops.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 
-type WebMediaResult = {
+export type WebMediaResult = {
   buffer: Buffer;
   contentType?: string;
   kind: MediaKind;
@@ -89,10 +90,9 @@ async function loadWebMediaInternal(
     kind: MediaKind;
     fileName?: string;
   }): Promise<WebMediaResult> => {
-    const cap =
-      maxBytes !== undefined
-        ? Math.min(maxBytes, maxBytesForKind(params.kind))
-        : maxBytesForKind(params.kind);
+    // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
+    // Otherwise fall back to per-kind defaults.
+    const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {
@@ -139,6 +139,11 @@ async function loadWebMediaInternal(
     const { buffer, contentType, fileName } = fetched;
     const kind = mediaKindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
+  }
+
+  // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
+  if (mediaUrl.startsWith("~")) {
+    mediaUrl = resolveUserPath(mediaUrl);
   }
 
   // Local path

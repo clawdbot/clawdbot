@@ -1,8 +1,10 @@
-import type {
-  ClawdbotConfig,
-  MSTeamsReplyStyle,
-  RuntimeEnv,
+import {
+  resolveChannelMediaMaxBytes,
+  type ClawdbotConfig,
+  type MSTeamsReplyStyle,
+  type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
   classifyMSTeamsSendError,
@@ -30,6 +32,10 @@ export function createMSTeamsReplyDispatcher(params: {
   replyStyle: MSTeamsReplyStyle;
   textLimit: number;
   onSentMessageIds?: (ids: string[]) => void;
+  /** Token provider for OneDrive/SharePoint uploads in group chats/channels */
+  tokenProvider?: MSTeamsAccessTokenProvider;
+  /** SharePoint site ID for file uploads in group chats/channels */
+  sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
@@ -52,6 +58,10 @@ export function createMSTeamsReplyDispatcher(params: {
         chunkText: true,
         mediaMode: "split",
       });
+      const mediaMaxBytes = resolveChannelMediaMaxBytes({
+        cfg: params.cfg,
+        resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+      });
       const ids = await sendMSTeamsMessages({
         replyStyle: params.replyStyle,
         adapter: params.adapter,
@@ -67,6 +77,9 @@ export function createMSTeamsReplyDispatcher(params: {
             ...event,
           });
         },
+        tokenProvider: params.tokenProvider,
+        sharePointSiteId: params.sharePointSiteId,
+        mediaMaxBytes,
       });
       if (ids.length > 0) params.onSentMessageIds?.(ids);
     },

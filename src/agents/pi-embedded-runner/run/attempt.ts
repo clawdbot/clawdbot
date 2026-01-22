@@ -7,7 +7,10 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import { listChannelSupportedActions } from "../../channel-tools.js";
+import {
+  listChannelSupportedActions,
+  resolveChannelMessageToolHints,
+} from "../../channel-tools.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -260,6 +263,13 @@ export async function runEmbeddedAttempt(
           channel: runtimeChannel,
         })
       : undefined;
+    const messageToolHints = runtimeChannel
+      ? resolveChannelMessageToolHints({
+          cfg: params.config,
+          channel: runtimeChannel,
+          accountId: params.agentAccountId,
+        })
+      : undefined;
 
     const defaultModelRef = resolveDefaultModelForAgent({
       cfg: params.config ?? {},
@@ -305,6 +315,7 @@ export async function runEmbeddedAttempt(
       reactionGuidance,
       promptMode,
       runtimeInfo,
+      messageToolHints,
       sandboxInfo,
       tools,
       modelAliasLines: buildModelAliasLines(params.config),

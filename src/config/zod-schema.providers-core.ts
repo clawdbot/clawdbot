@@ -599,6 +599,10 @@ export const MSTeamsConfigSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
+    /** Max media size in MB (default: 100MB for OneDrive upload support). */
+    mediaMaxMb: z.number().positive().optional(),
+    /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
+    sharePointSiteId: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

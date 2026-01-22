@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 - Docs: add per-message Gmail search example for gog. (#1220) Thanks @mbelinky.
 - Onboarding: remove the run setup-token auth option (paste setup-token or reuse CLI creds instead).
 - Signal: add typing indicators and DM read receipts via signal-cli.
+- MSTeams: add file uploads, adaptive cards, and attachment handling improvements. (#1410) Thanks @Evizero.
 
 ### Fixes
 - Config: avoid stack traces for invalid configs and log the config path.
