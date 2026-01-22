@@ -87,11 +87,21 @@ declare global {
 
 const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
 
+function resolveOnboardingMode(): boolean {
+  if (!window.location.search) return false;
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("onboarding");
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 @customElement("clawdbot-app")
 export class ClawdbotApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   @state() password = "";
   @state() tab: Tab = "chat";
+  @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";

@@ -34,6 +34,7 @@ export type AppViewState = {
   settings: UiSettings;
   password: string;
   tab: Tab;
+  onboarding: boolean;
   basePath: string;
   connected: boolean;
   theme: ThemeMode;

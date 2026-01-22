@@ -105,12 +105,13 @@ export function renderApp(state: AppViewState) {
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
   const isChat = state.tab === "chat";
-  const chatFocus = isChat && state.settings.chatFocusMode;
+  const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
 
   return html`
-    <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""}">
+    <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
       <header class="topbar">
         <div class="topbar-left">
           <button
@@ -440,7 +441,7 @@ export function renderApp(state: AppViewState) {
                 void refreshChatAvatar(state);
               },
               thinkingLevel: state.chatThinkingLevel,
-              showThinking: state.settings.chatShowThinking,
+              showThinking,
               loading: state.chatLoading,
               sending: state.chatSending,
               assistantAvatarUrl: chatAvatarUrl,
@@ -455,16 +456,18 @@ export function renderApp(state: AppViewState) {
               disabledReason: chatDisabledReason,
               error: state.lastError,
               sessions: state.sessionsResult,
-              focusMode: state.settings.chatFocusMode,
+              focusMode: chatFocus,
               onRefresh: () => {
                 state.resetToolStream();
                 return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
               },
-              onToggleFocusMode: () =>
+              onToggleFocusMode: () => {
+                if (state.onboarding) return;
                 state.applySettings({
                   ...state.settings,
                   chatFocusMode: !state.settings.chatFocusMode,
-                }),
+                });
+              },
               onChatScroll: (event) => state.handleChatScroll(event),
               onDraftChange: (next) => (state.chatMessage = next),
               onSend: () => state.handleSendChat(),

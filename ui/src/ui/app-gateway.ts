@@ -34,6 +34,7 @@ type GatewayHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
+  onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
   tab: Tab;
@@ -153,6 +154,7 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "agent") {
+    if (host.onboarding) return;
     handleAgentEvent(
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,

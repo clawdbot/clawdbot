@@ -39,6 +39,10 @@ export function renderTab(state: AppViewState, tab: Tab) {
 
 export function renderChatControls(state: AppViewState) {
   const sessionOptions = resolveSessionOptions(state.sessionKey, state.sessionsResult);
+  const disableThinkingToggle = state.onboarding;
+  const disableFocusToggle = state.onboarding;
+  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   // Refresh icon
   const refreshIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>`;
   const focusIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h3"></path><path d="M20 7V4h-3"></path><path d="M4 17v3h3"></path><path d="M20 17v3h-3"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
@@ -90,26 +94,36 @@ export function renderChatControls(state: AppViewState) {
       </button>
       <span class="chat-controls__separator">|</span>
       <button
-        class="btn btn--sm btn--icon ${state.settings.chatShowThinking ? "active" : ""}"
-        @click=${() =>
+        class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
+        ?disabled=${disableThinkingToggle}
+        @click=${() => {
+          if (disableThinkingToggle) return;
           state.applySettings({
             ...state.settings,
             chatShowThinking: !state.settings.chatShowThinking,
-          })}
-        aria-pressed=${state.settings.chatShowThinking}
-        title="Toggle assistant thinking/working output"
+          });
+        }}
+        aria-pressed=${showThinking}
+        title=${disableThinkingToggle
+          ? "Disabled during onboarding"
+          : "Toggle assistant thinking/working output"}
       >
         🧠
       </button>
       <button
-        class="btn btn--sm btn--icon ${state.settings.chatFocusMode ? "active" : ""}"
-        @click=${() =>
+        class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
+        ?disabled=${disableFocusToggle}
+        @click=${() => {
+          if (disableFocusToggle) return;
           state.applySettings({
             ...state.settings,
             chatFocusMode: !state.settings.chatFocusMode,
-          })}
-        aria-pressed=${state.settings.chatFocusMode}
-        title="Toggle focus mode (hide sidebar + page header)"
+          });
+        }}
+        aria-pressed=${focusActive}
+        title=${disableFocusToggle
+          ? "Disabled during onboarding"
+          : "Toggle focus mode (hide sidebar + page header)"}
       >
         ${focusIcon}
       </button>

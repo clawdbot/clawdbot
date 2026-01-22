@@ -37,6 +37,18 @@
   grid-template-columns: 0px minmax(0, 1fr);
 }
 
+.shell--onboarding {
+  grid-template-rows: 0 1fr;
+}
+
+.shell--onboarding .topbar {
+  display: none;
+}
+
+.shell--onboarding .content {
+  padding-top: 0;
+}
+
 .shell--chat-focus .content {
   padding-top: 0;
   gap: 0;
