@@ -50,7 +50,7 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).toHaveBeenCalledWith("!");
   });
 
-  it("does not trim input", () => {
+  it("trims normal messages before sending and adding to history", () => {
     const editor = {
       setText: vi.fn(),
       addToHistory: vi.fn(),
@@ -68,7 +68,7 @@ describe("createEditorSubmitHandler", () => {
 
     onSubmit("  hello  ");
 
-    expect(sendMessage).toHaveBeenCalledWith("  hello  ");
-    expect(editor.addToHistory).toHaveBeenCalledWith("  hello  ");
+    expect(sendMessage).toHaveBeenCalledWith("hello");
+    expect(editor.addToHistory).toHaveBeenCalledWith("hello");
   });
 });

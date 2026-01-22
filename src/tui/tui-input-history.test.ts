@@ -22,7 +22,7 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("hello world");
   });
 
-  it("does not trim input before adding to history", () => {
+  it("trims input before adding to history", () => {
     const editor = {
       setText: vi.fn(),
       addToHistory: vi.fn(),
@@ -37,7 +37,7 @@ describe("createEditorSubmitHandler", () => {
 
     handler("   hi   ");
 
-    expect(editor.addToHistory).toHaveBeenCalledWith("   hi   ");
+    expect(editor.addToHistory).toHaveBeenCalledWith("hi");
   });
 
   it("does not add empty-string submissions to history", () => {

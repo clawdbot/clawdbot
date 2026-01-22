@@ -48,21 +48,24 @@ export function createEditorSubmitHandler(params: {
   handleBangLine: (value: string) => Promise<void> | void;
 }) {
   return (text: string) => {
-    // NOTE: We intentionally do not trim here.
-    // The caller decides how to interpret whitespace.
-    const value = text;
+    const raw = text;
+    const value = raw.trim();
     params.editor.setText("");
+
+    // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) return;
+
+    // Bash mode: only if the very first character is '!' and it's not just '!'.
+    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
+    // Per requirement: a lone '!' should be treated as a normal message.
+    if (raw.startsWith("!") && raw !== "!") {
+      params.editor.addToHistory(raw);
+      void params.handleBangLine(raw);
+      return;
+    }
 
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
-
-    // Bash mode: only if the very first character is '!' and it's not just '!'.
-    // Per requirement: a lone '!' should be treated as a normal message.
-    if (value.startsWith("!") && value !== "!") {
-      void params.handleBangLine(value);
-      return;
-    }
 
     if (value.startsWith("/")) {
       void params.handleCommand(value);
