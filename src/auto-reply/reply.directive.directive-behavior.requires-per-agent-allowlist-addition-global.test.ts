@@ -150,7 +150,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Elevated mode enabled");
+      expect(text).toContain("Elevated mode set to ask");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

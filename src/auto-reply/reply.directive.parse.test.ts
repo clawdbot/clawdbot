@@ -55,6 +55,16 @@ describe("directive parsing", () => {
     expect(res.hasDirective).toBe(true);
     expect(res.elevatedLevel).toBe("on");
   });
+  it("matches elevated ask", () => {
+    const res = extractElevatedDirective("/elevated ask please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBe("ask");
+  });
+  it("matches elevated full", () => {
+    const res = extractElevatedDirective("/elevated full please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBe("full");
+  });
 
   it("matches think at start of line", () => {
     const res = extractThinkDirective("/think:high run slow");

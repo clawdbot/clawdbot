@@ -76,6 +76,6 @@ export type EmbeddedSandboxInfo = {
   allowedControlPorts?: number[];
   elevated?: {
     allowed: boolean;
-    defaultLevel: "on" | "off";
+    defaultLevel: "on" | "off" | "ask" | "full";
   };
 };

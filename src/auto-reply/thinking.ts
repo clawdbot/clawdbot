@@ -1,6 +1,7 @@
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type VerboseLevel = "off" | "on" | "full";
-export type ElevatedLevel = "off" | "on";
+export type ElevatedLevel = "off" | "on" | "ask" | "full";
+export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
 
@@ -112,8 +113,16 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
   if (!raw) return undefined;
   const key = raw.toLowerCase();
   if (["off", "false", "no", "0"].includes(key)) return "off";
+  if (["full", "auto", "auto-approve", "autoapprove"].includes(key)) return "full";
+  if (["ask", "prompt", "approval", "approve"].includes(key)) return "ask";
   if (["on", "true", "yes", "1"].includes(key)) return "on";
   return undefined;
+}
+
+export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
+  if (!level || level === "off") return "off";
+  if (level === "full") return "full";
+  return "ask";
 }
 
 // Normalize reasoning visibility flags used to toggle reasoning exposure.

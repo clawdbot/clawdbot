@@ -216,7 +216,7 @@ Option B:
 ## Slash commands
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`
 - Per-agent, per-session overrides; non-persistent unless saved via config.
-- `/elevated on|off` remains a shortcut for `host=gateway security=full`.
+- `/elevated on|off|ask|full` remains a shortcut for `host=gateway security=full` (with `full` skipping approvals).
 
 ## Cross-platform story
 - The runner service is the portable execution target.

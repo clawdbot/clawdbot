@@ -322,7 +322,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("You are running in a sandboxed runtime");
     expect(prompt).toContain("Sub-agents stay sandboxed");
-    expect(prompt).toContain("User can toggle with /elevated on|off.");
+    expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(prompt).toContain("Current elevated level: on");
   });
 

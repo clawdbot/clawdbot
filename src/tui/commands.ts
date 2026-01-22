@@ -3,7 +3,7 @@ import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thi
 
 const VERBOSE_LEVELS = ["on", "off"];
 const REASONING_LEVELS = ["on", "off"];
-const ELEVATED_LEVELS = ["on", "off"];
+const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full"];
 
@@ -83,7 +83,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "elevated",
-      description: "Set elevated on/off",
+      description: "Set elevated on/off/ask/full",
       getArgumentCompletions: (prefix) =>
         ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
           value,
@@ -130,8 +130,8 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/verbose <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
-    "/elevated <on|off>",
-    "/elev <on|off>",
+    "/elevated <on|off|ask|full>",
+    "/elev <on|off|ask|full>",
     "/activation <mention|always>",
     "/new or /reset",
     "/abort",

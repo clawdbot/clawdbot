@@ -205,7 +205,7 @@ export async function handleDirectiveOnly(params: {
       const level = currentElevatedLevel ?? "off";
       return {
         text: [
-          withOptions(`Current elevated level: ${level}.`, "on, off"),
+          withOptions(`Current elevated level: ${level}.`, "on, off, ask, full"),
           shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
         ]
           .filter(Boolean)
@@ -213,7 +213,7 @@ export async function handleDirectiveOnly(params: {
       };
     }
     return {
-      text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on.`,
+      text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on, ask, full.`,
     };
   }
   if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
@@ -426,7 +426,9 @@ export async function handleDirectiveOnly(params: {
     parts.push(
       directives.elevatedLevel === "off"
         ? formatDirectiveAck("Elevated mode disabled.")
-        : formatDirectiveAck("Elevated mode enabled."),
+        : directives.elevatedLevel === "full"
+          ? formatDirectiveAck("Elevated mode set to full (auto-approve).")
+          : formatDirectiveAck("Elevated mode set to ask (approvals may still apply)."),
     );
     if (shouldHintDirectRuntime) parts.push(formatElevatedRuntimeHint());
   }

@@ -176,7 +176,7 @@ export function buildAgentSystemPrompt(params: {
     allowedControlPorts?: number[];
     elevated?: {
       allowed: boolean;
-      defaultLevel: "on" | "off";
+      defaultLevel: "on" | "off" | "ask" | "full";
     };
   };
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
@@ -444,12 +444,14 @@ export function buildAgentSystemPrompt(params: {
           params.sandboxInfo.elevated?.allowed
             ? "Elevated exec is available for this session."
             : "",
-          params.sandboxInfo.elevated?.allowed ? "User can toggle with /elevated on|off." : "",
           params.sandboxInfo.elevated?.allowed
-            ? "You may also send /elevated on|off when needed."
+            ? "User can toggle with /elevated on|off|ask|full."
             : "",
           params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (on runs exec on host; off runs in sandbox).`
+            ? "You may also send /elevated on|off|ask|full when needed."
+            : "",
+          params.sandboxInfo.elevated?.allowed
+            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
             : "",
         ]
           .filter(Boolean)

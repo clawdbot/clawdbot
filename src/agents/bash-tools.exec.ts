@@ -140,7 +140,7 @@ export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type ExecElevatedDefaults = {
   enabled: boolean;
   allowed: boolean;
-  defaultLevel: "on" | "off";
+  defaultLevel: "on" | "off" | "ask" | "full";
 };
 
 const execSchema = Type.Object({
@@ -706,12 +706,23 @@ export function createExecTool(
           : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
         : null;
       const elevatedDefaults = defaults?.elevated;
-      const elevatedDefaultOn =
-        elevatedDefaults?.defaultLevel === "on" &&
-        elevatedDefaults.enabled &&
-        elevatedDefaults.allowed;
-      const elevatedRequested =
-        typeof params.elevated === "boolean" ? params.elevated : elevatedDefaultOn;
+      const elevatedDefaultMode =
+        elevatedDefaults?.defaultLevel === "full"
+          ? "full"
+          : elevatedDefaults?.defaultLevel === "ask"
+            ? "ask"
+            : elevatedDefaults?.defaultLevel === "on"
+              ? "ask"
+              : "off";
+      const elevatedMode =
+        typeof params.elevated === "boolean"
+          ? params.elevated
+            ? elevatedDefaultMode === "full"
+              ? "full"
+              : "ask"
+            : "off"
+          : elevatedDefaultMode;
+      const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
@@ -767,6 +778,10 @@ export function createExecTool(
       const configuredAsk = defaults?.ask ?? "on-miss";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
+      const bypassApprovals = elevatedRequested && elevatedMode === "full";
+      if (bypassApprovals) {
+        ask = "off";
+      }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
@@ -1031,7 +1046,7 @@ export function createExecTool(
         };
       }
 
-      if (host === "gateway") {
+      if (host === "gateway" && !bypassApprovals) {
         const approvals = resolveExecApprovals(agentId, { security: "allowlist" });
         const hostSecurity = minSecurity(security, approvals.agent.security);
         const hostAsk = maxAsk(ask, approvals.agent.ask);

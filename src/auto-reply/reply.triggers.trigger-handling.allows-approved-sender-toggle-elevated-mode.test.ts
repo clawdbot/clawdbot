@@ -129,7 +129,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Elevated mode enabled");
+      expect(text).toContain("Elevated mode set to ask");
 
       const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
@@ -223,7 +223,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
-      expect(text).not.toContain("Elevated mode enabled");
+      expect(text).not.toContain("Elevated mode set to ask");
     });
   });
 });

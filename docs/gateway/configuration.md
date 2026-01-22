@@ -1981,7 +1981,7 @@ Per-agent override (further restrict):
 
 Notes:
 - `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can only further restrict (both must allow).
-- `/elevated on|off` stores state per session key; inline directives apply to a single message.
+- `/elevated on|off|ask|full` stores state per session key; inline directives apply to a single message.
 - Elevated `exec` runs on the host and bypasses sandboxing.
 - Tool policy still applies; if `exec` is denied, elevated cannot be used.
 

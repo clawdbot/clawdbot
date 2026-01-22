@@ -324,7 +324,12 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
     verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
-  const elevatedLabel = elevatedLevel === "on" ? "elevated" : null;
+  const elevatedLabel =
+    elevatedLevel && elevatedLevel !== "off"
+      ? elevatedLevel === "on"
+        ? "elevated"
+        : `elevated:${elevatedLevel}`
+      : null;
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
@@ -395,7 +400,7 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
     "/think <level>",
     "/verbose on|full|off",
     "/reasoning on|off",
-    "/elevated on|off",
+    "/elevated on|off|ask|full",
     "/model <id>",
     "/usage off|tokens|full",
   ];

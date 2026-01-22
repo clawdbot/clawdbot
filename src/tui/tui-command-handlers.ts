@@ -371,7 +371,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       case "elevated":
         if (!args) {
-          chatLog.addSystem("usage: /elevated <on|off>");
+          chatLog.addSystem("usage: /elevated <on|off|ask|full>");
+          break;
+        }
+        if (!["on", "off", "ask", "full"].includes(args)) {
+          chatLog.addSystem("usage: /elevated <on|off|ask|full>");
           break;
         }
         try {

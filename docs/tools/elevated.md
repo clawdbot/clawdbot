@@ -6,17 +6,20 @@ read_when:
 # Elevated Mode (/elevated directives)
 
 ## What it does
-- `/elevated on` is a **shortcut** for `exec.host=gateway` + `exec.security=full`.
+- `/elevated on` is a **shortcut** for `exec.host=gateway` + `exec.security=full` (approvals still apply).
+- `/elevated full` runs on the gateway host **and** auto-approves exec (skips exec approvals).
+- `/elevated ask` runs on the gateway host but keeps exec approvals (same as `/elevated on`).
 - Only changes behavior when the agent is **sandboxed** (otherwise exec already runs on the host).
-- Directive forms: `/elevated on`, `/elevated off`, `/elev on`, `/elev off`.
-- Only `on|off` are accepted; anything else returns a hint and does not change state.
+- Directive forms: `/elevated on|off|ask|full`, `/elev on|off|ask|full`.
+- Only `on|off|ask|full` are accepted; anything else returns a hint and does not change state.
 
 ## What it controls (and what it doesn’t)
 - **Availability gates**: `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can further restrict elevated per agent (both must allow).
-- **Per-session state**: `/elevated on|off` sets the elevated level for the current session key.
-- **Inline directive**: `/elevated on` inside a message applies to that message only.
+- **Per-session state**: `/elevated on|off|ask|full` sets the elevated level for the current session key.
+- **Inline directive**: `/elevated on|ask|full` inside a message applies to that message only.
 - **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
 - **Host execution**: elevated forces `exec` onto the gateway host with full security.
+- **Approvals**: `full` skips exec approvals; `on`/`ask` still honor them.
 - **Unsandboxed agents**: no-op for location; only affects gating, logging, and status.
 - **Tool policy still applies**: if `exec` is denied by tool policy, elevated cannot be used.
 
@@ -26,8 +29,8 @@ read_when:
 3. Global default (`agents.defaults.elevatedDefault` in config).
 
 ## Setting a session default
-- Send a message that is **only** the directive (whitespace allowed), e.g. `/elevated on`.
-- Confirmation reply is sent (`Elevated mode enabled.` / `Elevated mode disabled.`).
+- Send a message that is **only** the directive (whitespace allowed), e.g. `/elevated full`.
+- Confirmation reply is sent (`Elevated mode set to full...` / `Elevated mode disabled.`).
 - If elevated access is disabled or the sender is not on the approved allowlist, the directive replies with an actionable error and does not change session state.
 - Send `/elevated` (or `/elevated:`) with no argument to see the current elevated level.
 
@@ -41,4 +44,4 @@ read_when:
 
 ## Logging + status
 - Elevated exec calls are logged at info level.
-- Session status includes elevated mode (e.g. `elevated=on`).
+- Session status includes elevated mode (e.g. `elevated=ask`, `elevated=full`).

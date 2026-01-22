@@ -91,7 +91,8 @@ Available groups:
 ## Elevated: exec-only “run on host”
 
 Elevated does **not** grant extra tools; it only affects `exec`.
-- If you’re sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs on the host.
+- If you’re sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs on the host (approvals may still apply).
+- Use `/elevated full` to skip exec approvals for the session.
 - If you’re already running direct, elevated is effectively a no-op (still gated).
 - Elevated is **not** skill-scoped and does **not** override tool allow/deny.
 

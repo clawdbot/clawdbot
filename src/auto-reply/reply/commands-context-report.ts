@@ -120,7 +120,7 @@ async function resolveContextReport(
         workspaceAccess: "rw" as const,
         elevated: {
           allowed: params.elevated.allowed,
-          defaultLevel: params.resolvedElevatedLevel === "off" ? ("off" as const) : ("on" as const),
+          defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
         },
       }
     : { enabled: false };

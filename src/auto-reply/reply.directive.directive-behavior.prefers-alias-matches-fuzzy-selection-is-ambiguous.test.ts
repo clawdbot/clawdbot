@@ -219,7 +219,7 @@ describe("directive behavior", () => {
       );
 
       const events = drainSystemEvents(MAIN_SESSION_KEY);
-      expect(events.some((e) => e.includes("Elevated ON"))).toBe(true);
+      expect(events.some((e) => e.includes("Elevated ASK"))).toBe(true);
     });
   });
   it("queues a system event when toggling reasoning", async () => {
