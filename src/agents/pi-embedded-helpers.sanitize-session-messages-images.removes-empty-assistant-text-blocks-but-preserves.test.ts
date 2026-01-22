@@ -83,7 +83,7 @@ describe("sanitizeSessionMessagesImages", () => {
       toolCallIdMode: "strict",
     });
 
-    // Strict mode strips all non-alphanumeric characters for Mistral/OpenRouter compatibility
+    // Strict mode strips all non-alphanumeric characters
     const assistant = out[0] as { content?: Array<{ id?: string }> };
     expect(assistant.content?.[0]?.id).toBe("callabcitem123");
     expect(assistant.content?.[1]?.id).toBe("callabcitem456");

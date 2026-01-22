@@ -187,7 +187,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });
   });
-  it("lists allowlisted models on /model", async () => {
+  it("shows summary on /model", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
@@ -212,6 +212,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current: anthropic/claude-opus-4-5");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
       expect(text).toContain("More: /model status");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();

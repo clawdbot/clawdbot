@@ -65,7 +65,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      await getReplyFromConfig(
+      const res = await getReplyFromConfig(
         { Body: "/model kimi", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
@@ -94,10 +94,11 @@ describe("directive behavior", () => {
         },
       );
 
-      assertModelSelection(storePath, {
-        model: "kimi-k2-0905-preview",
-        provider: "moonshot",
-      });
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Unrecognized model: kimi");
+      expect(text).toContain("Did you mean: moonshot/kimi-k2-0905-preview");
+      expect(text).toContain("Try: /model moonshot/kimi-k2-0905-preview");
+      assertModelSelection(storePath);
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -106,7 +107,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      await getReplyFromConfig(
+      const res = await getReplyFromConfig(
         {
           Body: "/model kimi-k2-0905-preview",
           From: "+1222",
@@ -140,10 +141,11 @@ describe("directive behavior", () => {
         },
       );
 
-      assertModelSelection(storePath, {
-        model: "kimi-k2-0905-preview",
-        provider: "moonshot",
-      });
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Unrecognized model: kimi-k2-0905-preview");
+      expect(text).toContain("Did you mean: moonshot/kimi-k2-0905-preview");
+      expect(text).toContain("Try: /model moonshot/kimi-k2-0905-preview");
+      assertModelSelection(storePath);
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -152,7 +154,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      await getReplyFromConfig(
+      const res = await getReplyFromConfig(
         { Body: "/model moonshot/kimi", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
@@ -181,10 +183,11 @@ describe("directive behavior", () => {
         },
       );
 
-      assertModelSelection(storePath, {
-        model: "kimi-k2-0905-preview",
-        provider: "moonshot",
-      });
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Unrecognized model: moonshot/kimi");
+      expect(text).toContain("Did you mean: moonshot/kimi-k2-0905-preview");
+      expect(text).toContain("Try: /model moonshot/kimi-k2-0905-preview");
+      assertModelSelection(storePath);
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

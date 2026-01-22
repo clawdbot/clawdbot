@@ -119,7 +119,7 @@ describe("sanitizeSessionMessagesImages", () => {
     const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
       (b) => b.type === "toolCall",
     );
-    // Strict mode strips all non-alphanumeric characters for Mistral/OpenRouter compatibility
+    // Strict mode strips all non-alphanumeric characters
     expect(toolCall?.id).toBe("call123fc456");
 
     const toolResult = out[1] as unknown as {

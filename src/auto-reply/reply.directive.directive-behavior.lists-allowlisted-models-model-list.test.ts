@@ -60,7 +60,7 @@ describe("directive behavior", () => {
     vi.restoreAllMocks();
   });
 
-  it("lists allowlisted models on /model list", async () => {
+  it("moves /model list to /models", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
@@ -90,7 +90,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("falls back to configured models when catalog is unavailable", async () => {
+  it("shows summary on /model when catalog is unavailable", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
@@ -116,12 +116,13 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current: anthropic/claude-opus-4-5");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
       expect(text).toContain("More: /model status");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("includes catalog models when no allowlist is set", async () => {
+  it("moves /model list to /models even when no allowlist is set", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
@@ -156,7 +157,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("merges config allowlist models even when catalog is present", async () => {
+  it("moves /model list to /models even when catalog is present", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       // Catalog present but missing custom providers: /model should still include
@@ -207,7 +208,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("does not repeat missing auth labels on /model list", async () => {
+  it("moves /model list to /models without listing auth labels", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
@@ -231,6 +232,8 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Model listing moved.");
+      expect(text).toContain("Use: /models (providers) or /models <provider> (models)");
+      expect(text).toContain("Switch: /model <provider/model>");
       expect(text).not.toContain("missing (missing)");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });

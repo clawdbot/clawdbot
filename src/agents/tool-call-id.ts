@@ -2,23 +2,34 @@ import { createHash } from "node:crypto";
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-export type ToolCallIdMode = "standard" | "strict";
+export type ToolCallIdMode = "standard" | "strict" | "strict9";
+
+const STRICT9_LEN = 9;
 
 /**
  * Sanitize a tool call ID to be compatible with various providers.
  *
  * - "standard" mode: allows [a-zA-Z0-9_-], better readability (default)
- * - "strict" mode: only [a-zA-Z0-9], required for Mistral via OpenRouter
+ * - "strict" mode: only [a-zA-Z0-9]
+ * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
 export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "standard"): string {
   if (!id || typeof id !== "string") {
+    if (mode === "strict9") return "defaultid";
     return mode === "strict" ? "defaulttoolid" : "default_tool_id";
   }
 
   if (mode === "strict") {
-    // Some providers (e.g. Mistral via OpenRouter) require strictly alphanumeric tool call IDs.
+    // Some providers require strictly alphanumeric tool call IDs.
     const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
     return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
+  }
+
+  if (mode === "strict9") {
+    const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
+    if (alphanumericOnly.length >= STRICT9_LEN) return alphanumericOnly.slice(0, STRICT9_LEN);
+    if (alphanumericOnly.length > 0) return shortHash(alphanumericOnly, STRICT9_LEN);
+    return shortHash("sanitized", STRICT9_LEN);
   }
 
   // Standard mode: allow underscores and hyphens for better readability in logs
@@ -27,25 +38,40 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "standard"
   return trimmed.length > 0 ? trimmed : "sanitized_tool_id";
 }
 
-export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "standard"): boolean {
+export function isValidCloudCodeAssistToolId(
+  id: string,
+  mode: ToolCallIdMode = "standard",
+): boolean {
   if (!id || typeof id !== "string") return false;
   if (mode === "strict") {
-    // Strictly alphanumeric for providers like Mistral via OpenRouter
+    // Strictly alphanumeric for providers with tighter tool ID constraints
     return /^[a-zA-Z0-9]+$/.test(id);
+  }
+  if (mode === "strict9") {
+    return /^[a-zA-Z0-9]{9}$/.test(id);
   }
   // Standard mode allows underscores and hyphens
   return /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
-function shortHash(text: string): string {
-  return createHash("sha1").update(text).digest("hex").slice(0, 8);
+function shortHash(text: string, length = 8): string {
+  return createHash("sha1").update(text).digest("hex").slice(0, length);
 }
 
-function makeUniqueToolId(params: {
-  id: string;
-  used: Set<string>;
-  mode: ToolCallIdMode;
-}): string {
+function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {
+  if (params.mode === "strict9") {
+    const base = sanitizeToolCallId(params.id, params.mode);
+    const candidate = base.length >= STRICT9_LEN ? base.slice(0, STRICT9_LEN) : "";
+    if (candidate && !params.used.has(candidate)) return candidate;
+
+    for (let i = 0; i < 1000; i += 1) {
+      const hashed = shortHash(`${params.id}:${i}`, STRICT9_LEN);
+      if (!params.used.has(hashed)) return hashed;
+    }
+
+    return shortHash(`${params.id}:${Date.now()}`, STRICT9_LEN);
+  }
+
   const MAX_LEN = 40;
 
   const base = sanitizeToolCallId(params.id, params.mode).slice(0, MAX_LEN);
@@ -128,14 +154,15 @@ function rewriteToolResultIds(params: {
  * Sanitize tool call IDs for provider compatibility.
  *
  * @param messages - The messages to sanitize
- * @param mode - "standard" (default, allows _-) or "strict" (alphanumeric only for Mistral/OpenRouter)
+ * @param mode - "standard" (default, allows _-), "strict" (alphanumeric only), or "strict9" (alphanumeric length 9)
  */
 export function sanitizeToolCallIdsForCloudCodeAssist(
   messages: AgentMessage[],
   mode: ToolCallIdMode = "standard",
 ): AgentMessage[] {
   // Standard mode: allows [a-zA-Z0-9_-] for better readability in session logs
-  // Strict mode: only [a-zA-Z0-9] for providers like Mistral via OpenRouter
+  // Strict mode: only [a-zA-Z0-9]
+  // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
   // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `a_b` or `ab`).
   // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
   const map = new Map<string, string>();

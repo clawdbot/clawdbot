@@ -33,7 +33,12 @@ export async function sanitizeSessionMessagesImages(
   label: string,
   options?: {
     sanitizeToolCallIds?: boolean;
-    /** Mode for tool call ID sanitization: "standard" (default, preserves _-) or "strict" (alphanumeric only) */
+    /**
+     * Mode for tool call ID sanitization:
+     * - "standard" (default, preserves _-)
+     * - "strict" (alphanumeric only)
+     * - "strict9" (alphanumeric only, length 9)
+     */
     toolCallIdMode?: ToolCallIdMode;
     enforceToolCallLast?: boolean;
     preserveSignatures?: boolean;

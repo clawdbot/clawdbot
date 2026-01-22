@@ -54,6 +54,25 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
+  it("sanitizes tool call ids with strict9 for Mistral models", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-responses",
+      provider: "openrouter",
+      modelId: "mistralai/devstral-2512:free",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeToolCallIds: true, toolCallIdMode: "strict9" }),
+    );
+  });
+
   it("does not sanitize tool call ids for non-Google, non-OpenAI APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 

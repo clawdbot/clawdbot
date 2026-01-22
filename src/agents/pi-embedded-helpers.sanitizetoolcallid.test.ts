@@ -18,7 +18,7 @@ describe("sanitizeToolCallId", () => {
     });
   });
 
-  describe("strict mode (for Mistral/OpenRouter)", () => {
+  describe("strict mode (alphanumeric only)", () => {
     it("strips all non-alphanumeric characters", () => {
       expect(sanitizeToolCallId("call_abc-123", "strict")).toBe("callabc123");
       expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe("callabcitem456");
@@ -28,6 +28,16 @@ describe("sanitizeToolCallId", () => {
     });
     it("returns default for empty IDs", () => {
       expect(sanitizeToolCallId("", "strict")).toBe("defaulttoolid");
+    });
+  });
+
+  describe("strict9 mode (Mistral tool call IDs)", () => {
+    it("returns alphanumeric IDs with length 9", () => {
+      const out = sanitizeToolCallId("call_abc|item:456", "strict9");
+      expect(out).toMatch(/^[a-zA-Z0-9]{9}$/);
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("", "strict9")).toMatch(/^[a-zA-Z0-9]{9}$/);
     });
   });
 });
