@@ -59,11 +59,12 @@ Manage the service:
 
 ```bash
 clawdbot node status
-clawdbot node run
 clawdbot node stop
 clawdbot node restart
 clawdbot node uninstall
 ```
+
+Use `clawdbot node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
 
