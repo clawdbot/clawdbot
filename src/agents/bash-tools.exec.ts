@@ -706,6 +706,7 @@ export function createExecTool(
           : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
         : null;
       const elevatedDefaults = defaults?.elevated;
+      const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
       const elevatedDefaultMode =
         elevatedDefaults?.defaultLevel === "full"
           ? "full"
@@ -714,6 +715,7 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
+      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -721,7 +723,7 @@ export function createExecTool(
               ? "full"
               : "ask"
             : "off"
-          : elevatedDefaultMode;
+          : effectiveDefaultMode;
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
