@@ -104,10 +104,11 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Unrecognized model: ki");
-      expect(text).toContain("Did you mean: moonshot/kimi-k2-0905-preview");
-      expect(text).toContain("Try: /model moonshot/kimi-k2-0905-preview");
-      assertModelSelection(storePath);
+      expect(text).toContain("Model set to Kimi (moonshot/kimi-k2-0905-preview).");
+      assertModelSelection(storePath, {
+        provider: "moonshot",
+        model: "kimi-k2-0905-preview",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
