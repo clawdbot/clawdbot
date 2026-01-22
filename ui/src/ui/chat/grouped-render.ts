@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 
+import type { AssistantIdentity } from "../assistant-identity";
 import { toSanitizedMarkdownHtml } from "../markdown";
 import type { MessageGroup } from "../types/chat-types";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
@@ -12,10 +13,10 @@ import {
 } from "./message-extract";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
 
-export function renderReadingIndicatorGroup() {
+export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant")}
+      ${renderAvatar("assistant", assistant)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -31,15 +32,17 @@ export function renderStreamingGroup(
   text: string,
   startedAt: number,
   onOpenSidebar?: (content: string) => void,
+  assistant?: AssistantIdentity,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
+  const name = assistant?.name ?? "Assistant";
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant")}
+      ${renderAvatar("assistant", assistant)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -51,7 +54,7 @@ export function renderStreamingGroup(
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
-          <span class="chat-sender-name">Assistant</span>
+          <span class="chat-sender-name">${name}</span>
           <span class="chat-group-timestamp">${timestamp}</span>
         </div>
       </div>
@@ -61,14 +64,20 @@ export function renderStreamingGroup(
 
 export function renderMessageGroup(
   group: MessageGroup,
-  opts: { onOpenSidebar?: (content: string) => void; showReasoning: boolean },
+  opts: {
+    onOpenSidebar?: (content: string) => void;
+    showReasoning: boolean;
+    assistantName?: string;
+    assistantAvatar?: string | null;
+  },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
+  const assistantName = opts.assistantName ?? "Assistant";
   const who =
     normalizedRole === "user"
       ? "You"
       : normalizedRole === "assistant"
-        ? "Assistant"
+        ? assistantName
         : normalizedRole;
   const roleClass =
     normalizedRole === "user"
@@ -83,7 +92,10 @@ export function renderMessageGroup(
 
   return html`
     <div class="chat-group ${roleClass}">
-      ${renderAvatar(group.role)}
+      ${renderAvatar(group.role, {
+        name: assistantName,
+        avatar: opts.assistantAvatar ?? null,
+      })}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
           renderGroupedMessage(
@@ -105,13 +117,18 @@ export function renderMessageGroup(
   `;
 }
 
-function renderAvatar(role: string, avatarUrl?: string) {
+function renderAvatar(
+  role: string,
+  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
+) {
   const normalized = normalizeRoleForGrouping(role);
+  const assistantName = assistant?.name?.trim() || "Assistant";
+  const assistantAvatar = assistant?.avatar?.trim() || "";
   const initial =
     normalized === "user"
       ? "U"
       : normalized === "assistant"
-        ? "A"
+        ? assistantName.charAt(0).toUpperCase() || "A"
         : normalized === "tool"
           ? "⚙"
           : "?";
@@ -120,16 +137,29 @@ function renderAvatar(role: string, avatarUrl?: string) {
       ? "user"
       : normalized === "assistant"
         ? "assistant"
-        : normalized === "tool"
+      : normalized === "tool"
           ? "tool"
           : "other";
-  
-  // If avatar URL is provided for assistant, show image
-  if (avatarUrl && normalized === "assistant") {
-    return html`<img class="chat-avatar ${className}" src="${avatarUrl}" alt="Assistant" />`;
+
+  if (assistantAvatar && normalized === "assistant") {
+    if (isAvatarUrl(assistantAvatar)) {
+      return html`<img
+        class="chat-avatar ${className}"
+        src="${assistantAvatar}"
+        alt="${assistantName}"
+      />`;
+    }
+    return html`<div class="chat-avatar ${className}">${assistantAvatar}</div>`;
   }
-  
+
   return html`<div class="chat-avatar ${className}">${initial}</div>`;
+}
+
+function isAvatarUrl(value: string): boolean {
+  return (
+    /^https?:\/\//i.test(value) ||
+    /^data:image\//i.test(value)
+  );
 }
 
 function renderGroupedMessage(

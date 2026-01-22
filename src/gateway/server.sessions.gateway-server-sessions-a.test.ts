@@ -103,6 +103,7 @@ describe("gateway server sessions", () => {
     expect((hello as unknown as { features?: { methods?: string[] } }).features?.methods).toEqual(
       expect.arrayContaining([
         "sessions.list",
+        "sessions.preview",
         "sessions.patch",
         "sessions.reset",
         "sessions.delete",
@@ -333,6 +334,53 @@ describe("gateway server sessions", () => {
     expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
       /invalid thinkinglevel/i,
     );
+
+    ws.close();
+    await server.close();
+  });
+
+  test("sessions.preview returns transcript previews", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-preview-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    const sessionId = "sess-preview";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
+      JSON.stringify({
+        message: { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Forecast ready" } }),
+    ];
+    await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+    const preview = await rpcReq<{
+      previews: Array<{
+        key: string;
+        status: string;
+        items: Array<{ role: string; text: string }>;
+      }>;
+    }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+
+    expect(preview.ok).toBe(true);
+    const entry = preview.payload?.previews[0];
+    expect(entry?.key).toBe("main");
+    expect(entry?.status).toBe("ok");
+    expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(entry?.items[1]?.text).toContain("call weather");
 
     ws.close();
     await server.close();

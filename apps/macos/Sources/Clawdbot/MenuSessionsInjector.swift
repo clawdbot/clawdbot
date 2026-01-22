@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 @MainActor
@@ -18,6 +19,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var isMenuOpen = false
     private var lastKnownMenuWidth: CGFloat?
     private var menuOpenWidth: CGFloat?
+    private var isObservingControlChannel = false
 
     private var cachedSnapshot: SessionStoreSnapshot?
     private var cachedErrorText: String?
@@ -50,6 +52,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             self.loadTask = Task { await self.refreshCache(force: true) }
         }
 
+        self.startControlChannelObservation()
         self.nodesStore.start()
     }
 
@@ -94,6 +97,50 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.loadTask?.cancel()
         self.nodesLoadTask?.cancel()
         self.cancelPreviewTasks()
+    }
+
+    private func startControlChannelObservation() {
+        guard !self.isObservingControlChannel else { return }
+        self.isObservingControlChannel = true
+        self.observeControlChannelState()
+    }
+
+    private func observeControlChannelState() {
+        withObservationTracking {
+            _ = ControlChannel.shared.state
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.handleControlChannelStateChange()
+                self.observeControlChannelState()
+            }
+        }
+    }
+
+    private func handleControlChannelStateChange() {
+        guard self.isMenuOpen, let menu = self.statusItem?.menu else { return }
+        self.loadTask?.cancel()
+        self.loadTask = Task { [weak self, weak menu] in
+            guard let self, let menu else { return }
+            await self.refreshCache(force: true)
+            await self.refreshUsageCache(force: true)
+            await self.refreshCostUsageCache(force: true)
+            await MainActor.run {
+                guard self.isMenuOpen else { return }
+                self.inject(into: menu)
+                self.injectNodes(into: menu)
+            }
+        }
+
+        self.nodesLoadTask?.cancel()
+        self.nodesLoadTask = Task { [weak self, weak menu] in
+            guard let self, let menu else { return }
+            await self.nodesStore.refresh()
+            await MainActor.run {
+                guard self.isMenuOpen else { return }
+                self.injectNodes(into: menu)
+            }
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -141,14 +188,23 @@ extension MenuSessionsInjector {
                 if rhs.key == mainKey { return false }
                 return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
             }
+            if !rows.isEmpty {
+                let previewKeys = rows.prefix(20).map(\.key)
+                let task = Task {
+                    await SessionMenuPreviewLoader.prewarm(sessionKeys: previewKeys, maxItems: 10)
+                }
+                self.previewTasks.append(task)
+            }
 
             let headerItem = NSMenuItem()
             headerItem.tag = self.tag
             headerItem.isEnabled = false
+            let statusText = self
+                .cachedErrorText ?? (isConnected ? nil : self.controlChannelStatusText(for: channelState))
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: rows.count,
-                    statusText: isConnected ? nil : self.controlChannelStatusText(for: channelState))),
+                    statusText: statusText)),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
@@ -598,8 +654,11 @@ extension MenuSessionsInjector {
         }
 
         guard self.isControlChannelConnected else {
-            self.cachedSnapshot = nil
-            self.cachedErrorText = nil
+            if self.cachedSnapshot != nil {
+                self.cachedErrorText = "Gateway disconnected (showing cached)"
+            } else {
+                self.cachedErrorText = nil
+            }
             self.cacheUpdatedAt = Date()
             return
         }
@@ -624,8 +683,6 @@ extension MenuSessionsInjector {
         }
 
         guard self.isControlChannelConnected else {
-            self.cachedUsageSummary = nil
-            self.cachedUsageErrorText = nil
             self.usageCacheUpdatedAt = Date()
             return
         }
@@ -648,8 +705,6 @@ extension MenuSessionsInjector {
         }
 
         guard self.isControlChannelConnected else {
-            self.cachedCostSummary = nil
-            self.cachedCostErrorText = nil
             self.costCacheUpdatedAt = Date()
             return
         }

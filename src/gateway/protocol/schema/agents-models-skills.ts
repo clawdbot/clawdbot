@@ -17,6 +17,18 @@ export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
     name: Type.Optional(NonEmptyString),
+    identity: Type.Optional(
+      Type.Object(
+        {
+          name: Type.Optional(NonEmptyString),
+          theme: Type.Optional(NonEmptyString),
+          emoji: Type.Optional(NonEmptyString),
+          avatar: Type.Optional(NonEmptyString),
+          avatarUrl: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

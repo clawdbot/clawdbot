@@ -1,10 +1,11 @@
 import { loadChatHistory } from "./controllers/chat";
 import { loadDevices } from "./controllers/devices";
 import { loadNodes } from "./controllers/nodes";
+import { loadAgents } from "./controllers/agents";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway";
 import { GatewayBrowserClient } from "./gateway";
 import type { EventLogEntry } from "./app-events";
-import type { PresenceEntry, HealthSnapshot, StatusSummary } from "./types";
+import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types";
 import type { Tab } from "./navigation";
 import type { UiSettings } from "./storage";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream";
@@ -24,6 +25,7 @@ import {
 } from "./controllers/exec-approval";
 import type { ClawdbotApp } from "./app";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
+import { loadAssistantIdentity } from "./controllers/assistant-identity";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -32,13 +34,20 @@ type GatewayHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
+  onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
   tab: Tab;
   presenceEntries: PresenceEntry[];
   presenceError: string | null;
   presenceStatus: StatusSummary | null;
+  agentsLoading: boolean;
+  agentsList: AgentsListResult | null;
+  agentsError: string | null;
   debugHealth: HealthSnapshot | null;
+  assistantName: string;
+  assistantAvatar: string | null;
+  assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
   execApprovalQueue: ExecApprovalRequest[];
@@ -117,6 +126,8 @@ export function connectGateway(host: GatewayHost) {
       host.connected = true;
       host.hello = hello;
       applySnapshot(host, hello);
+      void loadAssistantIdentity(host as unknown as ClawdbotApp);
+      void loadAgents(host as unknown as ClawdbotApp);
       void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
       void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
@@ -143,6 +154,7 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "agent") {
+    if (host.onboarding) return;
     handleAgentEvent(
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,

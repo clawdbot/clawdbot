@@ -94,6 +94,13 @@ public struct GatewayConnectOptions: Sendable {
     }
 }
 
+public enum GatewayAuthSource: String, Sendable {
+    case deviceToken = "device-token"
+    case sharedToken = "shared-token"
+    case password = "password"
+    case none = "none"
+}
+
 // Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
 
@@ -117,6 +124,7 @@ public actor GatewayChannelActor {
     private var lastSeq: Int?
     private var lastTick: Date?
     private var tickIntervalMs: Double = 30000
+    private var lastAuthSource: GatewayAuthSource = .none
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private let connectTimeoutSeconds: Double = 6
@@ -148,6 +156,8 @@ public actor GatewayChannelActor {
             await self?.startWatchdog()
         }
     }
+
+    public func authSource() -> GatewayAuthSource { self.lastAuthSource }
 
     public func shutdown() async {
         self.shouldReconnect = false
@@ -300,6 +310,18 @@ public actor GatewayChannelActor {
         let identity = DeviceIdentityStore.loadOrCreate()
         let storedToken = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role)?.token
         let authToken = storedToken ?? self.token
+        let authSource: GatewayAuthSource
+        if storedToken != nil {
+            authSource = .deviceToken
+        } else if authToken != nil {
+            authSource = .sharedToken
+        } else if self.password != nil {
+            authSource = .password
+        } else {
+            authSource = .none
+        }
+        self.lastAuthSource = authSource
+        self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
         let canFallbackToShared = storedToken != nil && self.token != nil
         if let authToken {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])

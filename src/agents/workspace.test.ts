@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -38,6 +39,34 @@ describe("ensureAgentWorkspace", () => {
     await expect(fs.stat(user)).resolves.toBeDefined();
     await expect(fs.stat(heartbeat)).resolves.toBeDefined();
     await expect(fs.stat(bootstrap)).resolves.toBeDefined();
+  });
+
+  it("initializes a git repo for brand-new workspaces when git is available", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    const nested = path.join(dir, "nested");
+    const gitAvailable = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 })
+      .then((res) => res.code === 0)
+      .catch(() => false);
+    if (!gitAvailable) return;
+
+    await ensureAgentWorkspace({
+      dir: nested,
+      ensureBootstrapFiles: true,
+    });
+
+    await expect(fs.stat(path.join(nested, ".git"))).resolves.toBeDefined();
+  });
+
+  it("does not initialize git when workspace already exists", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    await fs.writeFile(path.join(dir, "AGENTS.md"), "custom", "utf-8");
+
+    await ensureAgentWorkspace({
+      dir,
+      ensureBootstrapFiles: true,
+    });
+
+    await expect(fs.stat(path.join(dir, ".git"))).rejects.toBeDefined();
   });
 
   it("does not overwrite existing AGENTS.md", async () => {

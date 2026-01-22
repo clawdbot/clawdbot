@@ -55,6 +55,7 @@ export type CodexCliCredential = {
   access: string;
   refresh: string;
   expires: number;
+  accountId?: string;
 };
 
 export type QwenCliCredential = {
@@ -143,6 +144,7 @@ function readCodexKeychainCredentials(options?: {
     const expires = Number.isFinite(lastRefresh)
       ? lastRefresh + 60 * 60 * 1000
       : Date.now() + 60 * 60 * 1000;
+    const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
@@ -155,6 +157,7 @@ function readCodexKeychainCredentials(options?: {
       access: accessToken,
       refresh: refreshToken,
       expires,
+      accountId,
     };
   } catch {
     return null;
@@ -443,6 +446,7 @@ export function readCodexCliCredentials(options?: {
     access: accessToken,
     refresh: refreshToken,
     expires,
+    accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
   };
 }
 

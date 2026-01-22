@@ -58,6 +58,7 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         sessionKey: p.sessionKey ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
+      const decisionPromise = manager.waitForDecision(record, timeoutMs);
       context.broadcast(
         "exec.approval.requested",
         {
@@ -68,7 +69,7 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         },
         { dropIfSlow: true },
       );
-      const decision = await manager.waitForDecision(record, timeoutMs);
+      const decision = await decisionPromise;
       respond(
         true,
         {

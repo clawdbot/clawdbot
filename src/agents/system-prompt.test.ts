@@ -115,6 +115,15 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("includes workspace notes when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
+    });
+
+    expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
+  });
+
   it("includes user time when provided (12-hour)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",

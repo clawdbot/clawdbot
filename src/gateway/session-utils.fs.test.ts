@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionPreviewItemsFromTranscript,
 } from "./session-utils.fs.js";
 
 describe("readFirstUserMessageFromTranscript", () => {
@@ -339,5 +340,67 @@ describe("readLastMessagePreviewFromTranscript", () => {
 
     const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
     expect(result).toBe("Valid UTF-8: 你好世界 🌍");
+  });
+});
+
+describe("readSessionPreviewItemsFromTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-session-preview-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("returns recent preview items with tool summary", () => {
+    const sessionId = "preview-session";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
+      JSON.stringify({
+        message: { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Forecast ready" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      3,
+      120,
+    );
+
+    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(result[1]?.text).toContain("call weather");
+  });
+
+  test("truncates preview text to max chars", () => {
+    const sessionId = "preview-truncate";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const longText = "a".repeat(60);
+    const lines = [JSON.stringify({ message: { role: "assistant", content: longText } })];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      1,
+      24,
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text.length).toBe(24);
+    expect(result[0]?.text.endsWith("...")).toBe(true);
   });
 });

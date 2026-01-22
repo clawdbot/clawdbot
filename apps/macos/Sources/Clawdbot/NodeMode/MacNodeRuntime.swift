@@ -679,7 +679,8 @@ actor MacNodeRuntime {
                         security: context.security.rawValue,
                         ask: context.ask.rawValue,
                         agentId: context.agentId,
-                        resolvedPath: context.resolution?.resolvedPath))
+                        resolvedPath: context.resolution?.resolvedPath,
+                        sessionKey: context.sessionKey))
             }
             switch decision {
             case .deny:

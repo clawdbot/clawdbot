@@ -69,6 +69,7 @@ actor GatewayConnection {
         case channelsLogout = "channels.logout"
         case modelsList = "models.list"
         case chatHistory = "chat.history"
+        case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case chatAbort = "chat.abort"
         case skillsStatus = "skills.status"
@@ -247,6 +248,11 @@ actor GatewayConnection {
     func refresh() async throws {
         let cfg = try await self.configProvider()
         await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
+    }
+
+    func authSource() async -> GatewayAuthSource? {
+        guard let client else { return nil }
+        return await client.authSource()
     }
 
     func shutdown() async {
@@ -533,6 +539,30 @@ extension GatewayConnection {
         if let apiKey { params["apiKey"] = AnyCodable(apiKey) }
         if let env, !env.isEmpty { params["env"] = AnyCodable(env) }
         return try await self.requestDecoded(method: .skillsUpdate, params: params)
+    }
+
+    // MARK: - Sessions
+
+    func sessionsPreview(
+        keys: [String],
+        limit: Int? = nil,
+        maxChars: Int? = nil,
+        timeoutMs: Int? = nil) async throws -> ClawdbotSessionsPreviewPayload
+    {
+        let resolvedKeys = keys
+            .map { self.canonicalizeSessionKey($0) }
+            .filter { !$0.isEmpty }
+        if resolvedKeys.isEmpty {
+            return ClawdbotSessionsPreviewPayload(ts: 0, previews: [])
+        }
+        var params: [String: AnyCodable] = ["keys": AnyCodable(resolvedKeys)]
+        if let limit { params["limit"] = AnyCodable(limit) }
+        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
+        let timeout = timeoutMs.map { Double($0) }
+        return try await self.requestDecoded(
+            method: .sessionsPreview,
+            params: params,
+            timeoutMs: timeout)
     }
 
     // MARK: - Chat

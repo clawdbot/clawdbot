@@ -6,9 +6,15 @@ export function isGoogleModelApi(api?: string | null): boolean {
   );
 }
 
-export function isAntigravityClaude(api?: string | null, modelId?: string): boolean {
-  if (api !== "google-antigravity") return false;
-  return modelId?.toLowerCase().includes("claude") ?? false;
+export function isAntigravityClaude(params: {
+  api?: string | null;
+  provider?: string | null;
+  modelId?: string;
+}): boolean {
+  const provider = params.provider?.toLowerCase();
+  const api = params.api?.toLowerCase();
+  if (provider !== "google-antigravity" && api !== "google-antigravity") return false;
+  return params.modelId?.toLowerCase().includes("claude") ?? false;
 }
 
 export { sanitizeGoogleTurnOrdering };

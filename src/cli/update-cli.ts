@@ -1,4 +1,4 @@
-import { confirm, isCancel, spinner } from "@clack/prompts";
+import { confirm, isCancel, select, spinner } from "@clack/prompts";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,7 +39,7 @@ import { trimLogTail } from "../infra/restart-sentinel.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { formatCliCommand } from "./command-format.js";
-import { stylePromptMessage } from "../terminal/prompt-style.js";
+import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
 import { formatHelpExamples } from "./help-format.js";
@@ -61,6 +61,9 @@ export type UpdateCommandOptions = {
 };
 export type UpdateStatusOptions = {
   json?: boolean;
+  timeout?: string;
+};
+export type UpdateWizardOptions = {
   timeout?: string;
 };
 
@@ -480,6 +483,15 @@ function formatStepStatus(exitCode: number | null): string {
   if (exitCode === null) return theme.warn("?");
   return theme.error("\u2717");
 }
+
+const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
+  select({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 type PrintResultOptions = UpdateCommandOptions & {
   hideSteps?: boolean;
@@ -940,6 +952,142 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 }
 
+export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
+  if (!process.stdin.isTTY) {
+    defaultRuntime.error(
+      "Update wizard requires a TTY. Use `clawdbot update --channel <stable|beta|dev>` instead.",
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
+  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+    defaultRuntime.error("--timeout must be a positive integer (seconds)");
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const root =
+    (await resolveClawdbotPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    })) ?? process.cwd();
+
+  const [updateStatus, configSnapshot] = await Promise.all([
+    checkUpdateStatus({
+      root,
+      timeoutMs: timeoutMs ?? 3500,
+      fetchGit: false,
+      includeRegistry: false,
+    }),
+    readConfigFileSnapshot(),
+  ]);
+
+  const configChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+  const channelInfo = resolveEffectiveUpdateChannel({
+    configChannel,
+    installKind: updateStatus.installKind,
+    git: updateStatus.git
+      ? { tag: updateStatus.git.tag, branch: updateStatus.git.branch }
+      : undefined,
+  });
+  const channelLabel = formatUpdateChannelLabel({
+    channel: channelInfo.channel,
+    source: channelInfo.source,
+    gitTag: updateStatus.git?.tag ?? null,
+    gitBranch: updateStatus.git?.branch ?? null,
+  });
+
+  const pickedChannel = await selectStyled({
+    message: "Update channel",
+    options: [
+      {
+        value: "keep",
+        label: `Keep current (${channelInfo.channel})`,
+        hint: channelLabel,
+      },
+      {
+        value: "stable",
+        label: "Stable",
+        hint: "Tagged releases (npm latest)",
+      },
+      {
+        value: "beta",
+        label: "Beta",
+        hint: "Prereleases (npm beta)",
+      },
+      {
+        value: "dev",
+        label: "Dev",
+        hint: "Git main",
+      },
+    ],
+    initialValue: "keep",
+  });
+
+  if (isCancel(pickedChannel)) {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+    return;
+  }
+
+  const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
+
+  if (requestedChannel === "dev" && updateStatus.installKind !== "git") {
+    const gitDir = resolveGitInstallDir();
+    const hasGit = await isGitCheckout(gitDir);
+    if (!hasGit) {
+      const dirExists = await pathExists(gitDir);
+      if (dirExists) {
+        const empty = await isEmptyDir(gitDir);
+        if (!empty) {
+          defaultRuntime.error(
+            `CLAWDBOT_GIT_DIR points at a non-git directory: ${gitDir}. Set CLAWDBOT_GIT_DIR to an empty folder or a clawdbot checkout.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+      }
+      const ok = await confirm({
+        message: stylePromptMessage(
+          `Create a git checkout at ${gitDir}? (override via CLAWDBOT_GIT_DIR)`,
+        ),
+        initialValue: true,
+      });
+      if (isCancel(ok) || ok === false) {
+        defaultRuntime.log(theme.muted("Update cancelled."));
+        defaultRuntime.exit(0);
+        return;
+      }
+    }
+  }
+
+  const restart = await confirm({
+    message: stylePromptMessage("Restart the gateway service after update?"),
+    initialValue: false,
+  });
+  if (isCancel(restart)) {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+    return;
+  }
+
+  try {
+    await updateCommand({
+      channel: requestedChannel ?? undefined,
+      restart: Boolean(restart),
+      timeout: opts.timeout,
+    });
+  } catch (err) {
+    defaultRuntime.error(String(err));
+    defaultRuntime.exit(1);
+  }
+}
+
 export function registerUpdateCli(program: Command) {
   const update = program
     .command("update")
@@ -959,6 +1107,7 @@ export function registerUpdateCli(program: Command) {
         ["clawdbot update --restart", "Update and restart the service"],
         ["clawdbot update --json", "Output result as JSON"],
         ["clawdbot update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["clawdbot update wizard", "Interactive update wizard"],
         ["clawdbot --update", "Shorthand for clawdbot update"],
       ] as const;
       const fmtExamples = examples
@@ -999,6 +1148,23 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/upda
           timeout: opts.timeout as string | undefined,
           yes: Boolean(opts.yes),
         });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  update
+    .command("wizard")
+    .description("Interactive update wizard")
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .addHelpText(
+      "after",
+      `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}\n`,
+    )
+    .action(async (opts) => {
+      try {
+        await updateWizardCommand({ timeout: opts.timeout as string | undefined });
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

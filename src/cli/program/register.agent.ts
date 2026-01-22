@@ -139,7 +139,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
 
   agents
     .command("set-identity")
-    .description("Update an agent identity (name/theme/emoji)")
+    .description("Update an agent identity (name/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
     .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
     .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
@@ -147,6 +147,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--name <name>", "Identity name")
     .option("--theme <theme>", "Identity theme")
     .option("--emoji <emoji>", "Identity emoji")
+    .option("--avatar <value>", "Identity avatar (workspace path, http(s) URL, or data URI)")
     .option("--json", "Output JSON summary", false)
     .addHelpText(
       "after",
@@ -155,6 +156,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
   ['clawdbot agents set-identity --agent main --name "Clawd" --emoji "🦞"', "Set name + emoji."],
+  ["clawdbot agents set-identity --agent main --avatar avatars/clawd.png", "Set avatar path."],
   ["clawdbot agents set-identity --workspace ~/clawd --from-identity", "Load from IDENTITY.md."],
   [
     "clawdbot agents set-identity --identity-file ~/clawd/IDENTITY.md --agent main",
@@ -174,6 +176,7 @@ ${formatHelpExamples([
             name: opts.name as string | undefined,
             theme: opts.theme as string | undefined,
             emoji: opts.emoji as string | undefined,
+            avatar: opts.avatar as string | undefined,
             json: Boolean(opts.json),
           },
           defaultRuntime,

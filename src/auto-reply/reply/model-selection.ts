@@ -13,6 +13,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -76,6 +77,52 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
   const dist = prev[bLen] ?? null;
   if (dist == null || dist > maxDistance) return null;
   return dist;
+}
+
+type StoredModelOverride = {
+  provider?: string;
+  model: string;
+  source: "session" | "parent";
+};
+
+function resolveModelOverrideFromEntry(entry?: SessionEntry): {
+  provider?: string;
+  model: string;
+} | null {
+  const model = entry?.modelOverride?.trim();
+  if (!model) return null;
+  const provider = entry?.providerOverride?.trim() || undefined;
+  return { provider, model };
+}
+
+function resolveParentSessionKeyCandidate(params: {
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): string | null {
+  const explicit = params.parentSessionKey?.trim();
+  if (explicit && explicit !== params.sessionKey) return explicit;
+  const derived = resolveThreadParentSessionKey(params.sessionKey);
+  if (derived && derived !== params.sessionKey) return derived;
+  return null;
+}
+
+function resolveStoredModelOverride(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): StoredModelOverride | null {
+  const direct = resolveModelOverrideFromEntry(params.sessionEntry);
+  if (direct) return { ...direct, source: "session" };
+  const parentKey = resolveParentSessionKeyCandidate({
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!parentKey || !params.sessionStore) return null;
+  const parentEntry = params.sessionStore[parentKey];
+  const parentOverride = resolveModelOverrideFromEntry(parentEntry);
+  if (!parentOverride) return null;
+  return { ...parentOverride, source: "parent" };
 }
 
 function scoreFuzzyMatch(params: {
@@ -177,6 +224,7 @@ export async function createModelSelectionState(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  parentSessionKey?: string;
   storePath?: string;
   defaultProvider: string;
   defaultModel: string;
@@ -190,6 +238,7 @@ export async function createModelSelectionState(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    parentSessionKey,
     storePath,
     defaultProvider,
     defaultModel,
@@ -199,7 +248,13 @@ export async function createModelSelectionState(params: {
   let model = params.model;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-  const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
+  const initialStoredOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
+  });
+  const hasStoredOverride = Boolean(initialStoredOverride);
   const needsModelCatalog = params.hasModelDirective || hasAllowlist || hasStoredOverride;
 
   let allowedModelKeys = new Set<string>();
@@ -242,14 +297,18 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-  const storedModelOverride = sessionEntry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const candidateProvider = storedProviderOverride || defaultProvider;
-    const key = modelKey(candidateProvider, storedModelOverride);
+  const storedOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
+  });
+  if (storedOverride?.model) {
+    const candidateProvider = storedOverride.provider || defaultProvider;
+    const key = modelKey(candidateProvider, storedOverride.model);
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
-      model = storedModelOverride;
+      model = storedOverride.model;
     }
   }
 

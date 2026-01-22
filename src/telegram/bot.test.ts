@@ -10,6 +10,7 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
@@ -148,12 +149,16 @@ const getOnHandler = (event: string) => {
 };
 
 const ORIGINAL_TZ = process.env.TZ;
-
 describe("createTelegramBot", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
@@ -456,8 +461,12 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
+      const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+      const timestampPattern = escapeRegExp(expectedTimestamp);
       expect(payload.Body).toMatch(
-        /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 (\+\d+[smhd] )?2025-01-09 01:00 [^\]]+\]/,
+        new RegExp(
+          `^\\[Telegram Ada Lovelace \\(@ada_bot\\) id:1234 (\\+\\d+[smhd] )?${timestampPattern}\\]`,
+        ),
       );
       expect(payload.Body).toContain("hello world");
     } finally {
@@ -557,102 +566,104 @@ describe("createTelegramBot", () => {
   });
 
   it("accepts group messages when mentionPatterns match (without @botUsername)", async () => {
-    const originalTz = process.env.TZ;
-    process.env.TZ = "UTC";
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
-    try {
-      loadConfig.mockReturnValue({
-        identity: { name: "Bert" },
-        messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groups: { "*": { requireMention: true } },
-          },
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
         },
-      });
-
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 7, type: "group", title: "Test Group" },
-          text: "bert: introduce yourself",
-          date: 1736380800,
-          message_id: 1,
-          from: { id: 9, first_name: "Ada" },
+      },
+      identity: { name: "Bert" },
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
         },
-        me: { username: "clawdbot_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
+      },
+    });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
-      expectInboundContextContract(payload);
-      expect(payload.WasMentioned).toBe(true);
-      expect(payload.Body).toMatch(
-        /^\[Telegram Test Group id:7 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
-      );
-      expect(payload.SenderName).toBe("Ada");
-      expect(payload.SenderId).toBe("9");
-    } finally {
-      process.env.TZ = originalTz;
-    }
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "bert: introduce yourself",
+        date: 1736380800,
+        message_id: 1,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expectInboundContextContract(payload);
+    expect(payload.WasMentioned).toBe(true);
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const timestampPattern = escapeRegExp(expectedTimestamp);
+    expect(payload.Body).toMatch(
+      new RegExp(`^\\[Telegram Test Group id:7 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
+    );
+    expect(payload.SenderName).toBe("Ada");
+    expect(payload.SenderId).toBe("9");
   });
 
   it("includes sender identity in group envelope headers", async () => {
-    const originalTz = process.env.TZ;
-    process.env.TZ = "UTC";
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
-    try {
-      loadConfig.mockReturnValue({
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groups: { "*": { requireMention: false } },
-          },
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
         },
-      });
-
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 42, type: "group", title: "Ops" },
-          text: "hello",
-          date: 1736380800,
-          message_id: 2,
-          from: {
-            id: 99,
-            first_name: "Ada",
-            last_name: "Lovelace",
-            username: "ada",
-          },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
         },
-        me: { username: "clawdbot_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
+      },
+    });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
-      expectInboundContextContract(payload);
-      expect(payload.Body).toMatch(
-        /^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
-      );
-      expect(payload.SenderName).toBe("Ada Lovelace");
-      expect(payload.SenderId).toBe("99");
-      expect(payload.SenderUsername).toBe("ada");
-    } finally {
-      process.env.TZ = originalTz;
-    }
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 2,
+        from: {
+          id: 99,
+          first_name: "Ada",
+          last_name: "Lovelace",
+          username: "ada",
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expectInboundContextContract(payload);
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const timestampPattern = escapeRegExp(expectedTimestamp);
+    expect(payload.Body).toMatch(
+      new RegExp(`^\\[Telegram Ops id:42 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
+    );
+    expect(payload.SenderName).toBe("Ada Lovelace");
+    expect(payload.SenderId).toBe("99");
+    expect(payload.SenderUsername).toBe("ada");
   });
 
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
@@ -2200,6 +2211,47 @@ describe("createTelegramBot", () => {
         (call) => call[1] === "You are not authorized to use this command.",
       ),
     ).toBe(false);
+  });
+
+  it("blocks native DM commands for unpaired users", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    commandSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+    readTelegramAllowFromStore.mockResolvedValueOnce([]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) throw new Error("status command handler missing");
+
+    await handler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+      },
+      match: "",
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      12345,
+      "You are not authorized to use this command.",
+    );
   });
 
   it("streams tool summaries for native slash commands", async () => {

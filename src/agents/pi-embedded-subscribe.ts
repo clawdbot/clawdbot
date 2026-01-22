@@ -1,4 +1,5 @@
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -75,11 +76,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
+  const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
     state.blockBuffer = "";
     blockChunker?.reset();
+    replyDirectiveAccumulator.reset();
     state.blockState.thinking = false;
     state.blockState.final = false;
     state.blockState.inlineCode = createInlineCodeState();
@@ -374,7 +377,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts.push(chunk);
     rememberAssistantText(chunk);
     if (!params.onBlockReply) return;
-    const splitResult = parseReplyDirectives(chunk);
+    const splitResult = replyDirectiveAccumulator.consume(chunk);
+    if (!splitResult) return;
     const {
       text: cleanedText,
       mediaUrls,
@@ -394,6 +398,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToCurrent,
     });
   };
+
+  const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
+    replyDirectiveAccumulator.consume(text, options);
 
   const flushBlockReplyBuffer = () => {
     if (!params.onBlockReply) return;
@@ -447,6 +454,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     emitBlockChunk,
     flushBlockReplyBuffer,
     emitReasoningStream,
+    consumeReplyDirectives,
     resetAssistantMessageState,
     resetForCompactionRetry,
     finalizeAssistantTexts,

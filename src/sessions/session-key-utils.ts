@@ -33,3 +33,21 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   const parsed = parseAgentSessionKey(raw);
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
+
+const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
+
+export function resolveThreadParentSessionKey(
+  sessionKey: string | undefined | null,
+): string | null {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) return null;
+  const normalized = raw.toLowerCase();
+  let idx = -1;
+  for (const marker of THREAD_SESSION_MARKERS) {
+    const candidate = normalized.lastIndexOf(marker);
+    if (candidate > idx) idx = candidate;
+  }
+  if (idx <= 0) return null;
+  const parent = raw.slice(0, idx).trim();
+  return parent ? parent : null;
+}

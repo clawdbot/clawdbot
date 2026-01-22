@@ -70,7 +70,7 @@ describe("logger helpers", () => {
   it("uses daily rolling default log file and prunes old ones", () => {
     resetLogger();
     setLoggerOverride({}); // force defaults regardless of user config
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateString(new Date());
     const todayPath = path.join(DEFAULT_LOG_DIR, `clawdbot-${today}.log`);
 
     // create an old file to be pruned
@@ -102,4 +102,11 @@ function cleanup(file: string) {
   } catch {
     // ignore
   }
+}
+
+function localDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }

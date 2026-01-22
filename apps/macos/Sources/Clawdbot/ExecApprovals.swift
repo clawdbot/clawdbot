@@ -475,8 +475,8 @@ enum ExecApprovalsStore {
 
     private static func mergeAgents(
         current: ExecApprovalsAgent,
-        legacy: ExecApprovalsAgent
-    ) -> ExecApprovalsAgent {
+        legacy: ExecApprovalsAgent) -> ExecApprovalsAgent
+    {
         var seen = Set<String>()
         var allowlist: [ExecAllowlistEntry] = []
         func append(_ entry: ExecAllowlistEntry) {
@@ -486,8 +486,12 @@ enum ExecApprovalsStore {
             seen.insert(key)
             allowlist.append(entry)
         }
-        for entry in current.allowlist ?? [] { append(entry) }
-        for entry in legacy.allowlist ?? [] { append(entry) }
+        for entry in current.allowlist ?? [] {
+            append(entry)
+        }
+        for entry in legacy.allowlist ?? [] {
+            append(entry)
+        }
 
         return ExecApprovalsAgent(
             security: current.security ?? legacy.security,

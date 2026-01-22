@@ -4,12 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  type ExecAllowlistEntry,
   addAllowlistEntry,
   analyzeArgvCommand,
   analyzeShellCommand,
-  isSafeBinUsage,
-  matchAllowlist,
+  evaluateExecAllowlist,
+  requiresExecApproval,
   normalizeExecApprovals,
   recordAllowlistUse,
   resolveExecApprovals,
@@ -592,26 +591,18 @@ async function handleInvoke(
   const cfg = loadConfig();
   const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
-  const allowlistMatches: ExecAllowlistEntry[] = [];
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
+  const allowlistEval = evaluateExecAllowlist({
+    analysis,
+    allowlist: approvals.allowlist,
+    safeBins,
+    cwd: params.cwd ?? undefined,
+    skillBins: bins,
+    autoAllowSkills,
+  });
+  const allowlistMatches = allowlistEval.allowlistMatches;
   const allowlistSatisfied =
-    security === "allowlist" && analysis.ok && analysis.segments.length > 0
-      ? analysis.segments.every((segment) => {
-          const match = matchAllowlist(approvals.allowlist, segment.resolution);
-          if (match) allowlistMatches.push(match);
-          const safe = isSafeBinUsage({
-            argv: segment.argv,
-            resolution: segment.resolution,
-            safeBins,
-            cwd: params.cwd ?? undefined,
-          });
-          const skillAllow =
-            autoAllowSkills && segment.resolution?.executableName
-              ? bins.has(segment.resolution.executableName)
-              : false;
-          return Boolean(match || safe || skillAllow);
-        })
-      : false;
+    security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false;
 
   const useMacAppExec = process.platform === "darwin";
   if (useMacAppExec) {
@@ -715,9 +706,12 @@ async function handleInvoke(
     return;
   }
 
-  const requiresAsk =
-    ask === "always" ||
-    (ask === "on-miss" && security === "allowlist" && (!analysis.ok || !allowlistSatisfied));
+  const requiresAsk = requiresExecApproval({
+    ask,
+    security,
+    analysisOk: analysis.ok,
+    allowlistSatisfied,
+  });
 
   const approvalDecision =
     params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"

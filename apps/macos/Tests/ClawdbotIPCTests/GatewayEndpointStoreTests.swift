@@ -140,14 +140,14 @@ import Testing
         #expect(resolved.mode == .remote)
     }
 
-    @Test func resolveLocalGatewayHostPrefersTailnetForAuto() {
+    @Test func resolveLocalGatewayHostUsesLoopbackForAutoEvenWithTailnet() {
         let host = GatewayEndpointStore._testResolveLocalGatewayHost(
             bindMode: "auto",
             tailscaleIP: "100.64.1.2")
-        #expect(host == "100.64.1.2")
+        #expect(host == "127.0.0.1")
     }
 
-    @Test func resolveLocalGatewayHostFallsBackToLoopbackForAuto() {
+    @Test func resolveLocalGatewayHostUsesLoopbackForAutoWithoutTailnet() {
         let host = GatewayEndpointStore._testResolveLocalGatewayHost(
             bindMode: "auto",
             tailscaleIP: nil)

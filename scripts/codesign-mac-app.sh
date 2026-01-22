@@ -285,5 +285,5 @@ sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
 verify_team_ids
 
-rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_APP" "$ENT_TMP_RUNTIME"
+rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_RUNTIME"
 echo "Codesign complete for $APP_BUNDLE"

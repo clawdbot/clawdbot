@@ -91,6 +91,7 @@
 
 /* Image avatar support */
 img.chat-avatar {
+  display: block;
   object-fit: cover;
   object-position: center;
 }

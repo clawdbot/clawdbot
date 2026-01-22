@@ -12,6 +12,7 @@ public struct ClawdbotChatView: View {
     @State private var scrollPosition: UUID?
     @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
+    @State private var isPinnedToBottom = true
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -87,36 +88,28 @@ public struct ClawdbotChatView: View {
     private var messageList: some View {
         ZStack {
             ScrollView {
-                #if os(macOS)
-                VStack(spacing: 0) {
-                    LazyVStack(spacing: Layout.messageSpacing) {
-                        self.messageListRows
-                    }
-
-                    Color.clear
-                        .frame(height: Layout.messageListPaddingBottom)
-                        .id(self.scrollerBottomID)
-                }
-                // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
-                .scrollTargetLayout()
-                .padding(.top, Layout.messageListPaddingTop)
-                .padding(.horizontal, Layout.messageListPaddingHorizontal)
-                #else
                 LazyVStack(spacing: Layout.messageSpacing) {
                     self.messageListRows
 
                     Color.clear
+                        #if os(macOS)
+                        .frame(height: Layout.messageListPaddingBottom)
+                        #else
                         .frame(height: Layout.messageListPaddingBottom + 1)
+                        #endif
                         .id(self.scrollerBottomID)
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
                 .scrollTargetLayout()
                 .padding(.top, Layout.messageListPaddingTop)
                 .padding(.horizontal, Layout.messageListPaddingHorizontal)
-                #endif
             }
             // Keep the scroll pinned to the bottom for new messages.
             .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
+            .onChange(of: self.scrollPosition) { _, position in
+                guard let position else { return }
+                self.isPinnedToBottom = position == self.scrollerBottomID
+            }
 
             if self.viewModel.isLoading {
                 ProgressView()
@@ -133,18 +126,26 @@ public struct ClawdbotChatView: View {
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
             self.scrollPosition = self.scrollerBottomID
             self.hasPerformedInitialScroll = true
+            self.isPinnedToBottom = true
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
             self.hasPerformedInitialScroll = false
+            self.isPinnedToBottom = true
         }
         .onChange(of: self.viewModel.messages.count) { _, _ in
-            guard self.hasPerformedInitialScroll else { return }
+            guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
         }
         .onChange(of: self.viewModel.pendingRunCount) { _, _ in
-            guard self.hasPerformedInitialScroll else { return }
+            guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
+            withAnimation(.snappy(duration: 0.22)) {
+                self.scrollPosition = self.scrollerBottomID
+            }
+        }
+        .onChange(of: self.viewModel.streamingAssistantText) { _, _ in
+            guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }

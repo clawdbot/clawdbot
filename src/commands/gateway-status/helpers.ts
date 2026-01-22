@@ -134,7 +134,7 @@ export function resolveAuthForTarget(
     return { token: tokenOverride, password: passwordOverride };
   }
 
-  if (target.kind === "configRemote") {
+  if (target.kind === "configRemote" || target.kind === "sshTunnel") {
     const token =
       typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
     const remotePassword = (cfg.gateway?.remote as { password?: unknown } | undefined)?.password;

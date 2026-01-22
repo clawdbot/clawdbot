@@ -65,6 +65,12 @@ export type ClawdbotConfig = {
   ui?: {
     /** Accent color for Clawdbot UI chrome (hex). */
     seamColor?: string;
+    assistant?: {
+      /** Assistant display name for UI surfaces. */
+      name?: string;
+      /** Assistant avatar (emoji, short text, or image URL/data URI). */
+      avatar?: string;
+    };
   };
   skills?: SkillsConfig;
   plugins?: PluginsConfig;

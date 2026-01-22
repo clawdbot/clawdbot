@@ -34,6 +34,7 @@ const BASE_METHODS = [
   "voicewake.get",
   "voicewake.set",
   "sessions.list",
+  "sessions.preview",
   "sessions.patch",
   "sessions.reset",
   "sessions.delete",
@@ -68,6 +69,7 @@ const BASE_METHODS = [
   "system-event",
   "send",
   "agent",
+  "agent.identity.get",
   "agent.wait",
   // WebChat WebSocket-native chat methods
   "chat.history",

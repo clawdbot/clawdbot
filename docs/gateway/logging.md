@@ -17,6 +17,7 @@ Clawdbot has two log “surfaces”:
 ## File-based logger
 
 - Default rolling log file is under `/tmp/clawdbot/` (one file per day): `clawdbot-YYYY-MM-DD.log`
+  - Date uses the gateway host's local timezone.
 - The log file path and level can be configured via `~/.clawdbot/clawdbot.json`:
   - `logging.file`
   - `logging.level`

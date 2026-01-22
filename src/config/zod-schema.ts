@@ -155,6 +155,13 @@ export const ClawdbotSchema = z
     ui: z
       .object({
         seamColor: HexColorSchema.optional(),
+        assistant: z
+          .object({
+            name: z.string().max(50).optional(),
+            avatar: z.string().max(200).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

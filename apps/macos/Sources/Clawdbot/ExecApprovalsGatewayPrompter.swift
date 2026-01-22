@@ -1,5 +1,6 @@
 import ClawdbotKit
 import ClawdbotProtocol
+import CoreGraphics
 import Foundation
 import OSLog
 
@@ -44,6 +45,7 @@ final class ExecApprovalsGatewayPrompter {
         do {
             let data = try JSONEncoder().encode(payload)
             let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
+            guard self.shouldPresent(request: request) else { return }
             let decision = ExecApprovalsPromptPresenter.prompt(request.request)
             try await GatewayConnection.shared.requestVoid(
                 method: .execApprovalResolve,
@@ -56,4 +58,66 @@ final class ExecApprovalsGatewayPrompter {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    private func shouldPresent(request: GatewayApprovalRequest) -> Bool {
+        let mode = AppStateStore.shared.connectionMode
+        let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.shouldPresent(
+            mode: mode,
+            activeSession: activeSession,
+            requestSession: requestSession,
+            lastInputSeconds: Self.lastInputSeconds(),
+            thresholdSeconds: 120)
+    }
+
+    private static func shouldPresent(
+        mode: AppState.ConnectionMode,
+        activeSession: String?,
+        requestSession: String?,
+        lastInputSeconds: Int?,
+        thresholdSeconds: Int) -> Bool
+    {
+        let active = activeSession?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requested = requestSession?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recentlyActive = lastInputSeconds.map { $0 <= thresholdSeconds } ?? (mode == .local)
+
+        if let session = requested, !session.isEmpty {
+            if let active, !active.isEmpty {
+                return active == session
+            }
+            return recentlyActive
+        }
+
+        if let active, !active.isEmpty {
+            return true
+        }
+        return mode == .local
+    }
+
+    private static func lastInputSeconds() -> Int? {
+        let anyEvent = CGEventType(rawValue: UInt32.max) ?? .null
+        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEvent)
+        if seconds.isNaN || seconds.isInfinite || seconds < 0 { return nil }
+        return Int(seconds.rounded())
+    }
 }
+
+#if DEBUG
+extension ExecApprovalsGatewayPrompter {
+    static func _testShouldPresent(
+        mode: AppState.ConnectionMode,
+        activeSession: String?,
+        requestSession: String?,
+        lastInputSeconds: Int?,
+        thresholdSeconds: Int = 120) -> Bool
+    {
+        self.shouldPresent(
+            mode: mode,
+            activeSession: activeSession,
+            requestSession: requestSession,
+            lastInputSeconds: lastInputSeconds,
+            thresholdSeconds: thresholdSeconds)
+    }
+}
+#endif

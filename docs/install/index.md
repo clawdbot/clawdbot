@@ -71,6 +71,8 @@ If you have libvips installed globally (common on macOS via Homebrew) and `sharp
 SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g clawdbot@latest
 ```
 
+If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the `SHARP_IGNORE_GLOBAL_LIBVIPS=1` workaround above to skip the native build.
+
 Or:
 
 ```bash

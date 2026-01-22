@@ -1,5 +1,5 @@
 {
-  "originHash" : "550d4ea41d4bb2546b99a7bfa1c5cba7e28a13862bc226727ea7426c61555a33",
+  "originHash" : "f847d54db16b371dbb1a79271d50436cdec572179b0f0cf14cfe1b75df8dfbc2",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -24,7 +24,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/ElevenLabsKit",
       "state" : {
-        "revision" : "7e3c948d8340abe3977014f3de020edf221e9269",
+        "revision" : "c8679fbd37416a8780fe43be88a497ff16209e2d",
         "version" : "0.1.0"
       }
     },

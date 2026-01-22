@@ -28,6 +28,7 @@ export type ChatProps = {
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
+  assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
   connected: boolean;
@@ -42,6 +43,8 @@ export type ChatProps = {
   sidebarContent?: string | null;
   sidebarError?: string | null;
   splitRatio?: number;
+  assistantName: string;
+  assistantAvatar: string | null;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -64,6 +67,10 @@ export function renderChat(props: ChatProps) {
   );
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const assistantIdentity = {
+    name: props.assistantName,
+    avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
+  };
 
   const composePlaceholder = props.connected
     ? "Message (↩ to send, Shift+↩ for line breaks)"
@@ -114,7 +121,7 @@ export function renderChat(props: ChatProps) {
               : nothing}
             ${repeat(buildChatItems(props), (item) => item.key, (item) => {
               if (item.kind === "reading-indicator") {
-                return renderReadingIndicatorGroup();
+                return renderReadingIndicatorGroup(assistantIdentity);
               }
 
               if (item.kind === "stream") {
@@ -122,6 +129,7 @@ export function renderChat(props: ChatProps) {
                   item.text,
                   item.startedAt,
                   props.onOpenSidebar,
+                  assistantIdentity,
                 );
               }
 
@@ -129,6 +137,8 @@ export function renderChat(props: ChatProps) {
                 return renderMessageGroup(item, {
                   onOpenSidebar: props.onOpenSidebar,
                   showReasoning,
+                  assistantName: props.assistantName,
+                  assistantAvatar: assistantIdentity.avatar,
                 });
               }
 

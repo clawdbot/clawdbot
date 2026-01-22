@@ -184,6 +184,14 @@ actor PortGuardian {
         }
     }
 
+    func isListening(port: Int, pid: Int32? = nil) async -> Bool {
+        let listeners = await self.listeners(on: port)
+        if let pid {
+            return listeners.contains(where: { $0.pid == pid })
+        }
+        return !listeners.isEmpty
+    }
+
     private func listeners(on port: Int) async -> [Listener] {
         let res = await ShellExecutor.run(
             command: ["lsof", "-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcn"],

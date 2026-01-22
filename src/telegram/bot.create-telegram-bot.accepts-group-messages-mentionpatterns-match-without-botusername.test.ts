@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { createTelegramBot } from "./bot.js";
 
@@ -119,7 +120,6 @@ const getOnHandler = (event: string) => {
 };
 
 const ORIGINAL_TZ = process.env.TZ;
-
 describe("createTelegramBot", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
@@ -152,6 +152,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       identity: { name: "Bert" },
       messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
       channels: {
@@ -182,8 +187,10 @@ describe("createTelegramBot", () => {
     expect(payload.WasMentioned).toBe(true);
     expect(payload.SenderName).toBe("Ada");
     expect(payload.SenderId).toBe("9");
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const timestampPattern = escapeRegExp(expectedTimestamp);
     expect(payload.Body).toMatch(
-      /^\[Telegram Test Group id:7 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
+      new RegExp(`^\\[Telegram Test Group id:7 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
     );
   });
   it("keeps group envelope headers stable (sender identity is separate)", async () => {
@@ -192,6 +199,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: {
           groupPolicy: "open",
@@ -225,8 +237,10 @@ describe("createTelegramBot", () => {
     expect(payload.SenderName).toBe("Ada Lovelace");
     expect(payload.SenderId).toBe("99");
     expect(payload.SenderUsername).toBe("ada");
+    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
+    const timestampPattern = escapeRegExp(expectedTimestamp);
     expect(payload.Body).toMatch(
-      /^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09 00:00 [^\]]+\]/,
+      new RegExp(`^\\[Telegram Ops id:42 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
     );
   });
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {

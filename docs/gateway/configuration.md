@@ -400,12 +400,26 @@ Optional per-agent identity used for defaults and UX. This is written by the mac
 If set, Clawdbot derives defaults (only when you haven’t set them explicitly):
 - `messages.ackReaction` from the **active agent**’s `identity.emoji` (falls back to 👀)
 - `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
+- `identity.avatar` accepts a workspace-relative image path or a remote URL/data URL. Local files must live inside the agent workspace.
+
+`identity.avatar` accepts:
+- Workspace-relative path (must stay within the agent workspace)
+- `http(s)` URL
+- `data:` URI
 
 ```json5
 {
   agents: {
     list: [
-      { id: "main", identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" } }
+      {
+        id: "main",
+        identity: {
+          name: "Samantha",
+          theme: "helpful sloth",
+          emoji: "🦥",
+          avatar: "avatars/samantha.png"
+        }
+      }
     ]
   }
 }
@@ -2640,7 +2654,13 @@ If unset, clients fall back to a muted light-blue.
 ```json5
 {
   ui: {
-    seamColor: "#FF4500" // hex (RRGGBB or #RRGGBB)
+    seamColor: "#FF4500", // hex (RRGGBB or #RRGGBB)
+    // Optional: Control UI assistant identity override.
+    // If unset, the Control UI uses the active agent identity (config or IDENTITY.md).
+    assistant: {
+      name: "Clawdbot",
+      avatar: "CB" // emoji, short text, or image URL/data URI
+    }
   }
 }
 ```

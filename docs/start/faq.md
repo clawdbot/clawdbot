@@ -1067,6 +1067,17 @@ You can also force a specific auth profile for the provider (per session):
 Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
 It also shows the configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
 
+### How do I unpin a profile I set with `@profile`?
+
+Re-run `/model` **without** the `@profile` suffix:
+
+```
+/model anthropic/claude-opus-4-5
+```
+
+If you want to return to the default, pick it from `/model` (or send `/model <default provider/model>`).
+Use `/model status` to confirm which auth profile is active.
+
 ### Why do I see “Model … is not allowed” and then no reply?
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and any
@@ -1276,7 +1287,7 @@ Fix: either provide Google auth, or remove/avoid Google models in `agents.defaul
 Cause: the session history contains **thinking blocks without signatures** (often from
 an aborted/partial stream). Google Antigravity requires signatures for thinking blocks.
 
-Fix: start a **new session** or set `/thinking off` for that agent.
+Fix: Clawdbot now strips unsigned thinking blocks for Google Antigravity Claude. If it still appears, start a **new session** or set `/thinking off` for that agent.
 
 ## Auth profiles: what they are and how to manage them
 

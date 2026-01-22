@@ -309,7 +309,7 @@ private func resolveLocalHost(bind: String?) -> String {
     let normalized = (bind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let tailnetIP = detectTailnetIPv4()
     switch normalized {
-    case "tailnet", "auto":
+    case "tailnet":
         return tailnetIP ?? "127.0.0.1"
     default:
         return "127.0.0.1"

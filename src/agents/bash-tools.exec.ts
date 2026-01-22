@@ -8,16 +8,17 @@ import {
   type ExecAsk,
   type ExecHost,
   type ExecSecurity,
-  type ExecAllowlistEntry,
+  type ExecApprovalsFile,
   addAllowlistEntry,
   analyzeShellCommand,
-  isSafeBinUsage,
-  matchAllowlist,
+  evaluateExecAllowlist,
   maxAsk,
   minSecurity,
+  requiresExecApproval,
   resolveSafeBins,
   recordAllowlistUse,
   resolveExecApprovals,
+  resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
@@ -706,6 +707,7 @@ export function createExecTool(
           : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
         : null;
       const elevatedDefaults = defaults?.elevated;
+      const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
       const elevatedDefaultMode =
         elevatedDefaults?.defaultLevel === "full"
           ? "full"
@@ -714,6 +716,7 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
+      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -721,7 +724,7 @@ export function createExecTool(
               ? "full"
               : "ask"
             : "off"
-          : elevatedDefaultMode;
+          : effectiveDefaultMode;
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
@@ -754,6 +757,8 @@ export function createExecTool(
               .join("\n"),
           );
         }
+      }
+      if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
       const configuredHost = defaults?.host ?? "sandbox";
@@ -866,7 +871,43 @@ export function createExecTool(
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
         }
-        const requiresAsk = hostAsk === "always" || hostAsk === "on-miss";
+        const analysis = analyzeShellCommand({ command: params.command, cwd: workdir, env });
+        let allowlistSatisfied = false;
+        if (hostAsk === "on-miss" && hostSecurity === "allowlist") {
+          try {
+            const approvalsSnapshot = (await callGatewayTool(
+              "exec.approvals.node.get",
+              { timeoutMs: 10_000 },
+              { nodeId },
+            )) as { file?: unknown } | null;
+            const approvalsFile =
+              approvalsSnapshot && typeof approvalsSnapshot === "object"
+                ? approvalsSnapshot.file
+                : undefined;
+            if (approvalsFile && typeof approvalsFile === "object") {
+              const resolved = resolveExecApprovalsFromFile({
+                file: approvalsFile as ExecApprovalsFile,
+                agentId,
+                overrides: { security: "allowlist" },
+              });
+              // Allowlist-only precheck; safe bins are node-local and may diverge.
+              allowlistSatisfied = evaluateExecAllowlist({
+                analysis,
+                allowlist: resolved.allowlist,
+                safeBins: new Set(),
+                cwd: workdir,
+              }).allowlistSatisfied;
+            }
+          } catch {
+            // Fall back to requiring approval if node approvals cannot be fetched.
+          }
+        }
+        const requiresAsk = requiresExecApproval({
+          ask: hostAsk,
+          security: hostSecurity,
+          analysisOk: analysis.ok,
+          allowlistSatisfied,
+        });
         const commandText = params.command;
         const invokeTimeoutMs = Math.max(
           10_000,
@@ -917,8 +958,8 @@ export function createExecTool(
                   security: hostSecurity,
                   ask: hostAsk,
                   agentId,
-                  resolvedPath: null,
-                  sessionKey: defaults?.sessionKey ?? null,
+                  resolvedPath: undefined,
+                  sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               )) as { decision?: string } | null;
@@ -1055,33 +1096,28 @@ export function createExecTool(
           throw new Error("exec denied: host=gateway security=deny");
         }
         const analysis = analyzeShellCommand({ command: params.command, cwd: workdir, env });
-        const allowlistMatches: ExecAllowlistEntry[] = [];
-        let allowlistSatisfied = false;
-        if (hostSecurity === "allowlist" && analysis.ok && analysis.segments.length > 0) {
-          allowlistSatisfied = analysis.segments.every((segment) => {
-            const match = matchAllowlist(approvals.allowlist, segment.resolution);
-            if (match) allowlistMatches.push(match);
-            const safe = isSafeBinUsage({
-              argv: segment.argv,
-              resolution: segment.resolution,
-              safeBins,
-              cwd: workdir,
-            });
-            return Boolean(match || safe);
-          });
-        }
-        const requiresAsk =
-          hostAsk === "always" ||
-          (hostAsk === "on-miss" &&
-            hostSecurity === "allowlist" &&
-            (!analysis.ok || !allowlistSatisfied));
+        const allowlistEval = evaluateExecAllowlist({
+          analysis,
+          allowlist: approvals.allowlist,
+          safeBins,
+          cwd: workdir,
+        });
+        const allowlistMatches = allowlistEval.allowlistMatches;
+        const allowlistSatisfied =
+          hostSecurity === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false;
+        const requiresAsk = requiresExecApproval({
+          ask: hostAsk,
+          security: hostSecurity,
+          analysisOk: analysis.ok,
+          allowlistSatisfied,
+        });
 
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
           const approvalSlug = createApprovalSlug(approvalId);
           const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
           const contextKey = `exec:${approvalId}`;
-          const resolvedPath = analysis.segments[0]?.resolution?.resolvedPath ?? null;
+          const resolvedPath = analysis.segments[0]?.resolution?.resolvedPath;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const commandText = params.command;
           const effectiveTimeout =
@@ -1103,7 +1139,7 @@ export function createExecTool(
                   ask: hostAsk,
                   agentId,
                   resolvedPath,
-                  sessionKey: defaults?.sessionKey ?? null,
+                  sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               )) as { decision?: string } | null;

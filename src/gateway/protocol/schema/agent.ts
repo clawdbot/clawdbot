@@ -68,6 +68,23 @@ export const AgentParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentIdentityParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentIdentityResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    name: Type.Optional(NonEmptyString),
+    avatar: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentWaitParamsSchema = Type.Object(
   {
     runId: NonEmptyString,

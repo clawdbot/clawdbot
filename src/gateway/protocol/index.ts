@@ -2,6 +2,10 @@ import AjvPkg, { type ErrorObject } from "ajv";
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AgentIdentityParams,
+  AgentIdentityParamsSchema,
+  type AgentIdentityResult,
+  AgentIdentityResultSchema,
   AgentParamsSchema,
   type AgentSummary,
   AgentSummarySchema,
@@ -136,6 +140,8 @@ import {
   SessionsListParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
+  type SessionsPreviewParams,
+  SessionsPreviewParamsSchema,
   type SessionsResetParams,
   SessionsResetParamsSchema,
   type SessionsResolveParams,
@@ -198,6 +204,8 @@ export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
+export const validateAgentIdentityParams =
+  ajv.compile<AgentIdentityParams>(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
@@ -223,6 +231,9 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
+  SessionsPreviewParamsSchema,
+);
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
 );
@@ -359,6 +370,8 @@ export {
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
+  AgentIdentityParamsSchema,
+  AgentIdentityResultSchema,
   WakeParamsSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
@@ -368,6 +381,7 @@ export {
   NodeListParamsSchema,
   NodeInvokeParamsSchema,
   SessionsListParamsSchema,
+  SessionsPreviewParamsSchema,
   SessionsPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
@@ -432,6 +446,8 @@ export type {
   ErrorShape,
   StateVersion,
   AgentEvent,
+  AgentIdentityParams,
+  AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
   TickEvent,
@@ -478,6 +494,7 @@ export type {
   NodeInvokeResultParams,
   NodeEventParams,
   SessionsListParams,
+  SessionsPreviewParams,
   SessionsResolveParams,
   SessionsPatchParams,
   SessionsResetParams,

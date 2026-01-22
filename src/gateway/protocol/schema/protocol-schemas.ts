@@ -2,6 +2,8 @@ import type { TSchema } from "@sinclair/typebox";
 
 import {
   AgentEventSchema,
+  AgentIdentityParamsSchema,
+  AgentIdentityResultSchema,
   AgentParamsSchema,
   AgentWaitParamsSchema,
   PollParamsSchema,
@@ -106,6 +108,7 @@ import {
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
+  SessionsPreviewParamsSchema,
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
 } from "./sessions.js";
@@ -136,6 +139,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   SendParams: SendParamsSchema,
   PollParams: PollParamsSchema,
   AgentParams: AgentParamsSchema,
+  AgentIdentityParams: AgentIdentityParamsSchema,
+  AgentIdentityResult: AgentIdentityResultSchema,
   AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
   NodePairRequestParams: NodePairRequestParamsSchema,
@@ -151,6 +156,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeEventParams: NodeEventParamsSchema,
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   SessionsListParams: SessionsListParamsSchema,
+  SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,
   SessionsResetParams: SessionsResetParamsSchema,

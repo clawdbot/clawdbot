@@ -16,6 +16,7 @@ If you installed via **npm/pnpm** (global install, no git metadata), updates hap
 ```bash
 clawdbot update
 clawdbot update status
+clawdbot update wizard
 clawdbot update --channel beta
 clawdbot update --channel dev
 clawdbot update --tag beta
@@ -47,6 +48,11 @@ clawdbot update status --timeout 10
 Options:
 - `--json`: print machine-readable status JSON.
 - `--timeout <seconds>`: timeout for checks (default is 3s).
+
+## `update wizard`
+
+Interactive flow to pick an update channel and confirm whether to restart the Gateway
+after updating. If you select `dev` without a git checkout, it offers to create one.
 
 ## What it does
 

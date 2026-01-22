@@ -212,6 +212,11 @@ struct GeneralSettings: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let authLabel = ControlChannel.shared.authSourceLabel {
+                    Text(authLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Text("Tip: enable Tailscale for stable remote access.")

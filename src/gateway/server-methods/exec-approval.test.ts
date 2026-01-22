@@ -105,6 +105,57 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("accepts resolve during broadcast", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const resolveRespond = vi.fn();
+
+    const resolveContext = {
+      broadcast: () => {},
+    };
+
+    const context = {
+      broadcast: (event: string, payload: unknown) => {
+        if (event !== "exec.approval.requested") return;
+        const id = (payload as { id?: string })?.id ?? "";
+        void handlers["exec.approval.resolve"]({
+          params: { id, decision: "allow-once" },
+          respond: resolveRespond,
+          context: resolveContext as unknown as Parameters<
+            (typeof handlers)["exec.approval.resolve"]
+          >[0]["context"],
+          client: { connect: { client: { id: "cli", displayName: "CLI" } } },
+          req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
+          isWebchatConnect: noop,
+        });
+      },
+    };
+
+    await handlers["exec.approval.request"]({
+      params: {
+        command: "echo ok",
+        cwd: "/tmp",
+        host: "node",
+        timeoutMs: 2000,
+      },
+      respond,
+      context: context as unknown as Parameters<
+        (typeof handlers)["exec.approval.request"]
+      >[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "exec.approval.request" },
+      isWebchatConnect: noop,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ decision: "allow-once" }),
+      undefined,
+    );
+  });
+
   it("accepts explicit approval ids", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);

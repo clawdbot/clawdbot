@@ -13,6 +13,7 @@ struct ExecApprovalPromptRequest: Codable, Sendable {
     var ask: String?
     var agentId: String?
     var resolvedPath: String?
+    var sessionKey: String?
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -215,36 +216,15 @@ enum ExecApprovalsPromptPresenter {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Allow this command?"
-
-        var details = "Clawdbot wants to run:\n\n\(request.command)"
-        let trimmedCwd = request.cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedCwd.isEmpty {
-            details += "\n\nWorking directory:\n\(trimmedCwd)"
-        }
-        let trimmedAgent = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedAgent.isEmpty {
-            details += "\n\nAgent:\n\(trimmedAgent)"
-        }
-        let trimmedPath = request.resolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedPath.isEmpty {
-            details += "\n\nExecutable:\n\(trimmedPath)"
-        }
-        let trimmedHost = request.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedHost.isEmpty {
-            details += "\n\nHost:\n\(trimmedHost)"
-        }
-        if let security = request.security?.trimmingCharacters(in: .whitespacesAndNewlines), !security.isEmpty {
-            details += "\n\nSecurity:\n\(security)"
-        }
-        if let ask = request.ask?.trimmingCharacters(in: .whitespacesAndNewlines), !ask.isEmpty {
-            details += "\nAsk mode:\n\(ask)"
-        }
-        details += "\n\nThis runs on this machine."
-        alert.informativeText = details
+        alert.informativeText = "Review the command details before allowing."
+        alert.accessoryView = self.buildAccessoryView(request)
 
         alert.addButton(withTitle: "Allow Once")
         alert.addButton(withTitle: "Always Allow")
         alert.addButton(withTitle: "Don't Allow")
+        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
+            alert.buttons[2].hasDestructiveAction = true
+        }
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
@@ -254,6 +234,110 @@ enum ExecApprovalsPromptPresenter {
         default:
             return .deny
         }
+    }
+
+    @MainActor
+    private static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.alignment = .leading
+
+        let commandTitle = NSTextField(labelWithString: "Command")
+        commandTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+        stack.addArrangedSubview(commandTitle)
+
+        let commandText = NSTextView()
+        commandText.isEditable = false
+        commandText.isSelectable = true
+        commandText.drawsBackground = true
+        commandText.backgroundColor = NSColor.textBackgroundColor
+        commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        commandText.string = request.command
+        commandText.textContainerInset = NSSize(width: 6, height: 6)
+        commandText.textContainer?.lineFragmentPadding = 0
+        commandText.textContainer?.widthTracksTextView = true
+        commandText.isHorizontallyResizable = false
+        commandText.isVerticallyResizable = false
+
+        let commandScroll = NSScrollView()
+        commandScroll.borderType = .lineBorder
+        commandScroll.hasVerticalScroller = false
+        commandScroll.hasHorizontalScroller = false
+        commandScroll.documentView = commandText
+        commandScroll.translatesAutoresizingMaskIntoConstraints = false
+        commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
+        commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+        stack.addArrangedSubview(commandScroll)
+
+        let contextTitle = NSTextField(labelWithString: "Context")
+        contextTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+        stack.addArrangedSubview(contextTitle)
+
+        let contextStack = NSStackView()
+        contextStack.orientation = .vertical
+        contextStack.spacing = 4
+        contextStack.alignment = .leading
+
+        let trimmedCwd = request.cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedCwd.isEmpty {
+            self.addDetailRow(title: "Working directory", value: trimmedCwd, to: contextStack)
+        }
+        let trimmedAgent = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedAgent.isEmpty {
+            self.addDetailRow(title: "Agent", value: trimmedAgent, to: contextStack)
+        }
+        let trimmedPath = request.resolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPath.isEmpty {
+            self.addDetailRow(title: "Executable", value: trimmedPath, to: contextStack)
+        }
+        let trimmedHost = request.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedHost.isEmpty {
+            self.addDetailRow(title: "Host", value: trimmedHost, to: contextStack)
+        }
+        if let security = request.security?.trimmingCharacters(in: .whitespacesAndNewlines), !security.isEmpty {
+            self.addDetailRow(title: "Security", value: security, to: contextStack)
+        }
+        if let ask = request.ask?.trimmingCharacters(in: .whitespacesAndNewlines), !ask.isEmpty {
+            self.addDetailRow(title: "Ask mode", value: ask, to: contextStack)
+        }
+
+        if contextStack.arrangedSubviews.isEmpty {
+            let empty = NSTextField(labelWithString: "No additional context provided.")
+            empty.textColor = NSColor.secondaryLabelColor
+            empty.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+            contextStack.addArrangedSubview(empty)
+        }
+
+        stack.addArrangedSubview(contextStack)
+
+        let footer = NSTextField(labelWithString: "This runs on this machine.")
+        footer.textColor = NSColor.secondaryLabelColor
+        footer.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        stack.addArrangedSubview(footer)
+
+        return stack
+    }
+
+    @MainActor
+    private static func addDetailRow(title: String, value: String, to stack: NSStackView) {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 6
+        row.alignment = .firstBaseline
+
+        let titleLabel = NSTextField(labelWithString: "\(title):")
+        titleLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        titleLabel.textColor = NSColor.secondaryLabelColor
+
+        let valueLabel = NSTextField(labelWithString: value)
+        valueLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        valueLabel.lineBreakMode = .byTruncatingMiddle
+        valueLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        row.addArrangedSubview(titleLabel)
+        row.addArrangedSubview(valueLabel)
+        stack.addArrangedSubview(row)
     }
 }
 
@@ -329,7 +413,8 @@ private enum ExecHostExecutor {
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
                     agentId: context.trimmedAgent,
-                    resolvedPath: context.resolution?.resolvedPath))
+                    resolvedPath: context.resolution?.resolvedPath,
+                    sessionKey: request.sessionKey))
 
             switch decision {
             case .deny:

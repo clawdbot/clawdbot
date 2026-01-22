@@ -1,12 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
-
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
+import type { AgentIdentityFile } from "../agents/identity-file.js";
+import {
+  identityHasValues,
+  loadAgentIdentityFromWorkspace,
+  parseIdentityMarkdown as parseIdentityMarkdownFile,
+} from "../agents/identity-file.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -28,14 +30,7 @@ export type AgentSummary = {
 
 type AgentEntry = NonNullable<NonNullable<ClawdbotConfig["agents"]>["list"]>[number];
 
-export type AgentIdentity = {
-  name?: string;
-  emoji?: string;
-  creature?: string;
-  vibe?: string;
-  theme?: string;
-  avatar?: string;
-};
+export type AgentIdentity = AgentIdentityFile;
 
 export function listAgentEntries(cfg: ClawdbotConfig): AgentEntry[] {
   const list = cfg.agents?.list;
@@ -74,47 +69,13 @@ function resolveAgentModel(cfg: ClawdbotConfig, agentId: string) {
 }
 
 export function parseIdentityMarkdown(content: string): AgentIdentity {
-  const identity: AgentIdentity = {};
-  const lines = content.split(/\r?\n/);
-  for (const line of lines) {
-    const cleaned = line.trim().replace(/^\s*-\s*/, "");
-    const colonIndex = cleaned.indexOf(":");
-    if (colonIndex === -1) continue;
-    const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
-    const value = cleaned
-      .slice(colonIndex + 1)
-      .replace(/^[*_]+|[*_]+$/g, "")
-      .trim();
-    if (!value) continue;
-    if (label === "name") identity.name = value;
-    if (label === "emoji") identity.emoji = value;
-    if (label === "creature") identity.creature = value;
-    if (label === "vibe") identity.vibe = value;
-    if (label === "theme") identity.theme = value;
-    if (label === "avatar") identity.avatar = value;
-  }
-  return identity;
+  return parseIdentityMarkdownFile(content);
 }
 
 export function loadAgentIdentity(workspace: string): AgentIdentity | null {
-  const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
-  try {
-    const content = fs.readFileSync(identityPath, "utf-8");
-    const parsed = parseIdentityMarkdown(content);
-    if (
-      !parsed.name &&
-      !parsed.emoji &&
-      !parsed.theme &&
-      !parsed.creature &&
-      !parsed.vibe &&
-      !parsed.avatar
-    ) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
+  const parsed = loadAgentIdentityFromWorkspace(workspace);
+  if (!parsed) return null;
+  return identityHasValues(parsed) ? parsed : null;
 }
 
 export function buildAgentSummaries(cfg: ClawdbotConfig): AgentSummary[] {

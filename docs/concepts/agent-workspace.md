@@ -140,6 +140,9 @@ workspace lives).
 
 ### 1) Initialize the repo
 
+If git is installed, brand-new workspaces are initialized automatically. If this
+workspace is not already a repo, run:
+
 ```bash
 cd ~/clawd
 git init

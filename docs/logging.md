@@ -22,6 +22,8 @@ By default, the Gateway writes a rolling log file under:
 
 `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log`
 
+The date uses the gateway host's local timezone.
+
 You can override this in `~/.clawdbot/clawdbot.json`:
 
 ```json

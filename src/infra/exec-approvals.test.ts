@@ -7,11 +7,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
+  evaluateExecAllowlist,
   isSafeBinUsage,
   matchAllowlist,
   maxAsk,
   minSecurity,
   normalizeSafeBins,
+  requiresExecApproval,
   resolveCommandResolution,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
@@ -183,6 +185,85 @@ describe("exec approvals safe bins", () => {
   });
 });
 
+describe("exec approvals allowlist evaluation", () => {
+  it("satisfies allowlist on exact match", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "tool",
+          argv: ["tool"],
+          resolution: {
+            rawExecutable: "tool",
+            resolvedPath: "/usr/bin/tool",
+            executableName: "tool",
+          },
+        },
+      ],
+    };
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/tool" }];
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual(["/usr/bin/tool"]);
+  });
+
+  it("satisfies allowlist via safe bins", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "jq .foo",
+          argv: ["jq", ".foo"],
+          resolution: {
+            rawExecutable: "jq",
+            resolvedPath: "/usr/bin/jq",
+            executableName: "jq",
+          },
+        },
+      ],
+    };
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: normalizeSafeBins(["jq"]),
+      cwd: "/tmp",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.allowlistMatches).toEqual([]);
+  });
+
+  it("satisfies allowlist via auto-allow skills", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "skill-bin",
+          argv: ["skill-bin", "--help"],
+          resolution: {
+            rawExecutable: "skill-bin",
+            resolvedPath: "/opt/skills/skill-bin",
+            executableName: "skill-bin",
+          },
+        },
+      ],
+    };
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: new Set(),
+      skillBins: new Set(["skill-bin"]),
+      autoAllowSkills: true,
+      cwd: "/tmp",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+});
+
 describe("exec approvals policy helpers", () => {
   it("minSecurity returns the more restrictive value", () => {
     expect(minSecurity("deny", "full")).toBe("deny");
@@ -192,6 +273,49 @@ describe("exec approvals policy helpers", () => {
   it("maxAsk returns the more aggressive ask mode", () => {
     expect(maxAsk("off", "always")).toBe("always");
     expect(maxAsk("on-miss", "off")).toBe("on-miss");
+  });
+
+  it("requiresExecApproval respects ask mode and allowlist satisfaction", () => {
+    expect(
+      requiresExecApproval({
+        ask: "always",
+        security: "allowlist",
+        analysisOk: true,
+        allowlistSatisfied: true,
+      }),
+    ).toBe(true);
+    expect(
+      requiresExecApproval({
+        ask: "off",
+        security: "allowlist",
+        analysisOk: true,
+        allowlistSatisfied: false,
+      }),
+    ).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: true,
+        allowlistSatisfied: true,
+      }),
+    ).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: false,
+        allowlistSatisfied: false,
+      }),
+    ).toBe(true);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "full",
+        analysisOk: false,
+        allowlistSatisfied: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -226,6 +350,82 @@ describe("exec approvals wildcard agent", () => {
     } finally {
       homedirSpy.mockRestore();
     }
+  });
+});
+
+describe("exec approvals node host allowlist check", () => {
+  // These tests verify the allowlist satisfaction logic used by the node host path
+  // The node host checks: matchAllowlist() || isSafeBinUsage() for each command segment
+  // Using hardcoded resolution objects for cross-platform compatibility
+
+  it("satisfies allowlist when command matches exact path pattern", () => {
+    const resolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/usr/bin/python3",
+      executableName: "python3",
+    };
+    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match).not.toBeNull();
+    expect(match?.pattern).toBe("/usr/bin/python3");
+  });
+
+  it("satisfies allowlist when command matches ** wildcard pattern", () => {
+    // Simulates symlink resolution: /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
+    const resolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
+      executableName: "python3.14",
+    };
+    // Pattern with ** matches across multiple directories
+    const entries: ExecAllowlistEntry[] = [{ pattern: "/opt/**/python*" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match?.pattern).toBe("/opt/**/python*");
+  });
+
+  it("does not satisfy allowlist when command is not in allowlist", () => {
+    const resolution = {
+      rawExecutable: "unknown-tool",
+      resolvedPath: "/usr/local/bin/unknown-tool",
+      executableName: "unknown-tool",
+    };
+    // Allowlist has different commands
+    const entries: ExecAllowlistEntry[] = [
+      { pattern: "/usr/bin/python3" },
+      { pattern: "/opt/**/node" },
+    ];
+    const match = matchAllowlist(entries, resolution);
+    expect(match).toBeNull();
+
+    // Also not a safe bin
+    const safe = isSafeBinUsage({
+      argv: ["unknown-tool", "--help"],
+      resolution,
+      safeBins: normalizeSafeBins(["jq", "curl"]),
+      cwd: "/tmp",
+    });
+    expect(safe).toBe(false);
+  });
+
+  it("satisfies via safeBins even when not in allowlist", () => {
+    const resolution = {
+      rawExecutable: "jq",
+      resolvedPath: "/usr/bin/jq",
+      executableName: "jq",
+    };
+    // Not in allowlist
+    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match).toBeNull();
+
+    // But is a safe bin with non-file args
+    const safe = isSafeBinUsage({
+      argv: ["jq", ".foo"],
+      resolution,
+      safeBins: normalizeSafeBins(["jq"]),
+      cwd: "/tmp",
+    });
+    expect(safe).toBe(true);
   });
 });
 

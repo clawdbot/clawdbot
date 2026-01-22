@@ -4,7 +4,9 @@ import { defineConfig } from "vitest/config";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
+const isWindows = process.platform === "win32";
 const localWorkers = 4;
+const ciWorkers = isWindows ? 2 : 3;
 
 export default defineConfig({
   resolve: {
@@ -13,10 +15,10 @@ export default defineConfig({
     },
   },
   test: {
-    testTimeout: 60_000,
-    hookTimeout: 120_000,
+    testTimeout: isWindows ? 120_000 : 60_000,
+    hookTimeout: isWindows ? 180_000 : 120_000,
     pool: "forks",
-    maxWorkers: isCI ? 3 : localWorkers,
+    maxWorkers: isCI ? ciWorkers : localWorkers,
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",

@@ -20,11 +20,13 @@ actor RemoteTunnelManager {
            tunnel.process.isRunning,
            let local = tunnel.localPort
         {
-            if await self.isTunnelHealthy(port: local) {
+            let pid = tunnel.process.processIdentifier
+            if await PortGuardian.shared.isListening(port: Int(local), pid: pid) {
                 self.logger.info("reusing active SSH tunnel localPort=\(local, privacy: .public)")
                 return local
             }
-            self.logger.error("active SSH tunnel on port \(local, privacy: .public) is unhealthy; restarting")
+            self.logger.error(
+                "active SSH tunnel on port \(local, privacy: .public) is not listening; restarting")
             await self.beginRestart()
             tunnel.terminate()
             self.controlTunnel = nil
@@ -35,19 +37,11 @@ actor RemoteTunnelManager {
         if let desc = await PortGuardian.shared.describe(port: Int(desiredPort)),
            self.isSshProcess(desc)
         {
-            if await self.isTunnelHealthy(port: desiredPort) {
-                self.logger.info(
-                    "reusing existing SSH tunnel listener " +
-                        "localPort=\(desiredPort, privacy: .public) " +
-                        "pid=\(desc.pid, privacy: .public)")
-                return desiredPort
-            }
-            if self.restartInFlight {
-                self.logger.info("control tunnel restart in flight; skip stale tunnel cleanup")
-                return nil
-            }
-            await self.beginRestart()
-            await self.cleanupStaleTunnel(desc: desc, port: desiredPort)
+            self.logger.info(
+                "reusing existing SSH tunnel listener " +
+                    "localPort=\(desiredPort, privacy: .public) " +
+                    "pid=\(desc.pid, privacy: .public)")
+            return desiredPort
         }
         return nil
     }
@@ -88,10 +82,6 @@ actor RemoteTunnelManager {
         self.controlTunnel = nil
     }
 
-    private func isTunnelHealthy(port: UInt16) async -> Bool {
-        await PortGuardian.shared.probeGatewayHealth(port: Int(port))
-    }
-
     private func isSshProcess(_ desc: PortGuardian.Descriptor) -> Bool {
         let cmd = desc.command.lowercased()
         if cmd.contains("ssh") { return true }
@@ -128,21 +118,5 @@ actor RemoteTunnelManager {
         try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
     }
 
-    private func cleanupStaleTunnel(desc: PortGuardian.Descriptor, port: UInt16) async {
-        let pid = desc.pid
-        self.logger.error(
-            "stale SSH tunnel detected on port \(port, privacy: .public) pid \(pid, privacy: .public)")
-        let killed = await self.kill(pid: pid)
-        if !killed {
-            self.logger.error("failed to terminate stale SSH tunnel pid \(pid, privacy: .public)")
-        }
-        await PortGuardian.shared.removeRecord(pid: pid)
-    }
-
-    private func kill(pid: Int32) async -> Bool {
-        let term = await ShellExecutor.run(command: ["kill", "-TERM", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        if term.ok { return true }
-        let sigkill = await ShellExecutor.run(command: ["kill", "-KILL", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        return sigkill.ok
-    }
+    // Keep tunnel reuse lightweight; restart only when the listener disappears.
 }

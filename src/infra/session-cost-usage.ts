@@ -184,9 +184,19 @@ export async function loadCostUsageSummary(params?: {
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map((entry) => path.join(sessionsDir, entry.name));
+  const files = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .map(async (entry) => {
+          const filePath = path.join(sessionsDir, entry.name);
+          const stats = await fs.promises.stat(filePath).catch(() => null);
+          if (!stats) return null;
+          if (stats.mtimeMs < sinceTime) return null;
+          return filePath;
+        }),
+    )
+  ).filter((filePath): filePath is string => Boolean(filePath));
 
   for (const filePath of files) {
     await scanUsageFile({

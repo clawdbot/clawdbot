@@ -54,7 +54,13 @@ describe("agents set-identity command", () => {
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(
       path.join(workspace, "IDENTITY.md"),
-      ["- Name: Clawd", "- Creature: helpful sloth", "- Emoji: :)", ""].join("\n"),
+      [
+        "- Name: Clawd",
+        "- Creature: helpful sloth",
+        "- Emoji: :)",
+        "- Avatar: avatars/clawd.png",
+        "",
+      ].join("\n"),
       "utf-8",
     );
 
@@ -81,6 +87,7 @@ describe("agents set-identity command", () => {
       name: "Clawd",
       theme: "helpful sloth",
       emoji: ":)",
+      avatar: "avatars/clawd.png",
     });
   });
 
@@ -115,7 +122,13 @@ describe("agents set-identity command", () => {
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(
       path.join(workspace, "IDENTITY.md"),
-      ["- Name: Clawd", "- Theme: space lobster", "- Emoji: :)", ""].join("\n"),
+      [
+        "- Name: Clawd",
+        "- Theme: space lobster",
+        "- Emoji: :)",
+        "- Avatar: avatars/clawd.png",
+        "",
+      ].join("\n"),
       "utf-8",
     );
 
@@ -125,7 +138,13 @@ describe("agents set-identity command", () => {
     });
 
     await agentsSetIdentityCommand(
-      { workspace, fromIdentity: true, name: "Nova", emoji: "🦞" },
+      {
+        workspace,
+        fromIdentity: true,
+        name: "Nova",
+        emoji: "🦞",
+        avatar: "https://example.com/override.png",
+      },
       runtime,
     );
 
@@ -137,6 +156,7 @@ describe("agents set-identity command", () => {
       name: "Nova",
       theme: "space lobster",
       emoji: "🦞",
+      avatar: "https://example.com/override.png",
     });
   });
 
@@ -147,9 +167,13 @@ describe("agents set-identity command", () => {
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(
       identityPath,
-      ["- **Name:** C-3PO", "- **Creature:** Flustered Protocol Droid", "- **Emoji:** 🤖", ""].join(
-        "\n",
-      ),
+      [
+        "- **Name:** C-3PO",
+        "- **Creature:** Flustered Protocol Droid",
+        "- **Emoji:** 🤖",
+        "- **Avatar:** avatars/c3po.png",
+        "",
+      ].join("\n"),
       "utf-8",
     );
 
@@ -168,6 +192,53 @@ describe("agents set-identity command", () => {
       name: "C-3PO",
       theme: "Flustered Protocol Droid",
       emoji: "🤖",
+      avatar: "avatars/c3po.png",
+    });
+  });
+
+  it("accepts avatar-only identity from IDENTITY.md", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-identity-"));
+    const workspace = path.join(root, "work");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, "IDENTITY.md"),
+      "- Avatar: avatars/only.png\n",
+      "utf-8",
+    );
+
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: { agents: { list: [{ id: "main", workspace }] } },
+    });
+
+    await agentsSetIdentityCommand({ workspace, fromIdentity: true }, runtime);
+
+    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      agents?: { list?: Array<{ id: string; identity?: Record<string, string> }> };
+    };
+    const main = written.agents?.list?.find((entry) => entry.id === "main");
+    expect(main?.identity).toEqual({
+      avatar: "avatars/only.png",
+    });
+  });
+
+  it("accepts avatar-only updates via flags", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: { agents: { list: [{ id: "main" }] } },
+    });
+
+    await agentsSetIdentityCommand(
+      { agent: "main", avatar: "https://example.com/avatar.png" },
+      runtime,
+    );
+
+    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      agents?: { list?: Array<{ id: string; identity?: Record<string, string> }> };
+    };
+    const main = written.agents?.list?.find((entry) => entry.id === "main");
+    expect(main?.identity).toEqual({
+      avatar: "https://example.com/avatar.png",
     });
   });
 

@@ -26,7 +26,7 @@ If the pipeline pauses for approval, the tool returns a `resumeToken` so you can
 
 ## Install Lobster
 
-Install the Lobster CLI on the **same host** that runs the Clawdbot Gateway (see the [Lobster repo](https://github.com/vignesh07/lobster)), and ensure `lobster` is on `PATH`.
+Install the Lobster CLI on the **same host** that runs the Clawdbot Gateway (see the [Lobster repo](https://github.com/clawdbot/lobster)), and ensure `lobster` is on `PATH`.
 If you want to use a custom binary location, pass an **absolute** `lobsterPath` in the tool call.
 
 ## Enable the tool

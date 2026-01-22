@@ -55,6 +55,15 @@ const MISTRAL_MODEL_HINTS = [
   "ministral",
   "mistralai",
 ];
+const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function isValidAntigravitySignature(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.length % 4 !== 0) return false;
+  return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
+}
 
 function shouldSanitizeToolCallIds(modelApi?: string | null): boolean {
   if (!modelApi) return false;
@@ -67,6 +76,66 @@ function isMistralModel(params: { provider?: string | null; modelId?: string | n
   const modelId = (params.modelId ?? "").toLowerCase();
   if (!modelId) return false;
   return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
+}
+
+function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistant.content)) {
+      out.push(msg);
+      continue;
+    }
+    type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
+    const nextContent: AssistantContentBlock[] = [];
+    let contentChanged = false;
+    for (const block of assistant.content) {
+      if (
+        !block ||
+        typeof block !== "object" ||
+        (block as { type?: unknown }).type !== "thinking"
+      ) {
+        nextContent.push(block);
+        continue;
+      }
+      const rec = block as {
+        thinkingSignature?: unknown;
+        signature?: unknown;
+        thought_signature?: unknown;
+        thoughtSignature?: unknown;
+      };
+      const candidate =
+        rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
+      if (!isValidAntigravitySignature(candidate)) {
+        contentChanged = true;
+        continue;
+      }
+      if (rec.thinkingSignature !== candidate) {
+        const nextBlock = {
+          ...(block as unknown as Record<string, unknown>),
+          thinkingSignature: candidate,
+        } as AssistantContentBlock;
+        nextContent.push(nextBlock);
+        contentChanged = true;
+      } else {
+        nextContent.push(block);
+      }
+    }
+    if (contentChanged) {
+      touched = true;
+    }
+    if (nextContent.length === 0) {
+      touched = true;
+      continue;
+    }
+    out.push(contentChanged ? { ...assistant, content: nextContent } : msg);
+  }
+  return touched ? out : messages;
 }
 
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
@@ -209,7 +278,11 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
 }): Promise<AgentMessage[]> {
-  const isAntigravityClaudeModel = isAntigravityClaude(params.modelApi, params.modelId);
+  const isAntigravityClaudeModel = isAntigravityClaude({
+    api: params.modelApi,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = (params.modelId ?? "").toLowerCase();
   const isOpenRouterGemini =
@@ -221,12 +294,15 @@ export async function sanitizeSessionHistory(params: {
     sanitizeToolCallIds,
     toolCallIdMode,
     enforceToolCallLast: params.modelApi === "anthropic-messages",
-    preserveSignatures: params.modelApi === "google-antigravity" && isAntigravityClaudeModel,
+    preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenRouterGemini
       ? { allowBase64Only: true, includeCamelCase: true }
       : undefined,
   });
-  const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
+  const sanitizedThinking = isAntigravityClaudeModel
+    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+    : sanitizedImages;
+  const repairedTools = sanitizeToolUseResultPairing(sanitizedThinking);
 
   return applyGoogleTurnOrderingFix({
     messages: repairedTools,

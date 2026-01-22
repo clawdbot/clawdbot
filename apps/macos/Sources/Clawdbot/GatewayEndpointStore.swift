@@ -482,7 +482,7 @@ actor GatewayEndpointStore {
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
             root: root,
             env: ProcessInfo.processInfo.environment)
-        guard bind == "auto" else { return nil }
+        guard bind == "tailnet" else { return nil }
 
         let currentHost = currentURL.host?.lowercased() ?? ""
         guard currentHost == "127.0.0.1" || currentHost == "localhost" else { return nil }
@@ -560,16 +560,13 @@ actor GatewayEndpointStore {
     {
         switch bindMode {
         case "tailnet":
-            return tailscaleIP ?? "127.0.0.1"
+            tailscaleIP ?? "127.0.0.1"
         case "auto":
-            if let tailscaleIP, !tailscaleIP.isEmpty {
-                return tailscaleIP
-            }
-            return "127.0.0.1"
+            "127.0.0.1"
         case "custom":
-            return customBindHost ?? "127.0.0.1"
+            customBindHost ?? "127.0.0.1"
         default:
-            return "127.0.0.1"
+            "127.0.0.1"
         }
     }
 }

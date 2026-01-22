@@ -26,6 +26,15 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsPreviewParamsSchema = Type.Object(
+  {
+    keys: Type.Array(NonEmptyString, { minItems: 1 }),
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    maxChars: Type.Optional(Type.Integer({ minimum: 20 })),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsResolveParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),

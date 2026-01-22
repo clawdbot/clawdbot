@@ -379,6 +379,7 @@ export async function resolveReplyDirectives(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    parentSessionKey: ctx.ParentSessionKey,
     storePath,
     defaultProvider,
     defaultModel,

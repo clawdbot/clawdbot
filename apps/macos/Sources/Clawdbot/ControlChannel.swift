@@ -74,6 +74,7 @@ final class ControlChannel {
     }
 
     private(set) var lastPingMs: Double?
+    private(set) var authSourceLabel: String?
 
     private let logger = Logger(subsystem: "com.clawdbot", category: "control")
 
@@ -128,6 +129,7 @@ final class ControlChannel {
         await GatewayConnection.shared.shutdown()
         self.state = .disconnected
         self.lastPingMs = nil
+        self.authSourceLabel = nil
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
@@ -188,8 +190,11 @@ final class ControlChannel {
            urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
         {
             let reason = urlErr.failureURLString ?? urlErr.localizedDescription
+            let tokenKey = CommandResolver.connectionModeIsRemote()
+                ? "gateway.remote.token"
+                : "gateway.auth.token"
             return
-                "Gateway rejected token; set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) " +
+                "Gateway rejected token; set \(tokenKey) (or CLAWDBOT_GATEWAY_TOKEN) " +
                 "or clear it on the gateway. " +
                 "Reason: \(reason)"
         }
@@ -299,6 +304,27 @@ final class ControlChannel {
                 domain: "Gateway",
                 code: 0,
                 userInfo: [NSLocalizedDescriptionKey: "gateway health not ok"])
+        }
+        await self.refreshAuthSourceLabel()
+    }
+
+    private func refreshAuthSourceLabel() async {
+        let isRemote = CommandResolver.connectionModeIsRemote()
+        let authSource = await GatewayConnection.shared.authSource()
+        self.authSourceLabel = Self.formatAuthSource(authSource, isRemote: isRemote)
+    }
+
+    private static func formatAuthSource(_ source: GatewayAuthSource?, isRemote: Bool) -> String? {
+        guard let source else { return nil }
+        switch source {
+        case .deviceToken:
+            return "Auth: device token (paired device)"
+        case .sharedToken:
+            return "Auth: shared token (\(isRemote ? "gateway.remote.token" : "gateway.auth.token"))"
+        case .password:
+            return "Auth: password (\(isRemote ? "gateway.remote.password" : "gateway.auth.password"))"
+        case .none:
+            return "Auth: none"
         }
     }
 

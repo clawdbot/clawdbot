@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import {
   ErrorCodes,
@@ -12,9 +13,38 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+const ROLLING_LOG_RE = /^clawdbot-\d{4}-\d{2}-\d{2}\.log$/;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function isRollingLogFile(file: string): boolean {
+  return ROLLING_LOG_RE.test(path.basename(file));
+}
+
+async function resolveLogFile(file: string): Promise<string> {
+  const stat = await fs.stat(file).catch(() => null);
+  if (stat) return file;
+  if (!isRollingLogFile(file)) return file;
+
+  const dir = path.dirname(file);
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
+  if (!entries) return file;
+
+  const candidates = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && ROLLING_LOG_RE.test(entry.name))
+      .map(async (entry) => {
+        const fullPath = path.join(dir, entry.name);
+        const fileStat = await fs.stat(fullPath).catch(() => null);
+        return fileStat ? { path: fullPath, mtimeMs: fileStat.mtimeMs } : null;
+      }),
+  );
+  const sorted = candidates
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return sorted[0]?.path ?? file;
 }
 
 async function readLogSlice(params: {
@@ -126,8 +156,9 @@ export const logsHandlers: GatewayRequestHandlers = {
     }
 
     const p = params as { cursor?: number; limit?: number; maxBytes?: number };
-    const file = getResolvedLoggerSettings().file;
+    const configuredFile = getResolvedLoggerSettings().file;
     try {
+      const file = await resolveLogFile(configuredFile);
       const result = await readLogSlice({
         file,
         cursor: p.cursor,
