@@ -102,6 +102,11 @@ const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const BATCH_FAILURE_LIMIT = 2;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
+const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
+const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
+const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
+const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
@@ -281,7 +286,7 @@ export class MemoryIndexManager {
       ? await this.searchKeyword(cleaned, candidates).catch(() => [])
       : [];
 
-    const queryVec = await this.provider.embedQuery(cleaned);
+    const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates).catch(() => [])
@@ -580,9 +585,23 @@ export class MemoryIndexManager {
   private async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) return false;
     if (!this.vectorReady) {
-      this.vectorReady = this.loadVectorExtension();
+      this.vectorReady = this.withTimeout(
+        this.loadVectorExtension(),
+        VECTOR_LOAD_TIMEOUT_MS,
+        `sqlite-vec load timed out after ${Math.round(VECTOR_LOAD_TIMEOUT_MS / 1000)}s`,
+      );
     }
-    const ready = await this.vectorReady;
+    let ready = false;
+    try {
+      ready = await this.vectorReady;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.vector.available = false;
+      this.vector.loadError = message;
+      this.vectorReady = null;
+      log.warn(`sqlite-vec unavailable: ${message}`);
+      return false;
+    }
     if (ready && typeof dimensions === "number" && dimensions > 0) {
       this.ensureVectorTable(dimensions);
     }
@@ -1153,6 +1172,13 @@ export class MemoryIndexManager {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
+    if (progress) {
+      progress.report({
+        completed: progress.completed,
+        total: progress.total,
+        label: "Loading vector extension…",
+      });
+    }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
@@ -1844,7 +1870,17 @@ export class MemoryIndexManager {
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
     while (true) {
       try {
-        return await this.provider.embedBatch(texts);
+        const timeoutMs = this.resolveEmbeddingTimeout("batch");
+        log.debug("memory embeddings: batch start", {
+          provider: this.provider.id,
+          items: texts.length,
+          timeoutMs,
+        });
+        return await this.withTimeout(
+          this.provider.embedBatch(texts),
+          timeoutMs,
+          `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
@@ -1866,6 +1902,41 @@ export class MemoryIndexManager {
     return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare)/i.test(
       message,
     );
+  }
+
+  private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
+    const isLocal = this.provider.id === "local";
+    if (kind === "query") {
+      return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
+    }
+    return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
+  }
+
+  private async embedQueryWithTimeout(text: string): Promise<number[]> {
+    const timeoutMs = this.resolveEmbeddingTimeout("query");
+    log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
+    return await this.withTimeout(
+      this.provider.embedQuery(text),
+      timeoutMs,
+      `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+    );
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return await promise;
+    let timer: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    try {
+      return (await Promise.race([promise, timeoutPromise])) as T;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {

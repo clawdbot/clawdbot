@@ -323,9 +323,11 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     }
     if (status.vector) {
       const vectorState = status.vector.enabled
-        ? status.vector.available
-          ? "ready"
-          : "unavailable"
+        ? status.vector.available === undefined
+          ? "unknown"
+          : status.vector.available
+            ? "ready"
+            : "unavailable"
         : "disabled";
       const vectorColor =
         vectorState === "ready"

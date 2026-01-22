@@ -589,16 +589,20 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let tag = explicitTag ?? channelToNpmTag(channel);
   if (updateInstallKind !== "git") {
     const currentVersion = switchToPackage ? null : await readPackageVersion(root);
+    let fallbackToLatest = false;
     const targetVersion = explicitTag
       ? await resolveTargetVersion(tag, timeoutMs)
       : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
           tag = resolved.tag;
+          fallbackToLatest = channel === "beta" && resolved.tag === "latest";
           return resolved.version;
         });
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
     const needsConfirm =
-      currentVersion != null && (targetVersion == null || (cmp != null && cmp > 0));
+      !fallbackToLatest &&
+      currentVersion != null &&
+      (targetVersion == null || (cmp != null && cmp > 0));
 
     if (needsConfirm && !opts.yes) {
       if (!process.stdin.isTTY || opts.json) {
