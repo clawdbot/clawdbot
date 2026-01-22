@@ -5,6 +5,7 @@ import {
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { defaultRuntime } from "../../runtime.js";
+import { interruptAllBubbles } from "../../agents/claude-code/bubble-service.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -41,6 +42,10 @@ export async function runGatewayLoop(params: {
 
     void (async () => {
       try {
+        // Update all Claude Code bubbles to "interrupted" state BEFORE shutdown
+        // This prevents stale "working" bubbles when gateway restarts
+        await interruptAllBubbles(isRestart ? "Gateway restarting" : "Gateway stopping");
+
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,

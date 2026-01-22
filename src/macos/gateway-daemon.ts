@@ -48,6 +48,7 @@ async function main() {
     { consumeGatewaySigusr1RestartAuthorization, isGatewaySigusr1RestartExternallyAllowed },
     { defaultRuntime },
     { enableConsoleCapture, setConsoleTimestampPrefix },
+    { interruptAllBubbles },
   ] = await Promise.all([
     import("../config/config.js"),
     import("../gateway/server.js"),
@@ -56,6 +57,7 @@ async function main() {
     import("../infra/restart.js"),
     import("../runtime.js"),
     import("../logging.js"),
+    import("../agents/claude-code/bubble-service.js"),
   ]);
 
   enableConsoleCapture();
@@ -128,6 +130,10 @@ async function main() {
 
     void (async () => {
       try {
+        // Update all Claude Code bubbles to "interrupted" state BEFORE shutdown
+        // This prevents stale "working" bubbles when gateway restarts
+        await interruptAllBubbles(isRestart ? "Gateway restarting" : "Gateway stopping");
+
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,

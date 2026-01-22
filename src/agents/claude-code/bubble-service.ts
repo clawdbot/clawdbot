@@ -805,6 +805,68 @@ export async function sendRuntimeLimitWarning(params: {
 }
 
 /**
+ * Update all active bubbles to "interrupted" state.
+ * Called during gateway shutdown to prevent stale "working" bubbles.
+ */
+export async function interruptAllBubbles(reason: string = "Gateway restarting"): Promise<void> {
+  const bubbleCount = activeBubbles.size;
+  if (bubbleCount === 0) {
+    log.info(`[shutdown] No active bubbles to interrupt`);
+    return;
+  }
+
+  log.info(`[shutdown] Interrupting ${bubbleCount} active bubble(s): ${reason}`);
+
+  const promises: Promise<void>[] = [];
+
+  for (const [sessionId, bubble] of activeBubbles.entries()) {
+    promises.push(
+      (async () => {
+        try {
+          // Build interrupted state message
+          const text = [
+            `⚠️ interrupted · ${bubble.projectName} · session paused`,
+            "",
+            `_${reason}_`,
+            "",
+            `ctx: ${bubble.projectName}`,
+            `\`claude --resume ${bubble.resumeToken}\``,
+          ].join("\n");
+
+          // Keep Continue button so user can resume after restart
+          const keyboard = [
+            [
+              {
+                text: "▶️ Continue",
+                callback_data: `cc:continue:${bubble.resumeToken.slice(0, 8)}`,
+              },
+            ],
+          ];
+
+          await editMessageTelegram(bubble.chatId, bubble.messageId, text, {
+            accountId: bubble.accountId,
+            buttons: keyboard,
+            disableLinkPreview: true,
+          });
+
+          log.info(`[shutdown] Interrupted bubble for session ${sessionId}`);
+        } catch (err) {
+          log.warn(`[shutdown] Failed to interrupt bubble ${sessionId}: ${String(err)}`);
+        }
+      })(),
+    );
+  }
+
+  // Wait for all updates with timeout
+  await Promise.race([
+    Promise.allSettled(promises),
+    new Promise((resolve) => setTimeout(resolve, 3000)), // 3s timeout
+  ]);
+
+  log.info(`[shutdown] Bubble interruption complete`);
+}
+
+/**
  * Send a question to the chat and wait for reply.
  */
 export async function sendQuestionToChat(params: {
