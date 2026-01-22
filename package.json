@@ -1,6 +1,6 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.21",
+  "version": "2026.1.21-1",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
@@ -73,7 +73,7 @@
   "scripts": {
     "dev": "node scripts/run-node.mjs",
     "postinstall": "node scripts/postinstall.js",
-    "prepack": "pnpm build",
+    "prepack": "pnpm build && pnpm ui:build",
     "docs:list": "node scripts/docs-list.js",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:dev": "cd docs && mint dev",
