@@ -734,7 +734,7 @@ export function recordAllowlistUse(
   command: string,
   resolvedPath?: string,
 ) {
-  const target = agentId ?? "default";
+  const target = agentId ?? DEFAULT_AGENT_ID;
   const agents = approvals.agents ?? {};
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
@@ -758,7 +758,7 @@ export function addAllowlistEntry(
   agentId: string | undefined,
   pattern: string,
 ) {
-  const target = agentId ?? "default";
+  const target = agentId ?? DEFAULT_AGENT_ID;
   const agents = approvals.agents ?? {};
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];

@@ -88,6 +88,7 @@ If a prompt is required but no UI is reachable, fallback decides:
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
 Patterns should resolve to **binary paths** (basename-only entries are ignored).
+Legacy `agents.default` entries are migrated to `agents.main` on load.
 
 Examples:
 - `~/Projects/**/bin/bird`

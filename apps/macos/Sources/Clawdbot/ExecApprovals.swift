@@ -149,6 +149,7 @@ struct ExecApprovalsResolvedDefaults {
 
 enum ExecApprovalsStore {
     private static let logger = Logger(subsystem: "com.clawdbot", category: "exec-approvals")
+    private static let defaultAgentId = "main"
     private static let defaultSecurity: ExecSecurity = .deny
     private static let defaultAsk: ExecAsk = .onMiss
     private static let defaultAskFallback: ExecSecurity = .deny
@@ -165,13 +166,22 @@ enum ExecApprovalsStore {
     static func normalizeIncoming(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
         let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var agents = file.agents ?? [:]
+        if let legacyDefault = agents["default"] {
+            if let main = agents[self.defaultAgentId] {
+                agents[self.defaultAgentId] = self.mergeAgents(current: main, legacy: legacyDefault)
+            } else {
+                agents[self.defaultAgentId] = legacyDefault
+            }
+            agents.removeValue(forKey: "default")
+        }
         return ExecApprovalsFile(
             version: 1,
             socket: ExecApprovalsSocketConfig(
                 path: socketPath.isEmpty ? nil : socketPath,
                 token: token.isEmpty ? nil : token),
             defaults: file.defaults,
-            agents: file.agents)
+            agents: agents)
     }
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
@@ -272,9 +282,7 @@ enum ExecApprovalsStore {
             ask: defaults.ask ?? self.defaultAsk,
             askFallback: defaults.askFallback ?? self.defaultAskFallback,
             autoAllowSkills: defaults.autoAllowSkills ?? self.defaultAutoAllowSkills)
-        let key = (agentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? agentId!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : "default"
+        let key = self.agentKey(agentId)
         let agentEntry = file.agents?[key] ?? ExecApprovalsAgent()
         let wildcardEntry = file.agents?["*"] ?? ExecApprovalsAgent()
         let resolvedAgent = ExecApprovalsResolvedDefaults(
@@ -457,7 +465,36 @@ enum ExecApprovalsStore {
 
     private static func agentKey(_ agentId: String?) -> String {
         let trimmed = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "default" : trimmed
+        return trimmed.isEmpty ? self.defaultAgentId : trimmed
+    }
+
+    private static func normalizedPattern(_ pattern: String?) -> String? {
+        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed.lowercased()
+    }
+
+    private static func mergeAgents(
+        current: ExecApprovalsAgent,
+        legacy: ExecApprovalsAgent
+    ) -> ExecApprovalsAgent {
+        var seen = Set<String>()
+        var allowlist: [ExecAllowlistEntry] = []
+        func append(_ entry: ExecAllowlistEntry) {
+            guard let key = self.normalizedPattern(entry.pattern), !seen.contains(key) else {
+                return
+            }
+            seen.insert(key)
+            allowlist.append(entry)
+        }
+        for entry in current.allowlist ?? [] { append(entry) }
+        for entry in legacy.allowlist ?? [] { append(entry) }
+
+        return ExecApprovalsAgent(
+            security: current.security ?? legacy.security,
+            ask: current.ask ?? legacy.ask,
+            askFallback: current.askFallback ?? legacy.askFallback,
+            autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
+            allowlist: allowlist.isEmpty ? nil : allowlist)
     }
 }
 
