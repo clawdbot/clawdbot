@@ -6,8 +6,81 @@ import { fileURLToPath } from "node:url";
 const ROOT_PREFIX = "/";
 const AVATAR_PREFIX = "/avatar";
 
+// === Assistant Identity Resolution ===
+
+const DEFAULT_ASSISTANT_IDENTITY = {
+  name: "Assistant",
+  avatar: "A",
+};
+
+interface AssistantIdentity {
+  name: string;
+  avatar: string;
+}
+
+interface AssistantConfig {
+  name?: string;
+  avatar?: string;
+}
+
+function parseIdentityMd(content: string): Partial<AssistantIdentity> {
+  const result: Partial<AssistantIdentity> = {};
+  const nameMatch = content.match(/^-\s*Name:\s*(.+)$/im);
+  if (nameMatch?.[1]) {
+    const name = nameMatch[1].trim();
+    if (name && name.length <= 50) {
+      result.name = name;
+    }
+  }
+  const emojiMatch = content.match(/^-\s*Emoji:\s*(.+)$/im);
+  if (emojiMatch?.[1]) {
+    const emoji = emojiMatch[1].trim();
+    if (emoji) {
+      result.avatar = emoji;
+    }
+  }
+  return result;
+}
+
+function resolveAssistantIdentity(opts?: {
+  configAssistant?: AssistantConfig;
+  workspaceDir?: string;
+}): AssistantIdentity {
+  const { configAssistant, workspaceDir } = opts ?? {};
+  let name = DEFAULT_ASSISTANT_IDENTITY.name;
+  let avatar = DEFAULT_ASSISTANT_IDENTITY.avatar;
+
+  // Try IDENTITY.md from workspace
+  if (workspaceDir) {
+    try {
+      const identityPath = path.join(workspaceDir, "IDENTITY.md");
+      if (fs.existsSync(identityPath)) {
+        const identityMd = parseIdentityMd(fs.readFileSync(identityPath, "utf8"));
+        if (identityMd.name) name = identityMd.name;
+        if (identityMd.avatar) avatar = identityMd.avatar;
+      }
+    } catch {
+      // Ignore errors reading IDENTITY.md
+    }
+  }
+
+  // Config overrides IDENTITY.md
+  if (configAssistant?.name?.trim()) name = configAssistant.name.trim();
+  if (configAssistant?.avatar?.trim()) avatar = configAssistant.avatar.trim();
+
+  return { name, avatar };
+}
+
+// === End Assistant Identity ===
+
 export type ControlUiRequestOptions = {
   basePath?: string;
+  config?: {
+    ui?: {
+      assistant?: AssistantConfig;
+    };
+  };
+  workspaceDir?: string;
 };
 
 export function normalizeControlUiBasePath(basePath?: string): string {
@@ -168,11 +241,22 @@ function serveFile(res: ServerResponse, filePath: string) {
   res.end(fs.readFileSync(filePath));
 }
 
-function injectControlUiBasePath(html: string, basePath: string): string {
-  const script = `<script>window.__CLAWDBOT_CONTROL_UI_BASE_PATH__=${JSON.stringify(
-    basePath,
-  )};</script>`;
-  if (html.includes("__CLAWDBOT_CONTROL_UI_BASE_PATH__")) return html;
+interface ControlUiInjectionOpts {
+  basePath: string;
+  assistantName?: string;
+  assistantAvatar?: string;
+}
+
+function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): string {
+  const { basePath, assistantName, assistantAvatar } = opts;
+  const script =
+    `<script>` +
+    `window.__CLAWDBOT_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};` +
+    `window.__CLAWDBOT_ASSISTANT_NAME__=${JSON.stringify(assistantName ?? "Assistant")};` +
+    `window.__CLAWDBOT_ASSISTANT_AVATAR__=${JSON.stringify(assistantAvatar ?? "A")};` +
+    `</script>`;
+  // Check if already injected
+  if (html.includes("__CLAWDBOT_ASSISTANT_NAME__")) return html;
   const headClose = html.indexOf("</head>");
   if (headClose !== -1) {
     return `${html.slice(0, headClose)}${script}${html.slice(headClose)}`;
@@ -180,11 +264,28 @@ function injectControlUiBasePath(html: string, basePath: string): string {
   return `${script}${html}`;
 }
 
-function serveIndexHtml(res: ServerResponse, indexPath: string, basePath: string) {
+interface ServeIndexHtmlOpts {
+  basePath: string;
+  config?: ControlUiRequestOptions["config"];
+  workspaceDir?: string;
+}
+
+function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
+  const { basePath, config, workspaceDir } = opts;
+  const identity = resolveAssistantIdentity({
+    configAssistant: config?.ui?.assistant,
+    workspaceDir,
+  });
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   const raw = fs.readFileSync(indexPath, "utf8");
-  res.end(injectControlUiBasePath(raw, basePath));
+  res.end(
+    injectControlUiConfig(raw, {
+      basePath,
+      assistantName: identity.name,
+      assistantAvatar: identity.avatar,
+    }),
+  );
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -263,7 +364,7 @@ export function handleControlUiHttpRequest(
 
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
     if (path.basename(filePath) === "index.html") {
-      serveIndexHtml(res, filePath, basePath);
+      serveIndexHtml(res, filePath, { basePath, config: opts?.config, workspaceDir: opts?.workspaceDir });
       return true;
     }
     serveFile(res, filePath);
@@ -273,7 +374,7 @@ export function handleControlUiHttpRequest(
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {
-    serveIndexHtml(res, indexPath, basePath);
+    serveIndexHtml(res, indexPath, { basePath, config: opts?.config, workspaceDir: opts?.workspaceDir });
     return true;
   }
 
