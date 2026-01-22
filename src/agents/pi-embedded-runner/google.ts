@@ -40,12 +40,6 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
-const OPENAI_TOOL_CALL_ID_APIS = new Set([
-  "openai",
-  "openai-completions",
-  "openai-responses",
-  "openai-codex-responses",
-]);
 const MISTRAL_MODEL_HINTS = [
   "mistral",
   "mixtral",
@@ -67,7 +61,7 @@ function isValidAntigravitySignature(value: unknown): value is string {
 
 function shouldSanitizeToolCallIds(modelApi?: string | null): boolean {
   if (!modelApi) return false;
-  return isGoogleModelApi(modelApi) || OPENAI_TOOL_CALL_ID_APIS.has(modelApi);
+  return isGoogleModelApi(modelApi);
 }
 
 function isMistralModel(params: { provider?: string | null; modelId?: string | null }): boolean {

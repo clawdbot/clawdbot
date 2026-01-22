@@ -73,7 +73,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("does not sanitize tool call ids for non-Google, non-OpenAI APIs", async () => {
+  it("does not sanitize tool call ids for non-Google APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -85,6 +85,25 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("anthropic-messages");
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeToolCallIds: false }),
+    );
+  });
+
+  it("does not sanitize tool call ids for openai-responses", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("openai-responses");
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",

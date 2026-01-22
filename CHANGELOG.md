@@ -27,6 +27,7 @@ Docs: https://docs.clawd.bot
 - Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.
 - Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
 - Agents: surface concrete API error details instead of generic AI service errors.
+- Agents: avoid sanitizing tool call IDs for OpenAI responses to preserve Pi pairing.
 - Docs: fix gog auth services example to include docs scope. (#1454) Thanks @zerone0x.
 - macOS: prefer linked channels in gateway summary to avoid false “not linked” status.
 

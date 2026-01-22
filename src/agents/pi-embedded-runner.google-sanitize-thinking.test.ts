@@ -320,7 +320,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
   });
 
-  it("sanitizes tool call ids for OpenAI-compatible APIs", async () => {
+  it("sanitizes tool call ids for Google APIs", async () => {
     const sessionManager = SessionManager.inMemory();
     const longId = `call_${"a".repeat(60)}`;
     const input = [
@@ -338,17 +338,21 @@ describe("sanitizeSessionHistory (google thinking)", () => {
 
     const out = await sanitizeSessionHistory({
       messages: input,
-      modelApi: "openai-responses",
+      modelApi: "google-antigravity",
       sessionManager,
-      sessionId: "session:openai",
+      sessionId: "session:google",
     });
 
-    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const assistant = out.find(
+      (msg) => (msg as { role?: unknown }).role === "assistant",
+    ) as Extract<AgentMessage, { role: "assistant" }>;
     const toolCall = assistant.content?.[0] as { id?: string };
     expect(toolCall.id).toBeDefined();
     expect(toolCall.id?.length).toBeLessThanOrEqual(40);
 
-    const toolResult = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    const toolResult = out.find(
+      (msg) => (msg as { role?: unknown }).role === "toolResult",
+    ) as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.toolCallId).toBe(toolCall.id);
   });
 });
