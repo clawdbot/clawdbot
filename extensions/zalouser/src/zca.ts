@@ -114,11 +114,36 @@ export function runZcaInteractive(
   });
 }
 
+function stripAnsi(str: string): string {
+  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 export function parseJsonOutput<T>(stdout: string): T | null {
   try {
     return JSON.parse(stdout) as T;
   } catch {
-    return null;
+    const cleaned = stripAnsi(stdout);
+
+    try {
+      return JSON.parse(cleaned) as T;
+    } catch {
+      // zca may prefix output with INFO/log lines, try to find JSON
+      const lines = cleaned.split("\n");
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith("{") || line.startsWith("[")) {
+          // Try parsing from this line to the end
+          const jsonCandidate = lines.slice(i).join("\n").trim();
+          try {
+            return JSON.parse(jsonCandidate) as T;
+          } catch {
+            continue;
+          }
+        }
+      }
+      return null;
+    }
   }
 }
 
