@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types";
-import { analyzeConfigSchema, renderConfigForm } from "./config-form";
+import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form";
 import {
   hintForPath,
   humanize,

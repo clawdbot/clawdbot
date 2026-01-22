@@ -54,7 +54,7 @@ const sectionIcons = {
 };
 
 // Section metadata
-const SECTION_META: Record<string, { label: string; description: string }> = {
+export const SECTION_META: Record<string, { label: string; description: string }> = {
   env: { label: "Environment Variables", description: "Environment variables passed to the gateway process" },
   update: { label: "Updates", description: "Auto-update settings and release channel" },
   agents: { label: "Agents", description: "Agent configurations, models, and identities" },

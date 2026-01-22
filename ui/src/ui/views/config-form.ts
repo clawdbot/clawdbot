@@ -1,4 +1,4 @@
-export { renderConfigForm, type ConfigFormProps } from "./config-form.render";
+export { renderConfigForm, type ConfigFormProps, SECTION_META } from "./config-form.render";
 export {
   analyzeConfigSchema,
   type ConfigSchemaAnalysis,
