@@ -22,6 +22,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Media: accept MEDIA paths with spaces/tilde and prefer the message tool hint for image replies.
+- Google Antigravity: drop unsigned thinking blocks for Claude models to avoid signature errors.
 - Config: avoid stack traces for invalid configs and log the config path.
 - CLI: read Codex CLI account_id for workspace billing. (#1422) Thanks @aj47.
 - Doctor: avoid recreating WhatsApp config when only legacy routing keys remain. (#900)

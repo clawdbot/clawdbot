@@ -1276,7 +1276,7 @@ Fix: either provide Google auth, or remove/avoid Google models in `agents.defaul
 Cause: the session history contains **thinking blocks without signatures** (often from
 an aborted/partial stream). Google Antigravity requires signatures for thinking blocks.
 
-Fix: start a **new session** or set `/thinking off` for that agent.
+Fix: Clawdbot now strips unsigned thinking blocks for Google Antigravity Claude. If it still appears, start a **new session** or set `/thinking off` for that agent.
 
 ## Auth profiles: what they are and how to manage them
 
