@@ -19,6 +19,7 @@ import {
 import type { CoreConfig } from "./types.js";
 
 const channel = "telegram-user" as const;
+type TelegramUserChannelConfig = NonNullable<CoreConfig["channels"]>["telegram-user"];
 
 function setTelegramUserDmPolicy(
   cfg: ClawdbotConfig,
@@ -26,23 +27,22 @@ function setTelegramUserDmPolicy(
   accountId?: string,
 ): ClawdbotConfig {
   const resolvedAccountId = normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID;
+  const current = cfg.channels?.["telegram-user"] as TelegramUserChannelConfig | undefined;
   const allowFrom =
     policy === "open"
-      ? addWildcardAllowFrom(
-          (cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"])?.allowFrom,
-        )
+      ? addWildcardAllowFrom(current?.allowFrom)
       : undefined;
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
-      channels: {
-        ...cfg.channels,
-        "telegram-user": {
-          ...(cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"]),
-          dmPolicy: policy,
-          ...(allowFrom ? { allowFrom } : {}),
-        },
+    channels: {
+      ...cfg.channels,
+      "telegram-user": {
+        ...(current ?? {}),
+        dmPolicy: policy,
+        ...(allowFrom ? { allowFrom } : {}),
+      },
       },
     };
   }
@@ -52,13 +52,11 @@ function setTelegramUserDmPolicy(
     channels: {
       ...cfg.channels,
       "telegram-user": {
-        ...(cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"]),
+        ...(current ?? {}),
         accounts: {
-          ...((cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"])
-            ?.accounts ?? {}),
+          ...(current?.accounts ?? {}),
           [resolvedAccountId]: {
-            ...((cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"])
-              ?.accounts?.[resolvedAccountId] ?? {}),
+            ...(current?.accounts?.[resolvedAccountId] ?? {}),
             dmPolicy: policy,
             ...(allowFrom ? { allowFrom } : {}),
           },
@@ -118,6 +116,7 @@ async function promptTelegramUserAllowFrom(params: {
     ...parsed,
   ];
   const unique = [...new Set(merged)];
+  const current = params.cfg.channels?.["telegram-user"] as TelegramUserChannelConfig | undefined;
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -125,7 +124,7 @@ async function promptTelegramUserAllowFrom(params: {
       channels: {
         ...params.cfg.channels,
         "telegram-user": {
-          ...(params.cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"]),
+          ...(current ?? {}),
           enabled: true,
           dmPolicy: "allowlist",
           allowFrom: unique,
@@ -139,14 +138,12 @@ async function promptTelegramUserAllowFrom(params: {
     channels: {
       ...params.cfg.channels,
       "telegram-user": {
-        ...(params.cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"]),
+        ...(current ?? {}),
         enabled: true,
         accounts: {
-          ...((params.cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"])
-            ?.accounts ?? {}),
+          ...(current?.accounts ?? {}),
           [accountId]: {
-            ...((params.cfg.channels?.["telegram-user"] as CoreConfig["channels"]?.["telegram-user"])
-              ?.accounts?.[accountId] ?? {}),
+            ...(current?.accounts?.[accountId] ?? {}),
             enabled: true,
             dmPolicy: "allowlist",
             allowFrom: unique,
@@ -261,13 +258,14 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
+    const current = next.channels?.["telegram-user"] as TelegramUserChannelConfig | undefined;
     if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
       next = {
         ...next,
         channels: {
           ...next.channels,
           "telegram-user": {
-            ...next.channels?.["telegram-user"],
+            ...(current ?? {}),
             enabled: true,
             ...(useEnv
               ? {}
@@ -284,12 +282,12 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
         channels: {
           ...next.channels,
           "telegram-user": {
-            ...next.channels?.["telegram-user"],
+            ...(current ?? {}),
             enabled: true,
             accounts: {
-              ...next.channels?.["telegram-user"]?.accounts,
+              ...(current?.accounts ?? {}),
               [resolvedAccountId]: {
-                ...next.channels?.["telegram-user"]?.accounts?.[resolvedAccountId],
+                ...(current?.accounts?.[resolvedAccountId] ?? {}),
                 enabled: true,
                 ...(useEnv
                   ? {}
