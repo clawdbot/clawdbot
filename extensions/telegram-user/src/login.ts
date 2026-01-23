@@ -16,6 +16,14 @@ async function promptText(message: string): Promise<string> {
   }
 }
 
+async function promptLoginMode(): Promise<"qr" | "phone"> {
+  const response = await promptText("Login method (qr/phone) [qr]: ");
+  const normalized = response.trim().toLowerCase();
+  if (!normalized) return "qr";
+  if (normalized === "phone" || normalized === "otp") return "phone";
+  return "qr";
+}
+
 export async function loginTelegramUser(params: {
   apiId: number;
   apiHash: string;
@@ -28,10 +36,16 @@ export async function loginTelegramUser(params: {
   let lastUrl = "";
 
   const passwordEnv = process.env.TELEGRAM_USER_PASSWORD?.trim() || undefined;
-  const phoneEnv = process.env.TELEGRAM_USER_PHONE?.trim() || undefined;
+  let phoneEnv = process.env.TELEGRAM_USER_PHONE?.trim() || undefined;
   const codeEnv = process.env.TELEGRAM_USER_CODE?.trim() || undefined;
 
   try {
+    if (!phoneEnv) {
+      const mode = await promptLoginMode();
+      if (mode === "phone") {
+        phoneEnv = await promptText("Telegram phone number (E.164): ");
+      }
+    }
     const user = await client.start(
       phoneEnv
         ? {
