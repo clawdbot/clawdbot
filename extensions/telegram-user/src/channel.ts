@@ -313,5 +313,104 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         setActiveTelegramUserClient(null);
       }
     },
+    logoutAccount: async ({ accountId, cfg, runtime }) => {
+      const sessionPath = resolveTelegramUserSessionPath(accountId);
+      let cleared = false;
+      if (fs.existsSync(sessionPath)) {
+        try {
+          fs.rmSync(sessionPath, { force: true });
+          cleared = true;
+        } catch (err) {
+          runtime.error?.(`Failed to remove Telegram user session: ${String(err)}`);
+        }
+      }
+
+      const nextCfg = { ...cfg } as ClawdbotConfig;
+      const nextSection = cfg.channels?.["telegram-user"]
+        ? { ...cfg.channels["telegram-user"] }
+        : undefined;
+      let changed = false;
+
+      if (nextSection) {
+        if (accountId === DEFAULT_ACCOUNT_ID) {
+          if ("apiId" in nextSection) {
+            if (nextSection.apiId) cleared = true;
+            delete nextSection.apiId;
+            changed = true;
+          }
+          if ("apiHash" in nextSection) {
+            if (nextSection.apiHash) cleared = true;
+            delete nextSection.apiHash;
+            changed = true;
+          }
+        }
+
+        const accounts =
+          nextSection.accounts && typeof nextSection.accounts === "object"
+            ? { ...nextSection.accounts }
+            : undefined;
+        if (accounts && accountId in accounts) {
+          const entry = accounts[accountId];
+          if (entry && typeof entry === "object") {
+            const nextEntry = { ...entry } as Record<string, unknown>;
+            if ("apiId" in nextEntry) {
+              const apiId = nextEntry.apiId;
+              if (typeof apiId === "number" && Number.isFinite(apiId)) {
+                cleared = true;
+              }
+              delete nextEntry.apiId;
+              changed = true;
+            }
+            if ("apiHash" in nextEntry) {
+              const apiHash = nextEntry.apiHash;
+              if (typeof apiHash === "string" ? apiHash.trim() : apiHash) {
+                cleared = true;
+              }
+              delete nextEntry.apiHash;
+              changed = true;
+            }
+            if (Object.keys(nextEntry).length === 0) {
+              delete accounts[accountId];
+              changed = true;
+            } else {
+              accounts[accountId] = nextEntry as typeof entry;
+            }
+          }
+        }
+        if (accounts) {
+          if (Object.keys(accounts).length === 0) {
+            delete nextSection.accounts;
+            changed = true;
+          } else {
+            nextSection.accounts = accounts;
+          }
+        }
+      }
+
+      if (changed) {
+        if (nextSection && Object.keys(nextSection).length > 0) {
+          nextCfg.channels = { ...nextCfg.channels, "telegram-user": nextSection };
+        } else {
+          const nextChannels = { ...nextCfg.channels };
+          delete nextChannels["telegram-user"];
+          if (Object.keys(nextChannels).length > 0) {
+            nextCfg.channels = nextChannels;
+          } else {
+            delete nextCfg.channels;
+          }
+        }
+        await getTelegramUserRuntime().config.writeConfigFile(nextCfg);
+      }
+
+      const envApiId = process.env.TELEGRAM_USER_API_ID?.trim();
+      const envApiHash = process.env.TELEGRAM_USER_API_HASH?.trim();
+      const loggedOut = !fs.existsSync(sessionPath);
+
+      return {
+        cleared,
+        loggedOut,
+        envCredentials: Boolean(envApiId && envApiHash),
+      };
+    },
   },
 };
