@@ -2,7 +2,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
-import { resolveSlackAccount } from "../slack/accounts.js";
+import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
 import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { normalizeE164 } from "../utils.js";
@@ -224,8 +224,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveRequireMention: resolveSlackGroupRequireMention,
     },
     threading: {
-      resolveReplyToMode: ({ cfg, accountId }) =>
-        resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
+      resolveReplyToMode: ({ cfg, accountId, chatType }) =>
+        resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
       allowTagsWhenOff: true,
       buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },

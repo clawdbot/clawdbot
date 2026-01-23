@@ -9,12 +9,14 @@ export function resolveReplyToMode(
   cfg: ClawdbotConfig,
   channel?: OriginatingChannelType,
   accountId?: string | null,
+  chatType?: string | null,
 ): ReplyToMode {
   const provider = normalizeChannelId(channel);
   if (!provider) return "all";
   const resolved = getChannelDock(provider)?.threading?.resolveReplyToMode?.({
     cfg,
     accountId,
+    chatType,
   });
   return resolved ?? "all";
 }

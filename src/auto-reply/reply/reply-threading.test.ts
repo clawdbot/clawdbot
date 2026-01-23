@@ -31,6 +31,33 @@ describe("resolveReplyToMode", () => {
     expect(resolveReplyToMode(cfg, "discord")).toBe("first");
     expect(resolveReplyToMode(cfg, "slack")).toBe("all");
   });
+
+  it("uses dm-specific replyToMode for Slack DMs when configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          dm: { replyToMode: "all" },
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
+    expect(resolveReplyToMode(cfg, "slack", null, undefined)).toBe("off");
+  });
+
+  it("falls back to top-level replyToMode when dm.replyToMode is not configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          replyToMode: "first",
+          dm: { enabled: true },
+        },
+      },
+    } as ClawdbotConfig;
+    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("first");
+    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("first");
+  });
 });
 
 describe("createReplyToModeFilter", () => {

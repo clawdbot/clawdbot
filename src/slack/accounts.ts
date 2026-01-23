@@ -107,3 +107,13 @@ export function listEnabledSlackAccounts(cfg: ClawdbotConfig): ResolvedSlackAcco
     .map((accountId) => resolveSlackAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
 }
+
+export function resolveSlackReplyToMode(
+  account: ResolvedSlackAccount,
+  chatType?: string | null,
+): "off" | "first" | "all" {
+  if (chatType === "direct" && account.dm?.replyToMode !== undefined) {
+    return account.dm.replyToMode;
+  }
+  return account.replyToMode ?? "off";
+}

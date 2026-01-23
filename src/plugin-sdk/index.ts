@@ -230,6 +230,7 @@ export {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "../slack/accounts.js";
 export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";

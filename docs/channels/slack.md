@@ -304,7 +304,8 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
       "policy": "pairing",
       "allowFrom": ["U123", "U456", "*"],
       "groupEnabled": false,
-      "groupChannels": ["G123"]
+      "groupChannels": ["G123"],
+      "replyToMode": "all"
     },
     "channels": {
       "C123": { "allow": true, "requireMention": true },
@@ -360,6 +361,24 @@ By default, Clawdbot replies in the main channel. Use `channels.slack.replyToMod
 | `all` | All replies go to thread. Keeps conversations contained but may reduce visibility. |
 
 The mode applies to both auto-replies and agent tool calls (`slack sendMessage`).
+
+### DM-specific threading
+You can configure different threading behavior for DMs vs channels by setting `channels.slack.dm.replyToMode`:
+
+```json5
+{
+  channels: {
+    slack: {
+      replyToMode: "off",        // default for channels
+      dm: {
+        replyToMode: "all"       // DMs always thread
+      }
+    }
+  }
+}
+```
+
+When `dm.replyToMode` is set, DMs use that mode; channels use the top-level `replyToMode`. If `dm.replyToMode` is not set, both DMs and channels use the top-level setting.
 
 ### Manual threading tags
 For fine-grained control, use these tags in agent responses:

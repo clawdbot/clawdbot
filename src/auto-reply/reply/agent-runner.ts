@@ -136,6 +136,7 @@ export async function runReplyAgent(params: {
     followupRun.run.config,
     replyToChannel,
     sessionCtx.AccountId,
+    sessionCtx.ChatType,
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;

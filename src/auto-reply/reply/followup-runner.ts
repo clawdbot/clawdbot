@@ -204,6 +204,7 @@ export function createFollowupRunner(params: {
         queued.run.config,
         replyToChannel,
         queued.originatingAccountId,
+        queued.originatingChatType,
       );
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({

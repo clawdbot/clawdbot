@@ -19,6 +19,7 @@ import {
   readStringParam,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  resolveSlackReplyToMode,
   resolveSlackGroupRequireMention,
   buildSlackThreadingToolContext,
   setAccountEnabledInConfigSection,
@@ -162,8 +163,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     resolveRequireMention: resolveSlackGroupRequireMention,
   },
   threading: {
-    resolveReplyToMode: ({ cfg, accountId }) =>
-      resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg, accountId, chatType }) =>
+      resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
     allowTagsWhenOff: true,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
   },

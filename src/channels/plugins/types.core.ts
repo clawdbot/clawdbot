@@ -198,6 +198,7 @@ export type ChannelThreadingAdapter = {
   resolveReplyToMode?: (params: {
     cfg: ClawdbotConfig;
     accountId?: string | null;
+    chatType?: string | null;
   }) => "off" | "first" | "all";
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {

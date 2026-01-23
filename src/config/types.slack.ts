@@ -17,6 +17,8 @@ export type SlackDmConfig = {
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
   groupChannels?: Array<string | number>;
+  /** Control reply threading for DMs (off|first|all). Overrides top-level replyToMode for DMs. */
+  replyToMode?: ReplyToMode;
 };
 
 export type SlackChannelConfig = {
