@@ -78,6 +78,28 @@ function isDestroyedClientError(err: unknown): boolean {
   return /client is destroyed/i.test(message);
 }
 
+function isClientDestroyed(client: TelegramClient): boolean {
+  const candidate = client as TelegramClient & { destroyed?: boolean };
+  return candidate.destroyed === true;
+}
+
+async function safeSendTyping(params: {
+  client: TelegramClient;
+  target: number | string;
+  status: Parameters<TelegramClient["sendTyping"]>[1];
+  typingParams?: Parameters<TelegramClient["sendTyping"]>[2];
+  runtime: TelegramUserHandlerParams["runtime"];
+  logLabel: string;
+}) {
+  if (isClientDestroyed(params.client)) return;
+  try {
+    await params.client.sendTyping(params.target, params.status, params.typingParams);
+  } catch (err) {
+    if (isDestroyedClientError(err)) return;
+    params.runtime.error?.(`telegram-user ${params.logLabel} failed: ${String(err)}`);
+  }
+}
+
 function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
   for (const value of values) {
     if (typeof value !== "undefined") return value;
@@ -625,12 +647,14 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             const mediaUrl = payload.mediaUrl;
             if (mediaUrl) {
               if (payload.audioAsVoice) {
-                try {
-                  await client.sendTyping(typingTarget, "record_voice", typingParams);
-                } catch (err) {
-                  if (isDestroyedClientError(err)) return;
-                  runtime.error?.(`telegram-user voice typing failed: ${String(err)}`);
-                }
+                await safeSendTyping({
+                  client,
+                  target: typingTarget,
+                  status: "record_voice",
+                  typingParams,
+                  runtime,
+                  logLabel: "voice typing",
+                });
               }
               try {
                 await sendMediaTelegramUser(replyTarget, replyText, {
@@ -676,12 +700,14 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             }
           },
           onReplyStart: async () => {
-            try {
-              await client.sendTyping(typingTarget, "typing", typingParams);
-            } catch (err) {
-              if (isDestroyedClientError(err)) return;
-              runtime.error?.(`telegram-user typing failed: ${String(err)}`);
-            }
+            await safeSendTyping({
+              client,
+              target: typingTarget,
+              status: "typing",
+              typingParams,
+              runtime,
+              logLabel: "typing",
+            });
           },
           onError: (err) => {
             runtime.error?.(`telegram-user reply failed: ${String(err)}`);
