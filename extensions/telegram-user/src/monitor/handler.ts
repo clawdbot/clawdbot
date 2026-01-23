@@ -625,11 +625,12 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             const mediaUrl = payload.mediaUrl;
             if (mediaUrl) {
               if (payload.audioAsVoice) {
-                await client
-                  .sendTyping(typingTarget, "record_voice", typingParams)
-                  .catch((err) => {
-                    runtime.error?.(`telegram-user voice typing failed: ${String(err)}`);
-                  });
+                try {
+                  await client.sendTyping(typingTarget, "record_voice", typingParams);
+                } catch (err) {
+                  if (isDestroyedClientError(err)) return;
+                  runtime.error?.(`telegram-user voice typing failed: ${String(err)}`);
+                }
               }
               try {
                 await sendMediaTelegramUser(replyTarget, replyText, {
@@ -675,10 +676,12 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             }
           },
           onReplyStart: async () => {
-            await client.sendTyping(typingTarget, "typing", typingParams).catch((err) => {
+            try {
+              await client.sendTyping(typingTarget, "typing", typingParams);
+            } catch (err) {
               if (isDestroyedClientError(err)) return;
               runtime.error?.(`telegram-user typing failed: ${String(err)}`);
-            });
+            }
           },
           onError: (err) => {
             runtime.error?.(`telegram-user reply failed: ${String(err)}`);
