@@ -30,6 +30,7 @@ import {
 } from "./send.js";
 import { resolveTelegramUserSessionPath } from "./session.js";
 import { getTelegramUserRuntime } from "./runtime.js";
+import { telegramUserOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
 
 const meta = {
@@ -57,6 +58,7 @@ const isSessionLinked = async (accountId: string): Promise<boolean> => {
 export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
   id: "telegram-user",
   meta,
+  onboarding: telegramUserOnboardingAdapter,
   pairing: {
     idLabel: "telegramUserId",
     normalizeAllowEntry: (entry) =>
