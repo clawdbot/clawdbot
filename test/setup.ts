@@ -9,11 +9,6 @@ import type { ClawdbotConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
-import { installTestEnv } from "./test-env";
-
-const { cleanup } = installTestEnv();
-process.on("exit", cleanup);
-
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   switch (id) {
     case "discord":

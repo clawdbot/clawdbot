@@ -26,6 +26,7 @@ export default defineConfig({
       "test/format-error.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
+    globalSetup: ["test/global-setup.ts"],
     exclude: [
       "dist/**",
       "apps/macos/**",
@@ -34,6 +35,7 @@ export default defineConfig({
       "**/vendor/**",
       "dist/Clawdbot.app/**",
       "**/*.live.test.ts",
+      "**/*.e2e.test.ts",
     ],
     coverage: {
       provider: "v8",
