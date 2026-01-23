@@ -2,6 +2,7 @@ import type { TelegramClient } from "@mtcute/node";
 import type { MessageContext } from "@mtcute/dispatcher";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 
+import { resolveAckReaction } from "clawdbot/plugin-sdk";
 import { getTelegramUserRuntime } from "../runtime.js";
 import type { CoreConfig, TelegramUserAccountConfig } from "../types.js";
 import { sendMediaTelegramUser, sendMessageTelegramUser } from "../send.js";
@@ -57,6 +58,14 @@ function isSenderAllowed(params: {
   return parsed.usernames.has(username.replace(/^@/, ""));
 }
 
+function resolveTelegramUserPeer(target: string): number | string {
+  if (/^-?\d+$/.test(target)) {
+    const parsed = Number.parseInt(target, 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return target;
+}
+
 async function resolveMediaAttachment(params: {
   client: TelegramClient;
   mediaMaxMb: number;
@@ -110,6 +119,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       if ("isSelf" in sender && sender.isSelf) return;
 
       const senderId = String(sender.id);
+      const senderPeer = resolveTelegramUserPeer(senderId);
       const senderUsername = "username" in sender ? sender.username : null;
       const senderName = "displayName" in sender ? sender.displayName : senderId;
       const storeAllowFrom = await core.channel.pairing
@@ -170,6 +180,24 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
           id: senderId,
         },
       });
+      const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+      const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+      const ackReaction = resolveAckReaction(cfg, route.agentId);
+      const shouldAckReaction =
+        Boolean(ackReaction) && (ackReactionScope === "all" || ackReactionScope === "direct");
+      const ackReactionPromise = shouldAckReaction
+        ? client
+            .sendReaction({
+              chatId: senderPeer,
+              message: msg.id,
+              emoji: ackReaction,
+            })
+            .then(() => true)
+            .catch((err) => {
+              runtime.error?.(`telegram-user ack reaction failed: ${String(err)}`);
+              return false;
+            })
+        : null;
       const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
         agentId: route.agentId,
       });
@@ -278,7 +306,9 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             }
           },
           onReplyStart: async () => {
-            await client.sendTyping(senderId).catch(() => undefined);
+            await client.sendTyping(senderPeer).catch((err) => {
+              runtime.error?.(`telegram-user typing failed: ${String(err)}`);
+            });
           },
           onError: (err) => {
             runtime.error?.(`telegram-user reply failed: ${String(err)}`);
@@ -292,6 +322,21 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         replyOptions,
       });
       markDispatchIdle();
+
+      if (removeAckAfterReply && ackReactionPromise) {
+        const didAck = await ackReactionPromise;
+        if (didAck) {
+          await client
+            .sendReaction({
+              chatId: senderPeer,
+              message: msg.id,
+              emoji: null,
+            })
+            .catch((err) => {
+              runtime.error?.(`telegram-user ack reaction cleanup failed: ${String(err)}`);
+            });
+        }
+      }
     } catch (err) {
       runtime.error?.(`telegram-user handler failed: ${String(err)}`);
     }
