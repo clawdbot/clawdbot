@@ -676,6 +676,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
           },
           onReplyStart: async () => {
             await client.sendTyping(typingTarget, "typing", typingParams).catch((err) => {
+              if (isDestroyedClientError(err)) return;
               runtime.error?.(`telegram-user typing failed: ${String(err)}`);
             });
           },
