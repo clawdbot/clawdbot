@@ -249,6 +249,14 @@ export function shortenHomeInString(input: string): string {
   return input.split(home).join("~");
 }
 
+export function displayPath(input: string): string {
+  return shortenHomePath(input);
+}
+
+export function displayString(input: string): string {
+  return shortenHomeInString(input);
+}
+
 export function formatTerminalLink(
   label: string,
   url: string,

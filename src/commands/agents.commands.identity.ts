@@ -4,7 +4,8 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { writeConfigFile } from "../config/config.js";
+import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -211,7 +212,7 @@ export async function agentsSetIdentityCommand(
     return;
   }
 
-  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+  logConfigUpdated(runtime);
   runtime.log(`Agent: ${agentId}`);
   if (nextIdentity.name) runtime.log(`Name: ${nextIdentity.name}`);
   if (nextIdentity.theme) runtime.log(`Theme: ${nextIdentity.theme}`);

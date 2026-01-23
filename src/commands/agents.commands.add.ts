@@ -8,7 +8,8 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { writeConfigFile } from "../config/config.js";
+import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -126,7 +127,7 @@ export async function agentsAddCommand(
         : { config: nextConfig, added: [], skipped: [], conflicts: [] };
 
     await writeConfigFile(bindingResult.config);
-    if (!opts.json) runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+    if (!opts.json) logConfigUpdated(runtime);
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
       skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
@@ -334,7 +335,7 @@ export async function agentsAddCommand(
     }
 
     await writeConfigFile(nextConfig);
-    runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+    logConfigUpdated(runtime);
     await ensureWorkspaceAndSessions(workspaceDir, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       agentId,

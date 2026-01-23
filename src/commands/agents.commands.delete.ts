@@ -1,10 +1,10 @@
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { writeConfigFile } from "../config/config.js";
+import { logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
@@ -70,7 +70,7 @@ export async function agentsDeleteCommand(
 
   const result = pruneAgentConfig(cfg, agentId);
   await writeConfigFile(result.config);
-  if (!opts.json) runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+  if (!opts.json) logConfigUpdated(runtime);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await moveToTrash(workspaceDir, quietRuntime);

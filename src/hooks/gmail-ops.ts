@@ -12,6 +12,7 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { displayPath } from "../utils.js";
 import {
   buildDefaultHookUrl,
   buildGogWatchServeArgs,
@@ -276,7 +277,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   defaultRuntime.log(`- subscription: ${subscription}`);
   defaultRuntime.log(`- push endpoint: ${pushEndpoint}`);
   defaultRuntime.log(`- hook url: ${hookUrl}`);
-  defaultRuntime.log(`- config: ${CONFIG_PATH_CLAWDBOT}`);
+  defaultRuntime.log(`- config: ${displayPath(CONFIG_PATH_CLAWDBOT)}`);
   defaultRuntime.log(`Next: ${formatCliCommand("clawdbot webhooks gmail run")}`);
 }
 

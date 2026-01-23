@@ -3,7 +3,7 @@ import { intro, note, outro, select, spinner, text, isCancel } from "@clack/prom
 import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
-import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
+import { logConfigUpdated } from "../config/logging.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import {
@@ -236,7 +236,7 @@ export async function githubCopilotLoginCommand(
     }),
   );
 
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (github-copilot/oauth)`);
   runtime.log(`Base URL: ${resolveGithubCopilotBaseUrl(enterpriseDomain ?? undefined)}`);
 

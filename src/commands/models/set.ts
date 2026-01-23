@@ -1,7 +1,6 @@
-import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
+import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveModelTarget, updateConfig } from "./shared.js";
-import { shortenHomePath } from "../../utils.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg) => {
@@ -28,6 +27,6 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     };
   });
 
-  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+  logConfigUpdated(runtime);
   runtime.log(`Default model: ${updated.agents?.defaults?.model?.primary ?? modelRaw}`);
 }

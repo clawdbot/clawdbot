@@ -1,10 +1,10 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../../config/config.js";
+import { writeConfigFile } from "../../config/config.js";
+import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
-import { shortenHomePath } from "../../utils.js";
 
 export async function runNonInteractiveOnboardingRemote(params: {
   opts: OnboardOptions;
@@ -34,7 +34,7 @@ export async function runNonInteractiveOnboardingRemote(params: {
   };
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
-  runtime.log(`Updated ${shortenHomePath(CONFIG_PATH_CLAWDBOT)}`);
+  logConfigUpdated(runtime);
 
   const payload = {
     mode,
