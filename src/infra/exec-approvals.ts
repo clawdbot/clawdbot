@@ -409,6 +409,10 @@ export function resolveCommandResolutionFromArgv(
 }
 
 function normalizeMatchTarget(value: string): string {
+  if (process.platform === "win32") {
+    const stripped = value.replace(/^\\\\[?.]\\/, "");
+    return stripped.replace(/\\/g, "/").toLowerCase();
+  }
   return value.replace(/\\\\/g, "/").toLowerCase();
 }
 
