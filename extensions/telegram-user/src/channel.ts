@@ -70,6 +70,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
   },
   capabilities: {
     chatTypes: ["direct", "group"],
+    polls: true,
     reactions: false,
     threads: false,
     media: true,
@@ -150,6 +151,12 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         groupId,
         accountId,
       }),
+  },
+  actions: {
+    listActions: ({ cfg }) => {
+      if (!cfg.channels?.["telegram-user"]) return [];
+      return ["poll"];
+    },
   },
   outbound: {
     deliveryMode: "direct",
