@@ -152,6 +152,23 @@ function extractTelegramUserLocation(
   return null;
 }
 
+function describeReplySender(sender: unknown): string | undefined {
+  const typed = sender as {
+    type?: string;
+    displayName?: string;
+    title?: string;
+    id?: number;
+  };
+  if (!typed || typeof typed !== "object") return undefined;
+  if (typed.type === "anonymous" && typed.displayName) return typed.displayName;
+  if (typed.type === "user" && typed.displayName) return typed.displayName;
+  if (typed.type === "chat") {
+    if (typed.title) return typed.title;
+    if (typed.id != null) return `chat:${typed.id}`;
+  }
+  return undefined;
+}
+
 async function resolveMediaAttachment(params: {
   client: TelegramClient;
   mediaMaxMb: number;
@@ -344,6 +361,17 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const media = allMedia[0] ?? null;
       const rawBody = [text, locationText].filter(Boolean).join("\n").trim();
       if (!rawBody && !media) return;
+      const timestampMs = msg.date ? msg.date * 1000 : undefined;
+      const replyInfo = msg.replyToMessage ?? null;
+      const replyToId = replyInfo?.id != null ? String(replyInfo.id) : undefined;
+      const replyToSender = replyInfo?.sender
+        ? describeReplySender(replyInfo.sender)
+        : undefined;
+      let replyToBody: string | undefined;
+      if (replyToId) {
+        const replyMessage = await msg.getReplyTo().catch(() => null);
+        replyToBody = replyMessage?.text?.trim() || undefined;
+      }
 
       core.channel.activity.record({
         channel: "telegram-user",
@@ -466,7 +494,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Telegram User",
         from: senderName,
-        timestamp: msg.date,
+        timestamp: timestampMs,
         previousTimestamp,
         envelope: envelopeOptions,
         body: rawBody || `(media${mediaSuffix})`,
@@ -490,11 +518,21 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         Provider: "telegram-user" as const,
         Surface: "telegram-user" as const,
         MessageSid: String(msg.id),
-        ReplyToId: String(msg.id),
-        Timestamp: msg.date,
+        ReplyToId: replyToId ?? String(msg.id),
+        ReplyToBody: replyToBody,
+        ReplyToSender: replyToSender,
+        Timestamp: timestampMs,
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
+        MediaPaths: allMedia.length > 0 ? allMedia.map((item) => item.path) : undefined,
+        MediaUrls: allMedia.length > 0 ? allMedia.map((item) => item.path) : undefined,
+        MediaTypes:
+          allMedia.length > 0
+            ? (allMedia
+                .map((item) => item.contentType)
+                .filter(Boolean) as string[])
+            : undefined,
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         OriginatingChannel: "telegram-user" as const,
@@ -503,6 +541,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             ? buildTelegramUserGroupFrom(chatId, threadId)
             : `telegram-user:${senderId}`,
         WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+        MessageThreadId: threadId,
         ...(locationData ? toLocationContext(locationData) : undefined),
       });
 
