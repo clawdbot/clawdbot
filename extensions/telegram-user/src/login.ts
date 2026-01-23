@@ -1,8 +1,20 @@
 import qrcode from "qrcode-terminal";
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 
 import { createTelegramUserClient } from "./client.js";
 import { ensureTelegramUserSessionDir } from "./session.js";
+
+async function promptText(message: string): Promise<string> {
+  const rl = createInterface({ input, output });
+  try {
+    const value = await rl.question(message);
+    return value.trim();
+  } finally {
+    rl.close();
+  }
+}
 
 export async function loginTelegramUser(params: {
   apiId: number;
@@ -15,25 +27,52 @@ export async function loginTelegramUser(params: {
   const client = createTelegramUserClient({ apiId, apiHash, storagePath });
   let lastUrl = "";
 
-  const password = process.env.TELEGRAM_USER_PASSWORD?.trim() || undefined;
+  const passwordEnv = process.env.TELEGRAM_USER_PASSWORD?.trim() || undefined;
+  const phoneEnv = process.env.TELEGRAM_USER_PHONE?.trim() || undefined;
+  const codeEnv = process.env.TELEGRAM_USER_CODE?.trim() || undefined;
 
   try {
-    const user = await client.start({
-      qrCodeHandler: (url, expires) => {
-        if (url === lastUrl) return;
-        lastUrl = url;
-        runtime.log(`Scan this QR in Telegram (expires ${expires.toLocaleTimeString()}):`);
-        qrcode.generate(url, { small: true });
-      },
-      ...(password ? { password } : {}),
-      invalidCodeCallback: async (type) => {
-        if (type === "password") {
-          runtime.error?.(
-            "Telegram 2FA password rejected. Set TELEGRAM_USER_PASSWORD and rerun.",
-          );
-        }
-      },
-    });
+    const user = await client.start(
+      phoneEnv
+        ? {
+            phone: phoneEnv,
+            code: codeEnv ? codeEnv : async () => await promptText("Telegram code: "),
+            password: passwordEnv ? passwordEnv : async () => await promptText("2FA password: "),
+            codeSentCallback: (code) => {
+              runtime.log(
+                `Telegram code sent via ${code.type}. Check your device and enter it here.`,
+              );
+            },
+            invalidCodeCallback: async (type) => {
+              if (type === "password" && passwordEnv) {
+                runtime.error?.(
+                  "Telegram 2FA password rejected. Update TELEGRAM_USER_PASSWORD and rerun.",
+                );
+              }
+              if (type === "code" && codeEnv) {
+                runtime.error?.(
+                  "Telegram code rejected. Update TELEGRAM_USER_CODE and rerun.",
+                );
+              }
+            },
+          }
+        : {
+            qrCodeHandler: (url, expires) => {
+              if (url === lastUrl) return;
+              lastUrl = url;
+              runtime.log(`Scan this QR in Telegram (expires ${expires.toLocaleTimeString()}):`);
+              qrcode.generate(url, { small: true });
+            },
+            ...(passwordEnv ? { password: passwordEnv } : {}),
+            invalidCodeCallback: async (type) => {
+              if (type === "password") {
+                runtime.error?.(
+                  "Telegram 2FA password rejected. Set TELEGRAM_USER_PASSWORD and rerun.",
+                );
+              }
+            },
+          },
+    );
     runtime.log(`Telegram user logged in as ${user.displayName}.`);
   } finally {
     await client.destroy();
