@@ -21,6 +21,7 @@ struct VoiceWakeSettings: View {
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var availableLocales: [Locale] = []
+    @State private var triggerEntries: [TriggerEntry] = []
     private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 240
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -31,9 +32,9 @@ struct VoiceWakeSettings: View {
         var id: String { self.uid }
     }
 
-    private struct IndexedWord: Identifiable {
-        let id: Int
-        let value: String
+    private struct TriggerEntry: Identifiable {
+        let id: UUID
+        var value: String
     }
 
     private var voiceWakeBinding: Binding<Bool> {
@@ -105,6 +106,7 @@ struct VoiceWakeSettings: View {
         .onAppear {
             guard !self.isPreview else { return }
             self.startMicObserver()
+            self.loadTriggerEntries()
         }
         .onChange(of: self.state.voiceWakeMicID) { _, _ in
             guard !self.isPreview else { return }
@@ -122,8 +124,10 @@ struct VoiceWakeSettings: View {
                 self.micRefreshTask = nil
                 Task { await self.meter.stop() }
                 self.micObserver.stop()
+                self.syncTriggerEntriesToState()
             } else {
                 self.startMicObserver()
+                self.loadTriggerEntries()
             }
         }
         .onDisappear {
@@ -136,11 +140,16 @@ struct VoiceWakeSettings: View {
             self.micRefreshTask = nil
             self.micObserver.stop()
             Task { await self.meter.stop() }
+            self.syncTriggerEntriesToState()
         }
     }
 
-    private var indexedWords: [IndexedWord] {
-        self.state.swabbleTriggerWords.enumerated().map { IndexedWord(id: $0.offset, value: $0.element) }
+    private func loadTriggerEntries() {
+        self.triggerEntries = self.state.swabbleTriggerWords.map { TriggerEntry(id: UUID(), value: $0) }
+    }
+
+    private func syncTriggerEntriesToState() {
+        self.state.swabbleTriggerWords = self.triggerEntries.map(\.value)
     }
 
     private var triggerTable: some View {
@@ -154,29 +163,42 @@ struct VoiceWakeSettings: View {
                 } label: {
                     Label("Add word", systemImage: "plus")
                 }
-                .disabled(self.state.swabbleTriggerWords
-                    .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+                .disabled(self.triggerEntries
+                    .contains(where: { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
-                Button("Reset defaults") { self.state.swabbleTriggerWords = defaultVoiceWakeTriggers }
+                Button("Reset defaults") {
+                    self.triggerEntries = defaultVoiceWakeTriggers.map { TriggerEntry(id: UUID(), value: $0) }
+                    self.syncTriggerEntriesToState()
+                }
             }
 
-            Table(self.indexedWords) {
-                TableColumn("Word") { row in
-                    TextField("Wake word", text: self.binding(for: row.id))
-                        .textFieldStyle(.roundedBorder)
-                }
-                TableColumn("") { row in
-                    Button {
-                        self.removeWord(at: row.id)
-                    } label: {
-                        Image(systemName: "trash")
+            VStack(spacing: 0) {
+                ForEach(self.$triggerEntries) { $entry in
+                    HStack(spacing: 8) {
+                        TextField("Wake word", text: $entry.value)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                self.syncTriggerEntriesToState()
+                            }
+
+                        Button {
+                            self.removeWord(id: entry.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove trigger word")
+                        .frame(width: 24)
                     }
-                    .buttonStyle(.borderless)
-                    .help("Remove trigger word")
+                    .padding(8)
+
+                    if entry.id != self.triggerEntries.last?.id {
+                        Divider()
+                    }
                 }
-                .width(36)
             }
-            .frame(minHeight: 180)
+            .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+            .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -211,24 +233,12 @@ struct VoiceWakeSettings: View {
     }
 
     private func addWord() {
-        self.state.swabbleTriggerWords.append("")
+        self.triggerEntries.append(TriggerEntry(id: UUID(), value: ""))
     }
 
-    private func removeWord(at index: Int) {
-        guard self.state.swabbleTriggerWords.indices.contains(index) else { return }
-        self.state.swabbleTriggerWords.remove(at: index)
-    }
-
-    private func binding(for index: Int) -> Binding<String> {
-        Binding(
-            get: {
-                guard self.state.swabbleTriggerWords.indices.contains(index) else { return "" }
-                return self.state.swabbleTriggerWords[index]
-            },
-            set: { newValue in
-                guard self.state.swabbleTriggerWords.indices.contains(index) else { return }
-                self.state.swabbleTriggerWords[index] = newValue
-            })
+    private func removeWord(id: UUID) {
+        self.triggerEntries.removeAll { $0.id == id }
+        self.syncTriggerEntriesToState()
     }
 
     private func toggleTest() {
@@ -638,13 +648,14 @@ extension VoiceWakeSettings {
         state.voicePushToTalkEnabled = true
         state.swabbleTriggerWords = ["Claude", "Hey"]
 
-        let view = VoiceWakeSettings(state: state, isActive: true)
+        var view = VoiceWakeSettings(state: state, isActive: true)
         view.availableMics = [AudioInputDevice(uid: "mic-1", name: "Built-in")]
         view.availableLocales = [Locale(identifier: "en_US")]
         view.meterLevel = 0.42
         view.meterError = "No input"
         view.testState = .detected("ok")
         view.isTesting = true
+        view.triggerEntries = [TriggerEntry(id: UUID(), value: "Claude")]
 
         _ = view.body
         _ = view.localePicker
@@ -654,8 +665,9 @@ extension VoiceWakeSettings {
         _ = view.chimeSection
 
         view.addWord()
-        _ = view.binding(for: 0).wrappedValue
-        view.removeWord(at: 0)
+        if let entryId = view.triggerEntries.first?.id {
+            view.removeWord(id: entryId)
+        }
     }
 }
 #endif
