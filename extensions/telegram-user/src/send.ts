@@ -30,10 +30,10 @@ export type TelegramUserSendOpts = {
 const normalizeTarget = (raw: string): string => {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error("Recipient is required for Telegram User sends");
-  return trimmed
-    .replace(/^(telegram-user|telegram|tg):/i, "")
-    .replace(/^user:/i, "")
-    .trim();
+  const withoutProvider = trimmed.replace(/^(telegram-user|telegram|tg):/i, "").trim();
+  const withoutPrefix = withoutProvider.replace(/^(user|group|channel|chat):/i, "").trim();
+  const topicSplit = withoutPrefix.split(/:topic:/i);
+  return (topicSplit[0] ?? withoutPrefix).trim();
 };
 
 export function normalizeTelegramUserMessagingTarget(raw: string): string {
@@ -43,6 +43,8 @@ export function normalizeTelegramUserMessagingTarget(raw: string): string {
 export function looksLikeTelegramUserTargetId(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return false;
+  if (/^telegram-user:/i.test(trimmed)) return true;
+  if (/^(user|group|channel|chat):/i.test(trimmed)) return true;
   return /^-?\d+$/.test(trimmed) || /^@?[a-z0-9_]{5,}$/i.test(trimmed);
 }
 
