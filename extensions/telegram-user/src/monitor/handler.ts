@@ -2,7 +2,13 @@ import type { TelegramClient } from "@mtcute/node";
 import type { MessageContext } from "@mtcute/dispatcher";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 
-import { resolveAckReaction, resolveMentionGatingWithBypass } from "clawdbot/plugin-sdk";
+import {
+  formatLocationText,
+  resolveAckReaction,
+  resolveMentionGatingWithBypass,
+  toLocationContext,
+  type NormalizedLocation,
+} from "clawdbot/plugin-sdk";
 import { getTelegramUserRuntime } from "../runtime.js";
 import type { CoreConfig, TelegramUserAccountConfig } from "../types.js";
 import { sendMediaTelegramUser, sendMessageTelegramUser } from "../send.js";
@@ -105,6 +111,45 @@ function resolveTelegramUserGroupConfig(
   const topicConfig =
     groupConfig?.topics?.[topicKey] ?? groups["*"]?.topics?.[topicKey];
   return { groupConfig, topicConfig };
+}
+
+function extractTelegramUserLocation(
+  media: MessageContext["media"],
+): NormalizedLocation | null {
+  if (!media) return null;
+  const typed = media as { type?: string };
+  if (typed.type === "venue") {
+    const venue = media as {
+      location: { latitude: number; longitude: number; radius?: number };
+      title: string;
+      address: string;
+    };
+    return {
+      latitude: venue.location.latitude,
+      longitude: venue.location.longitude,
+      accuracy: venue.location.radius,
+      name: venue.title,
+      address: venue.address,
+      source: "place",
+      isLive: false,
+    };
+  }
+  if (typed.type === "location" || typed.type === "live_location") {
+    const location = media as {
+      latitude: number;
+      longitude: number;
+      radius?: number;
+    };
+    const isLive = typed.type === "live_location";
+    return {
+      latitude: location.latitude,
+      longitude: location.longitude,
+      accuracy: location.radius,
+      source: isLive ? "live" : "pin",
+      isLive,
+    };
+  }
+  return null;
 }
 
 async function resolveMediaAttachment(params: {
@@ -288,6 +333,8 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const primaryMessage =
         messageGroup.find((entry) => entry.text?.trim()) ?? msg;
       const text = primaryMessage.text?.trim() ?? "";
+      const locationData = extractTelegramUserLocation(primaryMessage.media);
+      const locationText = locationData ? formatLocationText(locationData) : undefined;
       const allMedia = await resolveMediaAttachments({
         client,
         mediaMaxMb,
@@ -295,7 +342,8 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         runtime,
       });
       const media = allMedia[0] ?? null;
-      if (!text && !media) return;
+      const rawBody = [text, locationText].filter(Boolean).join("\n").trim();
+      if (!rawBody && !media) return;
 
       core.channel.activity.record({
         channel: "telegram-user",
@@ -414,14 +462,14 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         ? buildTelegramUserGroupLabel(groupTitle, chatId, threadId)
         : senderName;
       const mediaSuffix =
-        !text && allMedia.length > 1 ? ` (${allMedia.length} items)` : "";
+        !rawBody && allMedia.length > 1 ? ` (${allMedia.length} items)` : "";
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Telegram User",
         from: senderName,
         timestamp: msg.date,
         previousTimestamp,
         envelope: envelopeOptions,
-        body: text || `(media${mediaSuffix})`,
+        body: rawBody || `(media${mediaSuffix})`,
       });
 
       const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -455,6 +503,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             ? buildTelegramUserGroupFrom(chatId, threadId)
             : `telegram-user:${senderId}`,
         WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+        ...(locationData ? toLocationContext(locationData) : undefined),
       });
 
       void core.channel.session
