@@ -16,6 +16,12 @@ type RegisteredPluginCommand = ClawdbotPluginCommandDefinition & {
 // Registry of plugin commands
 const pluginCommands: Map<string, RegisteredPluginCommand> = new Map();
 
+// Lock to prevent modifications during command execution
+let registryLocked = false;
+
+// Maximum allowed length for command arguments (defense in depth)
+const MAX_ARGS_LENGTH = 4096;
+
 /**
  * Reserved command names that plugins cannot override.
  * These are built-in commands from commands-registry.data.ts.
@@ -70,7 +76,8 @@ export function validateCommandName(name: string): string | null {
   }
 
   // Must start with a letter, contain only letters, numbers, hyphens, underscores
-  if (!/^[a-z][a-z0-9_-]*$/i.test(trimmed)) {
+  // Note: trimmed is already lowercased, so no need for /i flag
+  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
     return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
   }
 
@@ -95,6 +102,16 @@ export function registerPluginCommand(
   pluginId: string,
   command: ClawdbotPluginCommandDefinition,
 ): CommandRegistrationResult {
+  // Prevent registration while commands are being processed
+  if (registryLocked) {
+    return { ok: false, error: "Cannot register commands while processing is in progress" };
+  }
+
+  // Validate handler is a function
+  if (typeof command.handler !== "function") {
+    return { ok: false, error: "Command handler must be a function" };
+  }
+
   const validationError = validateCommandName(command.name);
   if (validationError) {
     return { ok: false, error: validationError };
@@ -166,7 +183,26 @@ export function matchPluginCommand(
 }
 
 /**
+ * Sanitize command arguments to prevent injection attacks.
+ * Removes control characters and enforces length limits.
+ */
+function sanitizeArgs(args: string | undefined): string | undefined {
+  if (!args) return undefined;
+
+  // Enforce length limit
+  if (args.length > MAX_ARGS_LENGTH) {
+    return args.slice(0, MAX_ARGS_LENGTH);
+  }
+
+  // Remove control characters (except newlines and tabs which may be intentional)
+  return args.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+/**
  * Execute a plugin command handler.
+ *
+ * Note: Plugin authors should still validate and sanitize ctx.args for their
+ * specific use case. This function provides basic defense-in-depth sanitization.
  */
 export async function executePluginCommand(params: {
   command: RegisteredPluginCommand;
@@ -176,9 +212,8 @@ export async function executePluginCommand(params: {
   isAuthorizedSender: boolean;
   commandBody: string;
   config: ClawdbotConfig;
-}): Promise<{ text: string } | null> {
-  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } =
-    params;
+}): Promise<{ text: string }> {
+  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
   // Check authorization
   const requireAuth = command.requireAuth !== false; // Default to true
@@ -186,27 +221,36 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} blocked: unauthorized sender ${senderId || "<unknown>"}`,
     );
-    // Return a message instead of silently ignoring
     return { text: "⚠️ This command requires authorization." };
   }
+
+  // Sanitize args before passing to handler
+  const sanitizedArgs = sanitizeArgs(args);
 
   const ctx: PluginCommandContext = {
     senderId,
     channel,
     isAuthorizedSender,
-    args,
+    args: sanitizedArgs,
     commandBody,
     config,
   };
 
+  // Lock registry during execution to prevent concurrent modifications
+  registryLocked = true;
   try {
     const result = await command.handler(ctx);
+    logVerbose(
+      `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
+    );
     return { text: result.text };
   } catch (err) {
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
+  } finally {
+    registryLocked = false;
   }
 }
 

@@ -23,7 +23,7 @@ export const handlePluginCommand: CommandHandler = async (
   const match = matchPluginCommand(command.commandBodyNormalized);
   if (!match) return null;
 
-  // Execute the plugin command
+  // Execute the plugin command (always returns a result)
   const result = await executePluginCommand({
     command: match.command,
     args: match.args,
@@ -34,13 +34,8 @@ export const handlePluginCommand: CommandHandler = async (
     config: cfg,
   });
 
-  if (result) {
-    return {
-      shouldContinue: false,
-      reply: { text: result.text },
-    };
-  }
-
-  // Command was blocked (e.g., unauthorized) - don't continue to agent
-  return { shouldContinue: false };
+  return {
+    shouldContinue: false,
+    reply: { text: result.text },
+  };
 };
