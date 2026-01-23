@@ -142,6 +142,28 @@ async function resolveMediaAttachment(params: {
   };
 }
 
+async function resolveMediaAttachments(params: {
+  client: TelegramClient;
+  mediaMaxMb: number;
+  messages: MessageContext[];
+  runtime: RuntimeEnv;
+}): Promise<Array<{ path: string; contentType?: string }>> {
+  const results: Array<{ path: string; contentType?: string }> = [];
+  for (const message of params.messages) {
+    if (!message.media) continue;
+    const resolved = await resolveMediaAttachment({
+      client: params.client,
+      mediaMaxMb: params.mediaMaxMb,
+      media: message.media,
+    }).catch((err) => {
+      params.runtime.error?.(`telegram-user media download failed: ${String(err)}`);
+      return null;
+    });
+    if (resolved) results.push(resolved);
+  }
+  return results;
+}
+
 export function createTelegramUserMessageHandler(params: TelegramUserHandlerParams) {
   const { client, cfg, runtime, accountId, accountConfig, self } = params;
   const core = getTelegramUserRuntime();
@@ -154,6 +176,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
   return async (msg: MessageContext) => {
     try {
       if (msg.isOutgoing || msg.isService) return;
+      const messageGroup = msg.isMessageGroup ? msg.messages : [msg];
       const isDirect = msg.chat.type === "user";
       const isGroup =
         msg.chat.type === "chat" && msg.chat.chatType !== "channel";
@@ -262,15 +285,16 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         }
       }
 
-      const text = msg.text?.trim() ?? "";
-      const media = await resolveMediaAttachment({
+      const primaryMessage =
+        messageGroup.find((entry) => entry.text?.trim()) ?? msg;
+      const text = primaryMessage.text?.trim() ?? "";
+      const allMedia = await resolveMediaAttachments({
         client,
         mediaMaxMb,
-        media: msg.media,
-      }).catch((err) => {
-        runtime.error?.(`telegram-user media download failed: ${String(err)}`);
-        return null;
+        messages: messageGroup,
+        runtime,
       });
+      const media = allMedia[0] ?? null;
       if (!text && !media) return;
 
       core.channel.activity.record({
@@ -389,13 +413,15 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const conversationLabel = isGroup && chatId != null
         ? buildTelegramUserGroupLabel(groupTitle, chatId, threadId)
         : senderName;
+      const mediaSuffix =
+        !text && allMedia.length > 1 ? ` (${allMedia.length} items)` : "";
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Telegram User",
         from: senderName,
         timestamp: msg.date,
         previousTimestamp,
         envelope: envelopeOptions,
-        body: text || "(media)",
+        body: text || `(media${mediaSuffix})`,
       });
 
       const ctxPayload = core.channel.reply.finalizeInboundContext({
