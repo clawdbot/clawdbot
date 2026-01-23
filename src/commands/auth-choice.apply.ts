@@ -21,6 +21,10 @@ export type ApplyAuthChoiceParams = {
   agentDir?: string;
   setDefaultModel: boolean;
   agentId?: string;
+  opts?: {
+    tokenProvider?: string;
+    token?: string;
+  };
 };
 
 export type ApplyAuthChoiceResult = {

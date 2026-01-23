@@ -198,10 +198,20 @@ export async function applyAuthChoiceAnthropic(
   }
 
   if (params.authChoice === "apiKey") {
+    if (params.opts?.tokenProvider && params.opts.tokenProvider !== "anthropic") {
+      return null;
+    }
+
     let nextConfig = params.config;
     let hasCredential = false;
     const envKey = process.env.ANTHROPIC_API_KEY?.trim();
-    if (envKey) {
+
+    if (params.opts?.token) {
+      await setAnthropicApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential && envKey) {
       const useExisting = await params.prompter.confirm({
         message: `Use existing ANTHROPIC_API_KEY (env, ${formatApiKeyPreview(envKey)})?`,
         initialValue: true,

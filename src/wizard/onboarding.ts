@@ -356,6 +356,10 @@ export async function runOnboardingWizard(
     prompter,
     runtime,
     setDefaultModel: true,
+    opts: {
+      tokenProvider: opts.tokenProvider,
+      token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
+    },
   });
   nextConfig = authResult.config;
 
