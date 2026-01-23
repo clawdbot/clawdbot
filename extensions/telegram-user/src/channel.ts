@@ -141,6 +141,15 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
       };
     },
   },
+  groups: {
+    resolveRequireMention: ({ cfg, groupId, accountId }) =>
+      getTelegramUserRuntime().channel.groups.resolveRequireMention({
+        cfg,
+        channel: "telegram-user",
+        groupId,
+        accountId,
+      }),
+  },
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) =>
