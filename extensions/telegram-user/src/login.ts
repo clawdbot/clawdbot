@@ -1,6 +1,7 @@
 import qrcode from "qrcode-terminal";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { isCancel, select } from "@clack/prompts";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 
 import { createTelegramUserClient } from "./client.js";
@@ -17,11 +18,17 @@ async function promptText(message: string): Promise<string> {
 }
 
 async function promptLoginMode(): Promise<"qr" | "phone"> {
-  const response = await promptText("Login method (qr/phone) [qr]: ");
-  const normalized = response.trim().toLowerCase();
-  if (!normalized) return "qr";
-  if (normalized === "phone" || normalized === "otp") return "phone";
-  return "qr";
+  if (!input.isTTY || !output.isTTY) return "qr";
+  const response = await select({
+    message: "Telegram login method",
+    options: [
+      { value: "qr", label: "QR code (scan with Telegram)" },
+      { value: "phone", label: "Phone code (SMS/Telegram)" },
+    ],
+    initialValue: "qr",
+  });
+  if (isCancel(response)) return "qr";
+  return response;
 }
 
 export async function loginTelegramUser(params: {

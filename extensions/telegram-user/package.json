@@ -28,6 +28,7 @@
     "@mtcute/core": "^0.27.6",
     "@mtcute/dispatcher": "^0.27.6",
     "@mtcute/node": "^0.27.6",
+    "@clack/prompts": "^0.8.2",
     "qrcode-terminal": "^0.12.0",
     "clawdbot": "workspace:*"
   }
