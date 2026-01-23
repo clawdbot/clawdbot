@@ -22,6 +22,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Auth: skip auth profiles in cooldown during initial selection and rotation. (#1316) Thanks @odrobnik.
+- Agents/TUI: honor user-pinned auth profiles during cooldown and preserve search picker ranking. (#1432) Thanks @tobiasbischoff.
 - Media: accept MEDIA paths with spaces/tilde and prefer the message tool hint for image replies.
 - Google Antigravity: drop unsigned thinking blocks for Claude models to avoid signature errors.
 - Config: avoid stack traces for invalid configs and log the config path.
