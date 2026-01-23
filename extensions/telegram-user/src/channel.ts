@@ -27,6 +27,7 @@ import {
   normalizeTelegramUserMessagingTarget,
   sendMediaTelegramUser,
   sendMessageTelegramUser,
+  sendPollTelegramUser,
 } from "./send.js";
 import { resolveTelegramUserSessionPath } from "./session.js";
 import { getTelegramUserRuntime } from "./runtime.js";
@@ -155,6 +156,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     chunker: (text, limit) =>
       getTelegramUserRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 4000,
+    pollMaxOptions: 10,
     sendText: async ({ to, text, accountId }) => {
       const result = await sendMessageTelegramUser(to, text, { accountId: accountId ?? undefined });
       return { channel: "telegram-user", ...result };
@@ -163,6 +165,12 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
       const result = await sendMediaTelegramUser(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
+      });
+      return { channel: "telegram-user", ...result };
+    },
+    sendPoll: async ({ to, poll, accountId }) => {
+      const result = await sendPollTelegramUser(to, poll, {
+        accountId: accountId ?? undefined,
       });
       return { channel: "telegram-user", ...result };
     },

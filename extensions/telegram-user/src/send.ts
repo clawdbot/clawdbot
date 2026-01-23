@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { TelegramClient } from "@mtcute/node";
 import { InputMedia } from "@mtcute/core";
+import type { PollInput } from "clawdbot/plugin-sdk";
 
 import { getTelegramUserRuntime } from "./runtime.js";
 import { resolveTelegramUserAccount } from "./accounts.js";
@@ -11,6 +12,12 @@ import type { CoreConfig } from "./types.js";
 export type TelegramUserSendResult = {
   messageId: string;
   chatId: string;
+};
+
+type NormalizedPollInput = {
+  question: string;
+  options: string[];
+  maxSelections: number;
 };
 
 export type TelegramUserSendOpts = {
@@ -45,6 +52,32 @@ function resolveTelegramUserPeer(target: string): number | string {
     if (Number.isFinite(parsed)) return parsed;
   }
   return target;
+}
+
+function normalizePollInput(input: PollInput): NormalizedPollInput {
+  const question = input.question.trim();
+  if (!question) {
+    throw new Error("Poll question is required");
+  }
+  const options = (input.options ?? []).map((option) => option.trim()).filter(Boolean);
+  if (options.length < 2) {
+    throw new Error("Poll requires at least 2 options");
+  }
+  if (options.length > 10) {
+    throw new Error("Poll supports at most 10 options");
+  }
+  const maxSelectionsRaw = input.maxSelections;
+  const maxSelections =
+    typeof maxSelectionsRaw === "number" && Number.isFinite(maxSelectionsRaw)
+      ? Math.floor(maxSelectionsRaw)
+      : 1;
+  if (maxSelections < 1) {
+    throw new Error("maxSelections must be at least 1");
+  }
+  if (maxSelections > options.length) {
+    throw new Error("maxSelections cannot exceed option count");
+  }
+  return { question, options, maxSelections };
 }
 
 async function resolveClient(params: {
@@ -115,6 +148,36 @@ export async function sendMediaTelegramUser(
       fileName: media.fileName ?? undefined,
       fileMime: media.contentType,
       caption: text,
+    });
+    const message = await client.sendMedia(target, input, {
+      ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+    });
+    return { messageId: String(message.id), chatId: String(target) };
+  } finally {
+    if (stopOnDone) {
+      await client.destroy();
+    }
+  }
+}
+
+export async function sendPollTelegramUser(
+  to: string,
+  poll: PollInput,
+  opts: TelegramUserSendOpts = {},
+): Promise<TelegramUserSendResult> {
+  const cfg = getTelegramUserRuntime().config.loadConfig() as CoreConfig;
+  const { client, stopOnDone } = await resolveClient({
+    client: opts.client,
+    cfg,
+    accountId: opts.accountId,
+  });
+  try {
+    const target = resolveTelegramUserPeer(normalizeTarget(to));
+    const normalized = normalizePollInput(poll);
+    const input = InputMedia.poll({
+      question: normalized.question,
+      answers: normalized.options,
+      multiple: normalized.maxSelections > 1,
     });
     const message = await client.sendMedia(target, input, {
       ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
