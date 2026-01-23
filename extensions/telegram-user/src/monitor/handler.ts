@@ -152,6 +152,22 @@ function extractTelegramUserLocation(
   return null;
 }
 
+function formatTelegramUserPoll(media: MessageContext["media"]): string | null {
+  if (!media) return null;
+  const typed = media as { type?: string };
+  if (typed.type !== "poll") return null;
+  const poll = media as {
+    question: string;
+    answers: Array<{ text: string }>;
+    isMultiple?: boolean;
+    isQuiz?: boolean;
+  };
+  const mode = poll.isQuiz ? "quiz" : poll.isMultiple ? "multi" : null;
+  const header = `📊 Poll${mode ? ` (${mode})` : ""}: ${poll.question}`;
+  const options = poll.answers.map((ans, idx) => `${idx + 1}) ${ans.text}`);
+  return [header, ...options].join("\n");
+}
+
 function describeReplySender(sender: unknown): string | undefined {
   const typed = sender as {
     type?: string;
@@ -175,6 +191,15 @@ async function resolveMediaAttachment(params: {
   media: MessageContext["media"];
 }) {
   if (!params.media) return null;
+  const typed = params.media as { type?: string };
+  if (
+    typed.type === "location" ||
+    typed.type === "live_location" ||
+    typed.type === "venue" ||
+    typed.type === "poll"
+  ) {
+    return null;
+  }
   const core = getTelegramUserRuntime();
   const maxBytes = Math.max(1, params.mediaMaxMb) * 1024 * 1024;
   if ("fileSize" in params.media && typeof params.media.fileSize === "number") {
@@ -353,6 +378,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const text = primaryMessage.text?.trim() ?? "";
       const locationData = extractTelegramUserLocation(primaryMessage.media);
       const locationText = locationData ? formatLocationText(locationData) : undefined;
+      const pollText = formatTelegramUserPoll(primaryMessage.media);
       const allMedia = await resolveMediaAttachments({
         client,
         mediaMaxMb,
@@ -360,7 +386,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         runtime,
       });
       const media = allMedia[0] ?? null;
-      const rawBody = [text, locationText].filter(Boolean).join("\n").trim();
+      const rawBody = [text, locationText, pollText].filter(Boolean).join("\n").trim();
       if (!rawBody && !media) return;
       const timestampMs = msg.date ? msg.date * 1000 : undefined;
       const replyInfo = msg.replyToMessage ?? null;
@@ -593,6 +619,13 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             const replyText = payload.text ?? "";
             const mediaUrl = payload.mediaUrl;
             if (mediaUrl) {
+              if (payload.audioAsVoice) {
+                await client
+                  .sendTyping(typingTarget, "record_voice", typingParams)
+                  .catch((err) => {
+                    runtime.error?.(`telegram-user voice typing failed: ${String(err)}`);
+                  });
+              }
               await sendMediaTelegramUser(replyTarget, replyText, {
                 client,
                 accountId,
