@@ -67,15 +67,27 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
   await client.start();
 
   const dispatcher = Dispatcher.for(client);
+  const self = await client.getMe().catch(() => undefined);
   const handleMessage = createTelegramUserMessageHandler({
     client,
     cfg,
     runtime,
     accountId: account.accountId,
     accountConfig: account.config,
+    self: self
+      ? { id: self.id, username: "username" in self ? self.username : undefined }
+      : undefined,
   });
 
-  dispatcher.onNewMessage(filters.chat("user"), handleMessage);
+  dispatcher.onNewMessage(
+    filters.or(
+      filters.chat("user"),
+      filters.chat("group"),
+      filters.chat("supergroup"),
+      filters.chat("gigagroup"),
+    ),
+    handleMessage,
+  );
 
   await new Promise<void>((resolve, reject) => {
     client.onError.add((err) => {

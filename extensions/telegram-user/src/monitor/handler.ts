@@ -2,7 +2,7 @@ import type { TelegramClient } from "@mtcute/node";
 import type { MessageContext } from "@mtcute/dispatcher";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 
-import { resolveAckReaction } from "clawdbot/plugin-sdk";
+import { resolveAckReaction, resolveMentionGatingWithBypass } from "clawdbot/plugin-sdk";
 import { getTelegramUserRuntime } from "../runtime.js";
 import type { CoreConfig, TelegramUserAccountConfig } from "../types.js";
 import { sendMediaTelegramUser, sendMessageTelegramUser } from "../send.js";
@@ -16,6 +16,7 @@ type TelegramUserHandlerParams = {
   runtime: RuntimeEnv;
   accountId: string;
   accountConfig: TelegramUserAccountConfig;
+  self?: { id: number; username?: string | null };
 };
 
 function normalizeAllowEntry(raw: string): string {
@@ -42,7 +43,7 @@ function parseAllowlist(entries: Array<string | number> | undefined) {
     const username = entry.startsWith("@") ? entry.slice(1) : entry;
     if (username) usernames.add(username);
   }
-  return { hasWildcard, usernames, ids };
+  return { hasWildcard, usernames, ids, hasEntries: normalized.length > 0 };
 }
 
 function isSenderAllowed(params: {
@@ -64,6 +65,46 @@ function resolveTelegramUserPeer(target: string): number | string {
     if (Number.isFinite(parsed)) return parsed;
   }
   return target;
+}
+
+function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
+  for (const value of values) {
+    if (typeof value !== "undefined") return value;
+  }
+  return undefined;
+}
+
+function buildTelegramUserGroupPeerId(chatId: number | string, threadId?: number) {
+  return threadId != null ? `${chatId}:topic:${threadId}` : String(chatId);
+}
+
+function buildTelegramUserGroupFrom(chatId: number | string, threadId?: number) {
+  return `telegram-user:group:${buildTelegramUserGroupPeerId(chatId, threadId)}`;
+}
+
+function buildTelegramUserGroupLabel(
+  title: string | undefined,
+  chatId: number | string,
+  threadId?: number,
+) {
+  const topicSuffix = threadId != null ? ` topic:${threadId}` : "";
+  if (title) return `${title} id:${chatId}${topicSuffix}`;
+  return `group:${chatId}${topicSuffix}`;
+}
+
+function resolveTelegramUserGroupConfig(
+  accountConfig: TelegramUserAccountConfig,
+  chatId: number | string,
+  threadId?: number,
+) {
+  const groups = accountConfig.groups ?? {};
+  const chatKey = String(chatId);
+  const groupConfig = groups[chatKey] ?? groups["*"];
+  if (!threadId) return { groupConfig, topicConfig: undefined };
+  const topicKey = String(threadId);
+  const topicConfig =
+    groupConfig?.topics?.[topicKey] ?? groups["*"]?.topics?.[topicKey];
+  return { groupConfig, topicConfig };
 }
 
 async function resolveMediaAttachment(params: {
@@ -102,17 +143,21 @@ async function resolveMediaAttachment(params: {
 }
 
 export function createTelegramUserMessageHandler(params: TelegramUserHandlerParams) {
-  const { client, cfg, runtime, accountId, accountConfig } = params;
+  const { client, cfg, runtime, accountId, accountConfig, self } = params;
   const core = getTelegramUserRuntime();
   const textLimit = accountConfig.textChunkLimit ?? DEFAULT_TEXT_LIMIT;
   const mediaMaxMb = accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const dmPolicy = accountConfig.dmPolicy ?? "pairing";
   const allowFrom = accountConfig.allowFrom ?? [];
+  const groupAllowFrom = accountConfig.groupAllowFrom ?? allowFrom;
 
   return async (msg: MessageContext) => {
     try {
       if (msg.isOutgoing || msg.isService) return;
-      if (msg.chat.type !== "user") return;
+      const isDirect = msg.chat.type === "user";
+      const isGroup =
+        msg.chat.type === "chat" && msg.chat.chatType !== "channel";
+      if (!isDirect && !isGroup) return;
 
       const sender = await msg.getCompleteSender().catch(() => msg.sender);
       if (sender.type !== "user") return;
@@ -126,32 +171,95 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         .readAllowFromStore("telegram-user")
         .catch(() => []);
       const combinedAllowFrom = [...allowFrom, ...storeAllowFrom];
+      const chatId = msg.chat.type === "chat" ? msg.chat.id : undefined;
+      const threadId =
+        isGroup && msg.isTopicMessage
+          ? msg.replyToMessage?.threadId ?? undefined
+          : undefined;
+      const { groupConfig, topicConfig } =
+        isGroup && chatId != null
+          ? resolveTelegramUserGroupConfig(accountConfig, chatId, threadId)
+          : { groupConfig: undefined, topicConfig: undefined };
 
-      if (dmPolicy === "disabled") return;
-      if (
-        dmPolicy !== "open" &&
-        !isSenderAllowed({ allowFrom: combinedAllowFrom, senderId, senderUsername })
-      ) {
-        if (dmPolicy === "pairing") {
-          const pairing = await core.channel.pairing.upsertPairingRequest({
-            channel: "telegram-user",
-            id: senderId,
-            meta: {
-              username: senderUsername ?? undefined,
-              name: senderName,
-            },
+      const groupAllowOverride = firstDefined(
+        topicConfig?.allowFrom,
+        groupConfig?.allowFrom,
+      );
+      const groupAllowEntries = [
+        ...((groupAllowOverride ?? groupAllowFrom) as Array<string | number>),
+        ...storeAllowFrom,
+      ];
+      const effectiveGroupAllow = parseAllowlist(groupAllowEntries);
+      const effectiveDmAllow = parseAllowlist(combinedAllowFrom);
+
+      if (isDirect) {
+        if (dmPolicy === "disabled") return;
+        if (
+          dmPolicy !== "open" &&
+          !isSenderAllowed({
+            allowFrom: combinedAllowFrom,
+            senderId,
+            senderUsername,
+          })
+        ) {
+          if (dmPolicy === "pairing") {
+            const pairing = await core.channel.pairing.upsertPairingRequest({
+              channel: "telegram-user",
+              id: senderId,
+              meta: {
+                username: senderUsername ?? undefined,
+                name: senderName,
+              },
+            });
+            const reply = core.channel.pairing.buildPairingReply({
+              channel: "telegram-user",
+              idLine: `Telegram user id: ${senderId}`,
+              code: pairing.code,
+            });
+            await sendMessageTelegramUser(`telegram-user:${senderId}`, reply, {
+              client,
+              accountId,
+            });
+          }
+          return;
+        }
+      } else if (isGroup) {
+        if (groupConfig?.enabled === false) return;
+        if (topicConfig?.enabled === false) return;
+        if (typeof groupAllowOverride !== "undefined") {
+          const allowed = isSenderAllowed({
+            allowFrom: groupAllowEntries,
+            senderId,
+            senderUsername,
           });
-          const reply = core.channel.pairing.buildPairingReply({
+          if (!allowed) return;
+        }
+        const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+        const groupPolicy =
+          accountConfig.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+        if (groupPolicy === "disabled") return;
+        if (groupPolicy === "allowlist") {
+          if (!senderId) return;
+          if (!effectiveGroupAllow.hasEntries) return;
+          if (
+            !isSenderAllowed({
+              allowFrom: groupAllowEntries,
+              senderId,
+              senderUsername,
+            })
+          ) {
+            return;
+          }
+        }
+        if (chatId != null) {
+          const groupAllowlist = core.channel.groups.resolveGroupPolicy({
+            cfg,
             channel: "telegram-user",
-            idLine: `Telegram user id: ${senderId}`,
-            code: pairing.code,
-          });
-          await sendMessageTelegramUser(`telegram-user:${senderId}`, reply, {
-            client,
+            groupId: String(chatId),
             accountId,
           });
+          if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) return;
         }
-        return;
       }
 
       const text = msg.text?.trim() ?? "";
@@ -171,24 +279,95 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         direction: "inbound",
       });
 
+      const groupPeerId =
+        isGroup && chatId != null
+          ? buildTelegramUserGroupPeerId(chatId, threadId)
+          : null;
       const route = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "telegram-user",
         accountId,
         peer: {
-          kind: "dm",
-          id: senderId,
+          kind: isGroup ? "group" : "dm",
+          id: isGroup && groupPeerId ? groupPeerId : senderId,
         },
       });
+      const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+      const hasAnyMention = msg.entities.some(
+        (ent) => ent.kind === "mention" || ent.kind === "text_mention",
+      );
+      const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg, {
+        botUsername: self?.username?.trim().toLowerCase(),
+      });
+      const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
+      const senderAllowedForCommands = isSenderAllowed({
+        allowFrom: isGroup ? groupAllowEntries : combinedAllowFrom,
+        senderId,
+        senderUsername,
+      });
+      const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+      const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+      });
+      if (isGroup && hasControlCommandInMessage && !commandAuthorized) return;
+
+      const computedWasMentioned =
+        msg.isMention || core.channel.mentions.matchesMentionPatterns(text, mentionRegexes);
+      const baseRequireMention = isGroup
+        ? core.channel.groups.resolveRequireMention({
+            cfg,
+            channel: "telegram-user",
+            groupId: chatId != null ? String(chatId) : undefined,
+            accountId,
+          })
+        : false;
+      const requireMention = firstDefined(
+        topicConfig?.requireMention,
+        groupConfig?.requireMention,
+        baseRequireMention,
+      );
+      const replySenderId =
+        msg.replyToMessage?.sender?.type === "user"
+          ? msg.replyToMessage.sender.id
+          : undefined;
+      const implicitMention =
+        isGroup && Boolean(requireMention) && self?.id != null && replySenderId === self.id;
+      const canDetectMention =
+        Boolean(self?.username) || mentionRegexes.length > 0 || msg.isMention;
+      const mentionGate = resolveMentionGatingWithBypass({
+        isGroup,
+        requireMention: Boolean(requireMention),
+        canDetectMention,
+        wasMentioned: computedWasMentioned,
+        implicitMention,
+        hasAnyMention,
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommandInMessage,
+        commandAuthorized,
+      });
+      const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+      if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+        return;
+      }
+
       const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
       const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
       const ackReaction = resolveAckReaction(cfg, route.agentId);
-      const shouldAckReaction =
-        Boolean(ackReaction) && (ackReactionScope === "all" || ackReactionScope === "direct");
-      const ackReactionPromise = shouldAckReaction
+      const shouldAckReaction = () => {
+        if (!ackReaction) return false;
+        if (ackReactionScope === "all") return true;
+        if (ackReactionScope === "direct") return !isGroup;
+        if (ackReactionScope === "group-all") return isGroup;
+        if (ackReactionScope === "group-mentions") {
+          return isGroup && Boolean(requireMention) && canDetectMention && effectiveWasMentioned;
+        }
+        return false;
+      };
+      const ackReactionPromise = shouldAckReaction()
         ? client
             .sendReaction({
-              chatId: senderPeer,
+              chatId: isGroup && chatId != null ? chatId : senderPeer,
               message: msg.id,
               emoji: ackReaction,
             })
@@ -206,6 +385,10 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         storePath,
         sessionKey: route.sessionKey,
       });
+      const groupTitle = msg.chat.type === "chat" ? msg.chat.title : undefined;
+      const conversationLabel = isGroup && chatId != null
+        ? buildTelegramUserGroupLabel(groupTitle, chatId, threadId)
+        : senderName;
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Telegram User",
         from: senderName,
@@ -219,12 +402,14 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         Body: body,
         RawBody: text,
         CommandBody: text,
-        From: `telegram-user:${senderId}`,
-        To: `telegram-user:${senderId}`,
+        From: isGroup && chatId != null ? buildTelegramUserGroupFrom(chatId, threadId) : `telegram-user:${senderId}`,
+        To: isGroup && chatId != null ? buildTelegramUserGroupFrom(chatId, threadId) : `telegram-user:${senderId}`,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
-        ChatType: "direct",
-        ConversationLabel: senderName,
+        ChatType: isGroup ? "group" : "direct",
+        ConversationLabel: conversationLabel,
+        GroupSubject: isGroup ? groupTitle ?? undefined : undefined,
+        GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt ?? undefined : undefined,
         SenderName: senderName,
         SenderId: senderId,
         SenderUsername: senderUsername ?? undefined,
@@ -236,10 +421,14 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
-        CommandAuthorized: true,
+        CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         OriginatingChannel: "telegram-user" as const,
-        OriginatingTo: `telegram-user:${senderId}`,
+        OriginatingTo:
+          isGroup && chatId != null
+            ? buildTelegramUserGroupFrom(chatId, threadId)
+            : `telegram-user:${senderId}`,
+        WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       });
 
       void core.channel.session
@@ -262,6 +451,10 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       });
 
       let hasReplied = false;
+      const replyTarget =
+        isGroup && chatId != null ? `telegram-user:${chatId}` : `telegram-user:${senderId}`;
+      const typingTarget = isGroup && chatId != null ? chatId : senderPeer;
+      const typingParams = isGroup && threadId != null ? { threadId } : undefined;
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId)
@@ -272,7 +465,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             const replyText = payload.text ?? "";
             const mediaUrl = payload.mediaUrl;
             if (mediaUrl) {
-              await sendMediaTelegramUser(`telegram-user:${senderId}`, replyText, {
+              await sendMediaTelegramUser(replyTarget, replyText, {
                 client,
                 accountId,
                 replyToId,
@@ -291,7 +484,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
               for (const chunk of core.channel.text.chunkMarkdownText(replyText, textLimit)) {
                 const trimmed = chunk.trim();
                 if (!trimmed) continue;
-                await sendMessageTelegramUser(`telegram-user:${senderId}`, trimmed, {
+                await sendMessageTelegramUser(replyTarget, trimmed, {
                   client,
                   accountId,
                   replyToId,
@@ -306,7 +499,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             }
           },
           onReplyStart: async () => {
-            await client.sendTyping(senderPeer).catch((err) => {
+            await client.sendTyping(typingTarget, "typing", typingParams).catch((err) => {
               runtime.error?.(`telegram-user typing failed: ${String(err)}`);
             });
           },
@@ -328,7 +521,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         if (didAck) {
           await client
             .sendReaction({
-              chatId: senderPeer,
+              chatId: isGroup && chatId != null ? chatId : senderPeer,
               message: msg.id,
               emoji: null,
             })

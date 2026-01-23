@@ -40,7 +40,7 @@ const meta = {
   detailLabel: "Telegram User",
   docsPath: "/channels/telegram-user",
   docsLabel: "telegram-user",
-  blurb: "login as a Telegram user via QR; DM-only for now.",
+  blurb: "login as a Telegram user via QR or phone code; supports DMs + groups.",
   order: 12,
   quickstartAllowFrom: true,
 };
@@ -68,7 +68,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     },
   },
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     reactions: false,
     threads: false,
     media: true,
