@@ -567,14 +567,16 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
           runtime.error?.(`telegram-user failed to update session meta: ${String(err)}`);
         });
 
-      await core.channel.session.updateLastRoute({
-        storePath,
-        sessionKey: route.mainSessionKey,
-        channel: "telegram-user",
-        to: `telegram-user:${senderId}`,
-        accountId: route.accountId,
-        ctx: ctxPayload,
-      });
+      if (!isGroup) {
+        await core.channel.session.updateLastRoute({
+          storePath,
+          sessionKey: route.mainSessionKey,
+          channel: "telegram-user",
+          to: `telegram-user:${senderId}`,
+          accountId: route.accountId,
+          ctx: ctxPayload,
+        });
+      }
 
       let hasReplied = false;
       const replyTarget =
