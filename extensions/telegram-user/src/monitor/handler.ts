@@ -257,6 +257,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         .catch(() => []);
       const combinedAllowFrom = [...allowFrom, ...storeAllowFrom];
       const chatId = msg.chat.type === "chat" ? msg.chat.id : undefined;
+      const isForum = msg.chat.type === "chat" && msg.chat.isForum === true;
       const threadId =
         isGroup && msg.isTopicMessage
           ? msg.replyToMessage?.threadId ?? undefined
@@ -489,6 +490,16 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const conversationLabel = isGroup && chatId != null
         ? buildTelegramUserGroupLabel(groupTitle, chatId, threadId)
         : senderName;
+      const skillFilter = firstDefined(
+        topicConfig?.skills,
+        groupConfig?.skills,
+      );
+      const systemPromptParts = [
+        groupConfig?.systemPrompt?.trim() || null,
+        topicConfig?.systemPrompt?.trim() || null,
+      ].filter((entry): entry is string => Boolean(entry));
+      const groupSystemPrompt =
+        systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
       const mediaSuffix =
         !rawBody && allMedia.length > 1 ? ` (${allMedia.length} items)` : "";
       const body = core.channel.reply.formatAgentEnvelope({
@@ -511,7 +522,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         ChatType: isGroup ? "group" : "direct",
         ConversationLabel: conversationLabel,
         GroupSubject: isGroup ? groupTitle ?? undefined : undefined,
-        GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt ?? undefined : undefined,
+        GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
         SenderName: senderName,
         SenderId: senderId,
         SenderUsername: senderUsername ?? undefined,
@@ -542,6 +553,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             : `telegram-user:${senderId}`,
         WasMentioned: isGroup ? effectiveWasMentioned : undefined,
         MessageThreadId: threadId,
+        IsForum: isForum,
         ...(locationData ? toLocationContext(locationData) : undefined),
       });
 
@@ -626,7 +638,10 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions,
+        replyOptions: {
+          ...replyOptions,
+          skillFilter,
+        },
       });
       markDispatchIdle();
 
