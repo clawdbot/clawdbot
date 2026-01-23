@@ -3,8 +3,11 @@ summary: "Cron jobs + wakeups for the Gateway scheduler"
 read_when:
   - Scheduling background jobs or wakeups
   - Wiring automation that should run with or alongside heartbeats
+  - Deciding between heartbeat and cron for scheduled tasks
 ---
 # Cron jobs (Gateway scheduler)
+
+> **Cron vs Heartbeat?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
 
 Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
 the right time, and can optionally deliver output back to a chat.

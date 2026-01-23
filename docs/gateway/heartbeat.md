@@ -2,8 +2,11 @@
 summary: "Heartbeat polling messages and notification rules"
 read_when:
   - Adjusting heartbeat cadence or messaging
+  - Deciding between heartbeat and cron for scheduled tasks
 ---
 # Heartbeat (Gateway)
+
+> **Heartbeat vs Cron?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
 
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.

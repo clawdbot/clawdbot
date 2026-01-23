@@ -350,6 +350,14 @@
       "destination": "/automation/cron-jobs"
     },
     {
+      "source": "/cron-vs-heartbeat",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
+      "source": "/cron-vs-heartbeat/",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
       "source": "/dashboard",
       "destination": "/web/dashboard"
     },
@@ -984,6 +992,7 @@
           "automation/webhook",
           "automation/gmail-pubsub",
           "automation/cron-jobs",
+          "automation/cron-vs-heartbeat",
           "automation/poll"
         ]
       },
