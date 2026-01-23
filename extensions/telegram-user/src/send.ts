@@ -20,6 +20,11 @@ type NormalizedPollInput = {
   maxSelections: number;
 };
 
+function isDestroyedClientError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /client is destroyed/i.test(message);
+}
+
 export type TelegramUserSendOpts = {
   client?: TelegramClient;
   accountId?: string;
@@ -121,9 +126,17 @@ export async function sendMessageTelegramUser(
   });
   try {
     const target = resolveTelegramUserPeer(normalizeTarget(to));
-    const message = await client.sendText(target, text, {
-      ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
-    });
+    let message: Awaited<ReturnType<TelegramClient["sendText"]>> | null = null;
+    try {
+      message = await client.sendText(target, text, {
+        ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+      });
+    } catch (err) {
+      if (!isDestroyedClientError(err)) throw err;
+    }
+    if (!message) {
+      return { messageId: "", chatId: String(target) };
+    }
     return { messageId: String(message.id), chatId: String(target) };
   } finally {
     if (stopOnDone) {
@@ -151,9 +164,17 @@ export async function sendMediaTelegramUser(
       fileMime: media.contentType,
       caption: text,
     });
-    const message = await client.sendMedia(target, input, {
-      ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
-    });
+    let message: Awaited<ReturnType<TelegramClient["sendMedia"]>> | null = null;
+    try {
+      message = await client.sendMedia(target, input, {
+        ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+      });
+    } catch (err) {
+      if (!isDestroyedClientError(err)) throw err;
+    }
+    if (!message) {
+      return { messageId: "", chatId: String(target) };
+    }
     return { messageId: String(message.id), chatId: String(target) };
   } finally {
     if (stopOnDone) {
@@ -181,9 +202,17 @@ export async function sendPollTelegramUser(
       answers: normalized.options,
       multiple: normalized.maxSelections > 1,
     });
-    const message = await client.sendMedia(target, input, {
-      ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
-    });
+    let message: Awaited<ReturnType<TelegramClient["sendMedia"]>> | null = null;
+    try {
+      message = await client.sendMedia(target, input, {
+        ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+      });
+    } catch (err) {
+      if (!isDestroyedClientError(err)) throw err;
+    }
+    if (!message) {
+      return { messageId: "", chatId: String(target) };
+    }
     return { messageId: String(message.id), chatId: String(target) };
   } finally {
     if (stopOnDone) {
