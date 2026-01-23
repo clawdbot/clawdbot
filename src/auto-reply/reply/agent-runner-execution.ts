@@ -514,7 +514,7 @@ export async function runAgentTurnWithFallback(params: {
             ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : isRoleOrderingError
               ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : `⚠️ Agent failed before reply: ${message}. Check gateway logs for details.`,
+              : `⚠️ Agent failed before reply: ${message}\nCheck gateway logs for details.`,
         },
       };
     }
