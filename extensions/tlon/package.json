@@ -1,0 +1,16 @@
+{
+  "name": "@clawdbot/tlon",
+  "version": "2026.1.22",
+  "type": "module",
+  "description": "Clawdbot Tlon/Urbit channel plugin",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@urbit/http-api": "^3.0.0",
+    "@urbit/aura": "^2.0.0",
+    "eventsource": "^2.0.2"
+  }
+}
