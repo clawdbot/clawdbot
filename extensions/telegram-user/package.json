@@ -1,0 +1,34 @@
+{
+  "name": "@clawdbot/telegram-user",
+  "version": "2026.1.22",
+  "type": "module",
+  "description": "Clawdbot Telegram user (MTProto) channel plugin",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "telegram-user",
+      "label": "Telegram User",
+      "selectionLabel": "Telegram User (MTProto)",
+      "detailLabel": "Telegram User",
+      "docsPath": "/channels/telegram-user",
+      "docsLabel": "telegram-user",
+      "blurb": "login as a Telegram user via QR; DM-only for now.",
+      "order": 12,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@clawdbot/telegram-user",
+      "localPath": "extensions/telegram-user",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {
+    "@mtcute/core": "^0.27.6",
+    "@mtcute/dispatcher": "^0.27.6",
+    "@mtcute/node": "^0.27.6",
+    "qrcode-terminal": "^0.12.0",
+    "clawdbot": "workspace:*"
+  }
+}

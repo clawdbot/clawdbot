@@ -39,6 +39,8 @@ const optionNamesAdd = [
   "audienceType",
   "audience",
   "useEnv",
+  "apiId",
+  "apiHash",
   "homeserver",
   "userId",
   "accessToken",
@@ -175,6 +177,8 @@ export function registerChannelsCli(program: Command) {
     .option("--webhook-url <url>", "Google Chat webhook URL")
     .option("--audience-type <type>", "Google Chat audience type (app-url|project-number)")
     .option("--audience <value>", "Google Chat audience value (app URL or project number)")
+    .option("--api-id <id>", "Telegram user API id (my.telegram.org)")
+    .option("--api-hash <hash>", "Telegram user API hash (my.telegram.org)")
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")

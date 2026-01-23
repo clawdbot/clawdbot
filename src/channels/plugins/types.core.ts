@@ -36,6 +36,8 @@ export type ChannelSetupInput = {
   audienceType?: string;
   audience?: string;
   useEnv?: boolean;
+  apiId?: number;
+  apiHash?: string;
   homeserver?: string;
   userId?: string;
   accessToken?: string;
