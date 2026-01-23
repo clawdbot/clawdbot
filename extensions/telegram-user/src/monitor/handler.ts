@@ -73,6 +73,11 @@ function resolveTelegramUserPeer(target: string): number | string {
   return target;
 }
 
+function isDestroyedClientError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /client is destroyed/i.test(message);
+}
+
 function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
   for (const value of values) {
     if (typeof value !== "undefined") return value;
@@ -626,13 +631,18 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
                     runtime.error?.(`telegram-user voice typing failed: ${String(err)}`);
                   });
               }
-              await sendMediaTelegramUser(replyTarget, replyText, {
-                client,
-                accountId,
-                replyToId,
-                mediaUrl,
-                maxBytes: mediaMaxMb * 1024 * 1024,
-              });
+              try {
+                await sendMediaTelegramUser(replyTarget, replyText, {
+                  client,
+                  accountId,
+                  replyToId,
+                  mediaUrl,
+                  maxBytes: mediaMaxMb * 1024 * 1024,
+                });
+              } catch (err) {
+                if (isDestroyedClientError(err)) return;
+                throw err;
+              }
               hasReplied = true;
               core.channel.activity.record({
                 channel: "telegram-user",
@@ -645,11 +655,16 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
               for (const chunk of core.channel.text.chunkMarkdownText(replyText, textLimit)) {
                 const trimmed = chunk.trim();
                 if (!trimmed) continue;
-                await sendMessageTelegramUser(replyTarget, trimmed, {
-                  client,
-                  accountId,
-                  replyToId,
-                });
+                try {
+                  await sendMessageTelegramUser(replyTarget, trimmed, {
+                    client,
+                    accountId,
+                    replyToId,
+                  });
+                } catch (err) {
+                  if (isDestroyedClientError(err)) return;
+                  throw err;
+                }
                 hasReplied = true;
                 core.channel.activity.record({
                   channel: "telegram-user",
