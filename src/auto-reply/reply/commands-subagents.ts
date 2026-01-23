@@ -107,12 +107,14 @@ function normalizeMessageText(text: string) {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
+export function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
+  const shouldSanitize = role === "assistant";
   const content = message.content;
   if (typeof content === "string") {
-    const sanitized = sanitizeTextContent(content);
-    const normalized = normalizeMessageText(sanitized);
+    const normalized = normalizeMessageText(
+      shouldSanitize ? sanitizeTextContent(content) : content,
+    );
     return normalized ? { role, text: normalized } : null;
   }
   if (!Array.isArray(content)) return null;
@@ -122,9 +124,9 @@ function extractMessageText(message: ChatMessage): { role: string; text: string 
     if ((block as { type?: unknown }).type !== "text") continue;
     const text = (block as { text?: unknown }).text;
     if (typeof text === "string") {
-      const sanitized = sanitizeTextContent(text);
-      if (sanitized) {
-        chunks.push(sanitized);
+      const value = shouldSanitize ? sanitizeTextContent(text) : text;
+      if (value.trim()) {
+        chunks.push(value);
       }
     }
   }

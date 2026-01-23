@@ -111,9 +111,8 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * This ensures user-facing text doesn't leak internal tool representations.
  */
 export function sanitizeTextContent(text: string): string {
-  return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
-  ).trim();
+  if (!text) return text;
+  return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
 }
 
 export function extractAssistantText(message: unknown): string | undefined {
@@ -128,11 +127,11 @@ export function extractAssistantText(message: unknown): string | undefined {
     const text = (block as { text?: unknown }).text;
     if (typeof text === "string") {
       const sanitized = sanitizeTextContent(text);
-      if (sanitized) {
+      if (sanitized.trim()) {
         chunks.push(sanitized);
       }
     }
   }
-  const joined = chunks.join("\n").trim();
+  const joined = chunks.join("").trim();
   return joined ? sanitizeUserFacingText(joined) : undefined;
 }

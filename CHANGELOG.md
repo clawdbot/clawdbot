@@ -30,6 +30,7 @@ Docs: https://docs.clawd.bot
 - Message tool: keep path/filePath as-is for send; hydrate buffers only for sendAttachment. (#1444) Thanks @hopyky.
 - Auto-reply: only report a model switch when session state is available. (#1465) Thanks @robbyczgw-cla.
 - Control UI: resolve local avatar URLs with basePath across injection + identity RPC. (#1457) Thanks @dlauer.
+- Agents: sanitize assistant history text to strip tool-call markers. (#1456) Thanks @zerone0x.
 - Discord: clarify Message Content Intent onboarding hint. (#1487) Thanks @kyleok.
 - Agents: surface concrete API error details instead of generic AI service errors.
 - Exec: fall back to non-PTY when PTY spawn fails (EBADF). (#1484)
