@@ -661,6 +661,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
                   client,
                   accountId,
                   replyToId,
+                  threadId,
                   mediaUrl,
                   maxBytes: mediaMaxMb * 1024 * 1024,
                 });
@@ -685,6 +686,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
                     client,
                     accountId,
                     replyToId,
+                    threadId,
                   });
                 } catch (err) {
                   if (isDestroyedClientError(err)) return;

@@ -31,6 +31,7 @@ const TelegramUserAccountSchema = z
     apiHash: z.string().optional(),
     dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
     allowFrom: z.array(allowFromEntry).optional(),
+    replyToMode: z.enum(["off", "first", "all"]).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     groupAllowFrom: z.array(allowFromEntry).optional(),

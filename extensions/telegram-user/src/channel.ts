@@ -181,20 +181,25 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
       getTelegramUserRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 4000,
     pollMaxOptions: 10,
-    sendText: async ({ to, text, accountId }) => {
-      const result = await sendMessageTelegramUser(to, text, { accountId: accountId ?? undefined });
-      return { channel: "telegram-user", ...result };
-    },
-    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
-      const result = await sendMediaTelegramUser(to, text, {
+    sendText: async ({ to, text, accountId, threadId }) => {
+      const result = await sendMessageTelegramUser(to, text, {
         accountId: accountId ?? undefined,
-        mediaUrl,
+        threadId,
       });
       return { channel: "telegram-user", ...result };
     },
-    sendPoll: async ({ to, poll, accountId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, threadId }) => {
+      const result = await sendMediaTelegramUser(to, text, {
+        accountId: accountId ?? undefined,
+        mediaUrl,
+        threadId,
+      });
+      return { channel: "telegram-user", ...result };
+    },
+    sendPoll: async ({ to, poll, accountId, threadId }) => {
       const result = await sendPollTelegramUser(to, poll, {
         accountId: accountId ?? undefined,
+        threadId,
       });
       return { channel: "telegram-user", ...result };
     },

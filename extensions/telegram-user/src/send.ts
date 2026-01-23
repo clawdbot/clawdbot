@@ -29,17 +29,37 @@ export type TelegramUserSendOpts = {
   client?: TelegramClient;
   accountId?: string;
   replyToId?: number;
+  threadId?: string | number | null;
   mediaUrl?: string;
 };
 
-const normalizeTarget = (raw: string): string => {
+function normalizeTarget(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error("Recipient is required for Telegram User sends");
   const withoutProvider = trimmed.replace(/^(telegram-user|telegram|tg):/i, "").trim();
   const withoutPrefix = withoutProvider.replace(/^(user|group|channel|chat):/i, "").trim();
-  const topicSplit = withoutPrefix.split(/:topic:/i);
-  return (topicSplit[0] ?? withoutPrefix).trim();
-};
+  if (!withoutPrefix) throw new Error("Recipient is required for Telegram User sends");
+  return withoutPrefix;
+}
+
+function parseThreadId(value: string | number | null | undefined): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+  }
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function resolveTargetAndThread(raw: string, threadId?: string | number | null) {
+  const normalized = normalizeTarget(raw);
+  const [base, topicRaw] = normalized.split(/:topic:/i);
+  const parsedThreadId = parseThreadId(threadId ?? topicRaw);
+  const target = (base ?? normalized).trim();
+  if (!target) throw new Error("Recipient is required for Telegram User sends");
+  return { target, threadId: parsedThreadId };
+}
 
 export function normalizeTelegramUserMessagingTarget(raw: string): string {
   return normalizeTarget(raw);
@@ -50,6 +70,7 @@ export function looksLikeTelegramUserTargetId(value: string): boolean {
   if (!trimmed) return false;
   if (/^telegram-user:/i.test(trimmed)) return true;
   if (/^(user|group|channel|chat):/i.test(trimmed)) return true;
+  if (/^-?\d+:topic:\d+$/i.test(trimmed)) return true;
   return /^-?\d+$/.test(trimmed) || /^@?[a-z0-9_]{5,}$/i.test(trimmed);
 }
 
@@ -125,11 +146,13 @@ export async function sendMessageTelegramUser(
     accountId: opts.accountId,
   });
   try {
-    const target = resolveTelegramUserPeer(normalizeTarget(to));
+    const resolved = resolveTargetAndThread(to, opts.threadId);
+    const target = resolveTelegramUserPeer(resolved.target);
     let message: Awaited<ReturnType<TelegramClient["sendText"]>> | null = null;
     try {
       message = await client.sendText(target, text, {
         ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+        ...(resolved.threadId ? { threadId: resolved.threadId } : {}),
       });
     } catch (err) {
       if (!isDestroyedClientError(err)) throw err;
@@ -157,7 +180,8 @@ export async function sendMediaTelegramUser(
     accountId: opts.accountId,
   });
   try {
-    const target = resolveTelegramUserPeer(normalizeTarget(to));
+    const resolved = resolveTargetAndThread(to, opts.threadId);
+    const target = resolveTelegramUserPeer(resolved.target);
     const media = await getTelegramUserRuntime().media.loadWebMedia(opts.mediaUrl, opts.maxBytes);
     const input = InputMedia.auto(media.buffer, {
       fileName: media.fileName ?? undefined,
@@ -168,6 +192,7 @@ export async function sendMediaTelegramUser(
     try {
       message = await client.sendMedia(target, input, {
         ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+        ...(resolved.threadId ? { threadId: resolved.threadId } : {}),
       });
     } catch (err) {
       if (!isDestroyedClientError(err)) throw err;
@@ -195,7 +220,8 @@ export async function sendPollTelegramUser(
     accountId: opts.accountId,
   });
   try {
-    const target = resolveTelegramUserPeer(normalizeTarget(to));
+    const resolved = resolveTargetAndThread(to, opts.threadId);
+    const target = resolveTelegramUserPeer(resolved.target);
     const normalized = normalizePollInput(poll);
     const input = InputMedia.poll({
       question: normalized.question,
@@ -206,6 +232,7 @@ export async function sendPollTelegramUser(
     try {
       message = await client.sendMedia(target, input, {
         ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+        ...(resolved.threadId ? { threadId: resolved.threadId } : {}),
       });
     } catch (err) {
       if (!isDestroyedClientError(err)) throw err;

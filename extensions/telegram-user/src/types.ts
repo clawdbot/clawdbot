@@ -30,6 +30,8 @@ export type TelegramUserAccountConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for DM senders (user ids or usernames, or "*"). */
   allowFrom?: Array<string | number>;
+  /** Control reply threading when reply tags are present (off|first|all). */
+  replyToMode?: "off" | "first" | "all";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Max outbound media size in MB. */

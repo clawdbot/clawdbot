@@ -1,10 +1,10 @@
 ---
-summary: "Connect a Telegram user account via MTProto (DM-only)"
+summary: "Connect a Telegram user account via MTProto (DMs + groups)"
 ---
 # Telegram User
 
 Telegram User connects Clawdbot to a **personal Telegram account** using MTProto.
-Use this when you need user-level DMs or want to message from your own account.
+Use this when you need user-level DMs or want to message from your own account in groups.
 
 ## Requirements
 
@@ -64,5 +64,5 @@ See [Pairing](/start/pairing) for details.
 
 ## Limitations
 
-- DM-only (no groups or channels yet).
+- Broadcast channels are not supported.
 - Calls are not supported.
