@@ -217,6 +217,19 @@ export async function openUrl(url: string): Promise<boolean> {
   }
 }
 
+export async function openUrlInBackground(url: string): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+  const resolved = await resolveBrowserOpenCommand();
+  if (!resolved.argv || resolved.command !== "open") return false;
+  const command = ["open", "-g", url];
+  try {
+    await runCommandWithTimeout(command, { timeoutMs: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,

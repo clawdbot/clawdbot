@@ -13,6 +13,7 @@ import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
   openUrl,
+  openUrlInBackground,
   probeGatewayReachable,
   waitForGatewayReachable,
   resolveControlUiLinks,
@@ -282,6 +283,11 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     "Control UI",
   );
 
+  let controlUiOpened = false;
+  let controlUiOpenHint: string | undefined;
+  let seededInBackground = false;
+  let hatchChoice: "tui" | "web" | "later" | null = null;
+
   if (!opts.skipUi && gatewayProbe.ok) {
     if (hasBootstrap) {
       await prompter.note(
@@ -293,11 +299,27 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         ].join("\n"),
         "Start TUI (best option!)",
       );
-      const wantsTui = await prompter.confirm({
-        message: "Do you want to hatch your bot now?",
-        initialValue: true,
-      });
-      if (wantsTui) {
+      await prompter.note(
+        [
+          "Gateway token: shared auth for the Gateway + Control UI.",
+          "Stored in: ~/.clawdbot/clawdbot.json (gateway.auth.token) or CLAWDBOT_GATEWAY_TOKEN.",
+          "Web UI stores a copy in this browser's localStorage (clawdbot.control.settings.v1).",
+          `Get the tokenized link anytime: ${formatCliCommand("clawdbot dashboard --no-open")}`,
+        ].join("\n"),
+        "Token",
+      );
+
+      hatchChoice = (await prompter.select({
+        message: "How do you want to hatch your bot?",
+        options: [
+          { value: "tui", label: "Hatch in TUI (recommended)" },
+          { value: "web", label: "Open the Web UI" },
+          { value: "later", label: "Do this later" },
+        ],
+        initialValue: "tui",
+      })) as "tui" | "web" | "later";
+
+      if (hatchChoice === "tui") {
         await runTui({
           url: links.wsUrl,
           token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -306,6 +328,52 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           deliver: false,
           message: "Wake up, my friend!",
         });
+        if (settings.authMode === "token" && settings.gatewayToken) {
+          seededInBackground = await openUrlInBackground(authedUrl);
+        }
+        if (seededInBackground) {
+          await prompter.note(
+            `Web UI seeded in the background. Open later with: ${formatCliCommand(
+              "clawdbot dashboard --no-open",
+            )}`,
+            "Web UI",
+          );
+        }
+      } else if (hatchChoice === "web") {
+        const browserSupport = await detectBrowserOpenSupport();
+        if (browserSupport.ok) {
+          controlUiOpened = await openUrl(authedUrl);
+          if (!controlUiOpened) {
+            controlUiOpenHint = formatControlUiSshHint({
+              port: settings.port,
+              basePath: controlUiBasePath,
+              token: settings.gatewayToken,
+            });
+          }
+        } else {
+          controlUiOpenHint = formatControlUiSshHint({
+            port: settings.port,
+            basePath: controlUiBasePath,
+            token: settings.gatewayToken,
+          });
+        }
+        await prompter.note(
+          [
+            `Dashboard link (with token): ${authedUrl}`,
+            controlUiOpened
+              ? "Opened in your browser. Keep that tab to control Clawdbot."
+              : "Copy/paste this URL in a browser on this machine to control Clawdbot.",
+            controlUiOpenHint,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          "Dashboard ready",
+        );
+      } else {
+        await prompter.note(
+          `When you're ready: ${formatCliCommand("clawdbot dashboard --no-open")}`,
+          "Later",
+        );
       }
     } else {
       const browserSupport = await detectBrowserOpenSupport();
@@ -342,9 +410,10 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
   );
 
   const shouldOpenControlUi =
-    !opts.skipUi && settings.authMode === "token" && Boolean(settings.gatewayToken);
-  let controlUiOpened = false;
-  let controlUiOpenHint: string | undefined;
+    !opts.skipUi &&
+    settings.authMode === "token" &&
+    Boolean(settings.gatewayToken) &&
+    hatchChoice === null;
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
@@ -406,9 +475,16 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     "Web search (optional)",
   );
 
+  await prompter.note(
+    'What now: https://clawd.bot/showcase ("What People Are Building").',
+    "What now",
+  );
+
   await prompter.outro(
     controlUiOpened
       ? "Onboarding complete. Dashboard opened with your token; keep that tab to control Clawdbot."
-      : "Onboarding complete. Use the tokenized dashboard link above to control Clawdbot.",
+      : seededInBackground
+        ? "Onboarding complete. Web UI seeded in the background; open it anytime with the tokenized link above."
+        : "Onboarding complete. Use the tokenized dashboard link above to control Clawdbot.",
   );
 }

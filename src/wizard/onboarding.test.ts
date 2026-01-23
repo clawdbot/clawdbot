@@ -177,19 +177,19 @@ describe("runOnboardingWizard", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-"));
     await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
 
-    const confirm: WizardPrompter["confirm"] = vi.fn(async (opts) => {
-      if (opts.message === "Do you want to hatch your bot now?") return true;
-      return opts.initialValue ?? false;
+    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
+      if (opts.message === "How do you want to hatch your bot?") return "tui";
+      return "quickstart";
     });
 
     const prompter: WizardPrompter = {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: vi.fn(async () => "quickstart"),
+      select,
       multiselect: vi.fn(async () => []),
       text: vi.fn(async () => ""),
-      confirm,
+      confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
     };
 
@@ -267,8 +267,7 @@ describe("runOnboardingWizard", () => {
 
       const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
-      const lastCall = calls[calls.length - 1];
-      expect(lastCall?.[1]).toBe("Web search (optional)");
+      expect(calls.some((call) => call?.[1] === "Web search (optional)")).toBe(true);
     } finally {
       if (prevBraveKey === undefined) {
         delete process.env.BRAVE_API_KEY;
