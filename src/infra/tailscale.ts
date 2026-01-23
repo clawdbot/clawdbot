@@ -237,7 +237,7 @@ export async function ensureFunnel(
     }
 
     logVerbose(`Enabling funnel on port ${port}…`);
-    const { stdout } = await exec(tailscaleBin, ["funnel", "--yes", "--bg", `${port}`], {
+    const { stdout } = await exec("sudo", ["-n", tailscaleBin, "funnel", "--yes", "--bg", `${port}`], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });
@@ -288,7 +288,7 @@ export async function ensureFunnel(
 
 export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec(tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
+  await exec("sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", `${port}`], {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
@@ -296,7 +296,7 @@ export async function enableTailscaleServe(port: number, exec: typeof runExec = 
 
 export async function disableTailscaleServe(exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec(tailscaleBin, ["serve", "reset"], {
+  await exec("sudo", ["-n", tailscaleBin, "serve", "reset"], {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
@@ -304,7 +304,7 @@ export async function disableTailscaleServe(exec: typeof runExec = runExec) {
 
 export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec(tailscaleBin, ["funnel", "--bg", "--yes", `${port}`], {
+  await exec("sudo", ["-n", tailscaleBin, "funnel", "--bg", "--yes", `${port}`], {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
@@ -312,7 +312,7 @@ export async function enableTailscaleFunnel(port: number, exec: typeof runExec =
 
 export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await exec(tailscaleBin, ["funnel", "reset"], {
+  await exec("sudo", ["-n", tailscaleBin, "funnel", "reset"], {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
