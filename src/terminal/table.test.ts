@@ -84,4 +84,21 @@ describe("renderTable", () => {
       throw new Error(`Unexpected escape sequence at index ${i}`);
     }
   });
+
+  it("respects explicit newlines in cell values", () => {
+    const out = renderTable({
+      width: 48,
+      columns: [
+        { key: "A", header: "A", minWidth: 6 },
+        { key: "B", header: "B", minWidth: 10, flex: true },
+      ],
+      rows: [{ A: "row", B: "line1\nline2" }],
+    });
+
+    const lines = out.trimEnd().split("\n");
+    const line1Index = lines.findIndex((line) => line.includes("line1"));
+    const line2Index = lines.findIndex((line) => line.includes("line2"));
+    expect(line1Index).toBeGreaterThan(-1);
+    expect(line2Index).toBe(line1Index + 1);
+  });
 });

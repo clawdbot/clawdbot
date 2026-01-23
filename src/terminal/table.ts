@@ -93,15 +93,9 @@ function wrapLine(text: string, width: number): string[] {
 
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
-    ch === " " ||
-    ch === "\t" ||
-    ch === "\n" ||
-    ch === "\r" ||
-    ch === "/" ||
-    ch === "-" ||
-    ch === "_" ||
-    ch === ".";
+    ch === " " || ch === "\t" || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   const isSpaceChar = (ch: string) => ch === " " || ch === "\t";
+  let skipNextLf = false;
 
   const buf: Token[] = [];
   let bufVisible = 0;
@@ -149,6 +143,15 @@ function wrapLine(text: string, width: number): string[] {
     }
 
     const ch = token.value;
+    if (skipNextLf) {
+      skipNextLf = false;
+      if (ch === "\n") continue;
+    }
+    if (ch === "\n" || ch === "\r") {
+      flushAt(buf.length);
+      if (ch === "\r") skipNextLf = true;
+      continue;
+    }
     if (bufVisible + 1 > width && bufVisible > 0) {
       flushAt(lastBreakIndex);
     }

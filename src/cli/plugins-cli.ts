@@ -135,19 +135,22 @@ export function registerPluginsCli(program: Command) {
 
       if (!opts.verbose) {
         const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-        const rows = list.map((plugin) => ({
-          Name: plugin.name || plugin.id,
-          ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
-          Status:
-            plugin.status === "loaded"
-              ? theme.success("loaded")
-              : plugin.status === "disabled"
-                ? theme.warn("disabled")
-                : theme.error("error"),
-          Source: plugin.source,
-          Version: plugin.version ?? "",
-          Description: plugin.description ?? "",
-        }));
+        const rows = list.map((plugin) => {
+          const desc = plugin.description ? theme.muted(plugin.description) : "";
+          const sourceLine = desc ? `${plugin.source}\n${desc}` : plugin.source;
+          return {
+            Name: plugin.name || plugin.id,
+            ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
+            Status:
+              plugin.status === "loaded"
+                ? theme.success("loaded")
+                : plugin.status === "disabled"
+                  ? theme.warn("disabled")
+                  : theme.error("error"),
+            Source: sourceLine,
+            Version: plugin.version ?? "",
+          };
+        });
         defaultRuntime.log(
           renderTable({
             width: tableWidth,
@@ -155,9 +158,8 @@ export function registerPluginsCli(program: Command) {
               { key: "Name", header: "Name", minWidth: 14, flex: true },
               { key: "ID", header: "ID", minWidth: 10, flex: true },
               { key: "Status", header: "Status", minWidth: 10 },
-              { key: "Source", header: "Source", minWidth: 10 },
+              { key: "Source", header: "Source", minWidth: 26, flex: true },
               { key: "Version", header: "Version", minWidth: 8 },
-              { key: "Description", header: "Description", minWidth: 18, flex: true },
             ],
             rows,
           }).trimEnd(),
