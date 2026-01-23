@@ -152,6 +152,17 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         accountId,
       }),
   },
+  threading: {
+    resolveReplyToMode: ({ cfg }) => cfg.channels?.["telegram-user"]?.replyToMode ?? "first",
+    buildToolContext: ({ context, hasRepliedRef }) => {
+      const threadId = context.MessageThreadId ?? context.ReplyToId;
+      return {
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: threadId != null ? String(threadId) : undefined,
+        hasRepliedRef,
+      };
+    },
+  },
   actions: {
     listActions: ({ cfg }) => {
       if (!cfg.channels?.["telegram-user"]) return [];
@@ -161,6 +172,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
   agentPrompt: {
     messageToolHints: () => [
       "Telegram user polls only work in groups/channels (DM polls return MEDIA_INVALID). Use the group id for polls.",
+      "When ChatType is group, use currentChannelId as the target for message/poll actions.",
     ],
   },
   outbound: {
