@@ -30,6 +30,8 @@ describe("openUrl", () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "");
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
 
     const url =
       "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost";

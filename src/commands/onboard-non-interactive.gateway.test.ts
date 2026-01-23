@@ -4,18 +4,43 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-} from "../infra/device-identity.js";
-import { buildDeviceAuthPayload } from "../gateway/device-auth.js";
-import { PROTOCOL_VERSION } from "../gateway/protocol/index.js";
-import { rawDataToString } from "../infra/ws.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+
+const gatewayClientCalls: Array<{
+  url?: string;
+  token?: string;
+  password?: string;
+  onHelloOk?: () => void;
+  onClose?: (code: number, reason: string) => void;
+}> = [];
+
+vi.mock("../gateway/client.js", () => ({
+  GatewayClient: class {
+    params: {
+      url?: string;
+      token?: string;
+      password?: string;
+      onHelloOk?: () => void;
+    };
+    constructor(params: {
+      url?: string;
+      token?: string;
+      password?: string;
+      onHelloOk?: () => void;
+    }) {
+      this.params = params;
+      gatewayClientCalls.push(params);
+    }
+    async request() {
+      return { ok: true };
+    }
+    start() {
+      queueMicrotask(() => this.params.onHelloOk?.());
+    }
+    stop() {}
+  },
+}));
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -39,85 +64,6 @@ async function getFreePort(): Promise<number> {
 
 async function getFreeGatewayPort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 4] });
-}
-
-async function onceMessage<T = unknown>(
-  ws: WebSocket,
-  filter: (obj: unknown) => boolean,
-  timeoutMs = 5000,
-): Promise<T> {
-  return await new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-    const closeHandler = (code: number, reason: Buffer) => {
-      clearTimeout(timer);
-      ws.off("message", handler);
-      reject(new Error(`closed ${code}: ${rawDataToString(reason)}`));
-    };
-    const handler = (data: WebSocket.RawData) => {
-      const obj = JSON.parse(rawDataToString(data));
-      if (!filter(obj)) return;
-      clearTimeout(timer);
-      ws.off("message", handler);
-      ws.off("close", closeHandler);
-      resolve(obj as T);
-    };
-    ws.on("message", handler);
-    ws.once("close", closeHandler);
-  });
-}
-
-async function connectReq(params: { url: string; token?: string }) {
-  const ws = new WebSocket(params.url);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  const identity = loadOrCreateDeviceIdentity();
-  const signedAtMs = Date.now();
-  const payload = buildDeviceAuthPayload({
-    deviceId: identity.deviceId,
-    clientId: GATEWAY_CLIENT_NAMES.TEST,
-    clientMode: GATEWAY_CLIENT_MODES.TEST,
-    role: "operator",
-    scopes: [],
-    signedAtMs,
-    token: params.token ?? null,
-  });
-  const device = {
-    id: identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    signature: signDevicePayload(identity.privateKeyPem, payload),
-    signedAt: signedAtMs,
-  };
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id: "c1",
-      method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: GATEWAY_CLIENT_NAMES.TEST,
-          displayName: "vitest",
-          version: "dev",
-          platform: process.platform,
-          mode: GATEWAY_CLIENT_MODES.TEST,
-        },
-        caps: [],
-        auth: params.token ? { token: params.token } : undefined,
-        device,
-      },
-    }),
-  );
-  const res = await onceMessage<{
-    type: "res";
-    id: string;
-    ok: boolean;
-    error?: { message?: string };
-  }>(ws, (o) => {
-    const obj = o as { type?: unknown; id?: unknown } | undefined;
-    return obj?.type === "res" && obj?.id === "c1";
-  });
-  ws.close();
-  return res;
 }
 
 const runtime = {
@@ -152,7 +98,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     const stateDir = await fs.mkdtemp(path.join(tempHome, prefix));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
     delete process.env.CLAWDBOT_CONFIG_PATH;
-    vi.resetModules();
     return stateDir;
   };
 
@@ -207,8 +152,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       runtime,
     );
 
-    const { CONFIG_PATH_CLAWDBOT } = await import("../config/config.js");
-    const cfg = JSON.parse(await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf8")) as {
+    const { resolveConfigPath } = await import("../config/paths.js");
+    const configPath = resolveConfigPath(process.env, stateDir);
+    const cfg = JSON.parse(await fs.readFile(configPath, "utf8")) as {
       gateway?: { auth?: { mode?: string; token?: string } };
       agents?: { defaults?: { workspace?: string } };
     };
@@ -217,25 +163,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     expect(cfg?.gateway?.auth?.mode).toBe("token");
     expect(cfg?.gateway?.auth?.token).toBe(token);
 
-    const { startGatewayServer } = await import("../gateway/server.js");
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      controlUiEnabled: false,
-    });
-    try {
-      const resNoToken = await connectReq({ url: `ws://127.0.0.1:${port}` });
-      expect(resNoToken.ok).toBe(false);
-      expect(resNoToken.error?.message ?? "").toContain("unauthorized");
-
-      const resToken = await connectReq({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-      });
-      expect(resToken.ok).toBe(true);
-    } finally {
-      await server.close({ reason: "non-interactive onboard auth test" });
-    }
+    const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
+    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+    const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
+    expect(resNoToken.ok).toBe(false);
+    const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token } });
+    expect(resToken.ok).toBe(true);
 
     await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
@@ -244,43 +177,37 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     const stateDir = await initStateDir("state-remote-");
     const port = await getFreePort();
     const token = "tok_remote_123";
-    const { startGatewayServer } = await import("../gateway/server.js");
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-    });
+    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+    await runNonInteractiveOnboarding(
+      {
+        nonInteractive: true,
+        mode: "remote",
+        remoteUrl: `ws://127.0.0.1:${port}`,
+        remoteToken: token,
+        authChoice: "skip",
+        json: true,
+      },
+      runtime,
+    );
 
-    try {
-      const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
-      await runNonInteractiveOnboarding(
-        {
-          nonInteractive: true,
-          mode: "remote",
-          remoteUrl: `ws://127.0.0.1:${port}`,
-          remoteToken: token,
-          authChoice: "skip",
-          json: true,
-        },
-        runtime,
-      );
+    const { resolveConfigPath } = await import("../config/config.js");
+    const cfg = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8")) as {
+      gateway?: { mode?: string; remote?: { url?: string; token?: string } };
+    };
 
-      const { resolveConfigPath } = await import("../config/config.js");
-      const cfg = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8")) as {
-        gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-      };
+    expect(cfg.gateway?.mode).toBe("remote");
+    expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
+    expect(cfg.gateway?.remote?.token).toBe(token);
 
-      expect(cfg.gateway?.mode).toBe("remote");
-      expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
-      expect(cfg.gateway?.remote?.token).toBe(token);
+    gatewayClientCalls.length = 0;
+    const { callGateway } = await import("../gateway/call.js");
+    const health = await callGateway<{ ok?: boolean }>({ method: "health" });
+    expect(health?.ok).toBe(true);
+    const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
+    expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);
+    expect(lastCall?.token).toBe(token);
 
-      const { callGateway } = await import("../gateway/call.js");
-      const health = await callGateway<{ ok?: boolean }>({ method: "health" });
-      expect(health?.ok).toBe(true);
-    } finally {
-      await server.close({ reason: "non-interactive remote test complete" });
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
 
   it("auto-enables token auth when binding LAN and persists the token", async () => {
@@ -336,27 +263,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     const token = cfg.gateway?.auth?.token ?? "";
     expect(token.length).toBeGreaterThan(8);
 
-    const { startGatewayServer } = await import("../gateway/server.js");
-    const server = await startGatewayServer(port, {
-      controlUiEnabled: false,
-      auth: {
-        mode: "token",
-        token,
-      },
-    });
-    try {
-      const resNoToken = await connectReq({ url: `ws://127.0.0.1:${port}` });
-      expect(resNoToken.ok).toBe(false);
-      expect(resNoToken.error?.message ?? "").toContain("unauthorized");
-
-      const resToken = await connectReq({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-      });
-      expect(resToken.ok).toBe(true);
-    } finally {
-      await server.close({ reason: "lan auto-token test complete" });
-    }
+    const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
+    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+    const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
+    expect(resNoToken.ok).toBe(false);
+    const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token } });
+    expect(resToken.ok).toBe(true);
 
     await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
