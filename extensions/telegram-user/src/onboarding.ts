@@ -16,6 +16,8 @@ import {
   resolveDefaultTelegramUserAccountId,
   resolveTelegramUserAccount,
 } from "./accounts.js";
+import { loginTelegramUser } from "./login.js";
+import { resolveTelegramUserSessionPath } from "./session.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "telegram-user" as const;
@@ -182,7 +184,14 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
       selectionHint: configured ? "configured" : "needs credentials",
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds, forceAllowFrom }) => {
+  configure: async ({
+    cfg,
+    runtime,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+    forceAllowFrom,
+  }) => {
     const override = accountOverrides["telegram-user"]?.trim();
     const defaultAccountId = resolveDefaultTelegramUserAccountId(cfg as CoreConfig);
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;
@@ -310,13 +319,45 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
       });
     }
 
-    await prompter.note(
-      [
-        "Next: link the account via QR or phone code.",
-        "Run: clawdbot channels login --channel telegram-user",
-      ].join("\n"),
-      "Telegram user login",
-    );
+    const wantsLogin = await prompter.confirm({
+      message: "Link Telegram user now (QR or phone code)?",
+      initialValue: !configured,
+    });
+    if (wantsLogin) {
+      const refreshed = resolveTelegramUserAccount({
+        cfg: next,
+        accountId: resolvedAccountId,
+      });
+      if (!refreshed.credentials.apiId || !refreshed.credentials.apiHash) {
+        await prompter.note(
+          "Telegram API ID/hash missing. Add credentials first, then retry login.",
+          "Telegram user login",
+        );
+      } else {
+        try {
+          await loginTelegramUser({
+            apiId: refreshed.credentials.apiId,
+            apiHash: refreshed.credentials.apiHash,
+            storagePath: resolveTelegramUserSessionPath(resolvedAccountId),
+            runtime,
+          });
+        } catch (err) {
+          runtime.error(`Telegram user login failed: ${String(err)}`);
+          await prompter.note(
+            `Run \`clawdbot channels login --channel telegram-user\` later to link.`,
+            "Telegram user login",
+          );
+        }
+      }
+    } else {
+      await prompter.note(
+        [
+          "Next: link the account via QR or phone code.",
+          "Run: clawdbot channels login --channel telegram-user",
+        ].join("\n"),
+        "Telegram user login",
+      );
+    }
 
     return { cfg: next, accountId: resolvedAccountId };
   },
