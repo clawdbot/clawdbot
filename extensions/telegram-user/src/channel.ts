@@ -158,6 +158,11 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
       return ["poll"];
     },
   },
+  agentPrompt: {
+    messageToolHints: () => [
+      "Telegram user polls only work in groups/channels (DM polls return MEDIA_INVALID). Use the group id for polls.",
+    ],
+  },
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) =>
