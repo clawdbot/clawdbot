@@ -20,7 +20,7 @@ describe("extractLinksFromMessage", () => {
     expect(links).toEqual(["https://bare.example"]);
   });
 
-  it("blocks localhost", () => {
+  it("blocks 127.0.0.1", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);
   });

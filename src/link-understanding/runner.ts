@@ -75,6 +75,7 @@ async function runLinkEntries(params: {
   url: string;
   config?: LinkToolsConfig;
 }): Promise<string | null> {
+  let lastError: unknown;
   for (const entry of params.entries) {
     try {
       const output = await runCliEntry({
@@ -85,8 +86,14 @@ async function runLinkEntries(params: {
       });
       if (output) return output;
     } catch (err) {
-      throw new Error(`link processor failed for ${params.url}: ${String(err)}`);
+      lastError = err;
+      if (shouldLogVerbose()) {
+        logVerbose(`Link understanding failed for ${params.url}: ${String(err)}`);
+      }
     }
+  }
+  if (lastError && shouldLogVerbose()) {
+    logVerbose(`Link understanding exhausted for ${params.url}`);
   }
   return null;
 }

@@ -14,8 +14,6 @@ import {
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { formatLinkUnderstandingBody } from "../../link-understanding/format.js";
-import { runLinkUnderstanding } from "../../link-understanding/runner.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -411,31 +409,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
-      return;
-    }
-
-    try {
-      const linkCtx: MsgContext = {
-        Body: parsedMessage,
-        RawBody: parsedMessage,
-        CommandBody: parsedMessage,
-        SessionKey: p.sessionKey,
-        ChatType: entry?.chatType,
-        Surface: entry?.channel ?? "webchat",
-      };
-      const linkResult = await runLinkUnderstanding({
-        cfg,
-        ctx: linkCtx,
-        message: parsedMessage,
-      });
-      if (linkResult.outputs.length > 0) {
-        parsedMessage = formatLinkUnderstandingBody({
-          body: parsedMessage,
-          outputs: linkResult.outputs,
-        });
-      }
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
     }
 
