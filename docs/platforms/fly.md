@@ -35,12 +35,58 @@ fly deploy
 
 ## Configuration
 
-The included `fly.toml` configures:
+The included `fly.toml` is a starting template. Key settings to customize:
 
-- **Region**: `lhr` (London) - change to your preferred [region](https://fly.io/docs/reference/regions/)
-- **VM**: `shared-cpu-1x` with 512MB RAM (sufficient for most use cases)
-- **Storage**: Persistent volume mounted at `/data`
-- **Auto-scaling**: Disabled to maintain persistent connections
+### VM Size
+
+The default `shared-cpu-1x` with 512MB may be too small for production. Recommended:
+
+```toml
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048mb"
+```
+
+### Bind Address
+
+**Important**: The gateway must bind to `0.0.0.0` for Fly's proxy to reach it:
+
+```toml
+[processes]
+  app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+```
+
+When using `--bind lan`, you must also set a gateway token for security:
+
+```bash
+fly secrets set CLAWDBOT_GATEWAY_TOKEN=$(openssl rand -hex 32)
+```
+
+### State Directory
+
+Store persistent data on the volume:
+
+```toml
+[env]
+  CLAWDBOT_STATE_DIR = "/data"
+```
+
+### Full Example
+
+```toml
+[env]
+  NODE_ENV = "production"
+  CLAWDBOT_PREFER_PNPM = "1"
+  CLAWDBOT_STATE_DIR = "/data"
+  NODE_OPTIONS = "--max-old-space-size=1536"
+
+[processes]
+  app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048mb"
+```
 
 ## Secrets
 
@@ -66,6 +112,33 @@ fly logs
 # SSH into the machine
 fly ssh console
 ```
+
+## Troubleshooting
+
+### "App is not listening on expected address"
+
+If you see this warning, the gateway is binding to `127.0.0.1` instead of `0.0.0.0`. Add `--bind lan` to your process command (see Configuration above).
+
+### OOM / Memory Issues
+
+If the container gets killed or restarts frequently, increase memory:
+
+```toml
+[[vm]]
+  memory = "2048mb"
+```
+
+### Gateway Lock Issues
+
+If the gateway refuses to start with "already running" errors after a container restart, this is a stale PID lock. The lock file persists on the volume but the process doesn't survive restarts.
+
+**Fix**: Delete the lock file via SSH:
+```bash
+fly ssh console
+rm /data/.clawdbot/run/gateway.*.lock
+```
+
+Then restart the machine.
 
 ## Notes
 
