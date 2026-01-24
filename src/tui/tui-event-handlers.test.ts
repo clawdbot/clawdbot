@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createEventHandlers } from "./tui-event-handlers.js";
-import type { AgentEvent, TuiStateAccess } from "./tui-types.js";
+import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type MockChatLog = {
   startTool: ReturnType<typeof vi.fn>;
@@ -120,5 +120,68 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(setActivityStatus).toHaveBeenCalledWith("running");
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures runId from chat events when activeChatRunId is unset", () => {
+    const state = makeState({ activeChatRunId: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const { handleChatEvent, handleAgentEvent } = createEventHandlers({
+      chatLog: chatLog as any,
+      tui: tui as any,
+      state,
+      setActivityStatus,
+    });
+
+    const chatEvt: ChatEvent = {
+      runId: "run-42",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    };
+
+    handleChatEvent(chatEvt);
+
+    expect(state.activeChatRunId).toBe("run-42");
+
+    const agentEvt: AgentEvent = {
+      runId: "run-42",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc1", name: "exec" },
+    };
+
+    handleAgentEvent(agentEvt);
+
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
+  });
+
+  it("clears run mapping when the session changes", () => {
+    const state = makeState({ activeChatRunId: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const { handleChatEvent, handleAgentEvent } = createEventHandlers({
+      chatLog: chatLog as any,
+      tui: tui as any,
+      state,
+      setActivityStatus,
+    });
+
+    handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+
+    state.currentSessionKey = "agent:main:other";
+    state.activeChatRunId = null;
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc2", name: "exec" },
+    });
+
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
   });
 });

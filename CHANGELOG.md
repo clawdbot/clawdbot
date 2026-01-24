@@ -55,6 +55,7 @@ Docs: https://docs.clawd.bot
 - Exec approvals: persist allowlist entry ids to keep macOS allowlist rows stable. (#1521) Thanks @ngutman.
 - MS Teams (plugin): remove `.default` suffix from Graph scopes to avoid double-appending. (#1507) Thanks @Evizero.
 - Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)
+- TUI: track active run ids from chat events so tool/lifecycle updates show for non-TUI runs. (#1567) Thanks @vignesh07.
 
 ## 2026.1.22
 
