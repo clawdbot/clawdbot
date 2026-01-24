@@ -15,6 +15,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
   - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
+  - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setup-token-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setup-token)
@@ -241,6 +242,26 @@ https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md
 Newest entries are at the top. If the top section is marked **Unreleased**, the next dated
 section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
 **Fixes** (plus docs/other sections when needed).
+
+### How do I install the beta version, and what’s the difference between beta and dev?
+
+**Beta** is a prerelease tag (`vYYYY.M.D-beta.N`) published to the npm dist‑tag `beta`.  
+**Dev** is the moving head of `main` (git); when published, it uses the npm dist‑tag `dev`.
+
+One‑liners (macOS/Linux):
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://clawd.bot/install.sh | bash -s -- --beta
+```
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+
+Windows installer (PowerShell):
+https://clawd.bot/install.ps1
+
+More detail: [Development channels](/install/development-channels) and [Installer flags](/install/installer).
 
 ### What does the onboarding wizard actually do?
 
