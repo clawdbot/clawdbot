@@ -80,6 +80,8 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
+  /** Transport for macOS remote connections (ssh tunnel or direct WS). */
+  transport?: "ssh" | "direct";
   /** Token for remote auth (when the gateway requires token auth). */
   token?: string;
   /** Password for remote auth (when the gateway requires password auth). */

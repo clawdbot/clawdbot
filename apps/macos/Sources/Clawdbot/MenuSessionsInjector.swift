@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import Observation
 import SwiftUI
 
@@ -517,11 +518,25 @@ extension MenuSessionsInjector {
         switch mode {
         case .remote:
             platform = "remote"
-            let target = AppStateStore.shared.remoteTarget
-            if let parsed = CommandResolver.parseSSHTarget(target) {
-                host = parsed.port == 22 ? parsed.host : "\(parsed.host):\(parsed.port)"
+            if AppStateStore.shared.remoteTransport == .direct {
+                let trimmedUrl = AppStateStore.shared.remoteUrl
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let url = URL(string: trimmedUrl), let urlHost = url.host, !urlHost.isEmpty {
+                    if let port = url.port {
+                        host = "\(urlHost):\(port)"
+                    } else {
+                        host = urlHost
+                    }
+                } else {
+                    host = trimmedUrl.nonEmpty
+                }
             } else {
-                host = target.nonEmpty
+                let target = AppStateStore.shared.remoteTarget
+                if let parsed = CommandResolver.parseSSHTarget(target) {
+                    host = parsed.port == 22 ? parsed.host : "\(parsed.host):\(parsed.port)"
+                } else {
+                    host = target.nonEmpty
+                }
             }
         case .local:
             platform = "local"

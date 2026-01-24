@@ -4,6 +4,8 @@ import SwiftUI
 struct GatewayDiscoveryInlineList: View {
     var discovery: GatewayDiscoveryModel
     var currentTarget: String?
+    var currentUrl: String?
+    var transport: AppState.RemoteTransport
     var onSelect: (GatewayDiscoveryModel.DiscoveredGateway) -> Void
     @State private var hoveredGatewayID: GatewayDiscoveryModel.DiscoveredGateway.ID?
 
@@ -25,9 +27,8 @@ struct GatewayDiscoveryInlineList: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(self.discovery.gateways.prefix(6)) { gateway in
-                        let target = self.suggestedSSHTarget(gateway)
-                        let selected = (target != nil && self.currentTarget?
-                            .trimmingCharacters(in: .whitespacesAndNewlines) == target)
+                        let display = self.displayInfo(for: gateway)
+                        let selected = display.selected
 
                         Button {
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
@@ -40,7 +41,7 @@ struct GatewayDiscoveryInlineList: View {
                                         .font(.callout.weight(.semibold))
                                         .lineLimit(1)
                                         .truncationMode(.tail)
-                                    Text(target ?? "Gateway pairing only")
+                                    Text(display.label)
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
@@ -83,33 +84,36 @@ struct GatewayDiscoveryInlineList: View {
                         .fill(Color(NSColor.controlBackgroundColor)))
             }
         }
-        .help("Click a discovered gateway to fill the SSH target.")
+        .help(self.transport == .direct
+            ? "Click a discovered gateway to fill the gateway URL."
+            : "Click a discovered gateway to fill the SSH target.")
     }
 
-    private func suggestedSSHTarget(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        let host = self.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost
-        guard let host else { return nil }
-        let user = NSUserName()
-        return GatewayDiscoveryModel.buildSSHTarget(
-            user: user,
-            host: host,
-            port: gateway.sshPort)
-    }
-
-    private func sanitizedTailnetHost(_ host: String?) -> String? {
-        guard let host else { return nil }
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        if trimmed.hasSuffix(".internal.") || trimmed.hasSuffix(".internal") {
-            return nil
+    private func displayInfo(
+        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> (label: String, selected: Bool)
+    {
+        switch self.transport {
+        case .direct:
+            let url = GatewayDiscoveryHelpers.directUrl(for: gateway)
+            let label = url ?? "Gateway pairing only"
+            let selected = url != nil && self.trimmed(self.currentUrl) == url
+            return (label, selected)
+        case .ssh:
+            let target = GatewayDiscoveryHelpers.sshTarget(for: gateway)
+            let label = target ?? "Gateway pairing only"
+            let selected = target != nil && self.trimmed(self.currentTarget) == target
+            return (label, selected)
         }
-        return trimmed
     }
 
     private func rowBackground(selected: Bool, hovered: Bool) -> Color {
         if selected { return Color.accentColor.opacity(0.12) }
         if hovered { return Color.secondary.opacity(0.08) }
         return Color.clear
+    }
+
+    private func trimmed(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
 

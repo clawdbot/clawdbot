@@ -177,42 +177,67 @@ extension OnboardingView {
                         VStack(alignment: .leading, spacing: 10) {
                             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                                 GridRow {
-                                    Text("SSH target")
+                                    Text("Transport")
                                         .font(.callout.weight(.semibold))
                                         .frame(width: labelWidth, alignment: .leading)
-                                    TextField("user@host[:port]", text: self.$state.remoteTarget)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: fieldWidth)
+                                    Picker("Transport", selection: self.$state.remoteTransport) {
+                                        Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
+                                        Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .frame(width: fieldWidth)
                                 }
-                                GridRow {
-                                    Text("Identity file")
-                                        .font(.callout.weight(.semibold))
-                                        .frame(width: labelWidth, alignment: .leading)
-                                    TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: fieldWidth)
+                                if self.state.remoteTransport == .direct {
+                                    GridRow {
+                                        Text("Gateway URL")
+                                            .font(.callout.weight(.semibold))
+                                            .frame(width: labelWidth, alignment: .leading)
+                                        TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: fieldWidth)
+                                    }
                                 }
-                                GridRow {
-                                    Text("Project root")
-                                        .font(.callout.weight(.semibold))
-                                        .frame(width: labelWidth, alignment: .leading)
-                                    TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: fieldWidth)
-                                }
-                                GridRow {
-                                    Text("CLI path")
-                                        .font(.callout.weight(.semibold))
-                                        .frame(width: labelWidth, alignment: .leading)
-                                    TextField(
-                                        "/Applications/Clawdbot.app/.../clawdbot",
-                                        text: self.$state.remoteCliPath)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: fieldWidth)
+                                if self.state.remoteTransport == .ssh {
+                                    GridRow {
+                                        Text("SSH target")
+                                            .font(.callout.weight(.semibold))
+                                            .frame(width: labelWidth, alignment: .leading)
+                                        TextField("user@host[:port]", text: self.$state.remoteTarget)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: fieldWidth)
+                                    }
+                                    GridRow {
+                                        Text("Identity file")
+                                            .font(.callout.weight(.semibold))
+                                            .frame(width: labelWidth, alignment: .leading)
+                                        TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: fieldWidth)
+                                    }
+                                    GridRow {
+                                        Text("Project root")
+                                            .font(.callout.weight(.semibold))
+                                            .frame(width: labelWidth, alignment: .leading)
+                                        TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: fieldWidth)
+                                    }
+                                    GridRow {
+                                        Text("CLI path")
+                                            .font(.callout.weight(.semibold))
+                                            .frame(width: labelWidth, alignment: .leading)
+                                        TextField(
+                                            "/Applications/Clawdbot.app/.../clawdbot",
+                                            text: self.$state.remoteCliPath)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: fieldWidth)
+                                    }
                                 }
                             }
 
-                            Text("Tip: keep Tailscale enabled so your gateway stays reachable.")
+                            Text(self.state.remoteTransport == .direct
+                                ? "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert."
+                                : "Tip: keep Tailscale enabled so your gateway stays reachable.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -225,7 +250,10 @@ extension OnboardingView {
     }
 
     func gatewaySubtitle(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        if let host = gateway.tailnetDns ?? gateway.lanHost {
+        if self.state.remoteTransport == .direct {
+            return GatewayDiscoveryHelpers.directUrl(for: gateway) ?? "Gateway pairing only"
+        }
+        if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
             let portSuffix = gateway.sshPort != 22 ? " · ssh \(gateway.sshPort)" : ""
             return "\(host)\(portSuffix)"
         }

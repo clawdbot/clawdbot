@@ -17,6 +17,7 @@ struct GeneralSettings: View {
     @State private var showRemoteAdvanced = false
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool { ProcessInfo.processInfo.isNixMode }
+    private var remoteLabelWidth: CGFloat { 88 }
 
     var body: some View {
         ScrollView(.vertical) {
@@ -104,7 +105,7 @@ struct GeneralSettings: View {
             Picker("Mode", selection: self.$state.connectionMode) {
                 Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
                 Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
-                Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
+                Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
             }
             .pickerStyle(.menu)
             .labelsHidden()
@@ -136,60 +137,51 @@ struct GeneralSettings: View {
 
     private var remoteCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("SSH")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: 48, alignment: .leading)
-                TextField("user@host[:22]", text: self.$state.remoteTarget)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
-                Button {
-                    Task { await self.testRemote() }
-                } label: {
-                    if self.remoteStatus == .checking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Test remote")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || self.state.remoteTarget
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            self.remoteTransportRow
+
+            if self.state.remoteTransport == .ssh {
+                self.remoteSshRow
+            } else {
+                self.remoteDirectRow
             }
 
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
-                currentTarget: self.state.remoteTarget)
+                currentTarget: self.state.remoteTarget,
+                currentUrl: self.state.remoteUrl,
+                transport: self.state.remoteTransport)
             { gateway in
                 self.applyDiscoveredGateway(gateway)
             }
-            .padding(.leading, 58)
+            .padding(.leading, self.remoteLabelWidth + 10)
 
             self.remoteStatusView
-                .padding(.leading, 58)
+                .padding(.leading, self.remoteLabelWidth + 10)
 
-            DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("Identity file") {
-                        TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 280)
+            if self.state.remoteTransport == .ssh {
+                DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent("Identity file") {
+                            TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 280)
+                        }
+                        LabeledContent("Project root") {
+                            TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 280)
+                        }
+                        LabeledContent("CLI path") {
+                            TextField("/Applications/Clawdbot.app/.../clawdbot", text: self.$state.remoteCliPath)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 280)
+                        }
                     }
-                    LabeledContent("Project root") {
-                        TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 280)
-                    }
-                    LabeledContent("CLI path") {
-                        TextField("/Applications/Clawdbot.app/.../clawdbot", text: self.$state.remoteCliPath)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 280)
-                    }
+                    .padding(.top, 4)
+                } label: {
+                    Text("Advanced")
+                        .font(.callout.weight(.semibold))
                 }
-                .padding(.top, 4)
-            } label: {
-                Text("Advanced")
-                    .font(.callout.weight(.semibold))
             }
 
             // Diagnostics
@@ -219,14 +211,87 @@ struct GeneralSettings: View {
                 }
             }
 
-            Text("Tip: enable Tailscale for stable remote access.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if self.state.remoteTransport == .ssh {
+                Text("Tip: enable Tailscale for stable remote access.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text("Tip: use Tailscale Serve so the gateway has a valid HTTPS cert.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
         }
         .transition(.opacity)
         .onAppear { self.gatewayDiscovery.start() }
         .onDisappear { self.gatewayDiscovery.stop() }
+    }
+
+    private var remoteTransportRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Transport")
+                .font(.callout.weight(.semibold))
+                .frame(width: self.remoteLabelWidth, alignment: .leading)
+            Picker("Transport", selection: self.$state.remoteTransport) {
+                Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
+                Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 320)
+        }
+    }
+
+    private var remoteSshRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("SSH target")
+                .font(.callout.weight(.semibold))
+                .frame(width: self.remoteLabelWidth, alignment: .leading)
+            TextField("user@host[:22]", text: self.$state.remoteTarget)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity)
+            Button {
+                Task { await self.testRemote() }
+            } label: {
+                if self.remoteStatus == .checking {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Test remote")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(self.remoteStatus == .checking || self.state.remoteTarget
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private var remoteDirectRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Gateway")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Button {
+                    Task { await self.testRemote() }
+                } label: {
+                    if self.remoteStatus == .checking {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Test remote")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.remoteStatus == .checking || self.state.remoteUrl
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Text("Direct mode requires a ws:// or wss:// URL (Tailscale Serve uses wss://<magicdns>).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, self.remoteLabelWidth + 10)
+        }
     }
 
     private var controlStatusLine: String {
@@ -458,24 +523,36 @@ extension GeneralSettings {
     func testRemote() async {
         self.remoteStatus = .checking
         let settings = CommandResolver.connectionSettings()
-        guard !settings.target.isEmpty else {
-            self.remoteStatus = .failed("Set an SSH target first")
-            return
+        if self.state.remoteTransport == .direct {
+            let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedUrl.isEmpty else {
+                self.remoteStatus = .failed("Set a gateway URL first")
+                return
+            }
+            guard Self.isValidWsUrl(trimmedUrl) else {
+                self.remoteStatus = .failed("Gateway URL must start with ws:// or wss://")
+                return
+            }
+        } else {
+            guard !settings.target.isEmpty else {
+                self.remoteStatus = .failed("Set an SSH target first")
+                return
+            }
+
+            // Step 1: basic SSH reachability check
+            let sshResult = await ShellExecutor.run(
+                command: Self.sshCheckCommand(target: settings.target, identity: settings.identity),
+                cwd: nil,
+                env: nil,
+                timeout: 8)
+
+            guard sshResult.ok else {
+                self.remoteStatus = .failed(self.formatSSHFailure(sshResult, target: settings.target))
+                return
+            }
         }
 
-        // Step 1: basic SSH reachability check
-        let sshResult = await ShellExecutor.run(
-            command: Self.sshCheckCommand(target: settings.target, identity: settings.identity),
-            cwd: nil,
-            env: nil,
-            timeout: 8)
-
-        guard sshResult.ok else {
-            self.remoteStatus = .failed(self.formatSSHFailure(sshResult, target: settings.target))
-            return
-        }
-
-        // Step 2: control channel health over tunnel
+        // Step 2: control channel health check
         let originalMode = AppStateStore.shared.connectionMode
         do {
             try await ControlChannel.shared.configure(mode: .remote(
@@ -500,6 +577,14 @@ extension GeneralSettings {
         case .unconfigured:
             await ControlChannel.shared.disconnect()
         }
+    }
+
+    private static func isValidWsUrl(_ raw: String) -> Bool {
+        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard scheme == "ws" || scheme == "wss" else { return false }
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !host.isEmpty
     }
 
     private static func sshCheckCommand(target: String, identity: String) -> [String] {
@@ -570,12 +655,18 @@ extension GeneralSettings {
         let host = gateway.tailnetDns ?? gateway.lanHost
         guard let host else { return }
         let user = NSUserName()
-        self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
-            user: user,
-            host: host,
-            port: gateway.sshPort)
-        self.state.remoteCliPath = gateway.cliPath ?? ""
-        ClawdbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
+        if self.state.remoteTransport == .direct {
+            if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
+                self.state.remoteUrl = url
+            }
+        } else {
+            self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
+                user: user,
+                host: host,
+                port: gateway.sshPort)
+            self.state.remoteCliPath = gateway.cliPath ?? ""
+            ClawdbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
+        }
     }
 }
 
@@ -598,7 +689,9 @@ extension GeneralSettings {
     static func exerciseForTesting() {
         let state = AppState(preview: true)
         state.connectionMode = .remote
+        state.remoteTransport = .ssh
         state.remoteTarget = "user@host:2222"
+        state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteIdentity = "/tmp/id_ed25519"
         state.remoteProjectRoot = "/tmp/clawdbot"
         state.remoteCliPath = "/tmp/clawdbot"
