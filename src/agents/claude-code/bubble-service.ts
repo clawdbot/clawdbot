@@ -519,6 +519,11 @@ export async function updateSessionBubble(params: {
 
   if (isSessionEnded) {
     log.info(`[${sessionId}] Session ended - bypassing rate limit to ensure final state is shown`);
+    // CRITICAL: Clear all pending updates to prevent stale state from overwriting final state
+    if (pending.coalescingTimer) {
+      clearTimeout(pending.coalescingTimer);
+      pending.coalescingTimer = undefined;
+    }
     // Mark session as finalized to prevent race conditions
     pending.finalized = true;
   }

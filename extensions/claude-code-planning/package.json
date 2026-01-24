@@ -1,0 +1,15 @@
+{
+  "name": "@clawdbot/claude-code-planning",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Claude Code planning plugin - AI-to-AI orchestration for Claude Code sessions",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47",
+    "yaml": "^2.7.0"
+  },
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

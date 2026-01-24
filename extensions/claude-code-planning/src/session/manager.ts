@@ -11,33 +11,49 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   ClaudeCodeSessionParams,
   ClaudeCodeSessionData,
   SessionEvent,
   SessionState,
-  SessionStatus,
   SessionStartResult,
-  BlockerInfo,
-} from "./types.js";
-import { checkEventsForBlocker } from "./blocker-detector.js";
+} from "../types.js";
 import {
   resolveProject,
   findSessionFile,
   getSessionDir,
   getGitBranch,
-} from "./project-resolver.js";
+} from "../context/resolver.js";
 import {
-  SessionParser,
   extractRecentActions,
   getWaitingEvent,
   isSessionIdle,
-} from "./session-parser.js";
-import { getPhaseStatus } from "./progress-tracker.js";
+} from "./parser.js";
 
-const log = createSubsystemLogger("claude-code/session");
+/** Logger interface for the plugin */
+interface Logger {
+  info(msg: string): void;
+  warn(msg: string): void;
+  error(msg: string): void;
+  debug(msg: string): void;
+}
+
+/** Default console logger */
+const defaultLogger: Logger = {
+  info: (msg) => console.log(`[claude-code/session] ${msg}`),
+  warn: (msg) => console.warn(`[claude-code/session] ${msg}`),
+  error: (msg) => console.error(`[claude-code/session] ${msg}`),
+  debug: (_msg) => {},
+};
+
+let log: Logger = defaultLogger;
+
+/**
+ * Set the logger for the session manager.
+ */
+export function setLogger(logger: Logger): void {
+  log = logger;
+}
 
 /**
  * Registry of active Claude Code sessions.
@@ -93,13 +109,10 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
     branch = getGitBranch(workingDir);
 
     // Detect if this is a worktree and extract project name properly
-    // Worktree paths look like: /path/to/project/.worktrees/branch
     const worktreeMatch = workingDir.match(/^(.+)\/\.worktrees\/([^/]+)\/?$/);
     if (worktreeMatch) {
-      // It's a worktree - use parent project name only (branch shown in ctx: line)
       projectName = path.basename(worktreeMatch[1]);
     } else {
-      // Regular directory
       projectName = path.basename(workingDir);
     }
   } else if (params.project) {
@@ -133,11 +146,9 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
   log.info(`Resume token: ${params.resumeToken || "(new session)"}`);
 
   // Build command arguments
-  // IMPORTANT: -p (print mode) is required for --output-format stream-json
-  // The prompt comes AFTER the -- separator, not as an argument to -p
   const args: string[] = [];
 
-  // Enable print mode and JSON streaming (takopi-style)
+  // Enable print mode and JSON streaming
   args.push("-p", "--output-format", "stream-json", "--verbose");
 
   // Resume existing session or start new
@@ -158,13 +169,11 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
     args.push("--permission-mode", "acceptEdits");
   }
 
-  // Add prompt after -- separator (required for stream-json mode)
-  // CRITICAL: In -p mode, Claude NEEDS a prompt or it exits immediately!
+  // Add prompt after -- separator
   const prompt = params.prompt?.trim();
   if (prompt) {
     args.push("--", prompt);
   } else {
-    // No prompt provided - use a fallback to prevent immediate exit
     const fallbackPrompt = params.resumeToken
       ? "continue"
       : "You are now in an interactive session. What would you like me to help with?";
@@ -184,7 +193,6 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
-        // Ensure we get JSON output for parsing
         TERM: "dumb",
       },
     });
@@ -204,16 +212,10 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
     };
   }
 
-  // CRITICAL: Close stdin immediately after spawn (takopi-style)!
-  // In -p mode with CLI arg prompt, Claude should process and exit.
-  // Closing stdin signals there's no interactive input coming.
-  // This is what takopi does - even when passing prompt as CLI arg, stdin is closed.
-  //
-  // Note: This means sendInput() won't work for this session.
-  // For question answering, we'll need to resume the session with the answer.
+  // Close stdin immediately after spawn (takopi-style)
   try {
     child.stdin.end();
-    log.info(`[${sessionId}] Closed stdin (takopi-style)`);
+    log.info(`[${sessionId}] Closed stdin`);
   } catch (err) {
     log.warn(`[${sessionId}] Failed to close stdin: ${err}`);
   }
@@ -221,10 +223,10 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
   // Create session data
   const sessionData: ClaudeCodeSessionData = {
     id: sessionId,
-    resumeToken: params.resumeToken ?? "", // Will be updated when we find session file
+    resumeToken: params.resumeToken ?? "",
     projectName,
     workingDir,
-    sessionFile: "", // Will be updated when session starts
+    sessionFile: "",
     child,
     pid: child.pid,
     startedAt: Date.now(),
@@ -232,14 +234,13 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
     onEvent: params.onEvent,
     onQuestion: params.onQuestion,
     onStateChange: params.onStateChange,
-    onBlocker: params.onBlocker,
     eventCount: 0,
     events: [],
     recentActions: [],
     phaseStatus: "Starting",
     branch,
-    isResume: !!params.resumeToken, // Track if this is a resumed session
-    sessionStartTime: Date.now(), // Record start time for filtering old events
+    isResume: !!params.resumeToken,
+    sessionStartTime: Date.now(),
   };
 
   // Register session
@@ -265,7 +266,6 @@ export async function startSession(params: ClaudeCodeSessionParams): Promise<Ses
 
 /**
  * Setup handlers for the child process.
- * Uses takopi-style JSON stream parsing for direct session_id extraction.
  */
 function setupProcessHandlers(session: ClaudeCodeSessionData): void {
   const { child } = session;
@@ -274,13 +274,13 @@ function setupProcessHandlers(session: ClaudeCodeSessionData): void {
   // Buffer for partial JSON lines
   let stdoutBuffer = "";
 
-  // Capture stdout (JSON stream from --output-format stream-json)
+  // Capture stdout (JSON stream)
   child.stdout.on("data", (data: Buffer) => {
     stdoutBuffer += data.toString();
 
     // Process complete lines
     const lines = stdoutBuffer.split("\n");
-    stdoutBuffer = lines.pop() ?? ""; // Keep incomplete line in buffer
+    stdoutBuffer = lines.pop() ?? "";
 
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -290,7 +290,6 @@ function setupProcessHandlers(session: ClaudeCodeSessionData): void {
         const event = JSON.parse(line);
         processJsonStreamEvent(session, event);
       } catch {
-        // Not valid JSON - might be non-JSON output, log for debugging
         log.debug(`[${session.id}] non-JSON stdout: ${line.slice(0, 100)}`);
 
         // Fallback: check for session token in text output
@@ -305,12 +304,11 @@ function setupProcessHandlers(session: ClaudeCodeSessionData): void {
     }
   });
 
-  // Capture stderr - log at INFO level to catch errors
+  // Capture stderr
   let stderrBuffer = "";
   child.stderr.on("data", (data: Buffer) => {
     const text = data.toString();
     stderrBuffer += text;
-    // Log each chunk to see errors in real-time
     log.info(`[${session.id}] stderr: ${text.trim()}`);
   });
 
@@ -334,36 +332,10 @@ function setupProcessHandlers(session: ClaudeCodeSessionData): void {
     // Stop file watcher
     session.watcherAbort?.abort();
 
-    // Check for blockers when session completes (not cancelled)
-    if (session.status === "completed" || session.status === "failed") {
-      const blocker = checkEventsForBlocker(session.events);
-      if (blocker) {
-        log.info(
-          `[${session.id}] Blocker detected on exit: ${blocker.reason} (patterns: ${blocker.matchedPatterns.length})`,
-        );
-        session.blockerInfo = blocker;
-
-        // If onBlocker callback is registered, let it handle the blocker
-        if (session.onBlocker) {
-          try {
-            const handled = await session.onBlocker(blocker);
-            if (handled) {
-              log.info(`[${session.id}] Blocker will be handled by orchestrator`);
-              session.status = "blocked"; // Orchestrator is working on it
-            } else {
-              log.info(`[${session.id}] Blocker not handled, staying in ${session.status} state`);
-            }
-          } catch (err) {
-            log.error(`[${session.id}] onBlocker callback failed: ${err}`);
-          }
-        }
-      }
-    }
-
     // Notify state change
     notifyStateChange(session);
 
-    // Keep session in registry for a while for status queries
+    // Keep session in registry for status queries
     setTimeout(() => {
       activeSessions.delete(session.id);
     }, 60_000);
@@ -378,31 +350,22 @@ function setupProcessHandlers(session: ClaudeCodeSessionData): void {
 
 /**
  * Start watching for session file location.
- *
- * Note: With takopi-style JSON streaming, we get events directly from stdout.
- * This watcher now only tracks the session file location for:
- * - Reconnection after restart (future feature)
- * - Session history/debugging
- *
- * It does NOT parse events from file - that would duplicate JSON stream events.
  */
 function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
   const abortController = new AbortController();
   session.watcherAbort = abortController;
 
-  // Poll to find session file location (but don't parse events - JSON stream does that)
   const pollInterval = setInterval(() => {
     if (abortController.signal.aborted) {
       clearInterval(pollInterval);
       return;
     }
 
-    // Already have session file, nothing to do
     if (session.sessionFile) {
       return;
     }
 
-    // Find session file by resumeToken (if we have it from JSON stream)
+    // Find session file by resumeToken
     if (session.resumeToken) {
       const sessionFile = findSessionFile(session.resumeToken);
       if (sessionFile) {
@@ -413,8 +376,6 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
     }
 
     // Fallback: scan directory for new session files
-    // Only used if JSON stream init event hasn't arrived yet
-    // IMPORTANT: Only pick up files created AFTER this session started
     const sessionDir = getSessionDir(session.workingDir);
     if (!fs.existsSync(sessionDir)) {
       return;
@@ -433,25 +394,20 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
           ctime: stat.birthtime?.getTime() ?? stat.mtime.getTime(),
         };
       })
-      // Only consider files created AFTER session started (with 5s grace)
       .filter((f) => f.ctime >= session.startedAt - 5000)
       .sort((a, b) => b.mtime - a.mtime);
 
     if (files.length > 0) {
       session.sessionFile = files[0].path;
-      // Extract token from filename only if we don't have one from JSON stream
       const tokenMatch = files[0].name.match(/([a-f0-9-]{36})\.jsonl$/);
       if (tokenMatch && !session.resumeToken) {
         session.resumeToken = tokenMatch[1];
-        log.info(
-          `[${session.id}] Got resumeToken from file scan (fallback): ${session.resumeToken}`,
-        );
+        log.info(`[${session.id}] Got resumeToken from file scan: ${session.resumeToken}`);
       }
       log.info(`[${session.id}] Found session file: ${session.sessionFile}`);
     }
   }, 1000);
 
-  // Store cleanup function
   abortController.signal.addEventListener("abort", () => {
     clearInterval(pollInterval);
   });
@@ -459,7 +415,6 @@ function startSessionFileWatcher(session: ClaudeCodeSessionData): void {
 
 /**
  * Process a JSON stream event from Claude's --output-format stream-json.
- * Takopi-style: extracts session_id from init event, converts to SessionEvent.
  */
 function processJsonStreamEvent(
   session: ClaudeCodeSessionData,
@@ -467,7 +422,7 @@ function processJsonStreamEvent(
 ): void {
   const eventType = jsonEvent.type as string | undefined;
 
-  // Handle system init event - extract session_id directly (takopi approach)
+  // Handle system init event
   if (eventType === "system") {
     const subtype = jsonEvent.subtype as string | undefined;
     if (subtype === "init" && jsonEvent.session_id) {
@@ -476,7 +431,6 @@ function processJsonStreamEvent(
         session.resumeToken = sessionId;
         log.info(`[${session.id}] Got session_id from init event: ${sessionId}`);
       }
-      // Also update status
       if (session.status === "starting") {
         session.status = "running";
       }
@@ -485,12 +439,11 @@ function processJsonStreamEvent(
     return;
   }
 
-  // Handle result event - session completed
+  // Handle result event
   if (eventType === "result") {
     const isError = jsonEvent.is_error as boolean | undefined;
     const resultText = jsonEvent.result as string | undefined;
 
-    // Convert to SessionEvent
     const event: SessionEvent = {
       type: "assistant_message",
       timestamp: new Date(),
@@ -498,14 +451,13 @@ function processJsonStreamEvent(
     };
     processEvent(session, event);
 
-    // Mark session as completed
     if (isError) {
       session.status = "failed";
     }
     return;
   }
 
-  // Handle assistant message - extract text and tool use
+  // Handle assistant message
   if (eventType === "assistant") {
     const message = jsonEvent.message as Record<string, unknown> | undefined;
     if (message) {
@@ -514,7 +466,6 @@ function processJsonStreamEvent(
         for (const block of content) {
           const blockType = block.type as string | undefined;
 
-          // Text block - assistant message
           if (blockType === "text" && block.text) {
             const event: SessionEvent = {
               type: "assistant_message",
@@ -524,7 +475,6 @@ function processJsonStreamEvent(
             processEvent(session, event);
           }
 
-          // Tool use block
           if (blockType === "tool_use") {
             const event: SessionEvent = {
               type: "tool_use",
@@ -540,7 +490,7 @@ function processJsonStreamEvent(
     return;
   }
 
-  // Handle user message - tool results
+  // Handle user message
   if (eventType === "user") {
     const message = jsonEvent.message as Record<string, unknown> | undefined;
     if (message) {
@@ -561,7 +511,6 @@ function processJsonStreamEvent(
           }
         }
       } else if (typeof content === "string") {
-        // Plain user message
         const event: SessionEvent = {
           type: "user_message",
           timestamp: new Date(),
@@ -579,19 +528,12 @@ function processJsonStreamEvent(
  */
 function processEvent(session: ClaudeCodeSessionData, event: SessionEvent): void {
   // For resumed sessions, skip events that happened before we started
-  // This filters out old history while still catching new events
   if (session.isResume && session.sessionStartTime) {
     const eventTime = event.timestamp.getTime();
-    // Allow 5 second buffer before session start to catch events written during startup
     if (eventTime < session.sessionStartTime - 5000) {
-      log.debug(
-        `[${session.id}] Skipping old event (${event.type}) from ${event.timestamp.toISOString()}`,
-      );
-      return; // Skip old event
+      log.debug(`[${session.id}] Skipping old event (${event.type})`);
+      return;
     }
-    log.debug(
-      `[${session.id}] Processing new event (${event.type}) from ${event.timestamp.toISOString()}`,
-    );
   }
 
   session.eventCount++;
@@ -607,21 +549,16 @@ function processEvent(session: ClaudeCodeSessionData, event: SessionEvent): void
     session.status = "running";
   }
 
-  // Update recent actions using the parser helper
+  // Update recent actions
   session.recentActions = extractRecentActions(session.events, 10);
 
-  // Update phase status from project files periodically (every 10 events)
-  if (session.eventCount % 10 === 0) {
-    session.phaseStatus = getPhaseStatus(session.workingDir);
-  }
-
-  // Check for questions using the parser helper
+  // Check for questions
   const waitingEvent = getWaitingEvent(session.events);
   if (waitingEvent && waitingEvent.text) {
     session.status = "waiting_for_input";
     session.currentQuestion = waitingEvent.text;
 
-    // Invoke question callback (only once per question)
+    // Invoke question callback
     if (session.onQuestion && event === waitingEvent) {
       session
         .onQuestion(waitingEvent.text)
@@ -635,7 +572,6 @@ function processEvent(session: ClaudeCodeSessionData, event: SessionEvent): void
         });
     }
   } else if (event.type === "user_message") {
-    // User responded, clear question state
     session.currentQuestion = undefined;
     session.status = "running";
   } else if (isSessionIdle(session.events)) {
@@ -659,39 +595,16 @@ function processEvent(session: ClaudeCodeSessionData, event: SessionEvent): void
 function notifyStateChange(session: ClaudeCodeSessionData): void {
   const state = getSessionState(session);
 
-  // CRITICAL: Block stale updates after session has ended
-  // This prevents race conditions where buffered events trigger callbacks after exit
-  const isSessionEnded =
-    session.status === "completed" ||
-    session.status === "cancelled" ||
-    session.status === "failed" ||
-    session.status === "blocked";
-
-  if (session.finalStateNotified && isSessionEnded) {
-    log.info(
-      `[${session.id}] Ignoring redundant end-state callback (status=${state.status}, already finalized)`,
-    );
-    return;
-  }
-
-  // Log state change for debugging bubble sync issues
   log.info(
-    `[${session.id}] State change: status=${state.status}, token=${session.resumeToken?.slice(0, 8) || "none"}, hasCallback=${!!session.onStateChange}`,
+    `[${session.id}] State change: status=${state.status}, token=${session.resumeToken?.slice(0, 8) || "none"}`,
   );
 
   if (!session.onStateChange) {
-    log.warn(`[${session.id}] No onStateChange callback registered - bubble will NOT be updated`);
     return;
-  }
-
-  // Mark final state as notified to prevent duplicates
-  if (isSessionEnded) {
-    session.finalStateNotified = true;
   }
 
   try {
     session.onStateChange(state);
-    log.debug(`[${session.id}] onStateChange callback executed successfully`);
   } catch (err) {
     log.error(`[${session.id}] onStateChange callback failed: ${err}`);
   }
@@ -719,16 +632,11 @@ export function getSessionState(session: ClaudeCodeSessionData): SessionState {
     questionText: session.currentQuestion ?? "",
     totalEvents: session.eventCount,
     isIdle: session.status === "idle",
-    blockerInfo: session.blockerInfo,
   };
 }
 
 /**
  * Send input to a running session.
- *
- * Note: With takopi-style spawning (stdin closed immediately), this won't work.
- * For question answering in -p mode, the session needs to be resumed with the
- * answer as a new prompt instead.
  */
 export function sendInput(sessionId: string, text: string): boolean {
   const session = activeSessions.get(sessionId);
@@ -737,11 +645,9 @@ export function sendInput(sessionId: string, text: string): boolean {
     return false;
   }
 
-  // Check if stdin is still writable
   if (!session.child.stdin.writable) {
     log.warn(
-      `[${sessionId}] Cannot send input: stdin is closed. ` +
-        `With takopi-style spawning, use session resume instead.`,
+      `[${sessionId}] Cannot send input: stdin is closed. Use session resume instead.`,
     );
     return false;
   }
@@ -775,7 +681,6 @@ export function cancelSession(sessionId: string): boolean {
   if (session.child && !session.child.killed) {
     session.child.kill("SIGTERM");
 
-    // Force kill after timeout
     setTimeout(() => {
       if (session.child && !session.child.killed) {
         session.child.kill("SIGKILL");

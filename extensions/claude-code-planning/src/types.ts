@@ -1,5 +1,5 @@
 /**
- * Claude Code Session Types
+ * Claude Code Planning Plugin Types
  *
  * Type definitions for managing Claude Code sessions as subprocesses.
  */
@@ -36,13 +36,6 @@ export interface ClaudeCodeSessionParams {
 
   /** Callback for session state changes */
   onStateChange?: (state: SessionState) => void;
-
-  /**
-   * Callback when a blocker is detected.
-   * Return true if you'll handle resolution (session stays alive).
-   * Return false to let session transition to done/blocked state.
-   */
-  onBlocker?: (blocker: BlockerInfo) => Promise<boolean>;
 }
 
 /**
@@ -85,22 +78,7 @@ export type SessionStatus =
   | "idle"
   | "completed"
   | "cancelled"
-  | "failed"
-  | "blocked"; // Session hit a blocker that needs external intervention
-
-/**
- * Information about a detected blocker.
- */
-export interface BlockerInfo {
-  /** The detected blocker reason */
-  reason: string;
-  /** The full last message containing blocker context */
-  lastMessage: string;
-  /** Extracted context if parseable (wallet address, amounts, etc.) */
-  extractedContext?: Record<string, unknown>;
-  /** Patterns that triggered the blocker detection */
-  matchedPatterns: string[];
-}
+  | "failed";
 
 /**
  * Snapshot of session state for UI updates.
@@ -121,7 +99,7 @@ export interface SessionState {
   /** Runtime in seconds */
   runtimeSeconds: number;
 
-  /** Current phase status (e.g., "Phase 3 in progress") */
+  /** Current phase status (e.g., "Planning") */
   phaseStatus: string;
 
   /** Git branch */
@@ -141,9 +119,6 @@ export interface SessionState {
 
   /** Whether session is idle (no active tool use) */
   isIdle: boolean;
-
-  /** Blocker info if session is blocked */
-  blockerInfo?: BlockerInfo;
 }
 
 /**
@@ -181,13 +156,9 @@ export interface ClaudeCodeSessionData {
   onEvent?: (event: SessionEvent) => void;
   onQuestion?: (question: string) => Promise<string | null>;
   onStateChange?: (state: SessionState) => void;
-  onBlocker?: (blocker: BlockerInfo) => Promise<boolean>;
 
   /** File watcher abort controller */
   watcherAbort?: AbortController;
-
-  /** Session parser instance */
-  parser?: unknown; // SessionParser - using unknown to avoid circular import
 
   /** Parsed events count */
   eventCount: number;
@@ -212,13 +183,6 @@ export interface ClaudeCodeSessionData {
 
   /** Timestamp when session started (for filtering old events on resume) */
   sessionStartTime?: number;
-
-  /** Blocker info if session hit a blocker */
-  blockerInfo?: BlockerInfo;
-
-  /** Whether final state (completed/cancelled/failed/blocked) has been notified via callback.
-   * This prevents duplicate or stale callbacks after session ends. */
-  finalStateNotified?: boolean;
 }
 
 /**
@@ -259,4 +223,62 @@ export interface ResolvedProject {
 
   /** Worktree name if applicable */
   worktreeName?: string;
+}
+
+/**
+ * Project context stored in context.yaml
+ */
+export interface ProjectContext {
+  /** Project name (directory name or alias) */
+  name: string;
+
+  /** Absolute path to project root */
+  path: string;
+
+  /** When context was last explored/updated */
+  lastExplored: string; // ISO date string
+
+  /** Detected project type */
+  type?: string; // e.g., "React + TypeScript", "Node.js CLI", "Python Django"
+
+  /** Package manager detected */
+  packageManager?: string; // npm, pnpm, yarn, bun, pip, cargo, etc.
+
+  /** Test framework detected */
+  testFramework?: string; // vitest, jest, pytest, etc.
+
+  /** Build tool detected */
+  buildTool?: string; // vite, webpack, tsc, etc.
+
+  /** Key directory descriptions */
+  structure: Record<string, string>;
+
+  /** Coding conventions observed */
+  conventions: string[];
+
+  /** Contents of CLAUDE.md if present */
+  claudeMd?: string;
+
+  /** Contents of AGENTS.md if present */
+  agentsMd?: string;
+
+  /** User preferences learned over time */
+  preferences: string[];
+
+  /** Recent session summaries */
+  recentSessions?: Array<{
+    date: string;
+    task: string;
+    outcome: "completed" | "partial" | "failed";
+    notes?: string;
+  }>;
+}
+
+/**
+ * Result of exploring a project
+ */
+export interface ExplorationResult {
+  context: ProjectContext;
+  isNew: boolean;
+  wasStale: boolean;
 }
