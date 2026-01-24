@@ -23,14 +23,47 @@ interface RestartMarker {
     projectName: string;
     resumeToken: string;
   }>;
+  /** Context from main session before restart */
+  mainSessionContext?: {
+    chatId: string;
+    threadId?: number;
+    lastMessages: Array<{
+      role: "user" | "assistant";
+      content: string;
+      timestamp: number;
+    }>;
+    pendingTask?: string;
+  };
 }
 
 /**
  * Write restart marker before gateway stops.
+ * Captures current context for resumption after restart.
  */
-export function writeRestartMarker(): void {
+export async function writeRestartMarker(): Promise<void> {
   try {
     const registry = loadBubbleRegistry();
+
+    // Check for pending task file (written by DyDo before committing/building)
+    let mainSessionContext: RestartMarker["mainSessionContext"] = undefined;
+    const pendingTaskPath = path.join(os.homedir(), ".clawdbot", "pending-task.txt");
+
+    if (fs.existsSync(pendingTaskPath)) {
+      try {
+        const pendingTask = fs.readFileSync(pendingTaskPath, "utf-8").trim();
+        if (pendingTask) {
+          mainSessionContext = {
+            chatId: "1359438700", // Hsc's user ID
+            lastMessages: [],
+            pendingTask,
+          };
+          log.info(`Captured pending task: ${pendingTask.slice(0, 100)}`);
+        }
+      } catch (err) {
+        log.warn(`Could not read pending task: ${err}`);
+      }
+    }
+
     const marker: RestartMarker = {
       timestamp: Date.now(),
       pid: process.pid,
@@ -39,6 +72,7 @@ export function writeRestartMarker(): void {
         projectName: entry.projectName,
         resumeToken: entry.resumeToken,
       })),
+      mainSessionContext,
     };
 
     fs.writeFileSync(RESTART_MARKER_PATH, JSON.stringify(marker, null, 2), "utf-8");
@@ -71,22 +105,31 @@ export async function notifyGatewayRestart(): Promise<void> {
       return;
     }
 
-    // Build notification message
+    // Build notification message with context
     const activeSessions = marker.activeSessions.length;
-    let message = `✅ **Gateway 已重啟完成**\n\n`;
-    message += `**PID:** ${process.pid}\n`;
-    message += `**重啟時間:** ${new Date(marker.timestamp).toLocaleTimeString("zh-TW")}\n\n`;
+    let message = `✅ **我回來了！**\n\n`;
+
+    // Show pending task if available
+    if (marker.mainSessionContext?.pendingTask) {
+      message += `**重啟前正在處理：**\n`;
+      message += `${marker.mainSessionContext.pendingTask}\n\n`;
+      message += `讓我繼續...\n\n`;
+
+      // Clean up pending task file
+      const pendingTaskPath = path.join(os.homedir(), ".clawdbot", "pending-task.txt");
+      try {
+        fs.unlinkSync(pendingTaskPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
+    // Technical details
+    message += `---\n`;
+    message += `**PID:** ${process.pid} · **重啟:** ${new Date(marker.timestamp).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}\n`;
 
     if (activeSessions > 0) {
-      message += `**恢復了 ${activeSessions} 個 session：**\n`;
-      for (const session of marker.activeSessions.slice(0, 3)) {
-        message += `• ${session.projectName}\n`;
-      }
-      if (activeSessions > 3) {
-        message += `_(+${activeSessions - 3} more)_\n`;
-      }
-    } else {
-      message += `無進行中的 session\n`;
+      message += `**進行中的 Claude Code:** ${activeSessions} sessions\n`;
     }
 
     // Send to main session via Telegram
