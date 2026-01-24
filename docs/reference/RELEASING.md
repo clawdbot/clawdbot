@@ -78,3 +78,30 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
 - [ ] From a clean temp directory (no `package.json`), run `npx -y clawdbot@X.Y.Z send --help` to confirm install/CLI entrypoints work.
 - [ ] Announce/share release notes.
+
+## Plugin publish scope (npm)
+
+We only publish **existing npm plugins** under the `@clawdbot/*` scope. Bundled
+plugins that are not on npm stay **disk-tree only** (still shipped in
+`extensions/**`).
+
+Process to derive the list:
+1) `npm search @clawdbot --json` and capture the package names.
+2) Compare with `extensions/*/package.json` names.
+3) Publish only the **intersection** (already on npm).
+
+Current npm plugin list (update as needed):
+- @clawdbot/bluebubbles
+- @clawdbot/diagnostics-otel
+- @clawdbot/discord
+- @clawdbot/lobster
+- @clawdbot/matrix
+- @clawdbot/msteams
+- @clawdbot/nextcloud-talk
+- @clawdbot/nostr
+- @clawdbot/voice-call
+- @clawdbot/zalo
+- @clawdbot/zalouser
+
+Release notes must also call out **new optional bundled plugins** that are **not
+on by default** (example: `tlon`).
