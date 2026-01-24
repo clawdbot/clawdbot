@@ -100,6 +100,7 @@ clawdbot onboard --auth-choice claude-cli
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `clawdbot models auth setup-token` on the gateway host.
+- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token or resync Claude Code CLI OAuth on the gateway host. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - Clawdbot writes `auth.profiles["anthropic:claude-cli"].mode` as `"oauth"` so the profile
   accepts both OAuth and setup-token credentials. Older configs using `"token"` are
   auto-migrated on load.
