@@ -105,3 +105,21 @@ clawdbot onboard --auth-choice claude-cli
   accepts both OAuth and setup-token credentials. Older configs using `"token"` are
   auto-migrated on load.
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
+
+## Troubleshooting
+
+**401 errors / token suddenly invalid**
+- Claude subscription auth can expire or be revoked. Re-run `claude setup-token`
+  and paste it into the **gateway host**.
+- If the Claude CLI login lives on a different machine, use
+  `clawdbot models auth paste-token --provider anthropic` on the gateway host.
+
+**No credentials found for profile `anthropic:default` or `anthropic:claude-cli`**
+- Run `clawdbot models status` to see which auth profile is active.
+- Re-run onboarding, or paste a setup-token / API key for that profile.
+
+**No available auth profile (all in cooldown/unavailable)**
+- Check `clawdbot models status --json` for `auth.unusableProfiles`.
+- Add another Anthropic profile or wait for cooldown.
+
+More: [/gateway/troubleshooting](/gateway/troubleshooting) and [/help/faq](/help/faq).
