@@ -67,9 +67,9 @@ export function parseList(input: string): string[] {
     .filter((v) => v.length > 0);
 }
 
-const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
-const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
-const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
+const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|final)\s*>/gi;
+const THINKING_OPEN_RE = /<\s*(?:think(?:ing)?|final)\s*>/i;
+const THINKING_CLOSE_RE = /<\s*\/\s*(?:think(?:ing)?|final)\s*>/i;
 
 export function stripThinkingTags(value: string): string {
   if (!value) return value;
