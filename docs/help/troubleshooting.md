@@ -61,33 +61,6 @@ Disable Advanced Security or add `docs.clawd.bot` to the allowlist, then retry.
 - [Models](/cli/models)
 - [OAuth / auth concepts](/concepts/oauth)
 
-### “Cross-context messaging denied” (Telegram → Discord, etc.)
-
-Clawdbot blocks **cross‑provider** sends by default. If a tool call is bound to
-Telegram, it won’t send to Discord unless you explicitly allow it.
-
-Enable cross‑provider messaging for the agent:
-
-```json5
-{
-  agents: {
-    defaults: {
-      tools: {
-        message: {
-          crossContext: {
-            allowAcrossProviders: true,
-            marker: { enabled: true, prefix: "[from {channel}] " }
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Restart the gateway after editing config. If you only want this for a single
-agent, set it under `agents.list[].tools.message` instead.
-
 ### `/model` says `model not allowed`
 
 This usually means `agents.defaults.models` is configured as an allowlist. When it’s non-empty,

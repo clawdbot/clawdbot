@@ -771,11 +771,11 @@
     },
     {
       "source": "/start/faq",
-      "destination": "/help"
+      "destination": "/help/faq"
     },
     {
       "source": "/start/faq/",
-      "destination": "/help"
+      "destination": "/help/faq"
     },
     {
       "source": "/oauth",
