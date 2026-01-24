@@ -233,6 +233,8 @@ interface PendingUpdate {
   minEditInterval: number;
   /** Last edit timestamp */
   lastEditAt: number;
+  /** Session has ended and final state has been rendered (ignore further updates) */
+  finalized: boolean;
 }
 
 const pendingUpdates = new Map<string, PendingUpdate>();
@@ -249,6 +251,7 @@ function getPendingUpdate(sessionId: string): PendingUpdate {
       lastRenderedContent: "",
       minEditInterval: 1500, // 1.5s minimum between edits
       lastEditAt: 0,
+      finalized: false,
     };
     pendingUpdates.set(sessionId, pending);
   }
@@ -484,10 +487,16 @@ export async function updateSessionBubble(params: {
     return false;
   }
 
+  // Check if session has already been finalized (prevent race conditions)
+  const pending = getPendingUpdate(sessionId);
+  if (pending.finalized) {
+    log.info(`[${sessionId}] Session already finalized - ignoring update (status=${state.status})`);
+    return false;
+  }
+
   // Signal update for coalescing
   signalUpdate(sessionId);
 
-  const pending = getPendingUpdate(sessionId);
   const now = Date.now();
 
   // Rate limiting: respect minimum edit interval
@@ -510,6 +519,8 @@ export async function updateSessionBubble(params: {
 
   if (isSessionEnded) {
     log.info(`[${sessionId}] Session ended - bypassing rate limit to ensure final state is shown`);
+    // Mark session as finalized to prevent race conditions
+    pending.finalized = true;
   }
 
   // Generate new content using hybrid format
