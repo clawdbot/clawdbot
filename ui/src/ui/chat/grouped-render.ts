@@ -7,8 +7,8 @@ import type { MessageGroup } from "../types/chat-types";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
 import {
-  extractText,
-  extractThinking,
+  extractTextCached,
+  extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
@@ -180,9 +180,11 @@ function renderGroupedMessage(
   const toolCards = extractToolCards(message);
   const hasToolCards = toolCards.length > 0;
 
-  const extractedText = extractText(message);
+  const extractedText = extractTextCached(message);
   const extractedThinking =
-    opts.showReasoning && role === "assistant" ? extractThinking(message) : null;
+    opts.showReasoning && role === "assistant"
+      ? extractThinkingCached(message)
+      : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking
     ? formatReasoningMarkdown(extractedThinking)

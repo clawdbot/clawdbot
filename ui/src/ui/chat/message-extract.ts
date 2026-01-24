@@ -16,6 +16,9 @@ const ENVELOPE_CHANNELS = [
   "BlueBubbles",
 ];
 
+const textCache = new WeakMap<object, string | null>();
+const thinkingCache = new WeakMap<object, string | null>();
+
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) return true;
   if (/\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/.test(header)) return true;
@@ -59,6 +62,15 @@ export function extractText(message: unknown): string | null {
   return null;
 }
 
+export function extractTextCached(message: unknown): string | null {
+  if (!message || typeof message !== "object") return extractText(message);
+  const obj = message as object;
+  if (textCache.has(obj)) return textCache.get(obj) ?? null;
+  const value = extractText(message);
+  textCache.set(obj, value);
+  return value;
+}
+
 export function extractThinking(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -86,6 +98,15 @@ export function extractThinking(message: unknown): string | null {
     .map((m) => (m[1] ?? "").trim())
     .filter(Boolean);
   return extracted.length > 0 ? extracted.join("\n") : null;
+}
+
+export function extractThinkingCached(message: unknown): string | null {
+  if (!message || typeof message !== "object") return extractThinking(message);
+  const obj = message as object;
+  if (thinkingCache.has(obj)) return thinkingCache.get(obj) ?? null;
+  const value = extractThinking(message);
+  thinkingCache.set(obj, value);
+  return value;
 }
 
 export function extractRawText(message: unknown): string | null {

@@ -8,7 +8,7 @@ import {
   getTruncatedPreview,
 } from "./tool-helpers";
 import { isToolResultMessage } from "./message-normalizer";
-import { extractText } from "./message-extract";
+import { extractTextCached } from "./message-extract";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -45,7 +45,7 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
-    const text = extractText(message) ?? undefined;
+    const text = extractTextCached(message) ?? undefined;
     cards.push({ kind: "result", name, text });
   }
 

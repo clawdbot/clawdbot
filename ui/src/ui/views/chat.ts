@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types";
 import type { ChatQueueItem } from "../ui-types";
@@ -7,7 +8,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
 } from "../chat/message-normalizer";
-import { extractText } from "../chat/message-extract";
+import { extractTextCached } from "../chat/message-extract";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -114,6 +115,56 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const thread = guard(
+    [
+      props.loading,
+      props.messages,
+      props.toolMessages,
+      props.stream,
+      props.streamStartedAt,
+      props.sessionKey,
+      props.showThinking,
+      reasoningLevel,
+      props.assistantName,
+      props.assistantAvatar,
+      props.assistantAvatarUrl,
+    ],
+    () => html`
+      <div
+        class="chat-thread"
+        role="log"
+        aria-live="polite"
+        @scroll=${props.onChatScroll}
+      >
+        ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
+        ${repeat(buildChatItems(props), (item) => item.key, (item) => {
+          if (item.kind === "reading-indicator") {
+            return renderReadingIndicatorGroup(assistantIdentity);
+          }
+
+          if (item.kind === "stream") {
+            return renderStreamingGroup(
+              item.text,
+              item.startedAt,
+              props.onOpenSidebar,
+              assistantIdentity,
+            );
+          }
+
+          if (item.kind === "group") {
+            return renderMessageGroup(item, {
+              onOpenSidebar: props.onOpenSidebar,
+              showReasoning,
+              assistantName: props.assistantName,
+              assistantAvatar: assistantIdentity.avatar,
+            });
+          }
+
+          return nothing;
+        })}
+      </div>
+    `,
+  );
 
   return html`
     <section class="card chat">
@@ -148,41 +199,7 @@ export function renderChat(props: ChatProps) {
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
-          <div
-            class="chat-thread"
-            role="log"
-            aria-live="polite"
-            @scroll=${props.onChatScroll}
-          >
-            ${props.loading
-              ? html`<div class="muted">Loading chat…</div>`
-              : nothing}
-            ${repeat(buildChatItems(props), (item) => item.key, (item) => {
-              if (item.kind === "reading-indicator") {
-                return renderReadingIndicatorGroup(assistantIdentity);
-              }
-
-              if (item.kind === "stream") {
-                return renderStreamingGroup(
-                  item.text,
-                  item.startedAt,
-                  props.onOpenSidebar,
-                  assistantIdentity,
-                );
-              }
-
-              if (item.kind === "group") {
-                return renderMessageGroup(item, {
-                  onOpenSidebar: props.onOpenSidebar,
-                  showReasoning,
-                  assistantName: props.assistantName,
-                  assistantAvatar: assistantIdentity.avatar,
-                });
-              }
-
-              return nothing;
-            })}
-          </div>
+          ${thread}
         </div>
 
         ${sidebarOpen
@@ -379,7 +396,8 @@ function messageKey(message: unknown, index: number): string {
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const fingerprint =
-    extractText(message) ?? (typeof m.content === "string" ? m.content : null);
+    extractTextCached(message) ??
+    (typeof m.content === "string" ? m.content : null);
   const seed = fingerprint ?? safeJson(message) ?? String(index);
   const hash = fnv1a(seed);
   return timestamp ? `msg:${role}:${timestamp}:${hash}` : `msg:${role}:${hash}`;
