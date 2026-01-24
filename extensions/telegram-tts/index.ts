@@ -13,7 +13,7 @@
  * via Telegram customCommands and handled by the agent workspace.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, renameSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import type { PluginApi } from "clawdbot";
@@ -49,16 +49,34 @@ interface UserPreferences {
     enabled?: boolean;
     provider?: "openai" | "elevenlabs";
     maxLength?: number; // Max chars before summarizing (default 1500)
+    summarize?: boolean; // Enable auto-summarization (default true)
   };
 }
 
 const DEFAULT_TTS_MAX_LENGTH = 1500;
+const DEFAULT_TTS_SUMMARIZE = true;
 
 interface TtsResult {
   success: boolean;
   audioPath?: string;
   error?: string;
+  latencyMs?: number;
+  provider?: string;
 }
+
+interface TtsStatusEntry {
+  timestamp: number;
+  success: boolean;
+  textLength: number;
+  summarized: boolean;
+  provider?: string;
+  latencyMs?: number;
+  error?: string;
+}
+
+// Track last TTS attempt for diagnostics (global, not per-user)
+// Note: This shows the most recent TTS attempt system-wide, not user-specific
+let lastTtsAttempt: TtsStatusEntry | undefined;
 
 // =============================================================================
 // Validation
@@ -118,7 +136,27 @@ function isTtsEnabled(prefsPath: string): boolean {
   }
 }
 
-function setTtsEnabled(prefsPath: string, enabled: boolean): void {
+/**
+ * Atomically writes to a file using temp file + rename pattern.
+ * Prevents race conditions when multiple processes write simultaneously.
+ */
+function atomicWriteFileSync(filePath: string, content: string): void {
+  const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  writeFileSync(tmpPath, content);
+  try {
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    // Clean up temp file on rename failure
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+    throw err;
+  }
+}
+
+function updatePrefs(prefsPath: string, update: (prefs: UserPreferences) => void): void {
   let prefs: UserPreferences = {};
   try {
     if (existsSync(prefsPath)) {
@@ -127,8 +165,14 @@ function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   } catch {
     // ignore
   }
-  prefs.tts = { ...prefs.tts, enabled };
-  writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+  update(prefs);
+  atomicWriteFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+}
+
+function setTtsEnabled(prefsPath: string, enabled: boolean): void {
+  updatePrefs(prefsPath, (prefs) => {
+    prefs.tts = { ...prefs.tts, enabled };
+  });
 }
 
 function getTtsProvider(prefsPath: string): "openai" | "elevenlabs" | undefined {
@@ -142,16 +186,9 @@ function getTtsProvider(prefsPath: string): "openai" | "elevenlabs" | undefined 
 }
 
 function setTtsProvider(prefsPath: string, provider: "openai" | "elevenlabs"): void {
-  let prefs: UserPreferences = {};
-  try {
-    if (existsSync(prefsPath)) {
-      prefs = JSON.parse(readFileSync(prefsPath, "utf8"));
-    }
-  } catch {
-    // ignore
-  }
-  prefs.tts = { ...prefs.tts, provider };
-  writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+  updatePrefs(prefsPath, (prefs) => {
+    prefs.tts = { ...prefs.tts, provider };
+  });
 }
 
 function getTtsMaxLength(prefsPath: string): number {
@@ -165,33 +202,50 @@ function getTtsMaxLength(prefsPath: string): number {
 }
 
 function setTtsMaxLength(prefsPath: string, maxLength: number): void {
-  let prefs: UserPreferences = {};
+  updatePrefs(prefsPath, (prefs) => {
+    prefs.tts = { ...prefs.tts, maxLength };
+  });
+}
+
+function isSummarizationEnabled(prefsPath: string): boolean {
   try {
-    if (existsSync(prefsPath)) {
-      prefs = JSON.parse(readFileSync(prefsPath, "utf8"));
-    }
+    if (!existsSync(prefsPath)) return DEFAULT_TTS_SUMMARIZE;
+    const prefs: UserPreferences = JSON.parse(readFileSync(prefsPath, "utf8"));
+    return prefs?.tts?.summarize ?? DEFAULT_TTS_SUMMARIZE;
   } catch {
-    // ignore
+    return DEFAULT_TTS_SUMMARIZE;
   }
-  prefs.tts = { ...prefs.tts, maxLength };
-  writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+}
+
+function setSummarizationEnabled(prefsPath: string, enabled: boolean): void {
+  updatePrefs(prefsPath, (prefs) => {
+    prefs.tts = { ...prefs.tts, summarize: enabled };
+  });
 }
 
 // =============================================================================
 // Text Summarization (for long texts)
 // =============================================================================
 
+interface SummarizeResult {
+  summary: string;
+  latencyMs: number;
+  inputLength: number;
+  outputLength: number;
+}
+
 async function summarizeText(
   text: string,
   targetLength: number,
   apiKey: string,
   timeoutMs: number = 30000
-): Promise<string> {
+): Promise<SummarizeResult> {
   // Validate targetLength
   if (targetLength < 100 || targetLength > 10000) {
     throw new Error(`Invalid targetLength: ${targetLength}`);
   }
 
+  const startTime = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -233,7 +287,13 @@ async function summarizeText(
       throw new Error("No summary returned");
     }
 
-    return summary;
+    const latencyMs = Date.now() - startTime;
+    return {
+      summary,
+      latencyMs,
+      inputLength: text.length,
+      outputLength: summary.length,
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -262,13 +322,14 @@ function getApiKey(config: TtsConfig, provider: string): string | undefined {
  * This ensures the file is consumed before deletion.
  */
 function scheduleCleanup(tempDir: string, delayMs: number = TEMP_FILE_CLEANUP_DELAY_MS): void {
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch {
       // Ignore cleanup errors
     }
   }, delayMs);
+  timer.unref(); // Allow process to exit without waiting for cleanup
 }
 
 // =============================================================================
@@ -401,6 +462,7 @@ async function textToSpeech(text: string, config: TtsConfig, prefsPath?: string)
       continue;
     }
 
+    const providerStartTime = Date.now();
     try {
       let audioBuffer: Buffer;
 
@@ -425,6 +487,8 @@ async function textToSpeech(text: string, config: TtsConfig, prefsPath?: string)
         continue;
       }
 
+      const latencyMs = Date.now() - providerStartTime;
+
       // Save to temp file
       const tempDir = mkdtempSync(join(tmpdir(), "tts-"));
       const audioPath = join(tempDir, `voice-${Date.now()}.mp3`);
@@ -433,7 +497,7 @@ async function textToSpeech(text: string, config: TtsConfig, prefsPath?: string)
       // Schedule cleanup after delay (file should be consumed by then)
       scheduleCleanup(tempDir);
 
-      return { success: true, audioPath };
+      return { success: true, audioPath, latencyMs, provider };
     } catch (err) {
       const error = err as Error;
       if (error.name === "AbortError") {
@@ -735,6 +799,84 @@ Do NOT add extra text around the MEDIA directive.`,
     },
   });
 
+  // /tts_summary [on|off] - Enable/disable auto-summarization
+  api.registerCommand({
+    name: "tts_summary",
+    description: "Enable or disable auto-summarization for long texts",
+    acceptsArgs: true,
+    handler: (ctx) => {
+      const arg = ctx.args?.trim().toLowerCase();
+      const currentEnabled = isSummarizationEnabled(prefsPath);
+      const maxLength = getTtsMaxLength(prefsPath);
+
+      if (!arg) {
+        // Show current status
+        return {
+          text: `📝 **Auto-Resumo TTS**\n\n` +
+            `Status: ${currentEnabled ? "✅ Ativado" : "❌ Desativado"}\n` +
+            `Limite: ${maxLength} caracteres\n\n` +
+            `Quando ativado, textos maiores que ${maxLength} chars são resumidos com gpt-4o-mini antes de virar áudio.\n\n` +
+            `Uso: /tts_summary on ou /tts_summary off`,
+        };
+      }
+
+      if (arg !== "on" && arg !== "off") {
+        return { text: "❌ Use: /tts_summary on ou /tts_summary off" };
+      }
+
+      const newEnabled = arg === "on";
+      setSummarizationEnabled(prefsPath, newEnabled);
+      log.info(`[${PLUGIN_ID}] Summarization ${newEnabled ? "enabled" : "disabled"} via /tts_summary command`);
+      return {
+        text: newEnabled
+          ? `✅ Auto-resumo **ativado**!\n\nTextos longos serão resumidos antes de virar áudio.`
+          : `❌ Auto-resumo **desativado**!\n\nTextos longos serão ignorados (sem áudio).`,
+      };
+    },
+  });
+
+  // /tts_status - Show TTS status and last attempt result
+  api.registerCommand({
+    name: "tts_status",
+    description: "Show TTS status, configuration, and last attempt result",
+    acceptsArgs: false,
+    handler: () => {
+      const enabled = isTtsEnabled(prefsPath);
+      const userProvider = getTtsProvider(prefsPath);
+      const activeProvider = userProvider || config.provider || "openai";
+      const maxLength = getTtsMaxLength(prefsPath);
+      const summarizationEnabled = isSummarizationEnabled(prefsPath);
+      const hasKey = !!getApiKey(config, activeProvider);
+
+      let statusLines = [
+        `📊 **Status TTS**\n`,
+        `Estado: ${enabled ? "✅ Ativado" : "❌ Desativado"}`,
+        `Provedor: ${activeProvider} (API Key: ${hasKey ? "✅" : "❌"})`,
+        `Limite de texto: ${maxLength} caracteres`,
+        `Auto-resumo: ${summarizationEnabled ? "✅ Ativado" : "❌ Desativado"}`,
+      ];
+
+      if (lastTtsAttempt) {
+        const timeAgo = Math.round((Date.now() - lastTtsAttempt.timestamp) / 1000);
+        statusLines.push(``);
+        statusLines.push(`**Última tentativa** (há ${timeAgo}s):`);
+        statusLines.push(`Resultado: ${lastTtsAttempt.success ? "✅ Sucesso" : "❌ Falha"}`);
+        statusLines.push(`Texto: ${lastTtsAttempt.textLength} chars${lastTtsAttempt.summarized ? " (resumido)" : ""}`);
+        if (lastTtsAttempt.success) {
+          statusLines.push(`Provedor: ${lastTtsAttempt.provider}`);
+          statusLines.push(`Latência: ${lastTtsAttempt.latencyMs}ms`);
+        } else if (lastTtsAttempt.error) {
+          statusLines.push(`Erro: ${lastTtsAttempt.error}`);
+        }
+      } else {
+        statusLines.push(``);
+        statusLines.push(`_Nenhuma tentativa de TTS registrada nesta sessão._`);
+      }
+
+      return { text: statusLines.join("\n") };
+    },
+  });
+
   // ===========================================================================
   // Auto-TTS Hook (message_sending)
   // ===========================================================================
@@ -763,9 +905,15 @@ Do NOT add extra text around the MEDIA directive.`,
 
     const maxLength = getTtsMaxLength(prefsPath);
     let textForAudio = content;
+    const summarizationEnabled = isSummarizationEnabled(prefsPath);
 
-    // If text exceeds limit, summarize it first
+    // If text exceeds limit, summarize it first (if enabled)
     if (content.length > maxLength) {
+      if (!summarizationEnabled) {
+        log.info(`[${PLUGIN_ID}] Auto-TTS: Text too long (${content.length} > ${maxLength}), summarization disabled, skipping audio`);
+        return; // User disabled summarization, skip audio for long texts
+      }
+
       log.info(`[${PLUGIN_ID}] Auto-TTS: Text too long (${content.length} > ${maxLength}), summarizing...`);
 
       const openaiKey = getApiKey(config, "openai");
@@ -775,8 +923,11 @@ Do NOT add extra text around the MEDIA directive.`,
       }
 
       try {
-        textForAudio = await summarizeText(content, maxLength, openaiKey, config.timeoutMs);
-        log.info(`[${PLUGIN_ID}] Auto-TTS: Summarized to ${textForAudio.length} chars`);
+        const summarizeResult = await summarizeText(content, maxLength, openaiKey, config.timeoutMs);
+        textForAudio = summarizeResult.summary;
+        log.info(
+          `[${PLUGIN_ID}] Auto-TTS: Summarized ${summarizeResult.inputLength} → ${summarizeResult.outputLength} chars in ${summarizeResult.latencyMs}ms`
+        );
 
         // Safeguard: if summary still exceeds hard limit, truncate
         const hardLimit = config.maxTextLength || 4000;
@@ -793,24 +944,61 @@ Do NOT add extra text around the MEDIA directive.`,
       log.info(`[${PLUGIN_ID}] Auto-TTS: Converting ${content.length} chars`);
     }
 
+    const wasSummarized = textForAudio !== content;
+
     try {
+      const ttsStartTime = Date.now();
       const result = await textToSpeech(textForAudio, config, prefsPath);
 
       if (result.success && result.audioPath) {
-        log.info(`[${PLUGIN_ID}] Auto-TTS: Audio generated: ${result.audioPath}`);
+        const totalLatency = Date.now() - ttsStartTime;
+        log.info(
+          `[${PLUGIN_ID}] Auto-TTS: Generated via ${result.provider} in ${result.latencyMs}ms (total: ${totalLatency}ms)`
+        );
+
+        // Track successful attempt
+        lastTtsAttempt = {
+          timestamp: Date.now(),
+          success: true,
+          textLength: content.length,
+          summarized: wasSummarized,
+          provider: result.provider,
+          latencyMs: result.latencyMs,
+        };
+
         // Return modified content with MEDIA directive
         // The text is kept for accessibility, audio is appended
         return {
           content: `MEDIA:${result.audioPath}`,
         };
       } else {
-        log.warn(`[${PLUGIN_ID}] Auto-TTS: Failed - ${result.error}`);
+        log.warn(`[${PLUGIN_ID}] Auto-TTS: TTS conversion failed - ${result.error}`);
+
+        // Track failed attempt
+        lastTtsAttempt = {
+          timestamp: Date.now(),
+          success: false,
+          textLength: content.length,
+          summarized: wasSummarized,
+          error: result.error,
+        };
+
         // On failure, send original text without audio
         return;
       }
     } catch (err) {
       const error = err as Error;
-      log.error(`[${PLUGIN_ID}] Auto-TTS error: ${error.message}`);
+      log.error(`[${PLUGIN_ID}] Auto-TTS: Unexpected error - ${error.message}`);
+
+      // Track error
+      lastTtsAttempt = {
+        timestamp: Date.now(),
+        success: false,
+        textLength: content.length,
+        summarized: wasSummarized,
+        error: error.message,
+      };
+
       // On error, send original text
       return;
     }
@@ -843,4 +1031,15 @@ export const meta = {
   name: "Telegram TTS",
   description: "Text-to-speech for chat responses using ElevenLabs or OpenAI",
   version: "0.3.0",
+};
+
+// =============================================================================
+// Test Exports (for unit testing)
+// =============================================================================
+
+export const _test = {
+  isValidVoiceId,
+  isValidOpenAIVoice,
+  isValidOpenAIModel,
+  OPENAI_TTS_MODELS,
 };
