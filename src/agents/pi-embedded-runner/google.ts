@@ -6,6 +6,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
@@ -292,12 +293,16 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedThinking)
     : sanitizedThinking;
 
+  const isOpenAIResponsesApi =
+    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+  const sanitizedOpenAI = isOpenAIResponsesApi ? downgradeOpenAIReasoningBlocks(repairedTools) : repairedTools;
+
   if (!policy.applyGoogleTurnOrdering) {
-    return repairedTools;
+    return sanitizedOpenAI;
   }
 
   return applyGoogleTurnOrderingFix({
-    messages: repairedTools,
+    messages: sanitizedOpenAI,
     modelApi: params.modelApi,
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,
