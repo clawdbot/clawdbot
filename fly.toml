@@ -1,0 +1,28 @@
+# Clawdbot Fly.io deployment configuration
+# See https://fly.io/docs/reference/configuration/
+
+app = "clawdbot"
+primary_region = "lhr"  # London
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  # Fly uses x86, but keep this for consistency
+  CLAWDBOT_PREFER_PNPM = "1"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false  # Keep running for persistent connections
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[mounts]
+  source = "clawdbot_data"
+  destination = "/data"
