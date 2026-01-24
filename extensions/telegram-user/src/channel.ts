@@ -8,9 +8,11 @@ import {
   formatPairingApproveHint,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
+  type ChannelGroupContext,
   type ChannelPlugin,
   type ChannelSetupInput,
   type ClawdbotConfig,
+  type GroupToolPolicyConfig,
 } from "clawdbot/plugin-sdk";
 
 import {
@@ -50,6 +52,36 @@ type TelegramUserSetupInput = ChannelSetupInput & {
   apiId?: number;
   apiHash?: string;
 };
+
+function normalizeTelegramUserGroupKey(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const withoutPrefix = trimmed.replace(/^telegram-user:group:/i, "");
+  const [base] = withoutPrefix.split(/:topic:/i);
+  const normalized = base?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function resolveTelegramUserGroupToolPolicy(
+  params: ChannelGroupContext,
+): GroupToolPolicyConfig | undefined {
+  const account = resolveTelegramUserAccount({
+    cfg: params.cfg as CoreConfig,
+    accountId: params.accountId,
+  });
+  const groups = account.config.groups ?? {};
+  const groupId = normalizeTelegramUserGroupKey(params.groupId);
+  const groupChannel = normalizeTelegramUserGroupKey(params.groupChannel);
+  const candidates = [groupId, groupChannel, "*"].filter(
+    (value): value is string => Boolean(value),
+  );
+  for (const key of candidates) {
+    const entry = groups[key];
+    if (entry?.tools) return entry.tools;
+  }
+  return undefined;
+}
 
 const isSessionLinked = async (accountId: string): Promise<boolean> => {
   const sessionPath = resolveTelegramUserSessionPath(accountId);
@@ -142,6 +174,21 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
           raw.replace(/^(telegram-user|telegram|tg):/i, "").toLowerCase(),
       };
     },
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      const groupAllowlistConfigured =
+        account.config.groups && Object.keys(account.config.groups).length > 0;
+      if (groupAllowlistConfigured) {
+        return [
+          `- Telegram user groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.telegram-user.groupPolicy="allowlist" + channels.telegram-user.groupAllowFrom to restrict senders.`,
+        ];
+      }
+      return [
+        `- Telegram user groups: groupPolicy="open" with no channels.telegram-user.groups allowlist; any group can add + ping (mention-gated). Set channels.telegram-user.groupPolicy="allowlist" + channels.telegram-user.groupAllowFrom or configure channels.telegram-user.groups.`,
+      ];
+    },
   },
   groups: {
     resolveRequireMention: ({ cfg, groupId, accountId }) =>
@@ -151,6 +198,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         groupId,
         accountId,
       }),
+    resolveToolPolicy: resolveTelegramUserGroupToolPolicy,
   },
   threading: {
     resolveReplyToMode: ({ cfg }) => cfg.channels?.["telegram-user"]?.replyToMode ?? "first",

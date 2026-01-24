@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy } from "clawdbot/plugin-sdk";
+import type { DmPolicy, GroupPolicy, GroupToolPolicyConfig } from "clawdbot/plugin-sdk";
 
 export type TelegramUserTopicConfig = {
   requireMention?: boolean;
@@ -11,6 +11,7 @@ export type TelegramUserTopicConfig = {
 export type TelegramUserGroupConfig = {
   requireMention?: boolean;
   skills?: string[];
+  tools?: GroupToolPolicyConfig;
   topics?: Record<string, TelegramUserTopicConfig>;
   enabled?: boolean;
   allowFrom?: Array<string | number>;
