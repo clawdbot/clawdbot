@@ -244,6 +244,19 @@ export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   return path.join(CONFIG_DIR, "settings", "tts.json");
 }
 
+export function buildTtsSystemPromptHint(cfg: ClawdbotConfig): string | undefined {
+  const config = resolveTtsConfig(cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  if (!isTtsEnabled(config, prefsPath)) return undefined;
+  const maxLength = getTtsMaxLength(prefsPath);
+  const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
+  return [
+    "Voice (TTS) is enabled.",
+    `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
+    "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+  ].join("\n");
+}
+
 function readPrefs(prefsPath: string): TtsUserPrefs {
   try {
     if (!existsSync(prefsPath)) return {};

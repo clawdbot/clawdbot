@@ -13,6 +13,7 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
 
@@ -194,6 +195,7 @@ export function buildSystemPrompt(params: {
       defaultModel: defaultModelLabel,
     },
   });
+  const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
@@ -209,6 +211,7 @@ export function buildSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
+    ttsHint,
   });
 }
 

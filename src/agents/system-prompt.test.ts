@@ -34,6 +34,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["message", "memory_search"],
       docsPath: "/tmp/clawd/docs",
       extraSystemPrompt: "Subagent details",
+      ttsHint: "Voice (TTS) is enabled.",
     });
 
     expect(prompt).not.toContain("## User Identity");
@@ -42,11 +43,22 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
+    expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("includes voice hint when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      ttsHint: "Voice (TTS) is enabled.",
+    });
+
+    expect(prompt).toContain("## Voice (TTS)");
+    expect(prompt).toContain("Voice (TTS) is enabled.");
   });
 
   it("adds reasoning tag hint when enabled", () => {

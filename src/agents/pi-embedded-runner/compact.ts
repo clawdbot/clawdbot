@@ -66,6 +66,7 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
+import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
@@ -298,6 +299,7 @@ export async function compactEmbeddedPiSession(params: {
           cwd: process.cwd(),
           moduleUrl: import.meta.url,
         });
+        const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
         const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
@@ -310,6 +312,7 @@ export async function compactEmbeddedPiSession(params: {
             : undefined,
           skillsPrompt,
           docsPath: docsPath ?? undefined,
+          ttsHint,
           promptMode,
           runtimeInfo,
           messageToolHints,

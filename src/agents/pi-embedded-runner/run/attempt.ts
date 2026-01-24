@@ -78,6 +78,7 @@ import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -315,6 +316,7 @@ export async function runEmbeddedAttempt(
       cwd: process.cwd(),
       moduleUrl: import.meta.url,
     });
+    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -328,6 +330,7 @@ export async function runEmbeddedAttempt(
         : undefined,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
+      ttsHint,
       workspaceNotes,
       reactionGuidance,
       promptMode,
