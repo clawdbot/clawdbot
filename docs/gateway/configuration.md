@@ -2825,13 +2825,14 @@ Auth and Tailscale:
 
 Remote client defaults (CLI):
 - `gateway.remote.url` sets the default Gateway WebSocket URL for CLI calls when `gateway.mode = "remote"`.
+- `gateway.remote.transport` selects the macOS remote transport (`ssh` default, `direct` for ws/wss). When `direct`, `gateway.remote.url` must be `ws://` or `wss://`. `ws://host` defaults to port `18789`.
 - `gateway.remote.token` supplies the token for remote calls (leave unset for no auth).
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
 
 macOS app behavior:
 - Clawdbot.app watches `~/.clawdbot/clawdbot.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
 - If `gateway.mode` is unset but `gateway.remote.url` is set, the macOS app treats it as remote mode.
-- When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` in remote mode) back to the config file.
+- When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` + `gateway.remote.transport` in remote mode) back to the config file.
 
 ```json5
 {
@@ -2841,6 +2842,21 @@ macOS app behavior:
       url: "ws://gateway.tailnet:18789",
       token: "your-token",
       password: "your-password"
+    }
+  }
+}
+```
+
+Direct transport example (macOS app):
+
+```json5
+{
+  gateway: {
+    mode: "remote",
+    remote: {
+      transport: "direct",
+      url: "wss://gateway.example.ts.net",
+      token: "your-token"
     }
   }
 }

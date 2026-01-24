@@ -312,8 +312,8 @@ actor GatewayEndpointStore {
                 password: password))
         case .remote:
             let root = ClawdbotConfigFile.loadDict()
-            if GatewayEndpointStore.resolveRemoteTransport(root: root) == "direct" {
-                guard let url = GatewayEndpointStore.resolveRemoteGatewayUrl(root: root) else {
+            if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
+                guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
                     self.cancelRemoteEnsure()
                     self.setState(.unavailable(
                         mode: .remote,
@@ -355,15 +355,16 @@ actor GatewayEndpointStore {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
         let root = ClawdbotConfigFile.loadDict()
-        if GatewayEndpointStore.resolveRemoteTransport(root: root) == "direct" {
-            guard let url = GatewayEndpointStore.resolveRemoteGatewayUrl(root: root) else {
+        if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
+            guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
                 throw NSError(
                     domain: "GatewayEndpoint",
                     code: 1,
                     userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
             }
-            let port = url.port ?? (url.scheme?.lowercased() == "wss" ? 443 : 80)
-            guard let portInt = UInt16(exactly: port) else {
+            guard let port = GatewayRemoteConfig.defaultPort(for: url),
+                  let portInt = UInt16(exactly: port)
+            else {
                 throw NSError(
                     domain: "GatewayEndpoint",
                     code: 1,
@@ -433,8 +434,8 @@ actor GatewayEndpointStore {
         }
 
         let root = ClawdbotConfigFile.loadDict()
-        if GatewayEndpointStore.resolveRemoteTransport(root: root) == "direct" {
-            guard let url = GatewayEndpointStore.resolveRemoteGatewayUrl(root: root) else {
+        if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
+            guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
                 throw NSError(
                     domain: "GatewayEndpoint",
                     code: 1,
@@ -579,31 +580,6 @@ actor GatewayEndpointStore {
             return trimmed.isEmpty ? nil : trimmed
         }
         return nil
-    }
-
-    private static func resolveRemoteTransport(root: [String: Any]) -> String {
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let transportRaw = remote["transport"] as? String
-        else {
-            return "ssh"
-        }
-        let trimmed = transportRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed == "direct" ? "direct" : "ssh"
-    }
-
-    private static func resolveRemoteGatewayUrl(root: [String: Any]) -> URL? {
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let urlRaw = remote["url"] as? String
-        else {
-            return nil
-        }
-        let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
-        let scheme = url.scheme?.lowercased() ?? ""
-        guard scheme == "ws" || scheme == "wss" else { return nil }
-        return url
     }
 
     private static func resolveGatewayScheme(

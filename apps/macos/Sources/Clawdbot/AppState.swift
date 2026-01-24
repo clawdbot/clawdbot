@@ -276,9 +276,8 @@ final class AppState {
         }
 
         let configRoot = ClawdbotConfigFile.loadDict()
-        let configGateway = configRoot["gateway"] as? [String: Any]
-        let configRemoteUrl = (configGateway?["remote"] as? [String: Any])?["url"] as? String
-        let configRemoteTransport = AppState.remoteTransport(from: configRoot)
+        let configRemoteUrl = GatewayRemoteConfig.resolveUrlString(root: configRoot)
+        let configRemoteTransport = GatewayRemoteConfig.resolveTransport(root: configRoot)
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
@@ -293,7 +292,7 @@ final class AppState {
         } else {
             self.remoteTarget = storedRemoteTarget
         }
-        self.remoteUrl = configRemoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.remoteUrl = configRemoteUrl ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
@@ -371,11 +370,11 @@ final class AppState {
     private func applyConfigOverrides(_ root: [String: Any]) {
         let gateway = root["gateway"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remoteUrl = (gateway?["remote"] as? [String: Any])?["url"] as? String
+        let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
         let hasRemoteUrl = !(remoteUrl?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
-        let remoteTransport = AppState.remoteTransport(from: root)
+        let remoteTransport = GatewayRemoteConfig.resolveTransport(root: root)
 
         let desiredMode: ConnectionMode? = switch modeRaw {
         case "local":
@@ -399,7 +398,7 @@ final class AppState {
         if remoteTransport != self.remoteTransport {
             self.remoteTransport = remoteTransport
         }
-        let remoteUrlText = remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let remoteUrlText = remoteUrl ?? ""
         if remoteUrlText != self.remoteUrl {
             self.remoteUrl = remoteUrlText
         }
@@ -471,9 +470,12 @@ final class AppState {
                             remote.removeValue(forKey: "url")
                             remoteChanged = true
                         }
-                    } else if (remote["url"] as? String) != trimmedUrl {
-                        remote["url"] = trimmedUrl
-                        remoteChanged = true
+                    } else {
+                        let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) ?? trimmedUrl
+                        if (remote["url"] as? String) != normalizedUrl {
+                            remote["url"] = normalizedUrl
+                            remoteChanged = true
+                        }
                     }
                     if (remote["transport"] as? String) != RemoteTransport.direct.rawValue {
                         remote["transport"] = RemoteTransport.direct.rawValue
@@ -534,17 +536,6 @@ final class AppState {
             }
             ClawdbotConfigFile.saveDict(root)
         }
-    }
-
-    private static func remoteTransport(from root: [String: Any]) -> RemoteTransport {
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let raw = remote["transport"] as? String
-        else {
-            return .ssh
-        }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed == RemoteTransport.direct.rawValue ? .direct : .ssh
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
