@@ -156,6 +156,30 @@ Example: two agents, only the second agent runs heartbeats.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
 
+## Visibility controls
+
+By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is
+delivered. You can adjust this per channel or per account:
+
+```yaml
+channels:
+  defaults:
+    heartbeat:
+      showOk: false      # Hide HEARTBEAT_OK (default)
+      showAlerts: true   # Show alert messages (default)
+      useIndicator: true # Emit indicator events (default)
+  telegram:
+    heartbeat:
+      showOk: true       # Show OK acknowledgments on Telegram
+  whatsapp:
+    accounts:
+      work:
+        heartbeat:
+          showAlerts: false # Suppress alert delivery for this account
+```
+
+Precedence: per-account → per-channel → channel defaults → built-in defaults.
+
 ## HEARTBEAT.md (optional)
 
 If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
