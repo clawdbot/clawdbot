@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -83,16 +82,13 @@ function stripWindowsNodeExec(argv: string[]): string[] {
   const execBase = path.basename(execPath).toLowerCase();
   const isExecPath = (value: string | undefined): boolean => {
     if (!value) return false;
-    const normalized = normalizeCandidate(value);
-    if (!normalized) return false;
-    const lower = normalized.toLowerCase();
+    const lower = normalizeCandidate(value).toLowerCase();
     return (
       lower === execPathLower ||
       path.basename(lower) === execBase ||
       lower.endsWith("\\node.exe") ||
       lower.endsWith("/node.exe") ||
-      lower.includes("node.exe") ||
-      (path.basename(lower) === "node.exe" && fs.existsSync(normalized))
+      lower.includes("node.exe")
     );
   };
   const filtered = argv.filter((arg, index) => index === 0 || !isExecPath(arg));
