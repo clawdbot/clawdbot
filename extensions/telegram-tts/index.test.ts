@@ -2,10 +2,10 @@
  * Unit tests for telegram-tts extension
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { _test, meta } from "./index.js";
 
-const { isValidVoiceId, isValidOpenAIVoice, isValidOpenAIModel, OPENAI_TTS_MODELS } = _test;
+const { isValidVoiceId, isValidOpenAIVoice, isValidOpenAIModel, OPENAI_TTS_MODELS, summarizeText } = _test;
 
 describe("telegram-tts", () => {
   describe("meta", () => {
@@ -67,35 +67,152 @@ describe("telegram-tts", () => {
   });
 
   describe("isValidOpenAIModel", () => {
-    it("should accept standard OpenAI TTS models", () => {
+    it("should accept gpt-4o-mini-tts model", () => {
       expect(isValidOpenAIModel("gpt-4o-mini-tts")).toBe(true);
-      expect(isValidOpenAIModel("tts-1")).toBe(true);
-      expect(isValidOpenAIModel("tts-1-hd")).toBe(true);
     });
 
-    it("should accept gpt-4o-mini-tts variants", () => {
-      expect(isValidOpenAIModel("gpt-4o-mini-tts-2025-12-15")).toBe(true);
-      expect(isValidOpenAIModel("gpt-4o-mini-tts-preview")).toBe(true);
-    });
-
-    it("should reject invalid model names", () => {
+    it("should reject other models", () => {
+      expect(isValidOpenAIModel("tts-1")).toBe(false);
+      expect(isValidOpenAIModel("tts-1-hd")).toBe(false);
       expect(isValidOpenAIModel("invalid")).toBe(false);
       expect(isValidOpenAIModel("")).toBe(false);
-      expect(isValidOpenAIModel("tts-2")).toBe(false);
       expect(isValidOpenAIModel("gpt-4")).toBe(false);
     });
   });
 
   describe("OPENAI_TTS_MODELS", () => {
-    it("should contain the expected models", () => {
+    it("should contain only gpt-4o-mini-tts", () => {
       expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
-      expect(OPENAI_TTS_MODELS).toContain("tts-1");
-      expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
+      expect(OPENAI_TTS_MODELS).toHaveLength(1);
     });
 
     it("should be a non-empty array", () => {
       expect(Array.isArray(OPENAI_TTS_MODELS)).toBe(true);
       expect(OPENAI_TTS_MODELS.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("summarizeText", () => {
+    const mockApiKey = "test-api-key";
+    const originalFetch = globalThis.fetch;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      vi.useRealTimers();
+    });
+
+    it("should summarize text and return result with metrics", async () => {
+      const mockSummary = "This is a summarized version of the text.";
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: mockSummary } }],
+        }),
+      });
+
+      const longText = "A".repeat(2000); // Text longer than default limit
+      const result = await summarizeText(longText, 1500, mockApiKey);
+
+      expect(result.summary).toBe(mockSummary);
+      expect(result.inputLength).toBe(2000);
+      expect(result.outputLength).toBe(mockSummary.length);
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("should call OpenAI API with correct parameters", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: "Summary" } }],
+        }),
+      });
+
+      await summarizeText("Long text to summarize", 500, mockApiKey);
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/chat/completions",
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${mockApiKey}`,
+            "Content-Type": "application/json",
+          },
+        })
+      );
+
+      const callArgs = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body = JSON.parse(callArgs[1].body);
+      expect(body.model).toBe("gpt-4o-mini");
+      expect(body.temperature).toBe(0.3);
+      expect(body.max_tokens).toBe(250); // Math.ceil(500 / 2)
+    });
+
+    it("should reject targetLength below minimum (100)", async () => {
+      await expect(summarizeText("text", 99, mockApiKey)).rejects.toThrow(
+        "Invalid targetLength: 99"
+      );
+    });
+
+    it("should reject targetLength above maximum (10000)", async () => {
+      await expect(summarizeText("text", 10001, mockApiKey)).rejects.toThrow(
+        "Invalid targetLength: 10001"
+      );
+    });
+
+    it("should accept targetLength at boundaries", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: "Summary" } }],
+        }),
+      });
+
+      // Min boundary
+      await expect(summarizeText("text", 100, mockApiKey)).resolves.toBeDefined();
+      // Max boundary
+      await expect(summarizeText("text", 10000, mockApiKey)).resolves.toBeDefined();
+    });
+
+    it("should throw error when API returns non-ok response", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+      });
+
+      await expect(summarizeText("text", 500, mockApiKey)).rejects.toThrow(
+        "Summarization service unavailable"
+      );
+    });
+
+    it("should throw error when no summary is returned", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [],
+        }),
+      });
+
+      await expect(summarizeText("text", 500, mockApiKey)).rejects.toThrow(
+        "No summary returned"
+      );
+    });
+
+    it("should throw error when summary content is empty", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: "   " } }], // whitespace only
+        }),
+      });
+
+      await expect(summarizeText("text", 500, mockApiKey)).rejects.toThrow(
+        "No summary returned"
+      );
     });
   });
 });

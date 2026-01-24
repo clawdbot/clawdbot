@@ -27,7 +27,7 @@
     },
     "openai.model": {
       "label": "OpenAI TTS Model",
-      "help": "tts-1 (faster) or tts-1-hd (higher quality)"
+      "help": "gpt-4o-mini-tts (recommended)"
     },
     "openai.voice": {
       "label": "OpenAI Voice",
@@ -88,8 +88,8 @@
           },
           "model": {
             "type": "string",
-            "enum": ["tts-1", "tts-1-hd"],
-            "default": "tts-1"
+            "enum": ["gpt-4o-mini-tts"],
+            "default": "gpt-4o-mini-tts"
           },
           "voice": {
             "type": "string",

@@ -101,17 +101,13 @@ function isValidOpenAIVoice(voice: string): boolean {
 /**
  * Available OpenAI TTS models.
  */
-const OPENAI_TTS_MODELS = [
-  "gpt-4o-mini-tts",
-  "tts-1",
-  "tts-1-hd",
-];
+const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts"];
 
 /**
  * Validates OpenAI TTS model name.
  */
 function isValidOpenAIModel(model: string): boolean {
-  return OPENAI_TTS_MODELS.includes(model) || model.startsWith("gpt-4o-mini-tts-");
+  return OPENAI_TTS_MODELS.includes(model);
 }
 
 // =============================================================================
@@ -261,7 +257,7 @@ async function summarizeText(
         messages: [
           {
             role: "system",
-            content: `Você é um assistente que resume textos de forma concisa mantendo as informações mais importantes. Resuma o texto para aproximadamente ${targetLength} caracteres. Mantenha o tom e estilo original. Responda apenas com o resumo, sem explicações adicionais.`,
+            content: `You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.`,
           },
           {
             role: "user",
@@ -439,7 +435,7 @@ async function openaiTTS(
 async function textToSpeech(text: string, config: TtsConfig, prefsPath?: string): Promise<TtsResult> {
   // Get user's preferred provider (from prefs) or fall back to config
   const userProvider = prefsPath ? getTtsProvider(prefsPath) : undefined;
-  const primaryProvider = userProvider || config.provider || "openai";
+  const primaryProvider = userProvider || config.provider || "elevenlabs";
   const fallbackProvider = primaryProvider === "openai" ? "elevenlabs" : "openai";
   const timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
 
@@ -606,7 +602,7 @@ Do NOT add extra text around the MEDIA directive.`,
   // tts.status - Check if TTS is enabled
   api.registerGatewayMethod("tts.status", async () => {
     const userProvider = getTtsProvider(prefsPath);
-    const activeProvider = userProvider || config.provider || "openai";
+    const activeProvider = userProvider || config.provider || "elevenlabs";
     return {
       enabled: isTtsEnabled(prefsPath),
       provider: activeProvider,
@@ -663,7 +659,7 @@ Do NOT add extra text around the MEDIA directive.`,
           id: "openai",
           name: "OpenAI",
           configured: !!getApiKey(config, "openai"),
-          models: ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"],
+          models: ["gpt-4o-mini-tts"],
           voices: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
         },
         {
@@ -673,7 +669,7 @@ Do NOT add extra text around the MEDIA directive.`,
           models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
         },
       ],
-      active: userProvider || config.provider || "openai",
+      active: userProvider || config.provider || "elevenlabs",
     };
   });
 
@@ -688,7 +684,7 @@ Do NOT add extra text around the MEDIA directive.`,
     handler: () => {
       setTtsEnabled(prefsPath, true);
       log.info(`[${PLUGIN_ID}] TTS enabled via /tts_on command`);
-      return { text: "🔊 TTS ativado! Agora vou responder em áudio." };
+      return { text: "🔊 TTS enabled! I'll now respond with audio." };
     },
   });
 
@@ -699,7 +695,7 @@ Do NOT add extra text around the MEDIA directive.`,
     handler: () => {
       setTtsEnabled(prefsPath, false);
       log.info(`[${PLUGIN_ID}] TTS disabled via /tts_off command`);
-      return { text: "🔇 TTS desativado. Voltando ao modo texto." };
+      return { text: "🔇 TTS disabled. Back to text mode." };
     },
   });
 
@@ -711,7 +707,7 @@ Do NOT add extra text around the MEDIA directive.`,
     handler: async (ctx) => {
       const text = ctx.args?.trim();
       if (!text) {
-        return { text: "❌ Uso: /audio <texto para converter em áudio>" };
+        return { text: "❌ Usage: /audio <text to convert to audio>" };
       }
 
       log.info(`[${PLUGIN_ID}] /audio command, text length: ${text.length}`);
@@ -723,7 +719,7 @@ Do NOT add extra text around the MEDIA directive.`,
       }
 
       log.error(`[${PLUGIN_ID}] /audio failed: ${result.error}`);
-      return { text: `❌ Erro ao gerar áudio: ${result.error}` };
+      return { text: `❌ Error generating audio: ${result.error}` };
     },
   });
 
@@ -734,7 +730,7 @@ Do NOT add extra text around the MEDIA directive.`,
     acceptsArgs: true,
     handler: (ctx) => {
       const arg = ctx.args?.trim().toLowerCase();
-      const currentProvider = getTtsProvider(prefsPath) || config.provider || "openai";
+      const currentProvider = getTtsProvider(prefsPath) || config.provider || "elevenlabs";
 
       if (!arg) {
         // Show current provider
@@ -743,24 +739,24 @@ Do NOT add extra text around the MEDIA directive.`,
         const hasElevenLabs = !!getApiKey(config, "elevenlabs");
         return {
           text: `🎙️ **TTS Provider**\n\n` +
-            `Primário: **${currentProvider}** ${currentProvider === "openai" ? "(gpt-4o-mini-tts)" : "(eleven_multilingual_v2)"}\n` +
+            `Primary: **${currentProvider}** ${currentProvider === "openai" ? "(gpt-4o-mini-tts)" : "(eleven_multilingual_v2)"}\n` +
             `Fallback: ${fallback}\n\n` +
-            `OpenAI: ${hasOpenAI ? "✅ configurado" : "❌ sem API key"}\n` +
-            `ElevenLabs: ${hasElevenLabs ? "✅ configurado" : "❌ sem API key"}\n\n` +
-            `Uso: /tts_provider openai ou /tts_provider elevenlabs`,
+            `OpenAI: ${hasOpenAI ? "✅ configured" : "❌ no API key"}\n` +
+            `ElevenLabs: ${hasElevenLabs ? "✅ configured" : "❌ no API key"}\n\n` +
+            `Usage: /tts_provider openai or /tts_provider elevenlabs`,
         };
       }
 
       if (arg !== "openai" && arg !== "elevenlabs") {
-        return { text: "❌ Provedor inválido. Use: /tts_provider openai ou /tts_provider elevenlabs" };
+        return { text: "❌ Invalid provider. Use: /tts_provider openai or /tts_provider elevenlabs" };
       }
 
       setTtsProvider(prefsPath, arg);
       const fallback = arg === "openai" ? "elevenlabs" : "openai";
       log.info(`[${PLUGIN_ID}] Provider set to ${arg} via /tts_provider command`);
       return {
-        text: `✅ Provedor TTS alterado!\n\n` +
-          `Primário: **${arg}** ${arg === "openai" ? "(gpt-4o-mini-tts)" : "(eleven_multilingual_v2)"}\n` +
+        text: `✅ TTS provider changed!\n\n` +
+          `Primary: **${arg}** ${arg === "openai" ? "(gpt-4o-mini-tts)" : "(eleven_multilingual_v2)"}\n` +
           `Fallback: ${fallback}`,
       };
     },
@@ -778,23 +774,23 @@ Do NOT add extra text around the MEDIA directive.`,
       if (!arg) {
         // Show current limit
         return {
-          text: `📏 **Limite TTS**\n\n` +
-            `Limite atual: **${currentLimit}** caracteres\n\n` +
-            `Textos maiores que ${currentLimit} chars serão resumidos automaticamente com gpt-4o-mini antes de converter em áudio.\n\n` +
-            `Uso: /tts_limit 2000 (define novo limite)`,
+          text: `📏 **TTS Limit**\n\n` +
+            `Current limit: **${currentLimit}** characters\n\n` +
+            `Texts longer than ${currentLimit} chars will be automatically summarized with gpt-4o-mini before converting to audio.\n\n` +
+            `Usage: /tts_limit 2000 (sets new limit)`,
         };
       }
 
       const newLimit = parseInt(arg, 10);
       if (isNaN(newLimit) || newLimit < 100 || newLimit > 10000) {
-        return { text: "❌ Limite inválido. Use um número entre 100 e 10000." };
+        return { text: "❌ Invalid limit. Use a number between 100 and 10000." };
       }
 
       setTtsMaxLength(prefsPath, newLimit);
       log.info(`[${PLUGIN_ID}] Max length set to ${newLimit} via /tts_limit command`);
       return {
-        text: `✅ Limite TTS alterado para **${newLimit}** caracteres!\n\n` +
-          `Textos maiores serão resumidos automaticamente antes de virar áudio.`,
+        text: `✅ TTS limit changed to **${newLimit}** characters!\n\n` +
+          `Longer texts will be automatically summarized before converting to audio.`,
       };
     },
   });
@@ -812,16 +808,16 @@ Do NOT add extra text around the MEDIA directive.`,
       if (!arg) {
         // Show current status
         return {
-          text: `📝 **Auto-Resumo TTS**\n\n` +
-            `Status: ${currentEnabled ? "✅ Ativado" : "❌ Desativado"}\n` +
-            `Limite: ${maxLength} caracteres\n\n` +
-            `Quando ativado, textos maiores que ${maxLength} chars são resumidos com gpt-4o-mini antes de virar áudio.\n\n` +
-            `Uso: /tts_summary on ou /tts_summary off`,
+          text: `📝 **TTS Auto-Summary**\n\n` +
+            `Status: ${currentEnabled ? "✅ Enabled" : "❌ Disabled"}\n` +
+            `Limit: ${maxLength} characters\n\n` +
+            `When enabled, texts longer than ${maxLength} chars are summarized with gpt-4o-mini before converting to audio.\n\n` +
+            `Usage: /tts_summary on or /tts_summary off`,
         };
       }
 
       if (arg !== "on" && arg !== "off") {
-        return { text: "❌ Use: /tts_summary on ou /tts_summary off" };
+        return { text: "❌ Use: /tts_summary on or /tts_summary off" };
       }
 
       const newEnabled = arg === "on";
@@ -829,8 +825,8 @@ Do NOT add extra text around the MEDIA directive.`,
       log.info(`[${PLUGIN_ID}] Summarization ${newEnabled ? "enabled" : "disabled"} via /tts_summary command`);
       return {
         text: newEnabled
-          ? `✅ Auto-resumo **ativado**!\n\nTextos longos serão resumidos antes de virar áudio.`
-          : `❌ Auto-resumo **desativado**!\n\nTextos longos serão ignorados (sem áudio).`,
+          ? `✅ Auto-summary **enabled**!\n\nLong texts will be summarized before converting to audio.`
+          : `❌ Auto-summary **disabled**!\n\nLong texts will be skipped (no audio).`,
       };
     },
   });
@@ -843,34 +839,34 @@ Do NOT add extra text around the MEDIA directive.`,
     handler: () => {
       const enabled = isTtsEnabled(prefsPath);
       const userProvider = getTtsProvider(prefsPath);
-      const activeProvider = userProvider || config.provider || "openai";
+      const activeProvider = userProvider || config.provider || "elevenlabs";
       const maxLength = getTtsMaxLength(prefsPath);
       const summarizationEnabled = isSummarizationEnabled(prefsPath);
       const hasKey = !!getApiKey(config, activeProvider);
 
       let statusLines = [
-        `📊 **Status TTS**\n`,
-        `Estado: ${enabled ? "✅ Ativado" : "❌ Desativado"}`,
-        `Provedor: ${activeProvider} (API Key: ${hasKey ? "✅" : "❌"})`,
-        `Limite de texto: ${maxLength} caracteres`,
-        `Auto-resumo: ${summarizationEnabled ? "✅ Ativado" : "❌ Desativado"}`,
+        `📊 **TTS Status**\n`,
+        `State: ${enabled ? "✅ Enabled" : "❌ Disabled"}`,
+        `Provider: ${activeProvider} (API Key: ${hasKey ? "✅" : "❌"})`,
+        `Text limit: ${maxLength} characters`,
+        `Auto-summary: ${summarizationEnabled ? "✅ Enabled" : "❌ Disabled"}`,
       ];
 
       if (lastTtsAttempt) {
         const timeAgo = Math.round((Date.now() - lastTtsAttempt.timestamp) / 1000);
         statusLines.push(``);
-        statusLines.push(`**Última tentativa** (há ${timeAgo}s):`);
-        statusLines.push(`Resultado: ${lastTtsAttempt.success ? "✅ Sucesso" : "❌ Falha"}`);
-        statusLines.push(`Texto: ${lastTtsAttempt.textLength} chars${lastTtsAttempt.summarized ? " (resumido)" : ""}`);
+        statusLines.push(`**Last attempt** (${timeAgo}s ago):`);
+        statusLines.push(`Result: ${lastTtsAttempt.success ? "✅ Success" : "❌ Failed"}`);
+        statusLines.push(`Text: ${lastTtsAttempt.textLength} chars${lastTtsAttempt.summarized ? " (summarized)" : ""}`);
         if (lastTtsAttempt.success) {
-          statusLines.push(`Provedor: ${lastTtsAttempt.provider}`);
-          statusLines.push(`Latência: ${lastTtsAttempt.latencyMs}ms`);
+          statusLines.push(`Provider: ${lastTtsAttempt.provider}`);
+          statusLines.push(`Latency: ${lastTtsAttempt.latencyMs}ms`);
         } else if (lastTtsAttempt.error) {
-          statusLines.push(`Erro: ${lastTtsAttempt.error}`);
+          statusLines.push(`Error: ${lastTtsAttempt.error}`);
         }
       } else {
         statusLines.push(``);
-        statusLines.push(`_Nenhuma tentativa de TTS registrada nesta sessão._`);
+        statusLines.push(`_No TTS attempts recorded in this session._`);
       }
 
       return { text: statusLines.join("\n") };
@@ -1010,7 +1006,7 @@ Do NOT add extra text around the MEDIA directive.`,
 
   const ttsEnabled = isTtsEnabled(prefsPath);
   const userProvider = getTtsProvider(prefsPath);
-  const activeProvider = userProvider || config.provider || "openai";
+  const activeProvider = userProvider || config.provider || "elevenlabs";
   const hasKey = !!getApiKey(config, activeProvider);
 
   log.info(`[${PLUGIN_ID}] Ready. TTS: ${ttsEnabled ? "ON" : "OFF"}, Provider: ${activeProvider}, API Key: ${hasKey ? "OK" : "MISSING"}`);
@@ -1042,4 +1038,5 @@ export const _test = {
   isValidOpenAIVoice,
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
+  summarizeText,
 };

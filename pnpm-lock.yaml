@@ -393,6 +393,8 @@ importers:
 
   extensions/telegram: {}
 
+  extensions/telegram-tts: {}
+
   extensions/tlon:
     dependencies:
       '@urbit/aura':
