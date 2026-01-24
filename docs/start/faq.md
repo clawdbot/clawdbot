@@ -123,7 +123,6 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [WhatsApp: will it message my contacts? How does pairing work?](#whatsapp-will-it-message-my-contacts-how-does-pairing-work)
 - [Chat commands, aborting tasks, and “it won’t stop”](#chat-commands-aborting-tasks-and-it-wont-stop)
   - [How do I stop/cancel a running task?](#how-do-i-stopcancel-a-running-task)
-  - [How do I send a Discord message from Telegram? (“Cross-context messaging denied”)](#how-do-i-send-a-discord-message-from-telegram-cross-context-messaging-denied)
   - [Why does it feel like the bot “ignores” rapid‑fire messages?](#why-does-it-feel-like-the-bot-ignores-rapidfire-messages)
 
 ## First 60 seconds if something's broken
@@ -1629,33 +1628,6 @@ process action:kill sessionId:XXX
 Slash commands overview: see [Slash commands](/tools/slash-commands).
 
 Most commands must be sent as a **standalone** message that starts with `/`, but a few shortcuts (like `/status`) also work inline for allowlisted senders.
-
-### How do I send a Discord message from Telegram? (“Cross-context messaging denied”)
-
-Clawdbot blocks **cross‑provider** messaging by default. If a tool call is bound
-to Telegram, it won’t send to Discord unless you explicitly allow it.
-
-Enable cross‑provider messaging for the agent:
-
-```json5
-{
-  agents: {
-    defaults: {
-      tools: {
-        message: {
-          crossContext: {
-            allowAcrossProviders: true,
-            marker: { enabled: true, prefix: "[from {channel}] " }
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Restart the gateway after editing config. If you only want this for a single
-agent, set it under `agents.list[].tools.message` instead.
 
 ### Why does it feel like the bot “ignores” rapid‑fire messages?
 
