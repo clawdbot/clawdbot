@@ -8,12 +8,46 @@ import type {
   SandboxToolPolicySource,
 } from "./types.js";
 
+type CompiledPattern =
+  | { kind: "all" }
+  | { kind: "exact"; value: string }
+  | { kind: "regex"; value: RegExp };
+
+function compilePattern(pattern: string): CompiledPattern {
+  const normalized = pattern.trim().toLowerCase();
+  if (!normalized) return { kind: "exact", value: "" };
+  if (normalized === "*") return { kind: "all" };
+  if (!normalized.includes("*")) return { kind: "exact", value: normalized };
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return {
+    kind: "regex",
+    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
+  };
+}
+
+function compilePatterns(patterns?: string[]): CompiledPattern[] {
+  if (!Array.isArray(patterns)) return [];
+  return expandToolGroups(patterns)
+    .map(compilePattern)
+    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
+}
+
+function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
+  for (const pattern of patterns) {
+    if (pattern.kind === "all") return true;
+    if (pattern.kind === "exact" && name === pattern.value) return true;
+    if (pattern.kind === "regex" && pattern.value.test(name)) return true;
+  }
+  return false;
+}
+
 export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
-  const deny = new Set(expandToolGroups(policy.deny));
-  if (deny.has(name.toLowerCase())) return false;
-  const allow = expandToolGroups(policy.allow);
+  const normalized = name.trim().toLowerCase();
+  const deny = compilePatterns(policy.deny);
+  if (matchesAny(normalized, deny)) return false;
+  const allow = compilePatterns(policy.allow);
   if (allow.length === 0) return true;
-  return allow.includes(name.toLowerCase());
+  return matchesAny(normalized, allow);
 }
 
 export function resolveSandboxToolPolicyForAgent(

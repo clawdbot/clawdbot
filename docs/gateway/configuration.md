@@ -1970,6 +1970,7 @@ Example (provider/model-specific allowlist):
 ```
 
 `tools.allow` / `tools.deny` configure a global tool allow/deny policy (deny wins).
+Matching is case-insensitive and supports `*` wildcards (`"*"` means all tools).
 This is applied even when the Docker sandbox is **off**.
 
 Example (disable browser/canvas everywhere):

@@ -22,6 +22,10 @@ You can globally allow/deny tools via `tools.allow` / `tools.deny` in `clawdbot.
 }
 ```
 
+Notes:
+- Matching is case-insensitive.
+- `*` wildcards are supported (`"*"` means all tools).
+
 ## Tool profiles (base allowlist)
 
 `tools.profile` sets a **base tool allowlist** before `tools.allow`/`tools.deny`.

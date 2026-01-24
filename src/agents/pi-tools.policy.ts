@@ -4,6 +4,52 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
+type CompiledPattern =
+  | { kind: "all" }
+  | { kind: "exact"; value: string }
+  | { kind: "regex"; value: RegExp };
+
+function compilePattern(pattern: string): CompiledPattern {
+  const normalized = normalizeToolName(pattern);
+  if (!normalized) return { kind: "exact", value: "" };
+  if (normalized === "*") return { kind: "all" };
+  if (!normalized.includes("*")) return { kind: "exact", value: normalized };
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return {
+    kind: "regex",
+    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
+  };
+}
+
+function compilePatterns(patterns?: string[]): CompiledPattern[] {
+  if (!Array.isArray(patterns)) return [];
+  return expandToolGroups(patterns)
+    .map(compilePattern)
+    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
+}
+
+function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
+  for (const pattern of patterns) {
+    if (pattern.kind === "all") return true;
+    if (pattern.kind === "exact" && name === pattern.value) return true;
+    if (pattern.kind === "regex" && pattern.value.test(name)) return true;
+  }
+  return false;
+}
+
+function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+  const deny = compilePatterns(policy.deny);
+  const allow = compilePatterns(policy.allow);
+  return (name: string) => {
+    const normalized = normalizeToolName(name);
+    if (matchesAny(normalized, deny)) return false;
+    if (allow.length === 0) return true;
+    if (matchesAny(normalized, allow)) return true;
+    if (normalized === "apply_patch" && matchesAny("exec", allow)) return true;
+    return false;
+  };
+}
+
 const DEFAULT_SUBAGENT_TOOL_DENY = [
   // Session management - main agent orchestrates
   "sessions_list",
@@ -35,22 +81,13 @@ export function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPoli
 
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
   if (!policy) return true;
-  const deny = new Set(expandToolGroups(policy.deny));
-  const allowRaw = expandToolGroups(policy.allow);
-  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
-  const normalized = normalizeToolName(name);
-  if (deny.has(normalized)) return false;
-  if (allow) {
-    if (allow.has(normalized)) return true;
-    if (normalized === "apply_patch" && allow.has("exec")) return true;
-    return false;
-  }
-  return true;
+  return makeToolPolicyMatcher(policy)(name);
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
   if (!policy) return tools;
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+  const matcher = makeToolPolicyMatcher(policy);
+  return tools.filter((tool) => matcher(tool.name));
 }
 
 type ToolPolicyConfig = {
