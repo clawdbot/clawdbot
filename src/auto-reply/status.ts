@@ -13,6 +13,14 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import {
+  getTtsMaxLength,
+  getTtsProvider,
+  isSummarizationEnabled,
+  isTtsEnabled,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+} from "../tts/tts.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
   estimateUsageCost,
@@ -244,6 +252,17 @@ const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) 
   return `📎 Media: ${parts.join(" · ")}`;
 };
 
+const formatVoiceModeLine = (config?: ClawdbotConfig): string | null => {
+  if (!config) return null;
+  const ttsConfig = resolveTtsConfig(config);
+  const prefsPath = resolveTtsPrefsPath(ttsConfig);
+  if (!isTtsEnabled(ttsConfig, prefsPath)) return null;
+  const provider = getTtsProvider(ttsConfig, prefsPath);
+  const maxLength = getTtsMaxLength(prefsPath);
+  const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
+  return `🔊 Voice: on · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+};
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -379,6 +398,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
+  const voiceLine = formatVoiceModeLine(args.config);
 
   return [
     versionLine,
@@ -391,6 +411,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `🧵 ${sessionLine}`,
     args.subagentsLine,
     `⚙️ ${optionsLine}`,
+    voiceLine,
     activationLine,
   ]
     .filter(Boolean)
