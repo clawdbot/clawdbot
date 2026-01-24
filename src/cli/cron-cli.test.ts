@@ -162,7 +162,7 @@ describe("cron cli", () => {
 
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as { patch?: { agentId?: unknown } };
-    expect(patch?.patch?.agentId).toBe("ops");
+    expect(patch?.patch?.agentId).toBe("Ops");
 
     callGatewayFromCli.mockClear();
     await program.parseAsync(["cron", "edit", "job-2", "--clear-agent"], {

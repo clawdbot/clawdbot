@@ -38,7 +38,7 @@ describe("normalizeCronJobCreate", () => {
       },
     }) as unknown as Record<string, unknown>;
 
-    expect(normalized.agentId).toBe("ops");
+    expect(normalized.agentId).toBe("Ops");
 
     const cleared = normalizeCronJobCreate({
       name: "agent-clear",

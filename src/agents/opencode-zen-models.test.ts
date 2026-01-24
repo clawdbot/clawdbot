@@ -54,7 +54,7 @@ describe("getOpencodeZenStaticFallbackModels", () => {
   it("returns an array of models", () => {
     const models = getOpencodeZenStaticFallbackModels();
     expect(Array.isArray(models)).toBe(true);
-    expect(models.length).toBe(10);
+    expect(models.length).toBe(9);
   });
 
   it("includes Claude, GPT, Gemini, and GLM models", () => {

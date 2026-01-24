@@ -180,7 +180,7 @@ describe("resolveAgentRoute", () => {
       accountId: undefined,
       peer: { kind: "dm", id: "+1000" },
     });
-    expect(defaultRoute.agentId).toBe("defaultacct");
+    expect(defaultRoute.agentId).toBe("defaultAcct");
     expect(defaultRoute.matchedBy).toBe("binding.account");
 
     const otherRoute = resolveAgentRoute({

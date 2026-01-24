@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { Client } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
@@ -95,7 +96,7 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
     try {
       bodyText = JSON.stringify(rawBody);
     } catch {
-      bodyText = String(rawBody);
+      bodyText = inspect(rawBody, { depth: 3 });
     }
     if (bodyText) {
       const maxLen = 800;
