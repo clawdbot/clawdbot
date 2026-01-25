@@ -23,7 +23,7 @@ Output when ready:
 
   ● Authenticated via FIRECRAWL_API_KEY
   Concurrency: 0/100 jobs (parallel scrape limit)
-  Credits: 500,000 remaining (pay-as-you-go)
+  Credits: 500,000 remaining
 ```
 
 - **Concurrency**: Max parallel jobs. Run parallel operations close to this limit but not above.
