@@ -18,6 +18,7 @@ export type AuthChoiceGroupId =
   | "ai-gateway"
   | "moonshot"
   | "zai"
+  | "chutes"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
@@ -104,6 +105,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["moonshot-api-key", "kimi-code-api-key"],
   },
   {
+    value: "chutes",
+    label: "Chutes",
+    hint: "OAuth + API key",
+    choices: ["chutes", "chutes-api-key"],
+  },
+  {
     value: "zai",
     label: "Z.AI (GLM 4.7)",
     hint: "API key",
@@ -188,6 +195,7 @@ export function buildAuthChoiceOptions(params: {
     label: "OpenAI Codex (ChatGPT OAuth)",
   });
   options.push({ value: "chutes", label: "Chutes (OAuth)" });
+  options.push({ value: "chutes-api-key", label: "Chutes API key" });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({

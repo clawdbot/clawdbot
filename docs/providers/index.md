@@ -40,6 +40,7 @@ See [Venice AI](/providers/venice).
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
+- [Chutes AI](/providers/chutes)
 - [Amazon Bedrock](/bedrock)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)

@@ -40,6 +40,18 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
+const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-4.6-TEE";
+const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
+const CHUTES_DEFAULT_MAX_TOKENS = 4096;
+const CHUTES_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_MODEL_ID = "kimi-for-coding";
 const KIMI_CODE_CONTEXT_WINDOW = 262144;
@@ -286,6 +298,24 @@ function buildMoonshotProvider(): ProviderConfig {
   };
 }
 
+function buildChutesProvider(): ProviderConfig {
+  return {
+    baseUrl: CHUTES_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: CHUTES_DEFAULT_MODEL_ID,
+        name: "GLM 4.6 TEE",
+        reasoning: false,
+        input: ["text"],
+        cost: CHUTES_DEFAULT_COST,
+        contextWindow: CHUTES_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CHUTES_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildKimiCodeProvider(): ProviderConfig {
   return {
     baseUrl: KIMI_CODE_BASE_URL,
@@ -379,6 +409,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+  }
+
+  const chutesKey =
+    resolveEnvApiKeyVarName("chutes") ??
+    resolveApiKeyFromProfiles({ provider: "chutes", store: authStore });
+  if (chutesKey) {
+    providers.chutes = { ...buildChutesProvider(), apiKey: chutesKey };
   }
 
   const kimiCodeKey =

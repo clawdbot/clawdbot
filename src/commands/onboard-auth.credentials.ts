@@ -73,6 +73,19 @@ export async function setMoonshotApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setChutesApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "chutes:default",
+    credential: {
+      type: "api_key",
+      provider: "chutes",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setKimiCodeApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
@@ -113,6 +126,7 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
 }
 
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
+export const CHUTES_DEFAULT_MODEL_REF = "chutes/zai-org/GLM-4.6-TEE";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.5";
 

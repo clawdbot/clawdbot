@@ -5,6 +5,8 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyChutesConfig,
+  applyChutesProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -35,6 +37,7 @@ export {
 export {
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
+  setChutesApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
@@ -54,7 +57,11 @@ export {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
+  buildChutesModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
+  CHUTES_BASE_URL,
+  CHUTES_DEFAULT_MODEL_ID,
+  CHUTES_DEFAULT_MODEL_REF,
   KIMI_CODE_BASE_URL,
   KIMI_CODE_MODEL_ID,
   KIMI_CODE_MODEL_REF,

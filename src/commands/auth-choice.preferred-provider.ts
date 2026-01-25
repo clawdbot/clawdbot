@@ -9,6 +9,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "openai-codex": "openai-codex",
   "codex-cli": "openai-codex",
   chutes: "chutes",
+  "chutes-api-key": "chutes",
   "openai-api-key": "openai",
   "openrouter-api-key": "openrouter",
   "ai-gateway-api-key": "vercel-ai-gateway",
