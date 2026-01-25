@@ -196,13 +196,17 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px 12px;
-  border-right: 1px solid var(--border);
   background: var(--bg);
+  scrollbar-width: none; /* Firefox */
   transition:
     width var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease),
     opacity var(--shell-focus-duration) var(--shell-focus-ease);
   min-height: 0;
+}
+
+.nav::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
 }
 
 .shell--chat-focus .nav {
