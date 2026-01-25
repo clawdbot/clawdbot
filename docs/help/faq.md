@@ -233,6 +233,14 @@ If you discover a real bug or fix, please file a GitHub issue or send a PR:
 https://github.com/clawdbot/clawdbot/issues
 https://github.com/clawdbot/clawdbot/pulls
 
+Start with these commands (share outputs when asking for help):
+
+```bash
+clawdbot status
+clawdbot models status
+clawdbot doctor
+```
+
 Quick debug loop: [First 60 seconds if something's broken](#first-60-seconds-if-somethings-broken).
 Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
