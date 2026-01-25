@@ -289,10 +289,33 @@ export function deriveChannel(params: {
 }
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
+  const looksLikeToolSummary = (text: string) => {
+    const trimmed = text.trimStart();
+    if (!trimmed) return false;
+
+    // Common transcript leak formats.
+    if (/^Tool:\s*/i.test(trimmed)) return true;
+
+    // Emoji + label prefix, e.g. "🔧 Tool: ...", "🛠 Sessions: ...", "📎 Attachments: ...".
+    // We intentionally keep this somewhat strict to avoid stripping legitimate assistant text.
+    if (/^[\p{Extended_Pictographic}]\s*[A-Za-z][A-Za-z0-9 _/-]{0,60}:\s+/u.test(trimmed)) {
+      return true;
+    }
+
+    return false;
+  };
+
   return messages.filter((msg) => {
     if (!msg || typeof msg !== "object") return true;
     const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult";
+    if (role === "toolResult") return false;
+
+    if (role === "assistant") {
+      const text = extractAssistantText(msg);
+      if (text && looksLikeToolSummary(text)) return false;
+    }
+
+    return true;
   });
 }
 

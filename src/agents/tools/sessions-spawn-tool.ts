@@ -156,6 +156,14 @@ export function createSessionsSpawnTool(opts?: {
         }
       }
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+
+      // Ensure subagent runs never inherit verbose settings from the requester.
+      await callGateway({
+        method: "sessions.patch",
+        params: { key: childSessionKey, verboseLevel: "off" },
+        timeoutMs: 10_000,
+      });
+
       const spawnedByKey = requesterInternalKey;
       const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
       const resolvedModel =
