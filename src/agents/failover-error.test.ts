@@ -11,6 +11,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
   });
 
   it("infers format errors from error messages", () => {
