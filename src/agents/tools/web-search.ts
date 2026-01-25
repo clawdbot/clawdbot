@@ -55,6 +55,12 @@ const WebSearchSchema = Type.Object({
       description: "ISO language code for UI elements.",
     }),
   ),
+  freshness: Type.Optional(
+    Type.String({
+      description:
+        "Filter results by discovery time. Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'. Brave provider only.",
+    }),
+  ),
 });
 
 type WebSearchConfig = NonNullable<ClawdbotConfig["tools"]>["web"] extends infer Web
@@ -279,11 +285,12 @@ async function runWebSearch(params: {
   country?: string;
   search_lang?: string;
   ui_lang?: string;
+  freshness?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
@@ -326,6 +333,9 @@ async function runWebSearch(params: {
   }
   if (params.ui_lang) {
     url.searchParams.set("ui_lang", params.ui_lang);
+  }
+  if (params.freshness) {
+    url.searchParams.set("freshness", params.freshness);
   }
 
   const res = await fetch(url.toString(), {
@@ -399,6 +409,7 @@ export function createWebSearchTool(options?: {
       const country = readStringParam(params, "country");
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
+      const freshness = readStringParam(params, "freshness");
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -409,6 +420,7 @@ export function createWebSearchTool(options?: {
         country,
         search_lang,
         ui_lang,
+        freshness,
         perplexityBaseUrl: resolvePerplexityBaseUrl(
           perplexityConfig,
           perplexityAuth?.source,
