@@ -53,9 +53,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
   - [How important is it to run Clawdbot on a dedicated machine?](#how-important-is-it-to-run-clawdbot-on-a-dedicated-machine)
   - [What are the minimum VPS requirements and recommended OS?](#what-are-the-minimum-vps-requirements-and-recommended-os)
+  - [Can I run Clawdbot in a VM and what are the requirements](#can-i-run-clawdbot-in-a-vm-and-what-are-the-requirements)
 - [What is Clawdbot?](#what-is-clawdbot)
   - [What is Clawdbot, in one paragraph?](#what-is-clawdbot-in-one-paragraph)
   - [What’s the value proposition?](#whats-the-value-proposition)
+  - [What are the top five everyday use cases for Clawdbot](#what-are-the-top-five-everyday-use-cases-for-clawdbot)
+  - [Can Clawdbot help with lead gen outreach ads and blogs for a SaaS](#can-clawdbot-help-with-lead-gen-outreach-ads-and-blogs-for-a-saas)
   - [What are the advantages vs Claude Code for web development?](#what-are-the-advantages-vs-claude-code-for-web-development)
 - [Skills and automation](#skills-and-automation)
   - [How do I customize skills without keeping the repo dirty?](#how-do-i-customize-skills-without-keeping-the-repo-dirty)
@@ -174,10 +177,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is it safe to expose Clawdbot to inbound DMs?](#is-it-safe-to-expose-clawdbot-to-inbound-dms)
   - [Is prompt injection only a concern for public bots?](#is-prompt-injection-only-a-concern-for-public-bots)
   - [Should my bot have its own email GitHub account or phone number](#should-my-bot-have-its-own-email-github-account-or-phone-number)
+  - [Can I give it autonomy over my text messages and is that safe](#can-i-give-it-autonomy-over-my-text-messages-and-is-that-safe)
   - [Can I use cheaper models for personal assistant tasks?](#can-i-use-cheaper-models-for-personal-assistant-tasks)
   - [I ran `/start` in Telegram but didn’t get a pairing code](#i-ran-start-in-telegram-but-didnt-get-a-pairing-code)
   - [WhatsApp: will it message my contacts? How does pairing work?](#whatsapp-will-it-message-my-contacts-how-does-pairing-work)
 - [Chat commands, aborting tasks, and “it won’t stop”](#chat-commands-aborting-tasks-and-it-wont-stop)
+  - [How do I stop internal system messages from showing in chat](#how-do-i-stop-internal-system-messages-from-showing-in-chat)
   - [How do I stop/cancel a running task?](#how-do-i-stopcancel-a-running-task)
   - [How do I send a Discord message from Telegram? (“Cross-context messaging denied”)](#how-do-i-send-a-discord-message-from-telegram-crosscontext-messaging-denied)
   - [Why does it feel like the bot “ignores” rapid‑fire messages?](#why-does-it-feel-like-the-bot-ignores-rapidfire-messages)
@@ -328,7 +333,7 @@ Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** fo
 
 ### Does it run on Raspberry Pi
 
-Yes. The Gateway is lightweight - docs list **512MB–1GB RAM**, **1 core**, and about **500MB**
+Yes. The Gateway is lightweight - docs list **512MB-1GB RAM**, **1 core**, and about **500MB**
 disk as enough for personal use, and note that a **Raspberry Pi 4 can run it**.
 
 If you want extra headroom (logs, media, other services), **2GB is recommended**, but it’s
@@ -815,6 +820,19 @@ OS: use **Ubuntu LTS** (or any modern Debian/Ubuntu). The Linux install path is 
 
 Docs: [Linux](/platforms/linux), [VPS hosting](/vps).
 
+### Can I run Clawdbot in a VM and what are the requirements
+
+Yes. Treat a VM the same as a VPS: it needs to be always on, reachable, and have enough
+RAM for the Gateway and any channels you enable.
+
+Baseline guidance:
+- **Absolute minimum:** 1 vCPU, 1GB RAM.
+- **Recommended:** 2GB RAM or more if you run multiple channels, browser automation, or media tools.
+- **OS:** Ubuntu LTS or another modern Debian/Ubuntu.
+
+If you are on Windows, **WSL2 is the easiest VM style setup** and has the best tooling
+compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
+
 ## What is Clawdbot?
 
 ### What is Clawdbot in one paragraph
@@ -842,6 +860,26 @@ Highlights:
 
 Docs: [Gateway](/gateway), [Channels](/channels), [Multi‑agent](/concepts/multi-agent),
 [Memory](/concepts/memory).
+
+### What are the top five everyday use cases for Clawdbot
+
+Everyday wins usually look like:
+- **Personal briefings:** summaries of inbox, calendar, and news you care about.
+- **Research and drafting:** quick research, summaries, and first drafts for emails or docs.
+- **Reminders and follow ups:** cron or heartbeat driven nudges and checklists.
+- **Browser automation:** filling forms, collecting data, and repeating web tasks.
+- **Cross device coordination:** send a task from your phone, let the Gateway run it on a server, and get the result back in chat.
+
+### Can Clawdbot help with lead gen outreach ads and blogs for a SaaS
+
+Yes for **research, qualification, and drafting**. It can scan sites, build shortlists,
+summarize prospects, and write outreach or ad copy drafts.
+
+For **outreach or ad runs**, keep a human in the loop. Avoid spam, follow local laws and
+platform policies, and review anything before it is sent. The safest pattern is to let
+Clawdbot draft and you approve.
+
+Docs: [Security](/gateway/security).
 
 ### What are the advantages vs Claude Code for web development
 
@@ -2477,6 +2515,16 @@ later if required.
 
 Docs: [Security](/gateway/security), [Pairing](/start/pairing).
 
+### Can I give it autonomy over my text messages and is that safe
+
+We do **not** recommend full autonomy over your personal messages. The safest pattern is:
+- Keep DMs in **pairing mode** or a tight allowlist.
+- Use a **separate number or account** if you want it to message on your behalf.
+- Let it draft, then **approve before sending**.
+
+If you want to experiment, do it on a dedicated account and keep it isolated. See
+[Security](/gateway/security).
+
 ### Can I use cheaper models for personal assistant tasks
 
 Yes, **if** the agent is chat-only and the input is trusted. Smaller tiers are
@@ -2516,6 +2564,23 @@ clawdbot pairing list whatsapp
 Wizard phone number prompt: it’s used to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that number and enable `channels.whatsapp.selfChatMode`.
 
 ## Chat commands, aborting tasks, and “it won’t stop”
+
+### How do I stop internal system messages from showing in chat
+
+Most internal or tool messages only appear when **verbose** or **reasoning** is enabled
+for that session.
+
+Fix in the chat where you see it:
+```
+/verbose off
+/reasoning off
+```
+
+If it is still noisy, check the session settings in the Control UI and set verbose
+to **inherit**. Also confirm you are not using a bot profile with `verboseDefault` set
+to `on` in config.
+
+Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security#reasoning--verbose-output-in-groups).
 
 ### How do I stopcancel a running task
 
