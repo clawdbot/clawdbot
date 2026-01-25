@@ -20,6 +20,7 @@ import {
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
+  applyVeniceConfig,
   applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
@@ -30,6 +31,7 @@ import {
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
@@ -270,6 +272,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applySyntheticConfig(nextConfig);
+  }
+
+  if (authChoice === "venice-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "venice",
+      cfg: baseConfig,
+      flagValue: opts.veniceApiKey,
+      flagName: "--venice-api-key",
+      envVar: "VENICE_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setVeniceApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "venice:default",
+      provider: "venice",
+      mode: "api_key",
+    });
+    return applyVeniceConfig(nextConfig);
   }
 
   if (
