@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
+import { delimiter, dirname, join } from "node:path";
 
 const CLIENT_ID_KEYS = ["CLAWDBOT_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 const CLIENT_SECRET_KEYS = [
@@ -47,15 +48,98 @@ function resolveEnv(keys: string[]): string | undefined {
   return undefined;
 }
 
-function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string } {
-  const clientId = resolveEnv(CLIENT_ID_KEYS);
-  if (!clientId) {
-    throw new Error(
-      "Missing Gemini OAuth client ID. Set CLAWDBOT_GEMINI_OAUTH_CLIENT_ID (or GEMINI_CLI_OAUTH_CLIENT_ID).",
-    );
+let cachedGeminiCliCredentials: { clientId: string; clientSecret: string } | null = null;
+
+/** @internal */
+export function clearCredentialsCache(): void {
+  cachedGeminiCliCredentials = null;
+}
+
+/** Extracts OAuth credentials from the installed Gemini CLI's bundled oauth2.js. */
+export function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
+  if (cachedGeminiCliCredentials) return cachedGeminiCliCredentials;
+
+  try {
+    const geminiPath = findInPath("gemini");
+    if (!geminiPath) return null;
+
+    const resolvedPath = realpathSync(geminiPath);
+    const geminiCliDir = dirname(dirname(resolvedPath));
+
+    const searchPaths = [
+      join(geminiCliDir, "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
+      join(geminiCliDir, "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js"),
+    ];
+
+    let content: string | null = null;
+    for (const p of searchPaths) {
+      if (existsSync(p)) {
+        content = readFileSync(p, "utf8");
+        break;
+      }
+    }
+    if (!content) {
+      const found = findFile(geminiCliDir, "oauth2.js", 10);
+      if (found) content = readFileSync(found, "utf8");
+    }
+    if (!content) return null;
+
+    const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
+    const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
+    if (idMatch && secretMatch) {
+      cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
+      return cachedGeminiCliCredentials;
+    }
+  } catch {
+    // Gemini CLI not installed or extraction failed
   }
-  const clientSecret = resolveEnv(CLIENT_SECRET_KEYS);
-  return { clientId, clientSecret };
+  return null;
+}
+
+function findInPath(name: string): string | null {
+  const exts = process.platform === "win32" ? [".cmd", ".bat", ".exe", ""] : [""];
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    for (const ext of exts) {
+      const p = join(dir, name + ext);
+      if (existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
+function findFile(dir: string, name: string, depth: number): string | null {
+  if (depth <= 0) return null;
+  try {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isFile() && e.name === name) return p;
+      if (e.isDirectory() && !e.name.startsWith(".")) {
+        const found = findFile(p, name, depth - 1);
+        if (found) return found;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string } {
+  // 1. Check env vars first (user override)
+  const envClientId = resolveEnv(CLIENT_ID_KEYS);
+  const envClientSecret = resolveEnv(CLIENT_SECRET_KEYS);
+  if (envClientId) {
+    return { clientId: envClientId, clientSecret: envClientSecret };
+  }
+
+  // 2. Try to extract from installed Gemini CLI
+  const extracted = extractGeminiCliCredentials();
+  if (extracted) {
+    return extracted;
+  }
+
+  // 3. No credentials available
+  throw new Error(
+    "Gemini CLI not found. Install it first: brew install gemini-cli (or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID.",
+  );
 }
 
 function isWSL(): boolean {

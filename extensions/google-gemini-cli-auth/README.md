@@ -18,7 +18,18 @@ Restart the Gateway after enabling.
 clawdbot models auth login --provider google-gemini-cli --set-default
 ```
 
-## Env vars
+## Requirements
+
+Requires the Gemini CLI to be installed (credentials are extracted automatically):
+
+```bash
+brew install gemini-cli
+# or: npm install -g @google/gemini-cli
+```
+
+## Env vars (optional)
+
+Override auto-detected credentials with:
 
 - `CLAWDBOT_GEMINI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_ID`
 - `CLAWDBOT_GEMINI_OAUTH_CLIENT_SECRET` / `GEMINI_CLI_OAUTH_CLIENT_SECRET`
