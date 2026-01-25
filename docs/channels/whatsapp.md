@@ -271,12 +271,13 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 
 ## Limits
 - Outbound text is chunked to `channels.whatsapp.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.whatsapp.chunkMode="newline"` to split on each line before length chunking.
 - Inbound media saves are capped by `channels.whatsapp.mediaMaxMb` (default 50 MB).
 - Outbound media items are capped by `agents.defaults.mediaMaxMb` (default 5 MB).
 
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
-- Text chunking: 4k max per message (configurable via `channels.whatsapp.textChunkLimit`).
+- Text chunking: 4k max per message (configurable via `channels.whatsapp.textChunkLimit`, optional `channels.whatsapp.chunkMode`).
 - Media:
   - Image/video/audio/document supported.
   - Audio sent as PTT; `audio/ogg` => `audio/ogg; codecs=opus`.

@@ -1,3 +1,5 @@
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../auto-reply/chunk.js";
+
 export type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
   maxChars?: number;
@@ -176,6 +178,31 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   }
 
   return rebalanceReasoningItalics(text, chunks);
+}
+
+export function chunkDiscordTextWithMode(
+  text: string,
+  opts: ChunkDiscordTextOpts & { chunkMode?: ChunkMode },
+): string[] {
+  const chunkMode = opts.chunkMode ?? "length";
+  if (chunkMode !== "newline") {
+    return chunkDiscordText(text, opts);
+  }
+  const lineChunks = chunkMarkdownTextWithMode(
+    text,
+    Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS)),
+    "newline",
+  );
+  const chunks: string[] = [];
+  for (const line of lineChunks) {
+    const nested = chunkDiscordText(line, opts);
+    if (!nested.length && line) {
+      chunks.push(line);
+      continue;
+    }
+    chunks.push(...nested);
+  }
+  return chunks;
 }
 
 // Keep italics intact for reasoning payloads that are wrapped once with `_…_`.

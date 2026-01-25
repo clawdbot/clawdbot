@@ -59,6 +59,7 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
@@ -75,6 +76,7 @@ export function createMSTeamsReplyDispatcher(params: {
         chunkText: true,
         mediaMode: "split",
         tableMode,
+        chunkMode,
       });
       const mediaMaxBytes = resolveChannelMediaMaxBytes({
         cfg: params.cfg,

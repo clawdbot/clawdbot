@@ -207,6 +207,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+    chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;

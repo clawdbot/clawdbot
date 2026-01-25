@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
+import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
@@ -125,6 +126,7 @@ export const dispatchTelegramMessage = async ({
     channel: "telegram",
     accountId: route.accountId,
   });
+  const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
@@ -147,6 +149,7 @@ export const dispatchTelegramMessage = async ({
           textLimit,
           messageThreadId: resolvedThreadId,
           tableMode,
+          chunkMode,
           onVoiceRecording: sendRecordVoice,
         });
       },

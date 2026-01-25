@@ -219,6 +219,7 @@ This is useful when you want an isolated personality/model for a specific thread
 
 ## Limits
 - Outbound text is chunked to `channels.imessage.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.imessage.chunkMode="newline"` to split on each line before length chunking.
 - Media uploads are capped by `channels.imessage.mediaMaxMb` (default 16).
 
 ## Addressing / delivery targets
@@ -253,6 +254,7 @@ Provider options:
 - `channels.imessage.includeAttachments`: ingest attachments into context.
 - `channels.imessage.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.imessage.textChunkLimit`: outbound chunk size (chars).
+- `channels.imessage.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
 
 Related global options:
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`).

@@ -38,6 +38,7 @@ Legend:
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
 - `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (merge streamed blocks before send).
 - Channel hard cap: `*.textChunkLimit` (e.g., `channels.whatsapp.textChunkLimit`).
+- Channel chunk mode: `*.chunkMode` (`length` default, `newline` splits on each line before length chunking).
 - Discord soft cap: `channels.discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 
 **Boundary semantics:**

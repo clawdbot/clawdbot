@@ -8,6 +8,7 @@ import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
   chunker: chunkText,
+  chunkerMode: "text",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) => {

@@ -128,6 +128,7 @@ Notes:
 
 ## Limits
 - Outbound text is chunked to `channels.telegram.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.telegram.chunkMode="newline"` to split on each line before length chunking.
 - Media downloads/uploads are capped by `channels.telegram.mediaMaxMb` (default 5).
 - Telegram Bot API requests time out after `channels.telegram.timeoutSeconds` (default 500 via grammY). Set lower to avoid long hangs.
 - Group history context uses `channels.telegram.historyLimit` (or `channels.telegram.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
@@ -516,6 +517,7 @@ Provider options:
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
+- `channels.telegram.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).

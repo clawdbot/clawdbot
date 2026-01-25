@@ -504,6 +504,7 @@ For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowF
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000, // optional outbound chunk size (chars)
+      chunkMode: "length", // optional chunking mode (length | newline)
       mediaMaxMb: 50 // optional inbound media cap (MB)
     }
   }
@@ -1105,6 +1106,7 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
       },
       historyLimit: 20,                       // include last N guild messages as context
       textChunkLimit: 2000,                   // optional outbound text chunk size (chars)
+      chunkMode: "length",                    // optional chunking mode (length | newline)
       maxLinesPerMessage: 17,                 // soft max lines per message (Discord UI clipping)
       retry: {                                // outbound retry policy
         attempts: 3,
@@ -1125,7 +1127,7 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
-Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
+Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Set `channels.discord.chunkMode="newline"` to split on line boundaries before length chunking. Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `channels.googlechat` (Chat API webhook)
@@ -1218,6 +1220,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
         ephemeral: true
       },
       textChunkLimit: 4000,
+      chunkMode: "length",
       mediaMaxMb: 20
     }
   }
@@ -1267,7 +1270,8 @@ Mattermost requires a bot token plus the base URL for your server:
       dmPolicy: "pairing",
       chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
-      textChunkLimit: 4000
+      textChunkLimit: 4000,
+      chunkMode: "length"
     }
   }
 }

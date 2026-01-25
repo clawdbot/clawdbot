@@ -1,6 +1,7 @@
 import type { Bot, Context } from "grammy";
 
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { resolveChunkMode } from "../auto-reply/chunk.js";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -320,6 +321,7 @@ export const registerTelegramNativeCommands = ({
             typeof telegramCfg.blockStreaming === "boolean"
               ? !telegramCfg.blockStreaming
               : undefined;
+          const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
           await dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
@@ -337,6 +339,7 @@ export const registerTelegramNativeCommands = ({
                   textLimit,
                   messageThreadId: resolvedThreadId,
                   tableMode,
+                  chunkMode,
                 });
               },
               onError: (err, info) => {

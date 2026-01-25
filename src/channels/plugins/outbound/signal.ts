@@ -6,6 +6,7 @@ import type { ChannelOutboundAdapter } from "../types.js";
 export const signalOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkText,
+  chunkerMode: "text",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId, deps }) => {
     const send = deps?.sendSignal ?? sendMessageSignal;

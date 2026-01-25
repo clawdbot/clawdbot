@@ -1,5 +1,6 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
+import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import {
   buildCommandTextFromArgs,
@@ -429,6 +430,7 @@ export function registerSlackMonitorSlashCommands(params: {
               respond,
               ephemeral: slashCommand.ephemeral,
               textLimit: ctx.textLimit,
+              chunkMode: resolveChunkMode(cfg, "slack", route.accountId),
               tableMode: resolveMarkdownTableMode({
                 cfg,
                 channel: "slack",
@@ -448,6 +450,7 @@ export function registerSlackMonitorSlashCommands(params: {
           respond,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
+          chunkMode: resolveChunkMode(cfg, "slack", route.accountId),
           tableMode: resolveMarkdownTableMode({
             cfg,
             channel: "slack",

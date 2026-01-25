@@ -61,7 +61,12 @@ export async function sendMessageMatrix(
     );
     const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix");
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
-    const chunks = getCore().channel.text.chunkMarkdownText(convertedMessage, chunkLimit);
+    const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+    const chunks = getCore().channel.text.chunkMarkdownTextWithMode(
+      convertedMessage,
+      chunkLimit,
+      chunkMode,
+    );
     const threadId = normalizeThreadId(opts.threadId);
     const relation = threadId
       ? buildThreadRelation(threadId, opts.replyToId)

@@ -349,6 +349,7 @@ ack reaction after the bot replies.
 
 ## Limits
 - Outbound text is chunked to `channels.slack.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.slack.chunkMode="newline"` to split on each line before length chunking.
 - Media uploads are capped by `channels.slack.mediaMaxMb` (default 20).
 
 ## Reply threading

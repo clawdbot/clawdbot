@@ -288,6 +288,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       if (remaining.length) chunks.push(remaining);
       return chunks;
     },
+    chunkerMode: "text",
     textChunkLimit: 2000,
     sendText: async ({ to, text, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {

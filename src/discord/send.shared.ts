@@ -9,7 +9,8 @@ import { createDiscordRetryRunner, type RetryRunner } from "../infra/retry-polic
 import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
-import { chunkDiscordText } from "./chunk.js";
+import type { ChunkMode } from "../auto-reply/chunk.js";
+import { chunkDiscordTextWithMode } from "./chunk.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 import { parseDiscordTarget } from "./targets.js";
@@ -231,15 +232,18 @@ async function sendDiscordText(
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   embeds?: unknown[],
+  chunkMode?: ChunkMode,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
-  const chunks = chunkDiscordText(text, {
+  const chunks = chunkDiscordTextWithMode(text, {
     maxChars: DISCORD_TEXT_LIMIT,
     maxLines: maxLinesPerMessage,
+    chunkMode,
   });
+  if (!chunks.length && text) chunks.push(text);
   if (chunks.length === 1) {
     const res = (await request(
       () =>
@@ -285,14 +289,17 @@ async function sendDiscordMedia(
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   embeds?: unknown[],
+  chunkMode?: ChunkMode,
 ) {
   const media = await loadWebMedia(mediaUrl);
   const chunks = text
-    ? chunkDiscordText(text, {
+    ? chunkDiscordTextWithMode(text, {
         maxChars: DISCORD_TEXT_LIMIT,
         maxLines: maxLinesPerMessage,
+        chunkMode,
       })
     : [];
+  if (!chunks.length && text) chunks.push(text);
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const res = (await request(
@@ -314,7 +321,16 @@ async function sendDiscordMedia(
   )) as { id: string; channel_id: string };
   for (const chunk of chunks.slice(1)) {
     if (!chunk.trim()) continue;
-    await sendDiscordText(rest, channelId, chunk, undefined, request, maxLinesPerMessage);
+    await sendDiscordText(
+      rest,
+      channelId,
+      chunk,
+      undefined,
+      request,
+      maxLinesPerMessage,
+      undefined,
+      chunkMode,
+    );
   }
   return res;
 }

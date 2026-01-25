@@ -215,6 +215,7 @@ Provider options:
 - `channels.matrix.initialSyncLimit`: initial sync limit.
 - `channels.matrix.threadReplies`: `off | inbound | always` (default: inbound).
 - `channels.matrix.textChunkLimit`: outbound text chunk size (chars).
+- `channels.matrix.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.matrix.dm.allowFrom`: DM allowlist (user IDs or display names). `open` requires `"*"`. The wizard resolves names to IDs when possible.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (default: allowlist).

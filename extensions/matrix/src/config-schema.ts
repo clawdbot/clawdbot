@@ -50,6 +50,7 @@ export const MatrixConfigSchema = z.object({
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
+  chunkMode: z.enum(["length", "newline"]).optional(),
   mediaMaxMb: z.number().optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: z.array(allowFromEntry).optional(),

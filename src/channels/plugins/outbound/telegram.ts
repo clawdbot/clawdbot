@@ -21,6 +21,7 @@ function parseThreadId(threadId?: string | number | null) {
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
+  chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;

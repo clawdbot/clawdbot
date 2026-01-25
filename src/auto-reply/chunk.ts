@@ -101,8 +101,6 @@ export function resolveChunkMode(
   accountId?: string | null,
 ): ChunkMode {
   if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) return DEFAULT_CHUNK_MODE;
-  // Chunk mode is only supported for BlueBubbles.
-  if (provider !== "bluebubbles") return DEFAULT_CHUNK_MODE;
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
   const providerConfig = (channelsConfig?.[provider] ??
     (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
@@ -111,25 +109,56 @@ export function resolveChunkMode(
 }
 
 /**
- * Split text on newlines, filtering empty lines.
- * Lines exceeding maxLineLength are further split using length-based chunking.
+ * Split text on newlines, trimming line whitespace.
+ * Blank lines are folded into the next non-empty line as leading "\n" prefixes.
+ * Long lines can be split by length (default) or kept intact via splitLongLines:false.
  */
-export function chunkByNewline(text: string, maxLineLength: number): string[] {
+export function chunkByNewline(
+  text: string,
+  maxLineLength: number,
+  opts?: {
+    splitLongLines?: boolean;
+    trimLines?: boolean;
+    isSafeBreak?: (index: number) => boolean;
+  },
+): string[] {
   if (!text) return [];
-  const lines = text.split("\n");
+  if (maxLineLength <= 0) return text.trim() ? [text] : [];
+  const splitLongLines = opts?.splitLongLines !== false;
+  const trimLines = opts?.trimLines !== false;
+  const lines = splitByNewline(text, opts?.isSafeBreak);
   const chunks: string[] = [];
+  let pendingBlankLines = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed) continue; // skip empty lines
-
-    if (trimmed.length <= maxLineLength) {
-      chunks.push(trimmed);
-    } else {
-      // Long line: fall back to length-based chunking
-      const subChunks = chunkText(trimmed, maxLineLength);
-      chunks.push(...subChunks);
+    if (!trimmed) {
+      pendingBlankLines += 1;
+      continue;
     }
+
+    const maxPrefix = Math.max(0, maxLineLength - 1);
+    const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
+    const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
+    pendingBlankLines = 0;
+
+    const lineValue = trimLines ? trimmed : line;
+    if (!splitLongLines || lineValue.length + prefix.length <= maxLineLength) {
+      chunks.push(prefix + lineValue);
+      continue;
+    }
+
+    const firstLimit = Math.max(1, maxLineLength - prefix.length);
+    const first = lineValue.slice(0, firstLimit);
+    chunks.push(prefix + first);
+    const remaining = lineValue.slice(firstLimit);
+    if (remaining) {
+      chunks.push(...chunkText(remaining, maxLineLength));
+    }
+  }
+
+  if (pendingBlankLines > 0 && chunks.length > 0) {
+    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
   }
 
   return chunks;
@@ -140,9 +169,57 @@ export function chunkByNewline(text: string, maxLineLength: number): string[] {
  */
 export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   if (mode === "newline") {
-    return chunkByNewline(text, limit);
+    const chunks: string[] = [];
+    const lineChunks = chunkByNewline(text, limit, { splitLongLines: false });
+    for (const line of lineChunks) {
+      const nested = chunkText(line, limit);
+      if (!nested.length && line) {
+        chunks.push(line);
+        continue;
+      }
+      chunks.push(...nested);
+    }
+    return chunks;
   }
   return chunkText(text, limit);
+}
+
+export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+  if (mode === "newline") {
+    const spans = parseFenceSpans(text);
+    const chunks: string[] = [];
+    const lineChunks = chunkByNewline(text, limit, {
+      splitLongLines: false,
+      trimLines: false,
+      isSafeBreak: (index) => isSafeFenceBreak(spans, index),
+    });
+    for (const line of lineChunks) {
+      const nested = chunkMarkdownText(line, limit);
+      if (!nested.length && line) {
+        chunks.push(line);
+        continue;
+      }
+      chunks.push(...nested);
+    }
+    return chunks;
+  }
+  return chunkMarkdownText(text, limit);
+}
+
+function splitByNewline(
+  text: string,
+  isSafeBreak: (index: number) => boolean = () => true,
+): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n" && isSafeBreak(i)) {
+      lines.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  lines.push(text.slice(start));
+  return lines;
 }
 
 export function chunkText(text: string, limit: number): string[] {

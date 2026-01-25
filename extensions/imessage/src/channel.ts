@@ -186,6 +186,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+    chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;

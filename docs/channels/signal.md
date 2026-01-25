@@ -95,6 +95,7 @@ Groups:
 
 ## Media + limits
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on each line before length chunking.
 - Attachments supported (base64 fetched from `signal-cli`).
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
 - Use `channels.signal.ignoreAttachments` to skip downloading media.
@@ -152,6 +153,7 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
+- `channels.signal.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap (MB).
 
 Related global options:

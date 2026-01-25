@@ -22,6 +22,7 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
@@ -346,6 +347,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         textLimit,
         maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
         tableMode,
+        chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
       replyReference.markSent();
     },

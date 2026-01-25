@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chunkByNewline,
   chunkMarkdownText,
+  chunkMarkdownTextWithMode,
   chunkText,
   chunkTextWithMode,
   resolveChunkMode,
@@ -246,16 +247,22 @@ describe("chunkByNewline", () => {
     expect(chunks).toEqual(["Line one", "Line two", "Line three"]);
   });
 
-  it("filters empty lines", () => {
+  it("preserves blank lines by folding into the next chunk", () => {
     const text = "Line one\n\n\nLine two\n\nLine three";
     const chunks = chunkByNewline(text, 1000);
-    expect(chunks).toEqual(["Line one", "Line two", "Line three"]);
+    expect(chunks).toEqual(["Line one", "\n\nLine two", "\nLine three"]);
   });
 
   it("trims whitespace from lines", () => {
     const text = "  Line one  \n  Line two  ";
     const chunks = chunkByNewline(text, 1000);
     expect(chunks).toEqual(["Line one", "Line two"]);
+  });
+
+  it("preserves leading blank lines on the first chunk", () => {
+    const text = "\n\nLine one\nLine two";
+    const chunks = chunkByNewline(text, 1000);
+    expect(chunks).toEqual(["\n\nLine one", "Line two"]);
   });
 
   it("falls back to length-based for long lines", () => {
@@ -269,12 +276,30 @@ describe("chunkByNewline", () => {
     expect(chunks[4]).toBe("Another short");
   });
 
+  it("does not split long lines when splitLongLines is false", () => {
+    const text = "a".repeat(50);
+    const chunks = chunkByNewline(text, 20, { splitLongLines: false });
+    expect(chunks).toEqual([text]);
+  });
+
   it("returns empty array for empty input", () => {
     expect(chunkByNewline("", 100)).toEqual([]);
   });
 
   it("returns empty array for whitespace-only input", () => {
     expect(chunkByNewline("   \n\n   ", 100)).toEqual([]);
+  });
+
+  it("preserves trailing blank lines on the last chunk", () => {
+    const text = "Line one\n\n";
+    const chunks = chunkByNewline(text, 1000);
+    expect(chunks).toEqual(["Line one\n\n"]);
+  });
+
+  it("keeps whitespace when trimLines is false", () => {
+    const text = "  indented line  \nNext";
+    const chunks = chunkByNewline(text, 1000, { trimLines: false });
+    expect(chunks).toEqual(["  indented line  ", "Next"]);
   });
 });
 
@@ -292,6 +317,26 @@ describe("chunkTextWithMode", () => {
   });
 });
 
+describe("chunkMarkdownTextWithMode", () => {
+  it("uses markdown-aware chunking for length mode", () => {
+    const text = "Line one\nLine two";
+    expect(chunkMarkdownTextWithMode(text, 1000, "length")).toEqual(chunkMarkdownText(text, 1000));
+  });
+
+  it("uses newline-based chunking for newline mode", () => {
+    const text = "Line one\nLine two";
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual(["Line one", "Line two"]);
+  });
+
+  it("does not split inside code fences for newline mode", () => {
+    const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
+    expect(chunkMarkdownTextWithMode(text, 1000, "newline")).toEqual([
+      "```js\nconst a = 1;\nconst b = 2;\n```",
+      "After",
+    ]);
+  });
+});
+
 describe("resolveChunkMode", () => {
   it("returns length as default", () => {
     expect(resolveChunkMode(undefined, "telegram")).toBe("length");
@@ -304,16 +349,16 @@ describe("resolveChunkMode", () => {
     expect(resolveChunkMode(cfg, "__internal__")).toBe("length");
   });
 
-  it("supports provider-level overrides for bluebubbles", () => {
-    const cfg = { channels: { bluebubbles: { chunkMode: "newline" as const } } };
-    expect(resolveChunkMode(cfg, "bluebubbles")).toBe("newline");
+  it("supports provider-level overrides for slack", () => {
+    const cfg = { channels: { slack: { chunkMode: "newline" as const } } };
+    expect(resolveChunkMode(cfg, "slack")).toBe("newline");
     expect(resolveChunkMode(cfg, "discord")).toBe("length");
   });
 
-  it("supports account-level overrides for bluebubbles", () => {
+  it("supports account-level overrides for slack", () => {
     const cfg = {
       channels: {
-        bluebubbles: {
+        slack: {
           chunkMode: "length" as const,
           accounts: {
             primary: { chunkMode: "newline" as const },
@@ -321,12 +366,7 @@ describe("resolveChunkMode", () => {
         },
       },
     };
-    expect(resolveChunkMode(cfg, "bluebubbles", "primary")).toBe("newline");
-    expect(resolveChunkMode(cfg, "bluebubbles", "other")).toBe("length");
-  });
-
-  it("ignores chunkMode for non-bluebubbles providers", () => {
-    const cfg = { channels: { ["telegram" as string]: { chunkMode: "newline" as const } } };
-    expect(resolveChunkMode(cfg, "telegram")).toBe("length");
+    expect(resolveChunkMode(cfg, "slack", "primary")).toBe("newline");
+    expect(resolveChunkMode(cfg, "slack", "other")).toBe("length");
   });
 });

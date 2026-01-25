@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import {
   chunkByNewline,
   chunkMarkdownText,
+  chunkMarkdownTextWithMode,
   chunkText,
   chunkTextWithMode,
   resolveChunkMode,
@@ -170,6 +171,7 @@ export function createPluginRuntime(): PluginRuntime {
       text: {
         chunkByNewline,
         chunkMarkdownText,
+        chunkMarkdownTextWithMode,
         chunkText,
         chunkTextWithMode,
         resolveChunkMode,

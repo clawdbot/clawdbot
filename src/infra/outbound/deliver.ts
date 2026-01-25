@@ -1,4 +1,9 @@
-import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import {
+  chunkByNewline,
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
@@ -62,6 +67,7 @@ type Chunker = (text: string, limit: number) => string[];
 
 type ChannelHandler = {
   chunker: Chunker | null;
+  chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
   sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
@@ -121,8 +127,10 @@ function createPluginHandler(params: {
   const sendText = outbound.sendText;
   const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
+  const chunkerMode = outbound.chunkerMode;
   return {
     chunker,
+    chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     sendText: async (text) =>
       sendText({
@@ -192,6 +200,7 @@ export async function deliverOutboundPayloads(params: {
         fallbackLimit: handler.textChunkLimit,
       })
     : undefined;
+  const chunkMode = handler.chunker ? resolveChunkMode(cfg, channel, accountId) : "length";
   const isSignalChannel = channel === "signal";
   const signalTableMode = isSignalChannel
     ? resolveMarkdownTableMode({ cfg, channel: "signal", accountId })
@@ -210,6 +219,23 @@ export async function deliverOutboundPayloads(params: {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
       results.push(await handler.sendText(text));
+      return;
+    }
+    if (chunkMode === "newline") {
+      const mode = handler.chunkerMode ?? "text";
+      const lineChunks =
+        mode === "markdown"
+          ? chunkMarkdownTextWithMode(text, textLimit, "newline")
+          : chunkByNewline(text, textLimit, { splitLongLines: false });
+      if (!lineChunks.length && text) lineChunks.push(text);
+      for (const lineChunk of lineChunks) {
+        const chunks = handler.chunker(lineChunk, textLimit);
+        if (!chunks.length && lineChunk) chunks.push(lineChunk);
+        for (const chunk of chunks) {
+          throwIfAborted(abortSignal);
+          results.push(await handler.sendText(chunk));
+        }
+      }
       return;
     }
     const chunks = handler.chunker(text, textLimit);

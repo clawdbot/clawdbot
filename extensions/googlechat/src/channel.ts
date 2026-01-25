@@ -374,6 +374,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) =>
       getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
     textChunkLimit: 4000,
     resolveTarget: ({ to, allowFrom, mode }) => {
       const trimmed = to?.trim() ?? "";

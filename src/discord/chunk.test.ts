@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chunkDiscordText } from "./chunk.js";
+import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
 function countLines(text: string) {
   return text.split("\n").length;
@@ -49,6 +49,16 @@ describe("chunkDiscordText", () => {
 
     expect(chunks[0]).toContain("```js");
     expect(chunks.at(-1)).toContain("Done.");
+  });
+
+  it("keeps fenced blocks intact when chunkMode is newline", () => {
+    const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
+    const chunks = chunkDiscordTextWithMode(text, {
+      maxChars: 2000,
+      maxLines: 50,
+      chunkMode: "newline",
+    });
+    expect(chunks).toEqual(["```js\nconst a = 1;\nconst b = 2;\n```", "After"]);
   });
 
   it("reserves space for closing fences when chunking", () => {

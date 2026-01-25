@@ -1,5 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
+import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -45,6 +46,7 @@ export async function sendMessageDiscord(
     channel: "discord",
     accountId: accountInfo.accountId,
   });
+  const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
   const textWithTables = convertMarkdownTables(text ?? "", tableMode);
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = parseRecipient(to);
@@ -61,6 +63,7 @@ export async function sendMessageDiscord(
         request,
         accountInfo.config.maxLinesPerMessage,
         opts.embeds,
+        chunkMode,
       );
     } else {
       result = await sendDiscordText(
@@ -71,6 +74,7 @@ export async function sendMessageDiscord(
         request,
         accountInfo.config.maxLinesPerMessage,
         opts.embeds,
+        chunkMode,
       );
     }
   } catch (err) {

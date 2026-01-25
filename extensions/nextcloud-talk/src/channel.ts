@@ -247,6 +247,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId, replyToId }) => {
       const result = await sendMessageNextcloudTalk(to, text, {

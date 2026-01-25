@@ -415,6 +415,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
 - `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
+- `channels.msteams.chunkMode`: `length` (default) or `newline` to split on newlines before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
 - `channels.msteams.requireMention`: require @mention in channels/groups (default true).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply Style](#reply-style-threads-vs-posts)).

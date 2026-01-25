@@ -37,6 +37,8 @@ type ResolveCommandAuthorizedFromAuthorizers =
 type ResolveTextChunkLimit = typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
 type ResolveChunkMode = typeof import("../../auto-reply/chunk.js").resolveChunkMode;
 type ChunkMarkdownText = typeof import("../../auto-reply/chunk.js").chunkMarkdownText;
+type ChunkMarkdownTextWithMode =
+  typeof import("../../auto-reply/chunk.js").chunkMarkdownTextWithMode;
 type ChunkText = typeof import("../../auto-reply/chunk.js").chunkText;
 type ChunkTextWithMode = typeof import("../../auto-reply/chunk.js").chunkTextWithMode;
 type ChunkByNewline = typeof import("../../auto-reply/chunk.js").chunkByNewline;
@@ -180,6 +182,7 @@ export type PluginRuntime = {
     text: {
       chunkByNewline: ChunkByNewline;
       chunkMarkdownText: ChunkMarkdownText;
+      chunkMarkdownTextWithMode: ChunkMarkdownTextWithMode;
       chunkText: ChunkText;
       chunkTextWithMode: ChunkTextWithMode;
       resolveChunkMode: ResolveChunkMode;

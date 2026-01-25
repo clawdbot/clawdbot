@@ -84,6 +84,7 @@ export type ChannelOutboundContext = {
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number) => string[]) | null;
+  chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   pollMaxOptions?: number;
   resolveTarget?: (params: {

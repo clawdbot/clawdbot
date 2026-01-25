@@ -12,7 +12,7 @@ import {
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
 
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -40,7 +40,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { loadWebMedia } from "../../web/media.js";
-import { chunkDiscordText } from "../chunk.js";
+import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import {
   allowListMatches,
@@ -767,6 +767,7 @@ async function dispatchDiscordCommandInteraction(params: {
             }),
             maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             preferFollowUp: preferFollowUp || didReply,
+            chunkMode: resolveChunkMode(cfg, "discord", accountId),
           });
         } catch (error) {
           if (isDiscordUnknownInteraction(error)) {
@@ -797,8 +798,9 @@ async function deliverDiscordInteractionReply(params: {
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
+  chunkMode: "length" | "newline";
 }) {
-  const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp } = params;
+  const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
   const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
   const text = payload.text ?? "";
 
@@ -838,10 +840,12 @@ async function deliverDiscordInteractionReply(params: {
         };
       }),
     );
-    const chunks = chunkDiscordText(text, {
+    const chunks = chunkDiscordTextWithMode(text, {
       maxChars: textLimit,
       maxLines: maxLinesPerMessage,
+      chunkMode,
     });
+    if (!chunks.length && text) chunks.push(text);
     const caption = chunks[0] ?? "";
     await sendMessage(caption, media);
     for (const chunk of chunks.slice(1)) {
@@ -852,10 +856,12 @@ async function deliverDiscordInteractionReply(params: {
   }
 
   if (!text.trim()) return;
-  const chunks = chunkDiscordText(text, {
+  const chunks = chunkDiscordTextWithMode(text, {
     maxChars: textLimit,
     maxLines: maxLinesPerMessage,
+    chunkMode,
   });
+  if (!chunks.length && text) chunks.push(text);
   for (const chunk of chunks) {
     if (!chunk.trim()) continue;
     await sendMessage(chunk);
