@@ -346,42 +346,48 @@ export async function dispatchReplyFromConfig(params: {
     // This handles the case where block streaming succeeds and drops final payloads,
     // but we still want TTS audio to be generated from the accumulated block content.
     if (replies.length === 0 && blockCount > 0 && accumulatedBlockText.trim()) {
-      const ttsSyntheticReply = await maybeApplyTtsToPayload({
-        payload: { text: accumulatedBlockText },
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-      });
-      // Only send if TTS was actually applied (mediaUrl exists)
-      if (ttsSyntheticReply.mediaUrl) {
-        // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
-        const ttsOnlyPayload: ReplyPayload = {
-          mediaUrl: ttsSyntheticReply.mediaUrl,
-          audioAsVoice: ttsSyntheticReply.audioAsVoice,
-        };
-        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-          const result = await routeReply({
-            payload: ttsOnlyPayload,
-            channel: originatingChannel,
-            to: originatingTo,
-            sessionKey: ctx.SessionKey,
-            accountId: ctx.AccountId,
-            threadId: ctx.MessageThreadId,
-            cfg,
-          });
-          queuedFinal = result.ok || queuedFinal;
-          if (result.ok) routedFinalCount += 1;
-          if (!result.ok) {
-            logVerbose(
-              `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
-            );
+      try {
+        const ttsSyntheticReply = await maybeApplyTtsToPayload({
+          payload: { text: accumulatedBlockText },
+          cfg,
+          channel: ttsChannel,
+          kind: "final",
+          inboundAudio,
+          ttsAuto: sessionTtsAuto,
+        });
+        // Only send if TTS was actually applied (mediaUrl exists)
+        if (ttsSyntheticReply.mediaUrl) {
+          // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
+          const ttsOnlyPayload: ReplyPayload = {
+            mediaUrl: ttsSyntheticReply.mediaUrl,
+            audioAsVoice: ttsSyntheticReply.audioAsVoice,
+          };
+          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const result = await routeReply({
+              payload: ttsOnlyPayload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: ctx.SessionKey,
+              accountId: ctx.AccountId,
+              threadId: ctx.MessageThreadId,
+              cfg,
+            });
+            queuedFinal = result.ok || queuedFinal;
+            if (result.ok) routedFinalCount += 1;
+            if (!result.ok) {
+              logVerbose(
+                `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
+              );
+            }
+          } else {
+            const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+            queuedFinal = didQueue || queuedFinal;
           }
-        } else {
-          const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
-          queuedFinal = didQueue || queuedFinal;
         }
+      } catch (err) {
+        logVerbose(
+          `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
