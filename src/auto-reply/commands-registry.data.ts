@@ -186,9 +186,18 @@ function buildChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "action",
-          description: "on | off | status | provider | limit | summary | audio | help",
+          description: "TTS action",
           type: "string",
-          choices: ["on", "off", "status", "provider", "limit", "summary", "audio", "help"],
+          choices: [
+            { value: "on", label: "On" },
+            { value: "off", label: "Off" },
+            { value: "status", label: "Status" },
+            { value: "provider", label: "Provider" },
+            { value: "limit", label: "Limit" },
+            { value: "summary", label: "Summary" },
+            { value: "audio", label: "Audio" },
+            { value: "help", label: "Help" },
+          ],
         },
         {
           name: "value",
@@ -197,7 +206,19 @@ function buildChatCommands(): ChatCommandDefinition[] {
           captureRemaining: true,
         },
       ],
-      argsMenu: "auto",
+      argsMenu: {
+        arg: "action",
+        title:
+          "TTS Actions:\n" +
+          "• On – Enable TTS for responses\n" +
+          "• Off – Disable TTS\n" +
+          "• Status – Show current settings\n" +
+          "• Provider – Set voice provider (edge, elevenlabs, openai)\n" +
+          "• Limit – Set max characters for TTS\n" +
+          "• Summary – Toggle AI summary for long texts\n" +
+          "• Audio – Generate TTS from custom text\n" +
+          "• Help – Show usage guide",
+      },
     }),
     defineChatCommand({
       key: "whoami",
