@@ -1,14 +1,11 @@
 ---
-summary: "Twitch chat bot support status, capabilities, and configuration"
+summary: "Twitch chat bot configuration and setup"
 read_when:
   - Setting up Twitch chat integration for Clawdbot
-  - Configuring Twitch bot permissions and access control
 ---
 # Twitch (plugin)
 
 Twitch chat support via IRC connection. Clawdbot connects as a Twitch user (bot account) to receive and send messages in channels.
-
-Status: ready for Twitch chat via IRC connection with @twurple.
 
 ## Plugin required
 
@@ -28,21 +25,20 @@ clawdbot plugins install ./extensions/twitch
 
 Details: [Plugins](/plugin)
 
-## Setup
+## Quick setup (beginner)
 
-1) Install the Twitch plugin and create a dedicated Twitch account for the bot.
-2) Generate your credentials (recommended: use [Twitch Token Generator](https://twitchtokengenerator.com/)):
+1) Create a dedicated Twitch account for the bot (or use an existing account).
+2) Generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)
    - Select **Bot Token**
    - Verify scopes `chat:read` and `chat:write` are selected
    - Copy the **Client ID** and **Access Token**
-3) Configure credentials:
+3) Configure the token:
    - Env: `CLAWDBOT_TWITCH_ACCESS_TOKEN=...` (default account only)
-   - Or config: `channels.twitch.accounts.default.accessToken`
+   - Or config: `channels.twitch.accessToken`
    - If both are set, config takes precedence (env fallback is default-account only).
 4) Start the gateway.
-5) The bot joins your channel and responds to messages.
 
-**⚠️ Important:** Strongly recommended to add `requireMention` and access control (`allowFrom` or `allowedRoles`) to prevent the bot from replying to all chat messages.
+**⚠️ Important:** Add `requireMention: true` and access control (`allowFrom` or `allowedRoles`) to prevent the bot from replying to all chat messages.
 
 Minimal config:
 
@@ -53,64 +49,114 @@ Minimal config:
       enabled: true,
       username: "clawdbot",              // Bot's Twitch account
       accessToken: "oauth:abc123...",    // OAuth Access Token (or use CLAWDBOT_TWITCH_ACCESS_TOKEN env var)
-      clientId: "your_client_id",        // Client ID from Token Generator
+      clientId: "xyz789...",             // Client ID from Token Generator
       channel: "vevisk",                 // Which Twitch channel's chat to join
       requireMention: true,              // (recommended) Only reply when mentioned
-      allowFrom: ["123456789"]           // (recommended) Your Twitch user ID only (Convert your twitch username to ID at https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/)
+      allowFrom: ["123456789"]           // (recommended) Your Twitch user ID only
     }
   }
 }
 ```
 
-**Recommended access control options:**
-- `requireMention: true` - Only respond when the bot is mentioned with `@botname`
-- `allowFrom: ["your_user_id"]` - Restrict to your Twitch user ID only
-- `allowedRoles: ["moderator", "vip", "subscriber"]` - Restrict to specific roles
+## What it is
 
-**Note:** [Twitch Token Generator](https://twitchtokengenerator.com/) provides the Client ID and Access Token (select **Bot Token** and verify `chat:read` + `chat:write` scopes) - no manual app registration needed.
+- A Twitch channel owned by the Gateway.
+- Deterministic routing: replies always go back to Twitch.
+- Each account maps to an isolated session key `agent:<agentId>:twitch:<accountName>`.
+- `username` is the bot's account (who authenticates), `channel` is which chat room to join.
 
-**Note:** `username` is the bot's account, `channel` is which chat to join.
+## Setup (detailed)
 
-## How it works
+### Generate credentials
 
-1. Create a bot account (or use an existing Twitch account).
-2. Generate credentials using [Twitch Token Generator](https://twitchtokengenerator.com/) (provides Client ID, Access Token, and optionally Refresh Token).
-3. Configure Clawdbot with the credentials.
-4. Run the gateway; it auto-starts the Twitch channel when a token is available (config first, env fallback) and `channels.twitch.enabled` is not `false`.
-5. The bot joins the specified `channel` to send/receive messages.
-6. Each account maps to an isolated session key `agent:<agentId>:twitch:<accountName>`.
+Use [Twitch Token Generator](https://twitchtokengenerator.com/):
+- Select **Bot Token**
+- Verify scopes `chat:read` and `chat:write` are selected
+- Copy the **Client ID** and **Access Token**
 
-**Key distinction:** `username` is who the bot authenticates as (the bot's account), `channel` is which chat room it joins.
+No manual app registration needed. Tokens expire after several hours.
+
+### Configure the bot
+
+**Env var (default account only):**
+```bash
+CLAWDBOT_TWITCH_ACCESS_TOKEN=oauth:abc123...
+```
+
+**Or config:**
+```json5
+{
+  channels: {
+    twitch: {
+      enabled: true,
+      username: "clawdbot",
+      accessToken: "oauth:abc123...",
+      clientId: "xyz789...",
+      channel: "vevisk"
+    }
+  }
+}
+```
+
+If both env and config are set, config takes precedence.
+
+### Access control (recommended)
+
+```json5
+{
+  channels: {
+    twitch: {
+      requireMention: true,          // (recommended) Only respond when mentioned
+      allowFrom: ["123456789"],       // (recommended) Your Twitch user ID only
+      allowedRoles: ["moderator"]     // Or restrict to roles
+    }
+  }
+}
+```
+
+**Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
+
+**Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
+
+Find your Twitch user ID: https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/ (Convert your Twitch username to ID)
 
 ## Token refresh (optional)
 
-Tokens from [Twitch Token Generator](https://twitchtokengenerator.com/) cannot be automatically refreshed - you'll need to generate a new token when it expires (typically after several hours).
+Tokens from [Twitch Token Generator](https://twitchtokengenerator.com/) cannot be automatically refreshed - regenerate when expired.
 
-For automatic token refresh, create your own Twitch application at [Twitch Developer Console](https://dev.twitch.tv/console) and add `clientSecret` and `refreshToken` to your config. The bot automatically refreshes tokens before they expire and logs refresh events.
+For automatic token refresh, create your own Twitch application at [Twitch Developer Console](https://dev.twitch.tv/console) and add to config:
 
-## Routing model
+```json5
+{
+  channels: {
+    twitch: {
+      clientSecret: "your_client_secret",
+      refreshToken: "your_refresh_token"
+    }
+  }
+}
+```
 
-- Replies always go back to Twitch.
-- Each account maps to `agent:<agentId>:twitch:<accountName>`.
+The bot automatically refreshes tokens before expiration and logs refresh events.
 
 ## Multi-account support
 
 Use `channels.twitch.accounts` with per-account tokens. See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
-Example (one bot account in two different channels):
+Example (one bot account in two channels):
 
 ```json5
 {
   channels: {
     twitch: {
       accounts: {
-        ninjaChannel: {
+        channel1: {
           username: "clawdbot",
           accessToken: "oauth:abc123...",
           clientId: "xyz789...",
           channel: "vevisk"
         },
-        shroudChannel: {
+        channel2: {
           username: "clawdbot",
           accessToken: "oauth:def456...",
           clientId: "uvw012...",
@@ -122,6 +168,8 @@ Example (one bot account in two different channels):
 }
 ```
 
+**Note:** Each account needs its own token (one token per channel).
+
 ## Access control
 
 ### Role-based restrictions
@@ -132,10 +180,6 @@ Example (one bot account in two different channels):
     twitch: {
       accounts: {
         default: {
-          username: "mybot",
-          accessToken: "oauth:abc123...",
-          clientId: "xyz789...",
-          channel: "your_channel",
           allowedRoles: ["moderator", "vip"]
         }
       }
@@ -144,11 +188,7 @@ Example (one bot account in two different channels):
 }
 ```
 
-**Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
-
-### Allowlist by User ID
-
-Only allow specific Twitch user IDs (most secure):
+### Allowlist by User ID (most secure)
 
 ```json5
 {
@@ -156,10 +196,6 @@ Only allow specific Twitch user IDs (most secure):
     twitch: {
       accounts: {
         default: {
-          username: "mybot",
-          accessToken: "oauth:abc123...",
-          clientId: "xyz789...",
-          channel: "your_channel",
           allowFrom: ["123456789", "987654321"]
         }
       }
@@ -168,16 +204,9 @@ Only allow specific Twitch user IDs (most secure):
 }
 ```
 
-**Why user IDs instead of usernames?** Twitch usernames can change, which could allow someone to hijack another user's access. User IDs are permanent.
-
-Find your Twitch user ID at: https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/
-
 ### Combined allowlist + roles
 
-Users in `allowFrom` bypass role checks. Example:
-- User `123456789` can always message (bypasses role check)
-- All moderators can message
-- Everyone else is blocked
+Users in `allowFrom` bypass role checks:
 
 ```json5
 {
@@ -185,10 +214,6 @@ Users in `allowFrom` bypass role checks. Example:
     twitch: {
       accounts: {
         default: {
-          username: "mybot",
-          accessToken: "oauth:abc123...",
-          clientId: "xyz789...",
-          channel: "your_channel",
           allowFrom: ["123456789"],
           allowedRoles: ["moderator"]
         }
@@ -200,18 +225,12 @@ Users in `allowFrom` bypass role checks. Example:
 
 ### Require @mention
 
-Only respond when the bot is mentioned:
-
 ```json5
 {
   channels: {
     twitch: {
       accounts: {
         default: {
-          username: "mybot",
-          accessToken: "oauth:abc123...",
-          clientId: "xyz789...",
-          channel: "your_channel",
           requireMention: true
         }
       }
@@ -219,25 +238,6 @@ Only respond when the bot is mentioned:
   }
 }
 ```
-
-## Capabilities & limits
-
-**Supported:**
-- ✅ Channel messages (group chat)
-- ✅ Whispers/DMs (received but replies not supported - Twitch doesn't allow bots to send whispers)
-- ✅ Markdown stripping (automatically applied)
-- ✅ Message chunking (500 char limit)
-- ✅ Access control (user ID allowlist, role-based)
-- ✅ @mention requirement
-- ✅ Automatic token refresh (with RefreshingAuthProvider)
-- ✅ Multi-account support
-
-**Not supported:**
-- ❌ Native reactions
-- ❌ Threaded replies
-- ❌ Message editing
-- ❌ Message deletion
-- ❌ Rich embeds/media uploads (sends media URLs as text)
 
 ## Troubleshooting
 
@@ -259,7 +259,7 @@ clawdbot channels status --probe
 **"Failed to connect" or authentication errors:**
 - Verify `accessToken` is the OAuth access token value (typically starts with `oauth:` prefix)
 - Check token has `chat:read` and `chat:write` scopes
-- If using RefreshingAuthProvider, verify `clientSecret` and `refreshToken` are set
+- If using token refresh, verify `clientSecret` and `refreshToken` are set
 
 ### Token refresh not working
 
@@ -274,6 +274,33 @@ If you see "token refresh disabled (no refresh token)":
 - Ensure `refreshToken` is provided
 
 ## Config
+
+**Account config:**
+- `username` - Bot username
+- `accessToken` - OAuth access token with `chat:read` and `chat:write`
+- `clientId` - Twitch Client ID (from Token Generator or your app)
+- `channel` - Channel to join
+- `enabled` - Enable this account (default: `true`)
+- `clientSecret` - Optional: For automatic token refresh
+- `refreshToken` - Optional: For automatic token refresh
+- `expiresIn` - Token expiry in seconds
+- `obtainmentTimestamp` - Token obtained timestamp
+- `allowFrom` - User ID allowlist
+- `allowedRoles` - Role-based access control (`"moderator" | "owner" | "vip" | "subscriber" | "all"`)
+- `requireMention` - Require @mention (default: `false`)
+
+**Plugin config:**
+- `stripMarkdown` - Strip markdown from outbound (default: `true`)
+
+**Provider options:**
+- `channels.twitch.enabled` - Enable/disable channel startup
+- `channels.twitch.username` - Bot username (simplified single-account config)
+- `channels.twitch.accessToken` - OAuth access token (simplified single-account config)
+- `channels.twitch.clientId` - Twitch Client ID (simplified single-account config)
+- `channels.twitch.channel` - Channel to join (simplified single-account config)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
+
+Full example:
 
 ```json5
 {
@@ -317,31 +344,6 @@ If you see "token refresh disabled (no refresh token)":
 }
 ```
 
-**Account config:**
-- `username` - Bot username
-- `accessToken` - OAuth access token with `chat:read` and `chat:write`
-- `clientId` - Twitch Client ID (from Token Generator or your app)
-- `channel` - Channel to join
-- `enabled` - Enable this account (default: `true`)
-- `clientSecret` - Optional: For automatic token refresh (from YOUR Twitch app)
-- `refreshToken` - Optional: For automatic token refresh (from YOUR Twitch app)
-- `expiresIn` - Token expiry in seconds
-- `obtainmentTimestamp` - Token obtained timestamp
-- `allowFrom` - User ID allowlist
-- `allowedRoles` - Role-based access control (`"moderator" | "owner" | "vip" | "subscriber" | "all"`)
-- `requireMention` - Require @mention (default: `false`)
-
-**Plugin config:**
-- `stripMarkdown` - Strip markdown from outbound (default: `true`)
-
-**Provider options:**
-- `channels.twitch.enabled` - Enable/disable channel startup
-- `channels.twitch.username` - Bot username (simplified single-account config)
-- `channels.twitch.accessToken` - OAuth access token (simplified single-account config)
-- `channels.twitch.clientId` - Twitch Client ID (simplified single-account config)
-- `channels.twitch.channel` - Channel to join (simplified single-account config)
-- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
-
 ## Tool actions
 
 The agent can call `twitch` with action:
@@ -362,15 +364,14 @@ Example:
 ## Safety & ops
 
 - **Treat tokens like passwords** - Never commit tokens to git
-- **Use RefreshingAuthProvider** for long-running bots
+- **Use automatic token refresh** for long-running bots
 - **Use user ID allowlists** instead of usernames for access control
 - **Monitor logs** for token refresh events and connection status
 - **Scope tokens minimally** - Only request `chat:read` and `chat:write`
 - **If stuck**: Restart the gateway after confirming no other process owns the session
 
-## Message limits
+## Limits
 
-- **500 characters** per message (Twitch limit)
-- Messages are automatically chunked at word boundaries
-- Markdown is stripped before chunking to avoid breaking patterns
+- **500 characters** per message (auto-chunked at word boundaries)
+- Markdown is stripped before chunking
 - No rate limiting (uses Twitch's built-in rate limits)

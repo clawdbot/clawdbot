@@ -1,6 +1,6 @@
 # @clawdbot/twitch
 
-Twitch chat plugin for Clawdbot.
+Twitch channel plugin for Clawdbot.
 
 ## Install (local checkout)
 

@@ -8,8 +8,10 @@
 import type { ReplyPayload } from "clawdbot/plugin-sdk";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl } from "./access-control.js";
+import { parsePluginConfig } from "./config.js";
 import { getTwitchRuntime } from "./runtime.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
+import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
 export type TwitchRuntimeEnv = {
   log?: (message: string) => void;
@@ -165,7 +167,12 @@ async function deliverTwitchReply(params: {
       runtime.error?.(`No text to send in reply payload`);
       return;
     }
-    await client.say(channel, payload.text);
+
+    const pluginCfg = parsePluginConfig((config as any).pluginConfig ?? {});
+    const textToSend =
+      (pluginCfg.stripMarkdown ?? true) ? stripMarkdownForTwitch(payload.text) : payload.text;
+
+    await client.say(channel, textToSend);
     statusSink?.({ lastOutboundAt: Date.now() });
   } catch (err) {
     runtime.error?.(`Failed to send reply: ${String(err)}`);
