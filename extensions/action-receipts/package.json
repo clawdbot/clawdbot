@@ -7,11 +7,5 @@
     "extensions": [
       "./index.ts"
     ]
-  },
-  "peerDependencies": {
-    "clawdbot/plugin-sdk": "^0.0.0"
-  },
-  "devDependencies": {
-    "clawdbot/plugin-sdk": "workspace:*"
   }
 }
