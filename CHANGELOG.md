@@ -2,6 +2,22 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.24-3
+
+### Fixes
+- Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
+- Security audit: flag loopback Control UI with auth disabled as critical. (#1795) Thanks @orlyjamie.
+
+## 2026.1.24-2
+
+### Fixes
+- Packaging: include dist/link-understanding output in npm tarball (fixes missing apply.js import on install).
+
+## 2026.1.24-1
+
+### Fixes
+- Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).
+
 ## 2026.1.24
 
 ### Highlights
@@ -38,6 +54,7 @@ Docs: https://docs.clawd.bot
 - Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.
 - BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.clawd.bot/channels/bluebubbles
 - BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.
+- iMessage: normalize chat_id/chat_guid/chat_identifier prefixes case-insensitively and keep service-prefixed handles stable. (#1708) Thanks @aaronn.
 - Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.
 - Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.clawd.bot/channels/signal
 - Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.

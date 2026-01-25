@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 
 // Mock fs module before importing the module under test
 const mockExistsSync = vi.fn();
@@ -19,7 +19,9 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 describe("extractGeminiCliCredentials", () => {
-  const normalizePath = (value: string) => value.replace(/\\/g, "/");
+  const normalizePath = (value: string) =>
+    value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const rootDir = parse(process.cwd()).root || "/";
   const FAKE_CLIENT_ID = "123456789-abcdef.apps.googleusercontent.com";
   const FAKE_CLIENT_SECRET = "GOCSPX-FakeSecretValue123";
   const FAKE_OAUTH2_CONTENT = `
@@ -49,11 +51,33 @@ describe("extractGeminiCliCredentials", () => {
   });
 
   it("extracts credentials from oauth2.js in known path", async () => {
-    const fakeBinDir = "/fake/bin";
+    const fakeBinDir = join(rootDir, "fake", "bin");
     const fakeGeminiPath = join(fakeBinDir, "gemini");
-    const fakeResolvedPath = "/fake/lib/node_modules/@google/gemini-cli/dist/index.js";
-    const fakeOauth2Path =
-      "/fake/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js";
+    const fakeResolvedPath = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "dist",
+      "index.js",
+    );
+    const fakeOauth2Path = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
 
     process.env.PATH = fakeBinDir;
 
@@ -77,9 +101,18 @@ describe("extractGeminiCliCredentials", () => {
   });
 
   it("returns null when oauth2.js cannot be found", async () => {
-    const fakeBinDir = "/fake/bin";
+    const fakeBinDir = join(rootDir, "fake", "bin");
     const fakeGeminiPath = join(fakeBinDir, "gemini");
-    const fakeResolvedPath = "/fake/lib/node_modules/@google/gemini-cli/dist/index.js";
+    const fakeResolvedPath = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "dist",
+      "index.js",
+    );
 
     process.env.PATH = fakeBinDir;
 
@@ -95,11 +128,33 @@ describe("extractGeminiCliCredentials", () => {
   });
 
   it("returns null when oauth2.js lacks credentials", async () => {
-    const fakeBinDir = "/fake/bin";
+    const fakeBinDir = join(rootDir, "fake", "bin");
     const fakeGeminiPath = join(fakeBinDir, "gemini");
-    const fakeResolvedPath = "/fake/lib/node_modules/@google/gemini-cli/dist/index.js";
-    const fakeOauth2Path =
-      "/fake/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js";
+    const fakeResolvedPath = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "dist",
+      "index.js",
+    );
+    const fakeOauth2Path = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
 
     process.env.PATH = fakeBinDir;
 
@@ -118,11 +173,33 @@ describe("extractGeminiCliCredentials", () => {
   });
 
   it("caches credentials after first extraction", async () => {
-    const fakeBinDir = "/fake/bin";
+    const fakeBinDir = join(rootDir, "fake", "bin");
     const fakeGeminiPath = join(fakeBinDir, "gemini");
-    const fakeResolvedPath = "/fake/lib/node_modules/@google/gemini-cli/dist/index.js";
-    const fakeOauth2Path =
-      "/fake/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js";
+    const fakeResolvedPath = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "dist",
+      "index.js",
+    );
+    const fakeOauth2Path = join(
+      rootDir,
+      "fake",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
 
     process.env.PATH = fakeBinDir;
 

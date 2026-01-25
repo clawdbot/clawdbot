@@ -207,6 +207,10 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
+  const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
+  const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
+    ? cfg.gateway.trustedProxies
+    : [];
 
   if (bind !== "loopback" && auth.mode === "none") {
     findings.push({
@@ -215,6 +219,32 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
       title: "Gateway binds beyond loopback without auth",
       detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
       remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
+    });
+  }
+
+  if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+    findings.push({
+      checkId: "gateway.trusted_proxies_missing",
+      severity: "warn",
+      title: "Reverse proxy headers are not trusted",
+      detail:
+        "gateway.bind is loopback and gateway.trustedProxies is empty. " +
+        "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
+        "so local-client checks cannot be spoofed.",
+      remediation:
+        "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
+    });
+  }
+
+  if (bind === "loopback" && controlUiEnabled && auth.mode === "none") {
+    findings.push({
+      checkId: "gateway.loopback_no_auth",
+      severity: "critical",
+      title: "Gateway auth disabled on loopback",
+      detail:
+        "gateway.bind is loopback and gateway.auth is disabled. " +
+        "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
+      remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
     });
   }
 

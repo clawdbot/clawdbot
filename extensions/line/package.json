@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/line",
-  "version": "2026.1.22",
+  "version": "2026.1.24",
   "type": "module",
   "description": "Clawdbot LINE channel plugin",
   "clawdbot": {

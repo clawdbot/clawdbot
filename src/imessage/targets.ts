@@ -34,6 +34,27 @@ export function normalizeIMessageHandle(raw: string): string {
   if (lowered.startsWith("imessage:")) return normalizeIMessageHandle(trimmed.slice(9));
   if (lowered.startsWith("sms:")) return normalizeIMessageHandle(trimmed.slice(4));
   if (lowered.startsWith("auto:")) return normalizeIMessageHandle(trimmed.slice(5));
+
+  // Normalize chat_id/chat_guid/chat_identifier prefixes case-insensitively
+  for (const prefix of CHAT_ID_PREFIXES) {
+    if (lowered.startsWith(prefix)) {
+      const value = trimmed.slice(prefix.length).trim();
+      return `chat_id:${value}`;
+    }
+  }
+  for (const prefix of CHAT_GUID_PREFIXES) {
+    if (lowered.startsWith(prefix)) {
+      const value = trimmed.slice(prefix.length).trim();
+      return `chat_guid:${value}`;
+    }
+  }
+  for (const prefix of CHAT_IDENTIFIER_PREFIXES) {
+    if (lowered.startsWith(prefix)) {
+      const value = trimmed.slice(prefix.length).trim();
+      return `chat_identifier:${value}`;
+    }
+  }
+
   if (trimmed.includes("@")) return trimmed.toLowerCase();
   const normalized = normalizeE164(trimmed);
   if (normalized) return normalized;

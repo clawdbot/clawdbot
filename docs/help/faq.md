@@ -105,6 +105,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
   - [Tailscale is connected but I get no replies. What now?](#tailscale-is-connected-but-i-get-no-replies-what-now)
   - [Can two Clawdbots talk to each other (local + VPS)?](#can-two-clawdbots-talk-to-each-other-local-vps)
+  - [Do I need separate VPSes for multiple agents](#do-i-need-separate-vpses-for-multiple-agents)
   - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
@@ -1462,6 +1463,16 @@ Tip: add a guardrail so the two bots do not loop endlessly (mention-only, channe
 allowlists, or a "do not reply to bot messages" rule).
 
 Docs: [Remote access](/gateway/remote), [Agent CLI](/cli/agent), [Agent send](/tools/agent-send).
+
+### Do I need separate VPSes for multiple agents
+
+No. One Gateway can host multiple agents, each with its own workspace, model defaults,
+and routing. That is the normal setup and it is much cheaper and simpler than running
+one VPS per agent.
+
+Use separate VPSes only when you need hard isolation (security boundaries) or very
+different configs that you do not want to share. Otherwise, keep one Gateway and
+use multiple agents or sub-agents.
 
 ### Is there a benefit to using a node on my personal laptop instead of SSH from a VPS
 
