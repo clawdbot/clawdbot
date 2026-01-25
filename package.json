@@ -219,6 +219,8 @@
     "@types/node": "^25.0.10",
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
+    "@types/react": "^19.2.9",
+    "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260125.1",
     "@vitest/coverage-v8": "^4.0.18",
