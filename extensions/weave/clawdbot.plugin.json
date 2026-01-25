@@ -1,0 +1,92 @@
+{
+  "id": "weave",
+  "name": "W&B Weave",
+  "description": "Weights & Biases Weave integration for LLM observability and tracing",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "W&B API key for authentication",
+        "uiHints": {
+          "label": "API Key",
+          "sensitive": true,
+          "help": "Get your API key from wandb.ai/settings"
+        }
+      },
+      "entity": {
+        "type": "string",
+        "description": "W&B entity (username or team name)",
+        "uiHints": {
+          "label": "Entity",
+          "placeholder": "your-username"
+        }
+      },
+      "project": {
+        "type": "string",
+        "description": "Default W&B project name for traces",
+        "default": "clawdbot",
+        "uiHints": {
+          "label": "Project",
+          "placeholder": "clawdbot"
+        }
+      },
+      "autoTrace": {
+        "type": "boolean",
+        "description": "Automatically trace all agent runs",
+        "default": true,
+        "uiHints": {
+          "label": "Auto-trace Agent Runs"
+        }
+      },
+      "traceToolCalls": {
+        "type": "boolean",
+        "description": "Log tool calls as child spans",
+        "default": true,
+        "uiHints": {
+          "label": "Trace Tool Calls"
+        }
+      },
+      "traceSessions": {
+        "type": "boolean",
+        "description": "Track session lifecycle",
+        "default": true,
+        "uiHints": {
+          "label": "Trace Sessions"
+        }
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Custom W&B server URL (leave empty for default)",
+        "uiHints": {
+          "label": "Base URL",
+          "advanced": true,
+          "placeholder": "https://api.wandb.ai"
+        }
+      },
+      "sampleRate": {
+        "type": "number",
+        "description": "Trace sampling rate (0.0 to 1.0)",
+        "default": 1.0,
+        "minimum": 0,
+        "maximum": 1,
+        "uiHints": {
+          "label": "Sample Rate",
+          "advanced": true,
+          "help": "Set to less than 1.0 to sample traces"
+        }
+      },
+      "debug": {
+        "type": "boolean",
+        "description": "Enable verbose debug logging",
+        "default": false,
+        "uiHints": {
+          "label": "Debug Mode",
+          "advanced": true
+        }
+      }
+    },
+    "required": ["apiKey", "entity"]
+  }
+}

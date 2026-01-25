@@ -19,6 +19,8 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookLlmRequestContext,
+  PluginHookLlmRequestEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -41,6 +43,8 @@ export type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookAgentEndEvent,
+  PluginHookLlmRequestContext,
+  PluginHookLlmRequestEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
@@ -204,6 +208,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("agent_end", event, ctx);
+  }
+
+  /**
+   * Run llm_request hook.
+   * Called when an LLM API request is about to be sent.
+   * Provides the complete request payload including system prompt.
+   * Runs in parallel (fire-and-forget, observability only).
+   */
+  async function runLlmRequest(
+    event: PluginHookLlmRequestEvent,
+    ctx: PluginHookLlmRequestContext,
+  ): Promise<void> {
+    return runVoidHook("llm_request", event, ctx);
   }
 
   /**
@@ -435,6 +452,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Agent hooks
     runBeforeAgentStart,
     runAgentEnd,
+    runLlmRequest,
     runBeforeCompaction,
     runAfterCompaction,
     // Message hooks

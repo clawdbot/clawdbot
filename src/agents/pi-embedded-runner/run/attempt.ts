@@ -22,6 +22,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { createLlmRequestHookWrapper } from "../../llm-request-hook.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
@@ -508,6 +509,21 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // LLM Request Hook - emits llm_request hook for plugins to observe full payloads
+      const llmRequestHook = createLlmRequestHookWrapper({
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionKey?.split(":")[0] ?? "main",
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
+      if (llmRequestHook) {
+        activeSession.agent.streamFn = llmRequestHook.wrapStreamFn(activeSession.agent.streamFn);
       }
 
       try {

@@ -289,6 +289,7 @@ export type PluginDiagnostic = {
 export type PluginHookName =
   | "before_agent_start"
   | "agent_end"
+  | "llm_request"
   | "before_compaction"
   | "after_compaction"
   | "message_received"
@@ -462,6 +463,42 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// llm_request hook - captures the full LLM API request payload
+export type PluginHookLlmRequestEvent = {
+  /** The complete request payload sent to the LLM API */
+  payload: {
+    /** System prompt (if any) */
+    system?: unknown;
+    /** Messages array */
+    messages?: unknown[];
+    /** Model ID */
+    model?: string;
+    /** Max tokens */
+    max_tokens?: number;
+    /** Temperature */
+    temperature?: number;
+    /** Tools/functions available */
+    tools?: unknown[];
+    /** Any other API parameters */
+    [key: string]: unknown;
+  };
+  /** SHA256 hash of the payload for deduplication */
+  payloadDigest?: string;
+  /** Timestamp of the request */
+  timestamp: string;
+};
+
+export type PluginHookLlmRequestContext = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  provider?: string;
+  modelId?: string;
+  modelApi?: string | null;
+  workspaceDir?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_agent_start: (
@@ -469,6 +506,10 @@ export type PluginHookHandlerMap = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_request: (
+    event: PluginHookLlmRequestEvent,
+    ctx: PluginHookLlmRequestContext,
+  ) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
     ctx: PluginHookAgentContext,

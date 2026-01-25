@@ -1,0 +1,12 @@
+{
+  "name": "@clawdbot/weave",
+  "version": "2026.1.25",
+  "type": "module",
+  "description": "W&B Weave integration for Clawdbot - LLM observability and tracing",
+  "clawdbot": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "weave": "^0.11.0"
+  }
+}
