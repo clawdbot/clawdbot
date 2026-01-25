@@ -1,15 +1,25 @@
 ---
-summary: "Run Clawdbot in a sandboxed macOS VM on your existing Apple Silicon Mac using Lume"
+summary: "Run Clawdbot in a sandboxed macOS VM (local or hosted) when you need isolation or iMessage"
 read_when:
   - You want Clawdbot isolated from your main macOS environment
   - You want iMessage integration (BlueBubbles) in a sandbox
-  - You already have an Apple Silicon Mac and don't want to buy extra hardware
-  - You want to reset your Clawdbot environment easily by cloning VMs
+  - You want a resettable macOS environment you can clone
+  - You want to compare local vs hosted macOS VM options
 ---
 
-# Clawdbot on Lume (macOS Sandbox)
+# Clawdbot on macOS VMs (Sandboxing)
 
-## Goal
+## Recommended default (most users)
+
+- **Small Linux VPS** for an always-on Gateway and low cost. See [VPS hosting](/vps).
+- **Dedicated hardware** (Mac mini or Linux box) if you want full control and a **residential IP** for browser automation. Many sites block data center IPs, so local browsing often works better.
+- **Hybrid:** keep the Gateway on a cheap VPS, and connect your Mac as a **node** when you need browser/UI automation. See [Nodes](/nodes) and [Gateway remote](/gateway/remote).
+
+Use a macOS VM when you specifically need macOS-only capabilities (iMessage/BlueBubbles) or want strict isolation from your daily Mac.
+
+## macOS VM options
+
+### Local VM on your Apple Silicon Mac (Lume)
 
 Run Clawdbot in a sandboxed macOS VM on your existing Apple Silicon Mac using [Lume](https://cua.ai/docs/lume).
 
@@ -19,19 +29,17 @@ This gives you:
 - Instant reset by cloning VMs
 - No extra hardware or cloud costs
 
-## What are we doing?
+### Hosted Mac providers (cloud)
 
-- Install Lume on your Mac (VM manager using Apple's Virtualization Framework)
-- Create a macOS VM
-- SSH into the VM
-- Install and configure Clawdbot inside the VM
-- Run the VM headlessly in the background
+If you want macOS in the cloud, hosted Mac providers work too:
+- [MacStadium](https://www.macstadium.com/) (hosted Macs)
+- Other hosted Mac vendors also work; follow their VM + SSH docs
 
-The Gateway runs inside the VM. You access it via SSH or the VM's IP.
+Once you have SSH access to a macOS VM, continue at step 6 below.
 
 ---
 
-## Quick path (experienced users)
+## Quick path (Lume, experienced users)
 
 1. Install Lume
 2. `lume create clawdbot --os macos --ipsw latest`
@@ -42,7 +50,7 @@ The Gateway runs inside the VM. You access it via SSH or the VM's IP.
 
 ---
 
-## What you need
+## What you need (Lume)
 
 - Apple Silicon Mac (M1/M2/M3/M4)
 - macOS Sequoia or later on the host
@@ -191,7 +199,8 @@ Inside the VM:
 
 1. Download BlueBubbles from bluebubbles.app
 2. Sign in with your Apple ID
-3. Enable the Web API in BlueBubbles settings
+3. Enable the Web API and set a password
+4. Point BlueBubbles webhooks at your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`)
 
 Add to your Clawdbot config:
 
@@ -200,13 +209,16 @@ Add to your Clawdbot config:
   "channels": {
     "bluebubbles": {
       "serverUrl": "http://localhost:1234",
-      "password": "your-api-password"
+      "password": "your-api-password",
+      "webhookPath": "/bluebubbles-webhook"
     }
   }
 }
 ```
 
 Restart the gateway. Now your agent can send and receive iMessages.
+
+Full setup details: [BlueBubbles channel](/channels/bluebubbles)
 
 ---
 
@@ -236,7 +248,7 @@ Keep the VM running by:
 - Disabling sleep in System Settings → Energy Saver
 - Using `caffeinate` if needed
 
-For true always-on, consider a dedicated Mac Mini or cloud Mac instances.
+For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosting](/vps).
 
 ---
 
@@ -253,6 +265,10 @@ For true always-on, consider a dedicated Mac Mini or cloud Mac instances.
 
 ## Related docs
 
+- [VPS hosting](/vps)
+- [Nodes](/nodes)
+- [Gateway remote](/gateway/remote)
+- [BlueBubbles channel](/channels/bluebubbles)
 - [Lume Quickstart](https://cua.ai/docs/lume/guide/getting-started/quickstart)
 - [Lume CLI Reference](https://cua.ai/docs/lume/reference/cli-reference)
 - [Unattended VM Setup](https://cua.ai/docs/lume/guide/fundamentals/unattended-setup) (advanced)
