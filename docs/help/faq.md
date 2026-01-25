@@ -2690,10 +2690,23 @@ Enable cross‑provider messaging for the agent:
       tools: {
         message: {
           crossContext: {
-            allowAcrossProviders: true,
-            marker: { enabled: true, prefix: "[from {channel}] " }
+            allowAcrossProviders: true
           }
         }
+      }
+    }
+  }
+}
+```
+
+To add an origin marker on cross‑context messages (disabled by default):
+
+```json5
+{
+  tools: {
+    message: {
+      crossContext: {
+        marker: { enabled: true, prefix: "[from {channel}] " }
       }
     }
   }

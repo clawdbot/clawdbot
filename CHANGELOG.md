@@ -6,6 +6,7 @@ Docs: https://docs.molt.bot
 Status: beta.
 
 ### Changes
+<<<<<<< HEAD
 - Rebrand: rename the npm package/CLI to `moltbot`, add a `moltbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
 - Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
 - macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
@@ -114,6 +115,7 @@ Status: beta.
 - Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
 - Gateway: treat loopback + non-local Host connections as remote unless trusted proxy headers are present.
 - Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.
+- Message tool: disable cross-context origin marker by default; set `tools.message.crossContext.marker.enabled: true` to restore. (#1782)
 
 ## 2026.1.24-3
 

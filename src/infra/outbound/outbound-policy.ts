@@ -124,7 +124,7 @@ export async function buildCrossContextDecoration(params: {
   if (!isCrossContextTarget(params)) return null;
 
   const markerConfig = params.cfg.tools?.message?.crossContext?.marker;
-  if (markerConfig?.enabled === false) return null;
+  if (markerConfig?.enabled !== true) return null;
 
   const currentName =
     (await lookupDirectoryDisplay({

@@ -427,7 +427,7 @@ const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.allowAcrossProviders":
     "Allow sends across different providers (default: false).",
   "tools.message.crossContext.marker.enabled":
-    "Add a visible origin marker when sending cross-context (default: true).",
+    "Add a visible origin marker when sending cross-context (default: false).",
   "tools.message.crossContext.marker.prefix":
     'Text prefix for cross-context markers (supports "{channel}").',
   "tools.message.crossContext.marker.suffix":
