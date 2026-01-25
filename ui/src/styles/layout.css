@@ -404,24 +404,11 @@
 .nav-item.active {
   color: var(--text-strong);
   background: var(--accent-subtle);
-  border-color: rgba(255, 92, 92, 0.15);
 }
 
 .nav-item.active .nav-item__icon {
   opacity: 1;
   color: var(--accent);
-}
-
-.nav-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 16px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
 }
 
 /* ===========================================
