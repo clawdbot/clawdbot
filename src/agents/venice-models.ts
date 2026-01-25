@@ -340,7 +340,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     });
 
     if (!response.ok) {
-      console.warn(`[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`);
+      console.warn(
+        `[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`,
+      );
       return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
@@ -355,7 +357,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     const models: ModelDefinitionConfig[] = [];
 
     for (const apiModel of data.data) {
-      const catalogEntry = catalogById.get(apiModel.id);
+      const catalogEntry = catalogById.get(apiModel.id as any);
       if (catalogEntry) {
         // Use catalog metadata for known models
         models.push(buildVeniceModelDefinition(catalogEntry));
