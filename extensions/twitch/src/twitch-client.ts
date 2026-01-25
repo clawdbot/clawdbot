@@ -280,7 +280,7 @@ export class TwitchClientManager {
       const client = await this.getClient(account, cfg, accountId);
 
       // Generate a message ID (Twurple's say() doesn't return the message ID, so we generate one)
-      const messageId = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+      const messageId = crypto.randomUUID();
 
       // Send message (Twurple handles rate limiting)
       await client.say(channel, message);
