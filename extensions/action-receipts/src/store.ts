@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
-
 type BeforeToolCallEvent = { toolName: string; params: Record<string, unknown> };
 type AfterToolCallEvent = {
   toolName: string;
@@ -41,7 +39,11 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
-export function createReceiptStore(opts: { api: ClawdbotPluginApi }) {
+// Minimal API shape we rely on. The real runtime passes a superset.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MinimalApi = { runtime: { stateDir: string }; pluginConfig?: any };
+
+export function createReceiptStore(opts: { api: MinimalApi }) {
   const api = opts.api;
   const enabled = (api.pluginConfig?.enabled as boolean | undefined) ?? true;
   const includeParams = (api.pluginConfig?.includeParams as boolean | undefined) ?? true;
@@ -53,6 +55,7 @@ export function createReceiptStore(opts: { api: ClawdbotPluginApi }) {
   const pending = new Map<string, { id: string; createdAt: string; params?: Record<string, unknown> }>();
 
   function key(ctx: ToolCtx) {
+    // Prefer per-invocation id to avoid collisions across parallel tool calls.
     return ctx.toolCallId && ctx.toolCallId.length > 0
       ? ctx.toolCallId
       : `${ctx.sessionKey ?? ""}::${ctx.toolName}`;
@@ -91,7 +94,7 @@ export function createReceiptStore(opts: { api: ClawdbotPluginApi }) {
         params: start?.params,
         ok: !event.error,
         error: event.error,
-        durationMs: event.durationMs,
+        durationMs: event.durationMs
       };
 
       await writeReceipt(receipt);
@@ -134,6 +137,6 @@ export function createReceiptStore(opts: { api: ClawdbotPluginApi }) {
         }
       }
       throw new Error(`receipt not found: ${id}`);
-    },
+    }
   };
 }

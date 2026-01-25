@@ -1,6 +1,9 @@
-import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
-
 import { createReceiptStore } from "./src/store.js";
+
+// Avoid depending on clawdbot/plugin-sdk so this extension can live as a reference
+// without publishing/lockfile churn. The runtime will still pass the full API object.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ClawdbotPluginApi = any;
 
 type Issue = { path: Array<string | number>; message: string };
 type SafeParseResult =
@@ -61,26 +64,26 @@ const plugin = {
   register(api: ClawdbotPluginApi) {
     const store = createReceiptStore({ api });
 
-    api.registerHook(["before_tool_call"], async (event, ctx) => {
+    api.registerHook(["before_tool_call"], async (event: unknown, ctx: unknown) => {
       await store.onBeforeToolCall(event as any, ctx as any);
       return undefined;
     });
 
-    api.registerHook(["after_tool_call"], async (event, ctx) => {
+    api.registerHook(["after_tool_call"], async (event: unknown, ctx: unknown) => {
       await store.onAfterToolCall(event as any, ctx as any);
       return undefined;
     });
 
-    api.registerCli((cli) => {
+    api.registerCli((cli: any) => {
       cli.command(
         "receipts:list",
         "List recent action receipts",
-        (yargs) =>
+        (yargs: any) =>
           yargs.option("limit", { type: "number", default: 20 }).option("session", {
             type: "string",
             describe: "Filter by session key"
           }),
-        async (argv) => {
+        async (argv: any) => {
           const rows = await store.list({
             limit: argv.limit as number,
             sessionKey: argv.session ? String(argv.session) : undefined
@@ -94,8 +97,8 @@ const plugin = {
       cli.command(
         "receipts:show <id>",
         "Show a specific receipt",
-        (yargs) => yargs.positional("id", { type: "string", demandOption: true }),
-        async (argv) => {
+        (yargs: any) => yargs.positional("id", { type: "string", demandOption: true }),
+        async (argv: any) => {
           const receipt = await store.read(String(argv.id));
           console.log(JSON.stringify(receipt, null, 2));
         }
