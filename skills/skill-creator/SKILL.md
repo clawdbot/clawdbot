@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.
+description: Create or update AgentSkills. Use when designing, structuring, packaging, or enriching skills with scripts, references, assets, and conversation-activation templates that help users engage and provide inputs quickly.
 ---
 
 # Skill Creator
@@ -42,6 +42,16 @@ Match the level of specificity to the task's fragility and variability:
 **Low freedom (specific scripts, few parameters)**: Use when operations are fragile and error-prone, consistency is critical, or a specific sequence must be followed.
 
 Think of Codex as exploring a path: a narrow bridge with cliffs needs specific guardrails (low freedom), while an open field allows many routes (high freedom).
+
+### Activate the Conversation
+
+Guide the user into fast, low-friction replies. Add short prompts, clear choices, and progressive questions when a skill expects back-and-forth input.
+
+- Provide 1 opener, 1 clarifying ladder, 1 confirmation checkpoint, and 1 completion prompt.
+- Offer defaults and escape hatches ("use defaults", "skip", "not sure").
+- Keep one question per message to avoid fatigue.
+
+Use `references/chat-activation.md` for ready-to-copy templates.
 
 ### Anatomy of a Skill
 
@@ -88,6 +98,7 @@ Documentation and reference material intended to be loaded as needed into contex
 - **Benefits**: Keeps SKILL.md lean, loaded only when Codex determines it's needed
 - **Best practice**: If files are large (>10k words), include grep search patterns in SKILL.md
 - **Avoid duplication**: Information should live in either SKILL.md or references files, not both. Prefer references files for detailed information unless it's truly core to the skill—this keeps SKILL.md lean while making information discoverable without hogging the context window. Keep only essential procedural instructions and workflow guidance in SKILL.md; move detailed reference material, schemas, and examples to references files.
+- **Conversation templates**: If the skill needs multi-turn input, store reusable prompt templates in `references/` and link them from SKILL.md. Use `references/chat-activation.md` as a starter set.
 
 ##### Assets (`assets/`)
 
@@ -258,6 +269,11 @@ Example: When building a `big-query` skill to handle queries like "How many user
 1. Querying BigQuery requires re-discovering the table schemas and relationships each time
 2. A `references/schema.md` file documenting the table schemas would be helpful to store in the skill
 
+Example: When building a `project-intake` skill to handle "Help me scope this project," the analysis shows:
+
+1. The skill needs consistent prompts to collect goals, constraints, and outputs
+2. A `references/chat-activation.md` file with conversation templates would be helpful to store in the skill
+
 To establish the skill's contents, analyze each concrete example to create a list of the reusable resources to include: scripts, references, and assets.
 
 ### Step 3: Initializing the Skill
@@ -301,6 +317,7 @@ Consult these helpful guides based on your skill's needs:
 
 - **Multi-step processes**: See references/workflows.md for sequential workflows and conditional logic
 - **Specific output formats or quality standards**: See references/output-patterns.md for template and example patterns
+- **Conversation activation**: See references/chat-activation.md for prompt templates and questioning ladders
 
 These files contain established best practices for effective skill design.
 
