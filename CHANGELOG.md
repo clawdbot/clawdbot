@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.25
+
+### Changes
+- TBD.
+
 ## 2026.1.24-3
 
 ### Fixes
