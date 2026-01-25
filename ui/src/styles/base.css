@@ -214,36 +214,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Theme transition */
-@keyframes theme-circle-transition {
-  0% {
-    clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-  100% {
-    clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-}
-
-html.theme-transition {
-  view-transition-name: theme;
-}
-
-html.theme-transition::view-transition-old(theme) {
-  mix-blend-mode: normal;
-  animation: none;
-  z-index: 1;
-}
-
-html.theme-transition::view-transition-new(theme) {
-  mix-blend-mode: normal;
-  z-index: 2;
-  animation: theme-circle-transition 0.4s var(--ease-out) forwards;
+/* Theme transition - clean crossfade */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.15s;
+  animation-timing-function: ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html.theme-transition::view-transition-old(theme),
-  html.theme-transition::view-transition-new(theme) {
-    animation: none !important;
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
   }
 }
 
