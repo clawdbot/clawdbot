@@ -39,6 +39,7 @@ Minimal config (simplified single-account):
 ```
 
 **Recommended access control options:**
+
 - `requireMention: true` - Only respond when the bot is mentioned with `@botname`
 - `allowFrom: ["your_user_id"]` - Restrict to your Twitch user ID only (find your ID at https://www.twitchangles.com/xqc or similar)
 - `allowedRoles: ["moderator", "vip", "subscriber"]` - Restrict to specific roles
