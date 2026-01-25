@@ -20,6 +20,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { getPluginCommandSpecs } from "../plugins/commands.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import type {
   ReplyToMode,
@@ -103,10 +104,15 @@ export const registerTelegramNativeCommands = ({
     runtime.error?.(danger(issue.message));
   }
   const customCommands = customResolution.commands;
+  const pluginCommandSpecs = getPluginCommandSpecs();
   const allCommands: Array<{ command: string; description: string }> = [
     ...nativeCommands.map((command) => ({
       command: command.name,
       description: command.description,
+    })),
+    ...pluginCommandSpecs.map((spec) => ({
+      command: spec.name,
+      description: spec.description,
     })),
     ...customCommands,
   ];
