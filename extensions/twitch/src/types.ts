@@ -36,14 +36,6 @@ import type { RuntimeEnv } from "../../../src/runtime.js";
 export type TwitchRole = "moderator" | "owner" | "vip" | "subscriber" | "all";
 
 /**
- * Plugin configuration passed from Clawdbot
- */
-export interface TwitchPluginConfig {
-  /** Strip markdown from outbound messages before sending to Twitch (default true). */
-  stripMarkdown?: boolean;
-}
-
-/**
  * Account configuration for a Twitch channel
  */
 export interface TwitchAccountConfig {
@@ -139,6 +131,11 @@ export type {
   ChannelOutboundContext,
   OutboundDeliveryResult,
 };
+
+// Import and re-export the schema type
+import type { TwitchConfigSchema } from "./config-schema.js";
+import type { z } from "zod";
+export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
 
 export type { ClawdbotConfig };
 export type { RuntimeEnv };

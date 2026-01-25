@@ -5,7 +5,7 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, parsePluginConfig } from "./config.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
@@ -127,17 +127,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       throw new Error("No channel specified and no default channel in account config");
     }
 
-    const pluginCfg = parsePluginConfig(
-      // biome-ignore lint/suspicious/noExplicitAny: pluginConfig is not part of CoreConfig
-      (cfg as any).pluginConfig ?? {},
-    );
-
     const result = await sendMessageTwitchInternal(
       normalizeTwitchChannel(channel),
       text,
       cfg,
       resolvedAccountId,
-      pluginCfg.stripMarkdown ?? true,
+      true, // stripMarkdown
       console,
     );
 

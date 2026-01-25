@@ -17,7 +17,6 @@ import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 vi.mock("./config.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   getAccountConfig: vi.fn(),
-  parsePluginConfig: vi.fn(() => ({ stripMarkdown: true })),
 }));
 
 vi.mock("./send.js", () => ({
@@ -293,35 +292,6 @@ describe("outbound", () => {
           accountId: "default",
         }),
       ).rejects.toThrow("Connection lost");
-    });
-
-    it("should respect stripMarkdown config", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { parsePluginConfig } = await import("./config.js");
-      const { sendMessageTwitchInternal } = await import("./send.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(parsePluginConfig).mockReturnValue({ stripMarkdown: false });
-      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
-        ok: true,
-        messageId: "msg-789",
-      });
-
-      await twitchOutbound.sendText({
-        cfg: mockConfig,
-        to: "#testchannel",
-        text: "**Bold** text",
-        accountId: "default",
-      });
-
-      expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        false, // stripMarkdown disabled
-        expect.anything(),
-      );
     });
   });
 

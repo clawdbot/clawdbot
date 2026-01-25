@@ -1,33 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getAccountConfig, parsePluginConfig } from "./config.js";
-
-describe("parsePluginConfig", () => {
-  it("parses valid config with stripMarkdown true", () => {
-    const result = parsePluginConfig({ stripMarkdown: true });
-    expect(result.stripMarkdown).toBe(true);
-  });
-
-  it("parses valid config with stripMarkdown false", () => {
-    const result = parsePluginConfig({ stripMarkdown: false });
-    expect(result.stripMarkdown).toBe(false);
-  });
-
-  it("defaults to stripMarkdown true when not specified", () => {
-    const result = parsePluginConfig({});
-    expect(result.stripMarkdown).toBe(true);
-  });
-
-  it("handles undefined config", () => {
-    const result = parsePluginConfig(undefined as unknown as Record<string, unknown>);
-    expect(result).toEqual({ stripMarkdown: true }); // Returns defaults when value is falsy
-  });
-
-  it("handles null config", () => {
-    const result = parsePluginConfig(null as unknown as Record<string, unknown>);
-    expect(result).toEqual({ stripMarkdown: true }); // Returns defaults when value is null
-  });
-});
+import { getAccountConfig } from "./config.js";
 
 describe("getAccountConfig", () => {
   const mockMultiAccountConfig = {

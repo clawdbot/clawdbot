@@ -289,9 +289,6 @@ If you see "token refresh disabled (no refresh token)":
 - `allowedRoles` - Role-based access control (`"moderator" | "owner" | "vip" | "subscriber" | "all"`)
 - `requireMention` - Require @mention (default: `false`)
 
-**Plugin config:**
-- `stripMarkdown` - Strip markdown from outbound (default: `true`)
-
 **Provider options:**
 - `channels.twitch.enabled` - Enable/disable channel startup
 - `channels.twitch.username` - Bot username (simplified single-account config)
@@ -331,13 +328,6 @@ Full example:
           allowedRoles: ["moderator"],
           requireMention: true
         }
-      }
-    }
-  },
-  plugins: {
-    entries: {
-      twitch: {
-        stripMarkdown: true
       }
     }
   }

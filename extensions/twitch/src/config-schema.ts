@@ -37,19 +37,21 @@ const TwitchAccountSchema = z.object({
 });
 
 /**
+ * Base configuration properties shared by both single and multi-account modes
+ */
+const TwitchConfigBaseSchema = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+  markdown: MarkdownConfigSchema.optional(),
+});
+
+/**
  * Simplified single-account configuration schema
  *
  * Use this for single-account setups. Properties are at the top level,
  * creating an implicit "default" account.
  */
-const simplifiedSchema = z.intersection(
-  z.object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    markdown: MarkdownConfigSchema.optional(),
-  }),
-  TwitchAccountSchema,
-);
+const simplifiedSchema = z.intersection(TwitchConfigBaseSchema, TwitchAccountSchema);
 
 /**
  * Multi-account configuration schema
@@ -57,11 +59,7 @@ const simplifiedSchema = z.intersection(
  * Use this for multi-account setups. Each key is an account ID (e.g., "default", "secondary").
  */
 const multiAccountSchema = z.intersection(
-  z.object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    markdown: MarkdownConfigSchema.optional(),
-  }),
+  TwitchConfigBaseSchema,
   z
     .object({
       /** Per-account configuration (for multi-account setups) */

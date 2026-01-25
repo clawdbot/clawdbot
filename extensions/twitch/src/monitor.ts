@@ -5,10 +5,9 @@
  * resolves agent routes, and handles replies.
  */
 
-import type { ReplyPayload } from "clawdbot/plugin-sdk";
+import type { ReplyPayload, ClawdbotConfig } from "clawdbot/plugin-sdk";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl } from "./access-control.js";
-import { parsePluginConfig } from "./config.js";
 import { getTwitchRuntime } from "./runtime.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
@@ -46,9 +45,10 @@ async function processTwitchMessage(params: {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
   const { message, account, accountId, config, runtime, core, statusSink } = params;
+  const cfg = config as ClawdbotConfig;
 
   const route = core.channel.routing.resolveAgentRoute({
-    cfg: config as Parameters<typeof core.channel.routing.resolveAgentRoute>[0]["cfg"],
+    cfg,
     channel: "twitch",
     accountId,
     peer: {
@@ -62,9 +62,7 @@ async function processTwitchMessage(params: {
     channel: "Twitch",
     from: message.displayName ?? message.username,
     timestamp: message.timestamp?.getTime(),
-    envelope: core.channel.reply.resolveEnvelopeFormatOptions(
-      config as Parameters<typeof core.channel.reply.resolveEnvelopeFormatOptions>[0],
-    ),
+    envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
     body: rawBody,
   });
 
@@ -89,7 +87,7 @@ async function processTwitchMessage(params: {
   });
 
   const storePath = core.channel.session.resolveStorePath(
-    (config as Parameters<typeof core.channel.session.resolveStorePath>[0]["cfg"])?.session?.store,
+    config as Parameters<typeof core.channel.session.resolveStorePath>[0],
     { agentId: route.agentId },
   );
   await core.channel.session.recordInboundSession({
@@ -102,16 +100,14 @@ async function processTwitchMessage(params: {
   });
 
   const tableMode = core.channel.text.resolveMarkdownTableMode({
-    cfg: config as Parameters<typeof core.channel.text.resolveMarkdownTableMode>[0]["cfg"],
+    cfg,
     channel: "twitch",
     accountId,
   });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
-    cfg: config as Parameters<
-      typeof core.channel.reply.dispatchReplyWithBufferedBlockDispatcher
-    >[0]["cfg"],
+    cfg,
     dispatcherOptions: {
       deliver: async (payload) => {
         await deliverTwitchReply({
@@ -168,9 +164,7 @@ async function deliverTwitchReply(params: {
       return;
     }
 
-    const pluginCfg = parsePluginConfig((config as any).pluginConfig ?? {});
-    const textToSend =
-      (pluginCfg.stripMarkdown ?? true) ? stripMarkdownForTwitch(payload.text) : payload.text;
+    const textToSend = stripMarkdownForTwitch(payload.text);
 
     await client.say(channel, textToSend);
     statusSink?.({ lastOutboundAt: Date.now() });
