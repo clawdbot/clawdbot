@@ -212,7 +212,7 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
         DEFAULT_ACCOUNT_ID;
       const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
       return {
-        accountId: DEFAULT_ACCOUNT_ID,
+        accountId: resolvedAccountId,
         enabled: account?.enabled !== false,
         configured: isAccountConfigured(account, tokenResolution.token),
         running: runtime?.running ?? false,
