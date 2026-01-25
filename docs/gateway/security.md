@@ -63,6 +63,23 @@ downgrade—prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 `clawdbot security audit` warns when this setting is enabled.
 
+## Reverse Proxy Configuration
+
+If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
+
+When the Gateway detects proxy headers (`X-Forwarded-For` or `X-Real-IP`) from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
+
+```yaml
+gateway:
+  trustedProxies:
+    - "127.0.0.1"  # if your proxy runs on localhost
+  auth:
+    mode: password
+    password: ${CLAWDBOT_GATEWAY_PASSWORD}
+```
+
+When `trustedProxies` is configured, the Gateway will use `X-Forwarded-For` headers to determine the real client IP for local client detection. Make sure your proxy overwrites (not appends to) incoming `X-Forwarded-For` headers to prevent spoofing.
+
 ## Local session logs live on disk
 
 Clawdbot stores session transcripts on disk under `~/.clawdbot/agents/<agentId>/sessions/*.jsonl`.

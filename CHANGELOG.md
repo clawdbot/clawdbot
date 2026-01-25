@@ -2,10 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.25
+## 2026.1.24-3
 
-### Changes
-- TBD.
+### Fixes
+- Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
+- Security audit: flag loopback Control UI with auth disabled as critical. (#1795) Thanks @orlyjamie.
 
 ## 2026.1.24-2
 

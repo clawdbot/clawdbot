@@ -351,6 +351,27 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  test("rejects proxied connections without auth when proxy headers are untrusted", async () => {
+    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { "x-forwarded-for": "203.0.113.10" },
+    });
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    const res = await connectReq(ws);
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("gateway auth required");
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
   test("accepts device token auth for paired device", async () => {
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing } =
