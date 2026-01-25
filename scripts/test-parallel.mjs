@@ -28,8 +28,8 @@ const overrideWorkers = Number.parseInt(process.env.CLAWDBOT_TEST_WORKERS ?? "",
 const resolvedOverride = Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelRuns.length));
-const macCiWorkers = isCI && isMacOS ? Math.min(2, perRunWorkers) : perRunWorkers;
-// Keep worker counts predictable for local runs; trim macOS CI workers to avoid OOM.
+const macCiWorkers = isCI && isMacOS ? 1 : perRunWorkers;
+// Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
 const maxWorkers = resolvedOverride ?? (isCI && !isMacOS ? null : macCiWorkers);
 
