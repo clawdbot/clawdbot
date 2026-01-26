@@ -246,11 +246,7 @@ export async function sendMessageTelegram(
         throw wrapChatNotFound(err);
       },
     );
-    if (res?.message_id) {
-      console.error(
-        `[CRITICAL LOG] [telegram/send.ts] Sent message ${res.message_id} to ${chatId}. Payload: ${JSON.stringify({ text: rawText, params: sendParams })}`,
-      );
-    }
+
     return res;
   };
 
@@ -525,9 +521,6 @@ export async function editMessageTelegram(
           ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       "editMessage",
-    );
-    console.error(
-      `[CRITICAL LOG] [telegram/send.ts] Edited message ${messageId} in chat ${chatId}. Payload: ${JSON.stringify({ text, htmlText })}`,
     );
   } catch (err) {
     // If HTML parsing fails, fall back to plain text
