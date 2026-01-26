@@ -35,6 +35,7 @@ Status: unreleased.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
 
 ### Fixes
+- Docs: fix FAQ table of contents apostrophe inconsistencies with Mintlify-compatible headings.
 - Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
 
 ## 2026.1.24-3
