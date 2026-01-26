@@ -369,3 +369,32 @@ export function listSubagentRunsForRequester(requesterSessionKey: string): Subag
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
+
+/**
+ * Check if a session key has an active (in-progress) subagent run.
+ * Returns true if a run exists with startedAt but no endedAt.
+ */
+export function isSubagentSessionRunning(childSessionKey: string): boolean {
+  const key = childSessionKey.trim();
+  if (!key) return false;
+  for (const entry of subagentRuns.values()) {
+    if (entry.childSessionKey === key && entry.startedAt && !entry.endedAt) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Get all currently running subagent session keys.
+ * Returns a Set of session keys that have active runs.
+ */
+export function getRunningSubagentSessions(): Set<string> {
+  const running = new Set<string>();
+  for (const entry of subagentRuns.values()) {
+    if (entry.startedAt && !entry.endedAt) {
+      running.add(entry.childSessionKey);
+    }
+  }
+  return running;
+}

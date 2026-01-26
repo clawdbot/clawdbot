@@ -28,6 +28,8 @@ export type SessionListRow = {
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
+  /** True if this session has an active subagent run in progress */
+  running?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
   systemSent?: boolean;

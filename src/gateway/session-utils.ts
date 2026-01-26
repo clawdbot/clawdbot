@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getRunningSubagentSessions } from "../agents/subagent-registry.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -468,6 +469,9 @@ export function listSessionsFromStore(params: {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
 
+  // Get set of currently running subagent sessions for accurate status reporting
+  const runningSubagents = getRunningSubagentSessions();
+
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
@@ -554,6 +558,8 @@ export function listSessionsFromStore(params: {
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: total,
+        // Check if this is a running subagent (has active run but may not have tokens yet)
+        running: runningSubagents.has(key),
         responseUsage: entry?.responseUsage,
         modelProvider: entry?.modelProvider,
         model: entry?.model,
