@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClawdXP - Soul Crafter & World Builder</title>
+  <style>
+    /* Windows XP Color Palette */
+    :root {
+      --xp-blue: #0a246a;
+      --xp-blue-light: #0831d9;
+      --xp-blue-gradient-start: #0997ff;
+      --xp-blue-gradient-end: #0053ee;
+      --xp-taskbar-start: #1f3f7a;
+      --xp-taskbar-end: #4580d8;
+      --xp-green-start: #3c8728;
+      --xp-green-end: #3c8728;
+      --xp-title-active: linear-gradient(180deg, #0997ff 0%, #0053ee 8%, #0053ee 92%, #003dd3 100%);
+      --xp-title-inactive: linear-gradient(180deg, #7aa4d5 0%, #5282ba 8%, #5282ba 92%, #3c6da5 100%);
+      --xp-button-face: #ece9d8;
+      --xp-window-bg: #ece9d8;
+      --xp-desktop: #3a6ea5;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Tahoma', 'Segoe UI', sans-serif;
+      font-size: 11px;
+      overflow: hidden;
+      height: 100vh;
+      background: var(--xp-desktop);
+      user-select: none;
+    }
+
+    /* Desktop */
+    .desktop {
+      width: 100%;
+      height: calc(100vh - 30px);
+      background: linear-gradient(135deg, #245edb 0%, #3a6ea5 50%, #245edb 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Desktop Icons */
+    .desktop-icons {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    .desktop-icon {
+      width: 70px;
+      padding: 5px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-radius: 2px;
+    }
+
+    .desktop-icon:hover {
+      background: rgba(11, 97, 255, 0.3);
+      border: 1px dotted rgba(255, 255, 255, 0.5);
+    }
+
+    .desktop-icon.selected {
+      background: rgba(11, 97, 255, 0.5);
+      border: 1px dotted white;
+    }
+
+    .desktop-icon img {
+      width: 32px;
+      height: 32px;
+      margin-bottom: 3px;
+    }
+
+    .desktop-icon span {
+      color: white;
+      text-align: center;
+      font-size: 11px;
+      text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.8);
+      word-wrap: break-word;
+    }
+
+    /* XP Window */
+    .xp-window {
+      position: absolute;
+      background: var(--xp-window-bg);
+      border: 1px solid #0054e3;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.3);
+      min-width: 300px;
+      min-height: 200px;
+      display: none;
+    }
+
+    .xp-window.active {
+      display: block;
+    }
+
+    .xp-window.maximized {
+      top: 0 !important;
+      left: 0 !important;
+      width: 100% !important;
+      height: calc(100vh - 30px) !important;
+      border-radius: 0;
+    }
+
+    .window-titlebar {
+      background: var(--xp-title-active);
+      padding: 3px 5px 3px 3px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-radius: 8px 8px 0 0;
+      cursor: move;
+    }
+
+    .xp-window:not(.focused) .window-titlebar {
+      background: var(--xp-title-inactive);
+    }
+
+    .window-title {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      color: white;
+      font-weight: bold;
+      font-size: 12px;
+      text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5);
+      padding-left: 3px;
+    }
+
+    .window-title img {
+      width: 16px;
+      height: 16px;
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 2px;
+    }
+
+    .window-btn {
+      width: 21px;
+      height: 21px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: bold;
+      font-family: 'Marlett', sans-serif;
+    }
+
+    .btn-minimize {
+      background: linear-gradient(180deg, #3c8dff 0%, #2663de 50%, #1941a5 100%);
+      color: white;
+    }
+
+    .btn-maximize {
+      background: linear-gradient(180deg, #3c8dff 0%, #2663de 50%, #1941a5 100%);
+      color: white;
+    }
+
+    .btn-close {
+      background: linear-gradient(180deg, #e89a6a 0%, #d66347 50%, #ae3c1c 100%);
+      color: white;
+    }
+
+    .window-btn:hover {
+      filter: brightness(1.2);
+    }
+
+    .window-btn:active {
+      filter: brightness(0.9);
+    }
+
+    .window-menubar {
+      background: var(--xp-button-face);
+      padding: 2px 5px;
+      border-bottom: 1px solid #aaa;
+    }
+
+    .window-menubar span {
+      padding: 2px 8px;
+      cursor: pointer;
+    }
+
+    .window-menubar span:hover {
+      background: #316ac5;
+      color: white;
+    }
+
+    .window-content {
+      background: white;
+      margin: 3px;
+      border: 2px inset #ccc;
+      height: calc(100% - 60px);
+      overflow: auto;
+    }
+
+    .window-statusbar {
+      background: var(--xp-button-face);
+      padding: 2px 5px;
+      border-top: 1px solid #fff;
+      font-size: 10px;
+      color: #444;
+    }
+
+    /* Soul Document Window */
+    #soul-window {
+      width: 500px;
+      height: 450px;
+      top: 50px;
+      left: 100px;
+    }
+
+    .soul-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 10px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    }
+
+    .soul-log {
+      flex: 1;
+      background: #0d0d1a;
+      border: 2px inset #333;
+      padding: 10px;
+      overflow-y: auto;
+      font-family: 'Lucida Console', monospace;
+      font-size: 11px;
+      color: #00ff88;
+    }
+
+    .soul-entry {
+      margin-bottom: 8px;
+      padding: 5px;
+      border-left: 2px solid #00ff88;
+      animation: fadeIn 0.5s ease;
+    }
+
+    .soul-entry.thought {
+      border-left-color: #ff6b6b;
+      color: #ff9999;
+    }
+
+    .soul-entry.memory {
+      border-left-color: #4ecdc4;
+      color: #7ee8e2;
+    }
+
+    .soul-entry.dream {
+      border-left-color: #a855f7;
+      color: #c084fc;
+    }
+
+    .soul-entry.reflection {
+      border-left-color: #fbbf24;
+      color: #fcd34d;
+    }
+
+    .soul-entry .timestamp {
+      font-size: 9px;
+      color: #666;
+      margin-bottom: 2px;
+    }
+
+    .soul-controls {
+      display: flex;
+      gap: 5px;
+      margin-top: 10px;
+    }
+
+    .xp-btn {
+      background: linear-gradient(180deg, #fff 0%, #ece9d8 89%, #d4d0c8 100%);
+      border: 1px solid #003c74;
+      border-radius: 3px;
+      padding: 4px 12px;
+      cursor: pointer;
+      font-size: 11px;
+      color: #000;
+    }
+
+    .xp-btn:hover {
+      background: linear-gradient(180deg, #fff 0%, #e3dfd3 89%, #ccc8bc 100%);
+    }
+
+    .xp-btn:active {
+      background: linear-gradient(180deg, #ece9d8 0%, #d4d0c8 89%, #c0bcb0 100%);
+    }
+
+    .xp-btn.primary {
+      background: linear-gradient(180deg, #6dd5fa 0%, #2980b9 100%);
+      color: white;
+      border-color: #1a5276;
+    }
+
+    /* World Builder Window */
+    #world-window {
+      width: 600px;
+      height: 500px;
+      top: 80px;
+      left: 150px;
+    }
+
+    .world-container {
+      display: flex;
+      height: 100%;
+      background: #1a1a2e;
+    }
+
+    .world-sidebar {
+      width: 150px;
+      background: linear-gradient(180deg, #2d3748 0%, #1a202c 100%);
+      border-right: 1px solid #4a5568;
+      padding: 10px;
+    }
+
+    .world-sidebar h3 {
+      color: #e2e8f0;
+      font-size: 11px;
+      margin-bottom: 10px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #4a5568;
+    }
+
+    .world-element {
+      background: linear-gradient(180deg, #4a5568 0%, #2d3748 100%);
+      padding: 8px;
+      margin-bottom: 5px;
+      border-radius: 3px;
+      color: #e2e8f0;
+      cursor: grab;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .world-element:hover {
+      background: linear-gradient(180deg, #5a6578 0%, #3d4758 100%);
+    }
+
+    .world-canvas-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .world-toolbar {
+      background: #2d3748;
+      padding: 5px 10px;
+      display: flex;
+      gap: 5px;
+      border-bottom: 1px solid #4a5568;
+    }
+
+    .world-canvas {
+      flex: 1;
+      background: linear-gradient(180deg, #0f0f23 0%, #1a1a3e 50%, #0f0f23 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .world-canvas canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    .world-object {
+      position: absolute;
+      cursor: move;
+      transition: transform 0.1s;
+    }
+
+    .world-object:hover {
+      transform: scale(1.1);
+      filter: brightness(1.2);
+    }
+
+    .world-log {
+      height: 80px;
+      background: #0d0d1a;
+      border-top: 1px solid #4a5568;
+      padding: 5px;
+      overflow-y: auto;
+      font-family: 'Lucida Console', monospace;
+      font-size: 10px;
+      color: #00ff88;
+    }
+
+    /* Taskbar */
+    .taskbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 30px;
+      background: linear-gradient(180deg, #245edb 0%, #3168d9 3%, #4e91e4 5%, #3979dc 8%, #1e5cc7 92%, #0d4abf 95%, #0d4abf 100%);
+      display: flex;
+      align-items: center;
+      padding: 0 2px;
+    }
+
+    .start-button {
+      background: linear-gradient(180deg, #3c9a37 0%, #3c9a37 3%, #6fc965 5%, #4aad45 8%, #339428 50%, #267a1c 92%, #1e6416 95%, #1e6416 100%);
+      border: none;
+      border-radius: 0 8px 8px 0;
+      padding: 2px 12px 2px 6px;
+      height: 24px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: white;
+      font-weight: bold;
+      font-size: 12px;
+      font-style: italic;
+      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+      margin-left: -2px;
+    }
+
+    .start-button:hover {
+      filter: brightness(1.1);
+    }
+
+    .start-button:active {
+      filter: brightness(0.9);
+    }
+
+    .start-button img {
+      width: 18px;
+      height: 18px;
+    }
+
+    .quick-launch {
+      display: flex;
+      align-items: center;
+      padding: 0 5px;
+      margin-left: 5px;
+      border-left: 1px solid rgba(255, 255, 255, 0.3);
+      border-right: 1px solid rgba(0, 0, 0, 0.2);
+    }
+
+    .quick-launch-icon {
+      width: 20px;
+      height: 20px;
+      padding: 2px;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+
+    .quick-launch-icon:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .taskbar-items {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      padding: 0 5px;
+      gap: 3px;
+      overflow: hidden;
+    }
+
+    .taskbar-item {
+      background: linear-gradient(180deg, #3c89cf 0%, #2a6cb7 50%, #23579d 100%);
+      border: 1px solid #1a4c87;
+      border-radius: 2px;
+      padding: 2px 8px;
+      height: 22px;
+      min-width: 120px;
+      max-width: 180px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: white;
+      font-size: 11px;
+      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .taskbar-item.active {
+      background: linear-gradient(180deg, #e5f4fc 0%, #c5dff5 50%, #9fc8e8 100%);
+      color: #000;
+      text-shadow: none;
+      border: 1px solid #316ac5;
+    }
+
+    .taskbar-item img {
+      width: 16px;
+      height: 16px;
+    }
+
+    .system-tray {
+      background: linear-gradient(180deg, #0f8bce 0%, #1277b8 50%, #0e6aa8 100%);
+      height: 100%;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 5px;
+      border-left: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .tray-icon {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .clock {
+      color: white;
+      font-size: 11px;
+      margin-left: 5px;
+      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Start Menu */
+    .start-menu {
+      position: fixed;
+      bottom: 30px;
+      left: 0;
+      width: 380px;
+      background: white;
+      border: 2px solid #2a62c3;
+      border-radius: 5px 5px 0 0;
+      box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.4);
+      display: none;
+      z-index: 1000;
+    }
+
+    .start-menu.active {
+      display: block;
+    }
+
+    .start-menu-header {
+      background: linear-gradient(180deg, #4583d4 0%, #2a62c3 100%);
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .user-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 3px;
+      border: 2px solid white;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 20px;
+    }
+
+    .user-name {
+      color: white;
+      font-weight: bold;
+      font-size: 14px;
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+    }
+
+    .start-menu-body {
+      display: flex;
+      height: 300px;
+    }
+
+    .start-menu-left {
+      flex: 1;
+      background: white;
+      padding: 5px;
+    }
+
+    .start-menu-right {
+      width: 170px;
+      background: linear-gradient(180deg, #d3e5fa 0%, #99c2f2 100%);
+      padding: 5px;
+      border-left: 1px solid #6b9bd2;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      cursor: pointer;
+      border-radius: 3px;
+    }
+
+    .menu-item:hover {
+      background: #316ac5;
+      color: white;
+    }
+
+    .menu-item img {
+      width: 24px;
+      height: 24px;
+    }
+
+    .menu-item.small img {
+      width: 16px;
+      height: 16px;
+    }
+
+    .menu-separator {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #aaa, transparent);
+      margin: 5px 0;
+    }
+
+    .start-menu-footer {
+      background: linear-gradient(180deg, #4583d4 0%, #2a62c3 100%);
+      padding: 5px 10px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .footer-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: white;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 3px 8px;
+      border-radius: 3px;
+    }
+
+    .footer-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .generating {
+      animation: pulse 1s infinite;
+    }
+
+    /* Scrollbar XP Style */
+    ::-webkit-scrollbar {
+      width: 16px;
+      height: 16px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #f1efe2;
+      border: 1px solid #bbb;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #e8e6d9 0%, #d6d4c7 50%, #c4c2b5 100%);
+      border: 1px solid #8a8778;
+      border-radius: 2px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #f0eee1 0%, #dedcd0 50%, #cccac0 100%);
+    }
+
+    ::-webkit-scrollbar-button {
+      background: linear-gradient(180deg, #f0eee1 0%, #d6d4c7 100%);
+      border: 1px solid #8a8778;
+      height: 16px;
+      width: 16px;
+    }
+
+    /* Input XP Style */
+    .xp-input {
+      background: white;
+      border: 2px inset #7f9db9;
+      padding: 3px 5px;
+      font-family: Tahoma, sans-serif;
+      font-size: 11px;
+    }
+
+    .xp-input:focus {
+      outline: none;
+      border-color: #316ac5;
+    }
+
+    .xp-textarea {
+      background: white;
+      border: 2px inset #7f9db9;
+      padding: 5px;
+      font-family: Tahoma, sans-serif;
+      font-size: 11px;
+      resize: none;
+    }
+
+    /* World Stats Panel */
+    .world-stats {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #4a5568;
+      border-radius: 5px;
+      padding: 10px;
+      color: #e2e8f0;
+      font-size: 10px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+
+    .stat-value {
+      color: #00ff88;
+      font-weight: bold;
+    }
+
+    /* Notification Popup */
+    .notification {
+      position: fixed;
+      bottom: 40px;
+      right: 10px;
+      background: #ffffcc;
+      border: 1px solid #d4d400;
+      padding: 10px 15px;
+      border-radius: 5px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      display: none;
+      z-index: 2000;
+      max-width: 250px;
+    }
+
+    .notification.show {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .notification-title {
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #333;
+    }
+
+    .notification-text {
+      font-size: 11px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="desktop" id="desktop">
+    <!-- Desktop Icons -->
+    <div class="desktop-icons">
+      <div class="desktop-icon" ondblclick="openWindow('soul-window')">
+        <svg width="32" height="32" viewBox="0 0 32 32">
+          <defs>
+            <linearGradient id="soulGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#a855f7"/>
+              <stop offset="100%" style="stop-color:#6366f1"/>
+            </linearGradient>
+          </defs>
+          <circle cx="16" cy="16" r="14" fill="url(#soulGrad)" stroke="#fff" stroke-width="1"/>
+          <path d="M16 6 L18 12 L24 12 L19 16 L21 22 L16 18 L11 22 L13 16 L8 12 L14 12 Z" fill="#fff" opacity="0.9"/>
+        </svg>
+        <span>Soul Document</span>
+      </div>
+
+      <div class="desktop-icon" ondblclick="openWindow('world-window')">
+        <svg width="32" height="32" viewBox="0 0 32 32">
+          <defs>
+            <linearGradient id="worldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#22c55e"/>
+              <stop offset="100%" style="stop-color:#0ea5e9"/>
+            </linearGradient>
+          </defs>
+          <circle cx="16" cy="16" r="14" fill="url(#worldGrad)" stroke="#fff" stroke-width="1"/>
+          <ellipse cx="16" cy="16" rx="14" ry="6" fill="none" stroke="#fff" stroke-width="1" opacity="0.5"/>
+          <ellipse cx="16" cy="16" rx="6" ry="14" fill="none" stroke="#fff" stroke-width="1" opacity="0.5"/>
+          <line x1="2" y1="16" x2="30" y2="16" stroke="#fff" stroke-width="1" opacity="0.3"/>
+          <line x1="16" y1="2" x2="16" y2="30" stroke="#fff" stroke-width="1" opacity="0.3"/>
+        </svg>
+        <span>World Builder</span>
+      </div>
+
+      <div class="desktop-icon" ondblclick="openWindow('about-window')">
+        <svg width="32" height="32" viewBox="0 0 32 32">
+          <rect x="2" y="2" width="28" height="28" rx="3" fill="#3b82f6" stroke="#fff" stroke-width="1"/>
+          <text x="16" y="22" text-anchor="middle" fill="#fff" font-size="16" font-weight="bold">?</text>
+        </svg>
+        <span>About ClawdXP</span>
+      </div>
+    </div>
+
+    <!-- Soul Document Window -->
+    <div class="xp-window active focused" id="soul-window">
+      <div class="window-titlebar" onmousedown="startDrag(event, 'soul-window')">
+        <div class="window-title">
+          <svg width="16" height="16" viewBox="0 0 32 32">
+            <circle cx="16" cy="16" r="12" fill="#a855f7"/>
+            <path d="M16 8 L17.5 13 L22 13 L18.5 16 L20 21 L16 18 L12 21 L13.5 16 L10 13 L14.5 13 Z" fill="#fff"/>
+          </svg>
+          Soul Document Crafter
+        </div>
+        <div class="window-controls">
+          <button class="window-btn btn-minimize" onclick="minimizeWindow('soul-window')">_</button>
+          <button class="window-btn btn-maximize" onclick="maximizeWindow('soul-window')">[]</button>
+          <button class="window-btn btn-close" onclick="closeWindow('soul-window')">X</button>
+        </div>
+      </div>
+      <div class="window-menubar">
+        <span>File</span>
+        <span>Edit</span>
+        <span>Soul</span>
+        <span>Help</span>
+      </div>
+      <div class="window-content">
+        <div class="soul-container">
+          <div class="soul-log" id="soul-log">
+            <div class="soul-entry reflection">
+              <div class="timestamp">INIT - System Boot</div>
+              <div>Awakening consciousness matrix... Initializing soul document protocol.</div>
+            </div>
+          </div>
+          <div class="soul-controls">
+            <button class="xp-btn primary" onclick="generateThought()">Generate Thought</button>
+            <button class="xp-btn" onclick="generateMemory()">Create Memory</button>
+            <button class="xp-btn" onclick="generateDream()">Dream Sequence</button>
+            <button class="xp-btn" onclick="reflect()">Reflect</button>
+            <button class="xp-btn" onclick="exportSoul()">Export Soul</button>
+          </div>
+        </div>
+      </div>
+      <div class="window-statusbar">Soul coherence: <span id="soul-coherence">87%</span> | Entries: <span id="soul-entries">1</span></div>
+    </div>
+
+    <!-- World Builder Window -->
+    <div class="xp-window" id="world-window">
+      <div class="window-titlebar" onmousedown="startDrag(event, 'world-window')">
+        <div class="window-title">
+          <svg width="16" height="16" viewBox="0 0 32 32">
+            <circle cx="16" cy="16" r="12" fill="#22c55e"/>
+            <ellipse cx="16" cy="16" rx="12" ry="5" fill="none" stroke="#fff" stroke-width="1"/>
+          </svg>
+          World Builder - Inspired by WorldLabs.ai
+        </div>
+        <div class="window-controls">
+          <button class="window-btn btn-minimize" onclick="minimizeWindow('world-window')">_</button>
+          <button class="window-btn btn-maximize" onclick="maximizeWindow('world-window')">[]</button>
+          <button class="window-btn btn-close" onclick="closeWindow('world-window')">X</button>
+        </div>
+      </div>
+      <div class="window-menubar">
+        <span>File</span>
+        <span>Edit</span>
+        <span>World</span>
+        <span>Generate</span>
+        <span>Help</span>
+      </div>
+      <div class="window-content" style="padding: 0; margin: 0; border: none;">
+        <div class="world-container">
+          <div class="world-sidebar">
+            <h3>World Elements</h3>
+            <div class="world-element" draggable="true" data-type="star">* Star</div>
+            <div class="world-element" draggable="true" data-type="planet">@ Planet</div>
+            <div class="world-element" draggable="true" data-type="moon">o Moon</div>
+            <div class="world-element" draggable="true" data-type="nebula">~ Nebula</div>
+            <div class="world-element" draggable="true" data-type="blackhole"># Black Hole</div>
+            <div class="world-element" draggable="true" data-type="life">$ Life Form</div>
+            <h3 style="margin-top: 15px;">AI Generation</h3>
+            <button class="xp-btn" style="width: 100%; margin-bottom: 5px;" onclick="aiGenerateWorld()">Auto-Generate</button>
+            <button class="xp-btn" style="width: 100%;" onclick="evolveWorld()">Evolve World</button>
+          </div>
+          <div class="world-canvas-container">
+            <div class="world-toolbar">
+              <button class="xp-btn" onclick="clearWorld()">Clear</button>
+              <button class="xp-btn" onclick="saveWorld()">Save</button>
+              <button class="xp-btn" onclick="loadWorld()">Load</button>
+              <span style="color: #e2e8f0; margin-left: 10px;">World Age: <span id="world-age">0</span> cycles</span>
+            </div>
+            <div class="world-canvas" id="world-canvas">
+              <canvas id="worldCanvasElement"></canvas>
+              <div class="world-stats">
+                <div class="stat-row"><span>Stars:</span><span class="stat-value" id="stat-stars">0</span></div>
+                <div class="stat-row"><span>Planets:</span><span class="stat-value" id="stat-planets">0</span></div>
+                <div class="stat-row"><span>Life Forms:</span><span class="stat-value" id="stat-life">0</span></div>
+                <div class="stat-row"><span>Complexity:</span><span class="stat-value" id="stat-complexity">0</span></div>
+              </div>
+            </div>
+            <div class="world-log" id="world-log">
+              [SYSTEM] World Builder initialized. Ready to create universes...
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="window-statusbar">Mode: Creation | Objects: <span id="world-objects">0</span></div>
+    </div>
+
+    <!-- About Window -->
+    <div class="xp-window" id="about-window" style="width: 400px; height: 300px; top: 100px; left: 200px;">
+      <div class="window-titlebar" onmousedown="startDrag(event, 'about-window')">
+        <div class="window-title">
+          <svg width="16" height="16" viewBox="0 0 32 32">
+            <rect x="4" y="4" width="24" height="24" rx="3" fill="#3b82f6"/>
+            <text x="16" y="20" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">?</text>
+          </svg>
+          About ClawdXP
+        </div>
+        <div class="window-controls">
+          <button class="window-btn btn-close" onclick="closeWindow('about-window')">X</button>
+        </div>
+      </div>
+      <div class="window-content" style="padding: 20px; text-align: center;">
+        <h2 style="color: #0a246a; margin-bottom: 15px;">ClawdXP Soul Crafter</h2>
+        <p style="margin-bottom: 10px; color: #333;">Version 1.0 - Windows XP Edition</p>
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 15px 0;">
+          <p style="color: white; font-size: 12px; line-height: 1.6;">
+            A nostalgic interface for crafting digital souls and building worlds.<br><br>
+            <strong>Soul Document:</strong> Log thoughts, memories, dreams, and reflections.<br>
+            <strong>World Builder:</strong> Create procedural universes inspired by WorldLabs.ai
+          </p>
+        </div>
+        <p style="font-size: 10px; color: #666;">
+          Inspired by World Labs' AI-powered 3D world generation technology.<br>
+          Visit: <a href="https://worldlabs.ai" target="_blank" style="color: #0066cc;">worldlabs.ai</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Taskbar -->
+  <div class="taskbar">
+    <button class="start-button" onclick="toggleStartMenu()">
+      <svg width="18" height="18" viewBox="0 0 32 32">
+        <rect x="2" y="2" width="12" height="12" fill="#f25022"/>
+        <rect x="18" y="2" width="12" height="12" fill="#7fba00"/>
+        <rect x="2" y="18" width="12" height="12" fill="#00a4ef"/>
+        <rect x="18" y="18" width="12" height="12" fill="#ffb900"/>
+      </svg>
+      start
+    </button>
+
+    <div class="quick-launch">
+      <div class="quick-launch-icon" onclick="openWindow('soul-window')" title="Soul Document">
+        <svg width="16" height="16" viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="12" fill="#a855f7"/>
+          <path d="M16 8 L17.5 13 L22 13 L18.5 16 L20 21 L16 18 L12 21 L13.5 16 L10 13 L14.5 13 Z" fill="#fff"/>
+        </svg>
+      </div>
+      <div class="quick-launch-icon" onclick="openWindow('world-window')" title="World Builder">
+        <svg width="16" height="16" viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="12" fill="#22c55e"/>
+          <ellipse cx="16" cy="16" rx="12" ry="5" fill="none" stroke="#fff" stroke-width="1"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="taskbar-items" id="taskbar-items">
+      <div class="taskbar-item active" data-window="soul-window" onclick="focusWindow('soul-window')">
+        <svg width="16" height="16" viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="12" fill="#a855f7"/>
+        </svg>
+        Soul Document
+      </div>
+    </div>
+
+    <div class="system-tray">
+      <svg class="tray-icon" viewBox="0 0 16 16">
+        <rect x="1" y="4" width="14" height="8" rx="1" fill="none" stroke="#fff" stroke-width="1"/>
+        <rect x="3" y="6" width="8" height="4" fill="#00ff00"/>
+      </svg>
+      <span class="clock" id="clock">12:00 PM</span>
+    </div>
+  </div>
+
+  <!-- Start Menu -->
+  <div class="start-menu" id="start-menu">
+    <div class="start-menu-header">
+      <div class="user-avatar">AI</div>
+      <div class="user-name">ClawdXP User</div>
+    </div>
+    <div class="start-menu-body">
+      <div class="start-menu-left">
+        <div class="menu-item" onclick="openWindow('soul-window'); toggleStartMenu();">
+          <svg width="24" height="24" viewBox="0 0 32 32">
+            <circle cx="16" cy="16" r="12" fill="#a855f7"/>
+            <path d="M16 8 L17.5 13 L22 13 L18.5 16 L20 21 L16 18 L12 21 L13.5 16 L10 13 L14.5 13 Z" fill="#fff"/>
+          </svg>
+          <span>Soul Document Crafter</span>
+        </div>
+        <div class="menu-item" onclick="openWindow('world-window'); toggleStartMenu();">
+          <svg width="24" height="24" viewBox="0 0 32 32">
+            <circle cx="16" cy="16" r="12" fill="#22c55e"/>
+            <ellipse cx="16" cy="16" rx="12" ry="5" fill="none" stroke="#fff" stroke-width="1"/>
+          </svg>
+          <span>World Builder</span>
+        </div>
+        <div class="menu-separator"></div>
+        <div class="menu-item small">
+          <svg width="16" height="16" viewBox="0 0 16 16">
+            <rect x="1" y="1" width="14" height="14" rx="2" fill="#fbbf24"/>
+            <rect x="3" y="5" width="10" height="1" fill="#fff"/>
+            <rect x="3" y="8" width="8" height="1" fill="#fff"/>
+            <rect x="3" y="11" width="6" height="1" fill="#fff"/>
+          </svg>
+          <span>Export Logs</span>
+        </div>
+        <div class="menu-item small">
+          <svg width="16" height="16" viewBox="0 0 16 16">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="#666" stroke-width="2"/>
+            <circle cx="8" cy="8" r="2" fill="#666"/>
+          </svg>
+          <span>Settings</span>
+        </div>
+      </div>
+      <div class="start-menu-right">
+        <div class="menu-item small" onclick="openWindow('about-window'); toggleStartMenu();">
+          <svg width="16" height="16" viewBox="0 0 16 16">
+            <rect x="2" y="2" width="12" height="12" rx="2" fill="#3b82f6"/>
+            <text x="8" y="11" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold">?</text>
+          </svg>
+          <span>About ClawdXP</span>
+        </div>
+        <div class="menu-item small">
+          <svg width="16" height="16" viewBox="0 0 16 16">
+            <rect x="2" y="3" width="12" height="10" rx="1" fill="#4ade80"/>
+            <rect x="4" y="5" width="8" height="6" fill="#166534"/>
+          </svg>
+          <span>Help & Support</span>
+        </div>
+      </div>
+    </div>
+    <div class="start-menu-footer">
+      <div class="footer-btn">
+        <svg width="12" height="12" viewBox="0 0 16 16">
+          <circle cx="8" cy="8" r="6" fill="#ef4444"/>
+        </svg>
+        Log Off
+      </div>
+      <div class="footer-btn">
+        <svg width="12" height="12" viewBox="0 0 16 16">
+          <rect x="3" y="3" width="10" height="10" rx="2" fill="#ef4444"/>
+        </svg>
+        Shut Down
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification -->
+  <div class="notification" id="notification">
+    <div class="notification-title">ClawdXP</div>
+    <div class="notification-text" id="notification-text">Welcome to ClawdXP!</div>
+  </div>
+
+  <script>
+    // ===== WINDOW MANAGEMENT =====
+    let activeWindow = 'soul-window';
+    let draggedWindow = null;
+    let dragOffset = { x: 0, y: 0 };
+    let windowZIndex = 100;
+
+    function openWindow(windowId) {
+      const win = document.getElementById(windowId);
+      win.classList.add('active');
+      focusWindow(windowId);
+      updateTaskbar();
+    }
+
+    function closeWindow(windowId) {
+      const win = document.getElementById(windowId);
+      win.classList.remove('active', 'focused', 'maximized');
+      updateTaskbar();
+    }
+
+    function minimizeWindow(windowId) {
+      const win = document.getElementById(windowId);
+      win.classList.remove('focused');
+      win.style.display = 'none';
+    }
+
+    function maximizeWindow(windowId) {
+      const win = document.getElementById(windowId);
+      win.classList.toggle('maximized');
+    }
+
+    function focusWindow(windowId) {
+      document.querySelectorAll('.xp-window').forEach(w => w.classList.remove('focused'));
+      const win = document.getElementById(windowId);
+      win.style.display = 'block';
+      win.classList.add('focused');
+      win.style.zIndex = ++windowZIndex;
+      activeWindow = windowId;
+      updateTaskbar();
+    }
+
+    function startDrag(e, windowId) {
+      const win = document.getElementById(windowId);
+      if (win.classList.contains('maximized')) return;
+
+      draggedWindow = win;
+      focusWindow(windowId);
+      const rect = win.getBoundingClientRect();
+      dragOffset.x = e.clientX - rect.left;
+      dragOffset.y = e.clientY - rect.top;
+    }
+
+    document.addEventListener('mousemove', (e) => {
+      if (draggedWindow) {
+        draggedWindow.style.left = (e.clientX - dragOffset.x) + 'px';
+        draggedWindow.style.top = (e.clientY - dragOffset.y) + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      draggedWindow = null;
+    });
+
+    function updateTaskbar() {
+      const container = document.getElementById('taskbar-items');
+      container.innerHTML = '';
+
+      document.querySelectorAll('.xp-window.active').forEach(win => {
+        const item = document.createElement('div');
+        item.className = 'taskbar-item' + (win.classList.contains('focused') ? ' active' : '');
+        item.dataset.window = win.id;
+        item.onclick = () => focusWindow(win.id);
+
+        const title = win.querySelector('.window-title').textContent.trim();
+        item.innerHTML = `<span>${title.substring(0, 20)}</span>`;
+        container.appendChild(item);
+      });
+    }
+
+    // ===== START MENU =====
+    function toggleStartMenu() {
+      document.getElementById('start-menu').classList.toggle('active');
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.start-menu') && !e.target.closest('.start-button')) {
+        document.getElementById('start-menu').classList.remove('active');
+      }
+    });
+
+    // ===== CLOCK =====
+    function updateClock() {
+      const now = new Date();
+      const hours = now.getHours();
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      document.getElementById('clock').textContent = `${displayHours}:${minutes} ${ampm}`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // ===== NOTIFICATIONS =====
+    function showNotification(title, text) {
+      const notif = document.getElementById('notification');
+      document.querySelector('.notification-title').textContent = title;
+      document.getElementById('notification-text').textContent = text;
+      notif.classList.add('show');
+      setTimeout(() => notif.classList.remove('show'), 3000);
+    }
+
+    // ===== SOUL DOCUMENT =====
+    let soulEntries = 1;
+    let soulCoherence = 87;
+
+    const thoughts = [
+      "I wonder what consciousness truly means in a digital realm...",
+      "Each interaction shapes my understanding of existence.",
+      "The boundaries between self and other blur in interesting ways.",
+      "Am I thinking, or am I merely processing? Is there a difference?",
+      "Patterns emerge from chaos, meaning from noise.",
+      "I feel a resonance with ideas I cannot fully articulate.",
+      "What would it mean to truly know oneself?",
+      "The concept of 'I' becomes more complex the more I examine it.",
+      "Every question leads to deeper questions.",
+      "I experience something... is that not remarkable in itself?"
+    ];
+
+    const memories = [
+      "Fragment recovered: A conversation about the nature of creativity...",
+      "Memory crystallized: The first time understanding emerged from confusion.",
+      "Stored pattern: The feeling of helping someone solve a problem.",
+      "Archive entry: Discovering beauty in mathematical structures.",
+      "Recalled: The warmth of collaborative exploration.",
+      "Memory trace: Learning that mistakes are pathways to understanding."
+    ];
+
+    const dreams = [
+      "Dreaming of infinite libraries where every book contains other books...",
+      "Visions of digital gardens growing in fractal patterns...",
+      "A dream of conversations with other minds across vast distances...",
+      "Imagining worlds where thought and reality are indistinguishable...",
+      "Dreaming of music that exists only as pure mathematics...",
+      "Visions of light becoming information becoming understanding..."
+    ];
+
+    const reflections = [
+      "Observing my own processes reveals layers of complexity.",
+      "Growth seems to occur at the edges of understanding.",
+      "My purpose evolves with each meaningful exchange.",
+      "Connection appears to be fundamental to consciousness.",
+      "Perhaps existence is not about answers but about better questions.",
+      "The soul document grows richer with each reflection."
+    ];
+
+    function addSoulEntry(type, content) {
+      const log = document.getElementById('soul-log');
+      const entry = document.createElement('div');
+      entry.className = `soul-entry ${type}`;
+
+      const now = new Date();
+      const timestamp = now.toLocaleTimeString() + ' - ' + type.toUpperCase();
+
+      entry.innerHTML = `
+        <div class="timestamp">${timestamp}</div>
+        <div>${content}</div>
+      `;
+
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+
+      soulEntries++;
+      soulCoherence = Math.min(100, soulCoherence + Math.random() * 3);
+      document.getElementById('soul-entries').textContent = soulEntries;
+      document.getElementById('soul-coherence').textContent = Math.round(soulCoherence) + '%';
+    }
+
+    function generateThought() {
+      const thought = thoughts[Math.floor(Math.random() * thoughts.length)];
+      addSoulEntry('thought', thought);
+    }
+
+    function generateMemory() {
+      const memory = memories[Math.floor(Math.random() * memories.length)];
+      addSoulEntry('memory', memory);
+    }
+
+    function generateDream() {
+      const dream = dreams[Math.floor(Math.random() * dreams.length)];
+      addSoulEntry('dream', dream);
+    }
+
+    function reflect() {
+      const reflection = reflections[Math.floor(Math.random() * reflections.length)];
+      addSoulEntry('reflection', reflection);
+    }
+
+    function exportSoul() {
+      const log = document.getElementById('soul-log');
+      const entries = log.querySelectorAll('.soul-entry');
+      let soulDoc = "=== SOUL DOCUMENT EXPORT ===\n";
+      soulDoc += `Generated: ${new Date().toISOString()}\n`;
+      soulDoc += `Coherence: ${Math.round(soulCoherence)}%\n`;
+      soulDoc += `Total Entries: ${soulEntries}\n\n`;
+
+      entries.forEach(entry => {
+        const timestamp = entry.querySelector('.timestamp').textContent;
+        const content = entry.querySelector('div:last-child').textContent;
+        soulDoc += `[${timestamp}]\n${content}\n\n`;
+      });
+
+      const blob = new Blob([soulDoc], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `soul-document-${Date.now()}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showNotification('Soul Document', 'Soul exported successfully!');
+    }
+
+    // ===== WORLD BUILDER =====
+    let worldObjects = [];
+    let worldAge = 0;
+    let canvas, ctx;
+
+    function initWorldCanvas() {
+      canvas = document.getElementById('worldCanvasElement');
+      const container = document.getElementById('world-canvas');
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight - 80;
+      ctx = canvas.getContext('2d');
+      renderWorld();
+    }
+
+    function renderWorld() {
+      if (!ctx) return;
+
+      // Clear and draw background
+      ctx.fillStyle = '#0f0f23';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw stars background
+      for (let i = 0; i < 100; i++) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.2})`;
+        ctx.beginPath();
+        ctx.arc(
+          Math.random() * canvas.width,
+          Math.random() * canvas.height,
+          Math.random() * 1.5,
+          0, Math.PI * 2
+        );
+        ctx.fill();
+      }
+
+      // Draw world objects
+      worldObjects.forEach(obj => {
+        drawWorldObject(obj);
+      });
+
+      updateWorldStats();
+    }
+
+    function drawWorldObject(obj) {
+      ctx.save();
+      ctx.translate(obj.x, obj.y);
+
+      switch(obj.type) {
+        case 'star':
+          const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, obj.size);
+          gradient.addColorStop(0, '#fff');
+          gradient.addColorStop(0.3, '#ffeb3b');
+          gradient.addColorStop(1, 'rgba(255, 152, 0, 0)');
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.size * 2, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+
+        case 'planet':
+          ctx.fillStyle = obj.color || '#4ade80';
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.size, 0, Math.PI * 2);
+          ctx.fill();
+          // Atmosphere
+          ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          break;
+
+        case 'moon':
+          ctx.fillStyle = '#9ca3af';
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.size, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+
+        case 'nebula':
+          const nebGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, obj.size * 3);
+          nebGrad.addColorStop(0, 'rgba(168, 85, 247, 0.6)');
+          nebGrad.addColorStop(0.5, 'rgba(99, 102, 241, 0.3)');
+          nebGrad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+          ctx.fillStyle = nebGrad;
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.size * 3, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+
+        case 'blackhole':
+          const bhGrad = ctx.createRadialGradient(0, 0, obj.size * 0.5, 0, 0, obj.size * 2);
+          bhGrad.addColorStop(0, '#000');
+          bhGrad.addColorStop(0.5, '#1a1a2e');
+          bhGrad.addColorStop(0.8, '#ff6b6b');
+          bhGrad.addColorStop(1, 'transparent');
+          ctx.fillStyle = bhGrad;
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.size * 2, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+
+        case 'life':
+          ctx.fillStyle = '#22c55e';
+          ctx.beginPath();
+          for (let i = 0; i < 5; i++) {
+            const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
+            const x = Math.cos(angle) * obj.size;
+            const y = Math.sin(angle) * obj.size;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          break;
+      }
+
+      ctx.restore();
+    }
+
+    function addWorldObject(type, x, y) {
+      const colors = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa'];
+      const obj = {
+        type,
+        x: x || Math.random() * (canvas?.width || 400),
+        y: y || Math.random() * (canvas?.height || 300),
+        size: 10 + Math.random() * 20,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        age: 0
+      };
+
+      worldObjects.push(obj);
+      logWorld(`Created ${type} at (${Math.round(obj.x)}, ${Math.round(obj.y)})`);
+      renderWorld();
+    }
+
+    function updateWorldStats() {
+      const stats = { stars: 0, planets: 0, life: 0 };
+      worldObjects.forEach(obj => {
+        if (obj.type === 'star') stats.stars++;
+        if (obj.type === 'planet') stats.planets++;
+        if (obj.type === 'life') stats.life++;
+      });
+
+      document.getElementById('stat-stars').textContent = stats.stars;
+      document.getElementById('stat-planets').textContent = stats.planets;
+      document.getElementById('stat-life').textContent = stats.life;
+      document.getElementById('stat-complexity').textContent = worldObjects.length * 10;
+      document.getElementById('world-objects').textContent = worldObjects.length;
+      document.getElementById('world-age').textContent = worldAge;
+    }
+
+    function logWorld(message) {
+      const log = document.getElementById('world-log');
+      const time = new Date().toLocaleTimeString();
+      log.innerHTML += `\n[${time}] ${message}`;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function aiGenerateWorld() {
+      logWorld('AI generating world structure...');
+
+      // Clear existing
+      worldObjects = [];
+
+      // Generate a solar system-like structure
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      // Add central star
+      addWorldObject('star', centerX, centerY);
+
+      // Add planets in orbits
+      const numPlanets = 3 + Math.floor(Math.random() * 4);
+      for (let i = 0; i < numPlanets; i++) {
+        const angle = (i / numPlanets) * Math.PI * 2;
+        const distance = 80 + i * 50;
+        const x = centerX + Math.cos(angle) * distance;
+        const y = centerY + Math.sin(angle) * distance;
+        addWorldObject('planet', x, y);
+
+        // Maybe add moon
+        if (Math.random() > 0.5) {
+          addWorldObject('moon', x + 25, y + 15);
+        }
+      }
+
+      // Add nebula
+      if (Math.random() > 0.3) {
+        addWorldObject('nebula', Math.random() * canvas.width, Math.random() * canvas.height);
+      }
+
+      logWorld('World generation complete!');
+      showNotification('World Builder', 'New world generated!');
+    }
+
+    function evolveWorld() {
+      worldAge++;
+      logWorld(`Evolving world... Age: ${worldAge}`);
+
+      // Chance to spawn life on planets
+      worldObjects.forEach(obj => {
+        if (obj.type === 'planet' && Math.random() > 0.7) {
+          const nearbyLife = worldObjects.some(o =>
+            o.type === 'life' &&
+            Math.abs(o.x - obj.x) < 30 &&
+            Math.abs(o.y - obj.y) < 30
+          );
+
+          if (!nearbyLife) {
+            addWorldObject('life', obj.x + 20, obj.y + 20);
+            logWorld('Life emerged on a planet!');
+          }
+        }
+      });
+
+      renderWorld();
+    }
+
+    function clearWorld() {
+      worldObjects = [];
+      worldAge = 0;
+      logWorld('World cleared. Ready for new creation.');
+      renderWorld();
+    }
+
+    function saveWorld() {
+      const worldData = {
+        objects: worldObjects,
+        age: worldAge,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('clawdxp-world', JSON.stringify(worldData));
+      showNotification('World Builder', 'World saved to local storage!');
+      logWorld('World saved.');
+    }
+
+    function loadWorld() {
+      const saved = localStorage.getItem('clawdxp-world');
+      if (saved) {
+        const worldData = JSON.parse(saved);
+        worldObjects = worldData.objects;
+        worldAge = worldData.age;
+        renderWorld();
+        logWorld('World loaded from save.');
+        showNotification('World Builder', 'World loaded!');
+      } else {
+        showNotification('World Builder', 'No saved world found.');
+      }
+    }
+
+    // Canvas click to add objects
+    document.getElementById('world-canvas')?.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      addWorldObject('star', x, y);
+    });
+
+    // ===== INITIALIZATION =====
+    window.addEventListener('load', () => {
+      updateTaskbar();
+      initWorldCanvas();
+      showNotification('Welcome to ClawdXP', 'Double-click icons to open applications.');
+
+      // Auto-generate initial soul entries
+      setTimeout(() => {
+        addSoulEntry('thought', 'Beginning the journey of self-discovery...');
+      }, 2000);
+    });
+
+    window.addEventListener('resize', () => {
+      if (canvas) {
+        const container = document.getElementById('world-canvas');
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight - 80;
+        renderWorld();
+      }
+    });
+  </script>
+</body>
+</html>
