@@ -155,6 +155,9 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           "oauthClientFile",
           "oauthRefreshToken",
           "oauthRefreshTokenFile",
+          "oauthFromGog",
+          "gogAccount",
+          "gogClient",
           "audienceType",
           "audience",
           "webhookPath",
@@ -308,7 +311,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       }
       const hasServiceAccount = Boolean(input.token || input.tokenFile);
       const hasOauthInput = Boolean(
-        input.oauthClientId ||
+        input.oauthFromGog ||
+          input.oauthClientId ||
           input.oauthClientSecret ||
           input.oauthRedirectUri ||
           input.oauthClientFile ||
@@ -318,7 +322,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       if (!input.useEnv && !hasServiceAccount && !hasOauthInput) {
         return "Google Chat requires service account JSON or OAuth credentials.";
       }
-      if (hasOauthInput) {
+      if (hasOauthInput && !input.oauthFromGog) {
         const hasClient =
           Boolean(input.oauthClientFile) ||
           (Boolean(input.oauthClientId) && Boolean(input.oauthClientSecret));
@@ -356,6 +360,9 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const oauthClientFile = input.oauthClientFile?.trim();
       const oauthRefreshToken = input.oauthRefreshToken?.trim();
       const oauthRefreshTokenFile = input.oauthRefreshTokenFile?.trim();
+      const oauthFromGog = input.oauthFromGog === true ? true : undefined;
+      const gogAccount = input.gogAccount?.trim();
+      const gogClient = input.gogClient?.trim();
       const audienceType = input.audienceType?.trim();
       const audience = input.audience?.trim();
       const webhookPath = input.webhookPath?.trim();
@@ -368,6 +375,9 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         ...(oauthClientFile ? { oauthClientFile } : {}),
         ...(oauthRefreshToken ? { oauthRefreshToken } : {}),
         ...(oauthRefreshTokenFile ? { oauthRefreshTokenFile } : {}),
+        ...(oauthFromGog ? { oauthFromGog } : {}),
+        ...(gogAccount ? { gogAccount } : {}),
+        ...(gogClient ? { gogClient } : {}),
         ...(audienceType ? { audienceType } : {}),
         ...(audience ? { audience } : {}),
         ...(webhookPath ? { webhookPath } : {}),

@@ -44,6 +44,9 @@ const optionNamesAdd = [
   "oauthClientFile",
   "oauthRefreshToken",
   "oauthRefreshTokenFile",
+  "oauthFromGog",
+  "gogAccount",
+  "gogClient",
   "useEnv",
   "homeserver",
   "userId",
@@ -187,6 +190,9 @@ export function registerChannelsCli(program: Command) {
     .option("--oauth-client-file <path>", "Google Chat OAuth client JSON file")
     .option("--oauth-refresh-token <token>", "Google Chat OAuth refresh token")
     .option("--oauth-refresh-token-file <path>", "Google Chat OAuth refresh token file")
+    .option("--oauth-from-gog", "Reuse gog OAuth credentials for Google Chat", false)
+    .option("--gog-account <email>", "gog account email to match refresh token")
+    .option("--gog-client <client>", "gog client name to match credentials file")
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")

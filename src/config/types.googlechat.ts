@@ -72,6 +72,12 @@ export type GoogleChatAccountConfig = {
   oauthRefreshToken?: string;
   /** OAuth refresh token file path (user auth). */
   oauthRefreshTokenFile?: string;
+  /** Reuse gog OAuth credentials (user auth). */
+  oauthFromGog?: boolean;
+  /** gog account email to match refresh token (optional). */
+  gogAccount?: string;
+  /** gog client name to match credentials file (optional). */
+  gogClient?: string;
   /** Webhook audience type (app-url or project-number). */
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */

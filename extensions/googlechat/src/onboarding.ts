@@ -218,14 +218,29 @@ async function promptOAuthCredentials(params: {
   const method = await prompter.select({
     message: "OAuth client source",
     options: [
+      { value: "gog", label: "Reuse gog OAuth (recommended if already set up)" },
       { value: "file", label: "OAuth client JSON file" },
       { value: "manual", label: "OAuth client id + secret" },
     ],
-    initialValue: "file",
+    initialValue: "gog",
   });
 
   let patch: Record<string, unknown> = {};
-  if (method === "file") {
+  if (method === "gog") {
+    const gogAccount = await prompter.text({
+      message: "gog account email (optional)",
+      placeholder: "you@example.com",
+    });
+    const gogClient = await prompter.text({
+      message: "gog client name (optional)",
+      placeholder: "work",
+    });
+    patch = {
+      oauthFromGog: true,
+      ...(String(gogAccount ?? "").trim() ? { gogAccount: String(gogAccount).trim() } : {}),
+      ...(String(gogClient ?? "").trim() ? { gogClient: String(gogClient).trim() } : {}),
+    };
+  } else if (method === "file") {
     const path = await prompter.text({
       message: "OAuth client JSON path",
       placeholder: "/path/to/oauth-client.json",
@@ -254,18 +269,21 @@ async function promptOAuthCredentials(params: {
     };
   }
 
-  const refreshToken = await prompter.text({
-    message: "OAuth refresh token",
-    placeholder: "1//0g...",
-    validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-  });
+  const refreshToken =
+    method === "gog"
+      ? undefined
+      : await prompter.text({
+          message: "OAuth refresh token",
+          placeholder: "1//0g...",
+          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        });
 
   return applyAccountConfig({
     cfg,
     accountId,
     patch: {
       ...patch,
-      oauthRefreshToken: String(refreshToken).trim(),
+      ...(refreshToken ? { oauthRefreshToken: String(refreshToken).trim() } : {}),
     },
   });
 }
@@ -308,6 +326,7 @@ async function noteGoogleChatSetup(prompter: WizardPrompter) {
       "Google Chat apps use service-account auth or user OAuth plus an HTTPS webhook.",
       "Set the Chat API scopes in your service account and configure the Chat app URL.",
       "User OAuth enables reactions and other user-level APIs.",
+      "If gog is configured, you can reuse its OAuth credentials for Chat.",
       "Webhook verification requires audience type + audience value.",
       `Docs: ${formatDocsLink("/channels/googlechat", "channels/googlechat")}`,
     ].join("\n"),

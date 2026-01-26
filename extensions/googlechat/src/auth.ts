@@ -4,6 +4,7 @@ import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import { DEFAULT_ACCOUNT_ID } from "clawdbot/plugin-sdk";
 
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { readGogRefreshTokenSync, resolveGogCredentialsFile } from "./gog.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
@@ -65,6 +66,8 @@ const ENV_OAUTH_REDIRECT_URI = "GOOGLE_CHAT_OAUTH_REDIRECT_URI";
 const ENV_OAUTH_CLIENT_FILE = "GOOGLE_CHAT_OAUTH_CLIENT_FILE";
 const ENV_OAUTH_REFRESH_TOKEN = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN";
 const ENV_OAUTH_REFRESH_TOKEN_FILE = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN_FILE";
+const ENV_GOG_ACCOUNT = "GOG_ACCOUNT";
+const ENV_GOG_CLIENT = "GOG_CLIENT";
 
 type OAuthClientConfig = {
   clientId: string;
@@ -102,6 +105,8 @@ function readJsonFile(path: string): unknown | null {
 
 function resolveOAuthClientConfig(account: ResolvedGoogleChatAccount): OAuthClientConfig | null {
   const cfg = account.config;
+  const gogAccount = cfg.gogAccount?.trim() || process.env[ENV_GOG_ACCOUNT]?.trim() || undefined;
+  const gogClient = cfg.gogClient?.trim() || process.env[ENV_GOG_CLIENT]?.trim() || undefined;
   const inlineId = cfg.oauthClientId?.trim();
   const inlineSecret = cfg.oauthClientSecret?.trim();
   const inlineRedirect = cfg.oauthRedirectUri?.trim();
@@ -117,6 +122,14 @@ function resolveOAuthClientConfig(account: ResolvedGoogleChatAccount): OAuthClie
   if (filePath) {
     const parsed = parseOAuthClientJson(readJsonFile(filePath));
     if (parsed) return parsed;
+  }
+
+  if (cfg.oauthFromGog) {
+    const gogCredentials = resolveGogCredentialsFile({ gogClient, gogAccount });
+    if (gogCredentials) {
+      const parsed = parseOAuthClientJson(readJsonFile(gogCredentials));
+      if (parsed) return parsed;
+    }
   }
 
   if (account.accountId === DEFAULT_ACCOUNT_ID) {
@@ -138,6 +151,8 @@ function resolveOAuthClientConfig(account: ResolvedGoogleChatAccount): OAuthClie
 
 function resolveOAuthRefreshToken(account: ResolvedGoogleChatAccount): string | null {
   const cfg = account.config;
+  const gogAccount = cfg.gogAccount?.trim() || process.env[ENV_GOG_ACCOUNT]?.trim() || undefined;
+  const gogClient = cfg.gogClient?.trim() || process.env[ENV_GOG_CLIENT]?.trim() || undefined;
   if (cfg.oauthRefreshToken?.trim()) return cfg.oauthRefreshToken.trim();
   const tokenFile = cfg.oauthRefreshTokenFile?.trim();
   if (tokenFile) {
@@ -153,6 +168,10 @@ function resolveOAuthRefreshToken(account: ResolvedGoogleChatAccount): string | 
             : "";
       if (token) return token;
     }
+  }
+  if (cfg.oauthFromGog) {
+    const token = readGogRefreshTokenSync({ gogAccount, gogClient });
+    if (token) return token;
   }
   if (account.accountId === DEFAULT_ACCOUNT_ID) {
     const envToken = process.env[ENV_OAUTH_REFRESH_TOKEN]?.trim();

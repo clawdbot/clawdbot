@@ -1137,6 +1137,10 @@ Multi-account support lives under `channels.googlechat.accounts` (see the multi-
       serviceAccountFile: "/path/to/service-account.json",
       oauthClientFile: "/path/to/oauth-client.json",
       oauthRefreshToken: "1//0g...",
+      // Or reuse gog OAuth:
+      // oauthFromGog: true,
+      // gogAccount: "you@example.com",
+      // gogClient: "work",
       audienceType: "app-url",             // app-url | project-number
       audience: "https://gateway.example.com/googlechat",
       webhookPath: "/googlechat",
@@ -1166,6 +1170,7 @@ Notes:
   `GOOGLE_CHAT_OAUTH_CLIENT_SECRET`, `GOOGLE_CHAT_OAUTH_REDIRECT_URI`,
   `GOOGLE_CHAT_OAUTH_CLIENT_FILE`, `GOOGLE_CHAT_OAUTH_REFRESH_TOKEN`,
   `GOOGLE_CHAT_OAUTH_REFRESH_TOKEN_FILE`.
+- `oauthFromGog` reuses `gog` OAuth credentials; `gogAccount`/`gogClient` (or `GOG_ACCOUNT`/`GOG_CLIENT`) select the account/client.
 - `audienceType` + `audience` must match the Chat app’s webhook auth config.
 - Use `spaces/<spaceId>` or `users/<userId|email>` when setting delivery targets.
 

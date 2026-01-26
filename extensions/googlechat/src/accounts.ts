@@ -2,6 +2,7 @@ import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 
 import type { GoogleChatAccountConfig, GoogleChatConfig } from "./types.config.js";
+import { readGogRefreshTokenSync, resolveGogCredentialsFile } from "./gog.js";
 
 export type GoogleChatAppCredentialSource = "file" | "inline" | "env" | "none";
 export type GoogleChatUserCredentialSource = "file" | "inline" | "env" | "none";
@@ -21,6 +22,8 @@ export type ResolvedGoogleChatAccount = {
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
+const ENV_GOG_ACCOUNT = "GOG_ACCOUNT";
+const ENV_GOG_CLIENT = "GOG_CLIENT";
 const ENV_OAUTH_CLIENT_ID = "GOOGLE_CHAT_OAUTH_CLIENT_ID";
 const ENV_OAUTH_CLIENT_SECRET = "GOOGLE_CHAT_OAUTH_CLIENT_SECRET";
 const ENV_OAUTH_CLIENT_FILE = "GOOGLE_CHAT_OAUTH_CLIENT_FILE";
@@ -121,6 +124,8 @@ function resolveUserAuthSource(params: {
   account: GoogleChatAccountConfig;
 }): GoogleChatUserCredentialSource {
   const { account, accountId } = params;
+  const gogAccount = account.gogAccount?.trim() || process.env[ENV_GOG_ACCOUNT]?.trim() || undefined;
+  const gogClient = account.gogClient?.trim() || process.env[ENV_GOG_CLIENT]?.trim() || undefined;
   const clientId = account.oauthClientId?.trim();
   const clientSecret = account.oauthClientSecret?.trim();
   const clientFile = account.oauthClientFile?.trim();
@@ -131,6 +136,12 @@ function resolveUserAuthSource(params: {
   const hasFileClient = hasNonEmptyString(clientFile);
   const hasInlineRefresh = hasNonEmptyString(refreshToken);
   const hasFileRefresh = hasNonEmptyString(refreshTokenFile);
+  const hasGogClient = account.oauthFromGog
+    ? Boolean(resolveGogCredentialsFile({ gogClient, gogAccount }))
+    : false;
+  const hasGogRefresh = account.oauthFromGog
+    ? Boolean(readGogRefreshTokenSync({ gogAccount, gogClient }))
+    : false;
 
   const hasEnvClient =
     accountId === DEFAULT_ACCOUNT_ID &&
@@ -144,8 +155,10 @@ function resolveUserAuthSource(params: {
     accountId === DEFAULT_ACCOUNT_ID &&
     hasNonEmptyString(process.env[ENV_OAUTH_REFRESH_TOKEN_FILE]);
 
-  const hasClient = hasInlineClient || hasFileClient || hasEnvClient || hasEnvClientFile;
-  const hasRefresh = hasInlineRefresh || hasFileRefresh || hasEnvRefresh || hasEnvRefreshFile;
+  const hasClient =
+    hasInlineClient || hasFileClient || hasEnvClient || hasEnvClientFile || hasGogClient;
+  const hasRefresh =
+    hasInlineRefresh || hasFileRefresh || hasEnvRefresh || hasEnvRefreshFile || hasGogRefresh;
   if (!hasClient || !hasRefresh) return "none";
 
   if (hasEnvClient || hasEnvClientFile || hasEnvRefresh || hasEnvRefreshFile) return "env";

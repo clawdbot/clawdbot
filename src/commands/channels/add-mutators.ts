@@ -45,6 +45,9 @@ export function applyChannelAccountConfig(params: {
   oauthClientFile?: string;
   oauthRefreshToken?: string;
   oauthRefreshTokenFile?: string;
+  oauthFromGog?: boolean;
+  gogAccount?: string;
+  gogClient?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;
@@ -88,6 +91,9 @@ export function applyChannelAccountConfig(params: {
     oauthClientFile: params.oauthClientFile,
     oauthRefreshToken: params.oauthRefreshToken,
     oauthRefreshTokenFile: params.oauthRefreshTokenFile,
+    oauthFromGog: params.oauthFromGog,
+    gogAccount: params.gogAccount,
+    gogClient: params.gogClient,
     useEnv: params.useEnv,
     homeserver: params.homeserver,
     userId: params.userId,

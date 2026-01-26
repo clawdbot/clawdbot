@@ -41,6 +41,9 @@ export type ChannelSetupInput = {
   oauthClientFile?: string;
   oauthRefreshToken?: string;
   oauthRefreshTokenFile?: string;
+  oauthFromGog?: boolean;
+  gogAccount?: string;
+  gogClient?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;

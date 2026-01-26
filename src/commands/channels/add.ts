@@ -42,6 +42,9 @@ export type ChannelsAddOptions = {
   oauthClientFile?: string;
   oauthRefreshToken?: string;
   oauthRefreshTokenFile?: string;
+  oauthFromGog?: boolean;
+  gogAccount?: string;
+  gogClient?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;
@@ -216,6 +219,9 @@ export async function channelsAddCommand(
       oauthClientFile: opts.oauthClientFile,
       oauthRefreshToken: opts.oauthRefreshToken,
       oauthRefreshTokenFile: opts.oauthRefreshTokenFile,
+      oauthFromGog: opts.oauthFromGog,
+      gogAccount: opts.gogAccount,
+      gogClient: opts.gogClient,
       homeserver: opts.homeserver,
       userId: opts.userId,
       accessToken: opts.accessToken,
@@ -265,6 +271,9 @@ export async function channelsAddCommand(
     oauthClientFile: opts.oauthClientFile,
     oauthRefreshToken: opts.oauthRefreshToken,
     oauthRefreshTokenFile: opts.oauthRefreshTokenFile,
+    oauthFromGog: opts.oauthFromGog,
+    gogAccount: opts.gogAccount,
+    gogClient: opts.gogClient,
     homeserver: opts.homeserver,
     userId: opts.userId,
     accessToken: opts.accessToken,

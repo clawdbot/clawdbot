@@ -49,7 +49,41 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
 ## User OAuth (optional, enables reactions)
 Service accounts cover most bot workflows, but **reactions and user-attributed actions require user OAuth**.
 
-1) Configure OAuth consent + create OAuth client credentials in your Google Cloud project.
+### Option A: Use gog OAuth (recommended if you already use `gog`)
+If you already use `gog` for Google Workspace, you can reuse its OAuth client + refresh token.
+`gog` stores the OAuth client credentials JSON in your config directory and the refresh token in your system keyring. citeturn9view0turn6view0
+
+1) Ensure `gog` is already authorized:
+   ```bash
+   gog auth credentials /path/to/client_secret.json
+   gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
+   ```
+2) Configure Google Chat to reuse `gog`:
+   ```json5
+   {
+     channels: {
+       googlechat: {
+         oauthFromGog: true,
+         // Optional when multiple gog clients or accounts are configured:
+         gogAccount: "you@example.com",
+         gogClient: "work"
+       }
+     }
+   }
+   ```
+3) Ensure `gog` can access its keyring on the gateway host.
+   - `gog` stores refresh tokens in the system keychain by default. citeturn6view0
+   - For headless systems, switch to file keyring + password (see `gog` docs). citeturn6view0
+
+Clawdbot reads `gog` OAuth client files from:
+- `~/.config/gogcli/credentials.json`
+- `~/.config/gogcli/credentials-<client>.json`
+- `~/.config/gogcli/credentials-<domain>.json` (or macOS equivalent) citeturn9view0
+
+Clawdbot queries `gog auth tokens --json` to reuse the stored refresh token. If this fails, set `oauthRefreshToken` manually.
+
+### Option B: Manual OAuth
+1) Configure OAuth consent + create OAuth client credentials in your Google Cloud project (desktop app recommended). citeturn6view0
 2) Use an OAuth 2.0 flow to request **offline** access and collect a refresh token.
    - Required scopes for reactions include:
      - `https://www.googleapis.com/auth/chat.messages.reactions.create`
@@ -160,6 +194,10 @@ Use these identifiers for delivery and allowlists:
       // Optional: user OAuth for reactions + user-attributed actions
       oauthClientFile: "/path/to/oauth-client.json",
       oauthRefreshToken: "1//0g...",
+      // Or reuse gog:
+      // oauthFromGog: true,
+      // gogAccount: "you@example.com",
+      // gogClient: "work",
       // Or explicit fields:
       // oauthClientId: "123456.apps.googleusercontent.com",
       // oauthClientSecret: "GOCSPX-...",
@@ -195,6 +233,7 @@ Notes:
 - Env options (default account): `GOOGLE_CHAT_OAUTH_CLIENT_ID`, `GOOGLE_CHAT_OAUTH_CLIENT_SECRET`,
   `GOOGLE_CHAT_OAUTH_REDIRECT_URI`, `GOOGLE_CHAT_OAUTH_CLIENT_FILE`,
   `GOOGLE_CHAT_OAUTH_REFRESH_TOKEN`, `GOOGLE_CHAT_OAUTH_REFRESH_TOKEN_FILE`.
+- `oauthFromGog` reuses the `gog` keyring. Use `gogAccount`/`gogClient` (or `GOG_ACCOUNT`/`GOG_CLIENT`) when multiple accounts or clients exist.
 - Default webhook path is `/googlechat` if `webhookPath` isn’t set.
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
