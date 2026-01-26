@@ -30,6 +30,12 @@
     "@mtcute/node": "^0.27.6",
     "@clack/prompts": "^0.8.2",
     "qrcode-terminal": "^0.12.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
     "clawdbot": "workspace:*"
+  },
+  "peerDependencies": {
+    "clawdbot": ">=2026.1.25"
   }
 }
