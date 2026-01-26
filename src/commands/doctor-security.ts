@@ -10,6 +10,26 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("clawdbot security audit --deep")}`;
 
+  // Check gateway network exposure (fixes #2015)
+  const gatewayBind = cfg.gateway?.bind ?? "loopback";
+  const authMode = cfg.gateway?.auth?.mode ?? "off";
+  const exposedBindings = ["all", "lan", "0.0.0.0"];
+  const isExposed = exposedBindings.includes(gatewayBind);
+
+  if (isExposed && authMode === "off") {
+    warnings.push(
+      `- CRITICAL: Gateway bound to "${gatewayBind}" with NO authentication.`,
+      `  Anyone on the network can fully control your agent (shell access, API keys).`,
+      `  Fix: ${formatCliCommand("clawdbot config set gateway.bind loopback")} or enable auth.`,
+    );
+  } else if (isExposed && authMode === "password") {
+    warnings.push(
+      `- WARN: Gateway bound to "${gatewayBind}" (network-exposed).`,
+      `  Password auth is enabled, but ensure it's strong and not in config file.`,
+      `  Recommended: Use ${formatCliCommand("clawdbot config set gateway.bind loopback")} if remote access not needed.`,
+    );
+  }
+
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
