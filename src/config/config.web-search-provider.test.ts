@@ -22,4 +22,20 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts serper provider and config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "serper",
+            apiKey: "test-key",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

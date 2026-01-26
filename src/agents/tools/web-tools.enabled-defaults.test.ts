@@ -307,3 +307,87 @@ describe("web_search perplexity baseUrl defaults", () => {
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
   });
 });
+
+describe("web_search serper provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    // @ts-expect-error global fetch cleanup
+    global.fetch = priorFetch;
+  });
+
+  it("works with Serper provider and config API key", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            organic: [
+              { title: "Test Result", link: "https://example.com", snippet: "Test snippet" },
+            ],
+          }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "serper",
+              apiKey: "serper-test-key",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.(1, { query: "test serper" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://google.serper.dev/search");
+    expect(mockFetch.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(mockFetch.mock.calls[0]?.[1]?.headers?.["X-API-KEY"]).toBe("serper-test-key");
+    expect(result?.details).toMatchObject({
+      provider: "serper",
+      query: "test serper",
+    });
+  });
+
+  it("works with Serper provider and SERPER_API_KEY env var", async () => {
+    vi.stubEnv("SERPER_API_KEY", "serper-env-key");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            organic: [
+              { title: "Test Result", link: "https://example.com", snippet: "Test snippet" },
+            ],
+          }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "serper",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test serper env" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[1]?.headers?.["X-API-KEY"]).toBe("serper-env-key");
+  });
+});
