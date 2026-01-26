@@ -229,7 +229,12 @@ describe("commands registry args", () => {
 
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("mode");
-    expect(menu?.choices).toEqual(["off", "tokens", "full", "cost"]);
+    expect(menu?.choices).toEqual([
+      { value: "off", label: "off" },
+      { value: "tokens", label: "tokens" },
+      { value: "full", label: "full" },
+      { value: "cost", label: "cost" },
+    ]);
   });
 
   it("does not show menus when arg already provided", () => {
@@ -284,7 +289,10 @@ describe("commands registry args", () => {
 
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices).toEqual(["low", "high"]);
+    expect(menu?.choices).toEqual([
+      { value: "low", label: "low" },
+      { value: "high", label: "high" },
+    ]);
     expect(seen?.commandKey).toBe("think");
     expect(seen?.argName).toBe("level");
     expect(seen?.provider).toBeTruthy();

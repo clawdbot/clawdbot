@@ -1,5 +1,6 @@
 import { listChannelDocks } from "../channels/dock.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getTtsProvider, isTtsEnabled, resolveTtsConfig, resolveTtsPrefsPath } from "../tts/tts.js";
 import { listThinkingLevels } from "./thinking.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type { ChatCommandDefinition, CommandScope } from "./commands-registry.types.js";
@@ -191,7 +192,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
           choices: [
             { value: "on", label: "On" },
             { value: "off", label: "Off" },
-            { value: "status", label: "Status" },
             { value: "provider", label: "Provider" },
             { value: "limit", label: "Limit" },
             { value: "summary", label: "Summary" },
@@ -208,16 +208,25 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
       argsMenu: {
         arg: "action",
-        title:
-          "TTS Actions:\n" +
-          "• On – Enable TTS for responses\n" +
-          "• Off – Disable TTS\n" +
-          "• Status – Show current settings\n" +
-          "• Provider – Set voice provider (edge, elevenlabs, openai)\n" +
-          "• Limit – Set max characters for TTS\n" +
-          "• Summary – Toggle AI summary for long texts\n" +
-          "• Audio – Generate TTS from custom text\n" +
-          "• Help – Show usage guide",
+        title: ({ cfg }) => {
+          if (!cfg) {
+            return "🔊 TTS Actions";
+          }
+          const config = resolveTtsConfig(cfg);
+          const prefsPath = resolveTtsPrefsPath(config);
+          const enabled = isTtsEnabled(config, prefsPath);
+          const provider = getTtsProvider(config, prefsPath);
+          const statusLine = `Status: ${enabled ? "✅ On" : "❌ Off"} · Provider: ${provider}`;
+          return (
+            `🔊 TTS Actions\n${statusLine}\n\n` +
+            "• On/Off – Toggle TTS\n" +
+            "• Provider – Change voice provider\n" +
+            "• Limit – Set max characters\n" +
+            "• Summary – Toggle AI summary\n" +
+            "• Audio – Generate from text\n" +
+            "• Help – Usage guide"
+          );
+        },
       },
     }),
     defineChatCommand({

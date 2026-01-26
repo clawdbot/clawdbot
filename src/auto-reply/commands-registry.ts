@@ -305,7 +305,8 @@ export function resolveCommandArgMenu(params: {
   if (!arg) return null;
   const choices = resolveCommandArgChoices({ command, arg, cfg });
   if (choices.length === 0) return null;
-  const title = argSpec !== "auto" ? argSpec.title : undefined;
+  const rawTitle = argSpec !== "auto" ? argSpec.title : undefined;
+  const title = typeof rawTitle === "function" ? rawTitle({ cfg, command }) : rawTitle;
   return { arg, choices, title };
 }
 

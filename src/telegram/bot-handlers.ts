@@ -4,9 +4,18 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
+import { resolveCommandArgMenu } from "../auto-reply/commands-registry.js";
+import { findCommandByNativeName } from "../auto-reply/commands-registry.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import {
+  getTtsProvider,
+  isTtsEnabled,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  setTtsEnabled,
+} from "../tts/tts.js";
 import { resolveMedia } from "./bot/delivery.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
@@ -16,6 +25,7 @@ import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
+import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -307,6 +317,44 @@ export const registerTelegramHandlers = ({
                 senderUsername,
               }));
           if (!allowed) return;
+        }
+      }
+
+      // Handle TTS on/off as in-place menu edit (no new message)
+      const ttsToggleMatch = data.match(/^\/tts\s+(on|off)$/i);
+      if (ttsToggleMatch) {
+        const action = ttsToggleMatch[1].toLowerCase();
+        const currentConfig = loadConfig();
+        const ttsConfig = resolveTtsConfig(currentConfig);
+        const prefsPath = resolveTtsPrefsPath(ttsConfig);
+        setTtsEnabled(prefsPath, action === "on");
+
+        // Build refreshed menu with updated status
+        const ttsCommand = findCommandByNativeName("tts", "telegram");
+        if (ttsCommand) {
+          const menu = resolveCommandArgMenu({ command: ttsCommand, cfg: currentConfig });
+          if (menu) {
+            const title = menu.title ?? "🔊 TTS Actions";
+            const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+            for (let i = 0; i < menu.choices.length; i += 2) {
+              const slice = menu.choices.slice(i, i + 2);
+              rows.push(
+                slice.map((choice) => ({
+                  text: choice.label,
+                  callback_data: `/tts ${choice.value}`,
+                })),
+              );
+            }
+            const replyMarkup = buildInlineKeyboard(rows);
+            try {
+              await bot.api.editMessageText(chatId, callbackMessage.message_id, title, {
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+              });
+            } catch (editErr) {
+              logVerbose(`Failed to edit TTS menu: ${String(editErr)}`);
+            }
+            return;
+          }
         }
       }
 

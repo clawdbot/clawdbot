@@ -25,9 +25,18 @@ export type CommandArgDefinition = {
   captureRemaining?: boolean;
 };
 
+export type CommandArgMenuTitleContext = {
+  cfg?: ClawdbotConfig;
+  command: ChatCommandDefinition;
+};
+
+export type CommandArgMenuTitleProvider = (
+  context: CommandArgMenuTitleContext,
+) => string | undefined;
+
 export type CommandArgMenuSpec = {
   arg: string;
-  title?: string;
+  title?: string | CommandArgMenuTitleProvider;
 };
 
 export type CommandArgValue = string | number | boolean | bigint;
