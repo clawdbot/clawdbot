@@ -186,37 +186,37 @@ describe("models-config", () => {
   });
 });
 
-it("adds deepseek provider when DEEPSEEK_API_KEY is set", async () => {
-  await withTempHome(async () => {
-    vi.resetModules();
-    const prevKey = process.env.DEEPSEEK_API_KEY;
-    process.env.DEEPSEEK_API_KEY = "sk-deepseek-test";
-    try {
-      const { ensureClawdbotModelsJson } = await import("./models-config.js");
-      const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
+  it("adds deepseek provider when DEEPSEEK_API_KEY is set", async () => {
+    await withTempHome(async () => {
+      vi.resetModules();
+      const prevKey = process.env.DEEPSEEK_API_KEY;
+      process.env.DEEPSEEK_API_KEY = "sk-deepseek-test";
+      try {
+        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
 
-      await ensureClawdbotModelsJson({});
+        await ensureClawdbotModelsJson({});
 
-      const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
-      const raw = await fs.readFile(modelPath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        providers: Record<
-          string,
-          {
-            baseUrl?: string;
-            apiKey?: string;
-            models?: Array<{ id: string }>;
-          }
-        >;
-      };
-      expect(parsed.providers.deepseek?.baseUrl).toBe("https://api.deepseek.com/v1");
-      expect(parsed.providers.deepseek?.apiKey).toBe("DEEPSEEK_API_KEY");
-      const ids = parsed.providers.deepseek?.models?.map((model) => model.id);
-      expect(ids).toContain("deepseek-chat");
-      expect(ids).toContain("deepseek-reasoner");
-    } finally {
-      if (prevKey === undefined) delete process.env.DEEPSEEK_API_KEY;
-      else process.env.DEEPSEEK_API_KEY = prevKey;
-    }
+        const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<
+            string,
+            {
+              baseUrl?: string;
+              apiKey?: string;
+              models?: Array<{ id: string }>;
+            }
+          >;
+        };
+        expect(parsed.providers.deepseek?.baseUrl).toBe("https://api.deepseek.com/v1");
+        expect(parsed.providers.deepseek?.apiKey).toBe("DEEPSEEK_API_KEY");
+        const ids = parsed.providers.deepseek?.models?.map((model) => model.id);
+        expect(ids).toContain("deepseek-chat");
+        expect(ids).toContain("deepseek-reasoner");
+      } finally {
+        if (prevKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+        else process.env.DEEPSEEK_API_KEY = prevKey;
+      }
+    });
   });
-});

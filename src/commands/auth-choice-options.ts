@@ -245,6 +245,7 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
   });
+  options.push({ value: "deepseek-api-key", label: "DeepSeek API key" });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }
