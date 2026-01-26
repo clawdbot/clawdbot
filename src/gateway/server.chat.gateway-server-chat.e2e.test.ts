@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import {
+  agentCommand,
   connectOk,
   getReplyFromConfig,
   installGatewayTestHooks,
