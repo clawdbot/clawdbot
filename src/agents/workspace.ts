@@ -188,9 +188,9 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
-async function resolveMemoryBootstrapEntries(resolvedDir: string): Promise<
-  Array<{ name: WorkspaceBootstrapFileName; filePath: string }>
-> {
+async function resolveMemoryBootstrapEntries(
+  resolvedDir: string,
+): Promise<Array<{ name: WorkspaceBootstrapFileName; filePath: string }>> {
   const candidates: WorkspaceBootstrapFileName[] = [
     DEFAULT_MEMORY_FILENAME,
     DEFAULT_MEMORY_ALT_FILENAME,
