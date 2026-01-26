@@ -211,6 +211,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parseJson: (raw) => deps.json5.parse(raw),
       });
 
+      // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars
+      if (resolved && typeof resolved === "object" && "env" in resolved) {
+        applyConfigEnv(resolved as ClawdbotConfig, deps.env);
+      }
+
       // Substitute ${VAR} env var references
       const substituted = resolveConfigEnvVars(resolved, deps.env);
 
@@ -363,6 +368,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           warnings: [],
           legacyIssues: [],
         };
+      }
+
+      // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars
+      if (resolved && typeof resolved === "object" && "env" in resolved) {
+        applyConfigEnv(resolved as ClawdbotConfig, deps.env);
       }
 
       // Substitute ${VAR} env var references

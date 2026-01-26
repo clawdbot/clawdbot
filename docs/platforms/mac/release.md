@@ -30,17 +30,17 @@ Notes:
 # From repo root; set release IDs so Sparkle feed is enabled.
 # APP_BUILD must be numeric + monotonic for Sparkle compare.
 BUNDLE_ID=com.clawdbot.mac \
-APP_VERSION=2026.1.24-3 \
+APP_VERSION=2026.1.25 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-app.sh
 
 # Zip for distribution (includes resource forks for Sparkle delta support)
-ditto -c -k --sequesterRsrc --keepParent dist/Clawdbot.app dist/Clawdbot-2026.1.24-3.zip
+ditto -c -k --sequesterRsrc --keepParent dist/Clawdbot.app dist/Clawdbot-2026.1.25.zip
 
 # Optional: also build a styled DMG for humans (drag to /Applications)
-scripts/create-dmg.sh dist/Clawdbot.app dist/Clawdbot-2026.1.24-3.dmg
+scripts/create-dmg.sh dist/Clawdbot.app dist/Clawdbot-2026.1.25.dmg
 
 # Recommended: build + notarize/staple zip + DMG
 # First, create a keychain profile once:
@@ -48,26 +48,26 @@ scripts/create-dmg.sh dist/Clawdbot.app dist/Clawdbot-2026.1.24-3.dmg
 #     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
 NOTARIZE=1 NOTARYTOOL_PROFILE=clawdbot-notary \
 BUNDLE_ID=com.clawdbot.mac \
-APP_VERSION=2026.1.24-3 \
+APP_VERSION=2026.1.25 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
 
 # Optional: ship dSYM alongside the release
-ditto -c -k --keepParent apps/macos/.build/release/Clawdbot.app.dSYM dist/Clawdbot-2026.1.24-3.dSYM.zip
+ditto -c -k --keepParent apps/macos/.build/release/Clawdbot.app.dSYM dist/Clawdbot-2026.1.25.dSYM.zip
 ```
 
 ## Appcast entry
 Use the release note generator so Sparkle renders formatted HTML notes:
 ```bash
-SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/Clawdbot-2026.1.24-3.zip https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml
+SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/Clawdbot-2026.1.25.zip https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml
 ```
 Generates HTML release notes from `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/changelog-to-html.sh)) and embeds them in the appcast entry.
 Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when publishing.
 
 ## Publish & verify
-- Upload `Clawdbot-2026.1.24-3.zip` (and `Clawdbot-2026.1.24-3.dSYM.zip`) to the GitHub release for tag `v2026.1.24-3`.
+- Upload `Clawdbot-2026.1.25.zip` (and `Clawdbot-2026.1.25.dSYM.zip`) to the GitHub release for tag `v2026.1.25`.
 - Ensure the raw appcast URL matches the baked feed: `https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml`.
 - Sanity checks:
   - `curl -I https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml` returns 200.

@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/lobster",
-  "version": "2026.1.24",
+  "version": "2026.1.25",
   "type": "module",
   "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
   "clawdbot": {

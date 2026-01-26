@@ -81,8 +81,8 @@ targets:
       properties:
         CFBundleDisplayName: Clawdbot
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.1.24"
-        CFBundleVersion: "20260124"
+        CFBundleShortVersionString: "2026.1.25"
+        CFBundleVersion: "20260125"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -130,5 +130,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: ClawdbotTests
-        CFBundleShortVersionString: "2026.1.24"
-        CFBundleVersion: "20260124"
+        CFBundleShortVersionString: "2026.1.25"
+        CFBundleVersion: "20260125"

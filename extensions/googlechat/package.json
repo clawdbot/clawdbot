@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/googlechat",
-  "version": "2026.1.24",
+  "version": "2026.1.25",
   "type": "module",
   "description": "Clawdbot Google Chat channel plugin",
   "clawdbot": {
@@ -34,6 +34,6 @@
     "clawdbot": "workspace:*"
   },
   "peerDependencies": {
-    "clawdbot": ">=2026.1.24"
+    "clawdbot": ">=2026.1.25"
   }
 }

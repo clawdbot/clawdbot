@@ -129,9 +129,10 @@ export async function checkGitUpdateStatus(params: {
   ).catch(() => null);
   const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
 
-  const dirtyRes = await runCommandWithTimeout(["git", "-C", root, "status", "--porcelain"], {
-    timeoutMs,
-  }).catch(() => null);
+  const dirtyRes = await runCommandWithTimeout(
+    ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
+    { timeoutMs },
+  ).catch(() => null);
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchOk = params.fetch

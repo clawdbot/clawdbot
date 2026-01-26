@@ -10,6 +10,61 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("clawdbot security audit --deep")}`;
 
+  // ===========================================
+  // GATEWAY NETWORK EXPOSURE CHECK
+  // ===========================================
+  // Check for dangerous gateway binding configurations
+  // that expose the gateway to network without proper auth
+
+  const gatewayBind = cfg.gateway?.bind ?? "loopback";
+  const customBindHost = cfg.gateway?.customBindHost?.trim();
+  const authMode = cfg.gateway?.auth?.mode ?? "off";
+  const authToken = cfg.gateway?.auth?.token;
+  const authPassword = cfg.gateway?.auth?.password;
+
+  const isLoopbackBindHost = (host: string) => {
+    const normalized = host.trim().toLowerCase();
+    return (
+      normalized === "localhost" ||
+      normalized === "::1" ||
+      normalized === "[::1]" ||
+      normalized.startsWith("127.")
+    );
+  };
+
+  // Bindings that expose gateway beyond localhost
+  const exposedBindings = ["all", "lan", "0.0.0.0"];
+  const isExposed =
+    exposedBindings.includes(gatewayBind) ||
+    (gatewayBind === "custom" && (!customBindHost || !isLoopbackBindHost(customBindHost)));
+
+  if (isExposed) {
+    if (authMode === "off") {
+      warnings.push(
+        `- CRITICAL: Gateway bound to "${gatewayBind}" with NO authentication.`,
+        `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
+        `  Fix: ${formatCliCommand("clawdbot config set gateway.bind loopback")}`,
+        `  Or enable auth: ${formatCliCommand("clawdbot config set gateway.auth.mode token")}`,
+      );
+    } else if (authMode === "token" && !authToken) {
+      warnings.push(
+        `- CRITICAL: Gateway bound to "${gatewayBind}" with empty auth token.`,
+        `  Fix: ${formatCliCommand("clawdbot doctor --fix")} to generate a token`,
+      );
+    } else if (authMode === "password" && !authPassword) {
+      warnings.push(
+        `- CRITICAL: Gateway bound to "${gatewayBind}" with empty password.`,
+        `  Fix: ${formatCliCommand("clawdbot configure")} to set a password`,
+      );
+    } else {
+      // Auth is configured, but still warn about network exposure
+      warnings.push(
+        `- WARNING: Gateway bound to "${gatewayBind}" (network-accessible).`,
+        `  Ensure your auth credentials are strong and not exposed.`,
+      );
+    }
+  }
+
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
