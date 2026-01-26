@@ -68,6 +68,7 @@ class CanvasController {
 
   fun onPageFinished() {
     applyDebugStatus()
+    injectA2uiActionBridgeCompat()
   }
 
   private inline fun withWebViewOnMain(crossinline block: (WebView) -> Unit) {
@@ -118,6 +119,37 @@ class CanvasController {
           } catch (_) {}
         })();
       """.trimIndent()
+      wv.evaluateJavascript(js, null)
+    }
+  }
+
+  // Some WebView/JS-bridge combos don't reliably preserve `handler === globalThis.clawdbotCanvasA2UIAction`,
+  // which makes the A2UI bundle try to post an object instead of a string. Android JS interfaces only
+  // accept primitives, so clicks appear to do nothing. This shim forces string payloads.
+  private fun injectA2uiActionBridgeCompat() {
+    withWebViewOnMain { wv ->
+      val js =
+        """
+        (() => {
+          try {
+            const native = globalThis.clawdbotCanvasA2UIAction;
+            if (!native || typeof native.postMessage !== 'function') return;
+            if (native.__clawdbotWrapped) return;
+            const wrapper = {
+              __clawdbotWrapped: true,
+              postMessage: (payload) => {
+                try {
+                  if (typeof payload === 'string') return native.postMessage(payload);
+                  return native.postMessage(JSON.stringify(payload));
+                } catch (e) {
+                  try { native.postMessage(String(payload)); } catch (_) {}
+                }
+              }
+            };
+            globalThis.clawdbotCanvasA2UIAction = wrapper;
+          } catch (_) {}
+        })();
+        """.trimIndent()
       wv.evaluateJavascript(js, null)
     }
   }

@@ -98,6 +98,9 @@ dependencies {
   // Material Components (XML theme + resources)
   implementation("com.google.android.material:material:1.13.0")
 
+  // Crypto provider for Ed25519 on Android (some OEM builds lack reliable support).
+  implementation("org.bouncycastle:bcprov-jdk15to18:1.80")
+
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
