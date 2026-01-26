@@ -49,22 +49,10 @@ Run a persistent Clawdbot Gateway on Oracle Cloud's **Always Free** ARM tier —
 
 **Tip:** If instance creation fails with "Out of capacity", try a different availability domain or retry later. Free tier capacity is limited.
 
-## 2) Configure VCN Security (Critical)
-
-OCI's Virtual Cloud Network (VCN) acts as a firewall at the network edge — traffic is blocked before it reaches your instance. This is more secure than host-based firewalls.
-
-1. Go to **Networking → Virtual Cloud Networks**
-2. Click your VCN → **Security Lists** → Default Security List
-3. **Remove** all ingress rules except:
-   - `0.0.0.0/0 UDP 41641` (Tailscale)
-4. Keep default egress rules (allow all outbound)
-
-This blocks everything except Tailscale. You'll SSH via Tailscale, not the public IP.
-
-## 3) Connect and Update
+## 2) Connect and Update
 
 ```bash
-# Initial connection via public IP (one time only)
+# Connect via public IP
 ssh ubuntu@YOUR_PUBLIC_IP
 
 # Update system
@@ -74,7 +62,7 @@ sudo apt install -y build-essential
 
 **Note:** `build-essential` is required for ARM compilation of some dependencies.
 
-## 4) Configure User and Hostname
+## 3) Configure User and Hostname
 
 ```bash
 # Set hostname
@@ -87,7 +75,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 5) Install Tailscale
+## 4) Install Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -102,6 +90,18 @@ tailscale status
 ```
 
 **From now on, connect via Tailscale:** `ssh ubuntu@clawdbot` (or use the Tailscale IP).
+
+## 5) Lock Down VCN Security
+
+Now that Tailscale is running, lock down the VCN to block all traffic except Tailscale. OCI's Virtual Cloud Network acts as a firewall at the network edge — traffic is blocked before it reaches your instance.
+
+1. Go to **Networking → Virtual Cloud Networks** in the OCI Console
+2. Click your VCN → **Security Lists** → Default Security List
+3. **Remove** all ingress rules except:
+   - `0.0.0.0/0 UDP 41641` (Tailscale)
+4. Keep default egress rules (allow all outbound)
+
+This blocks SSH on port 22, HTTP, HTTPS, and everything else at the network edge. You'll only be able to connect via Tailscale from now on.
 
 ## 6) Install Homebrew (ARM)
 
