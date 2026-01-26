@@ -21,15 +21,25 @@ export type HybridKeywordResult = {
 };
 
 export function buildFtsQuery(raw: string): string | null {
+  const q = raw.normalize("NFKC").trim();
+  if (!q) return null;
+  // Korean+Japanese+Chinese detection (support google embedding + openai embedding)
+  const hasCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(q);
+
+  const hasWhitespace = /\s/u.test(q);
+  if (hasCjk && !hasWhitespace) {
+    return `"${q.replaceAll('"', '""')}"`;
+  }
   const tokens =
-    raw
-      .match(/[A-Za-z0-9_]+/g)
-      ?.map((t) => t.trim())
-      .filter(Boolean) ?? [];
-  if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+    q.match(/[\p{L}\p{N}_]+/gu)?.map((t) => t.trim()).filter(Boolean) ?? [];
+
+  if (tokens.length === 0) {
+    return `"${q.replaceAll('"', '""')}"`;
+  }
+  const quoted = tokens.map((t) => `"${t.replaceAll('"', '""')}"`);
   return quoted.join(" AND ");
 }
+
 
 export function bm25RankToScore(rank: number): number {
   const normalized = Number.isFinite(rank) ? Math.max(0, rank) : 999;
