@@ -7,6 +7,7 @@ import {
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   normalizeAccountId,
+  resolveChannelMediaMaxBytes,
   setAccountEnabledInConfigSection,
   type ChannelGroupContext,
   type ChannelPlugin,
@@ -101,10 +102,10 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     },
   },
   capabilities: {
-    chatTypes: ["direct", "group"],
+    chatTypes: ["direct", "group", "thread"],
     polls: true,
-    reactions: false,
-    threads: false,
+    reactions: true,
+    threads: true,
     media: true,
     nativeCommands: false,
     blockStreaming: true,
@@ -236,11 +237,21 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
       });
       return { channel: "telegram-user", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, threadId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, threadId }) => {
+      const maxBytes = resolveChannelMediaMaxBytes({
+        cfg,
+        resolveChannelLimitMb: ({ cfg, accountId }) =>
+          resolveTelegramUserAccount({
+            cfg: cfg as CoreConfig,
+            accountId,
+          }).config.mediaMaxMb,
+        accountId,
+      });
       const result = await sendMediaTelegramUser(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
         threadId,
+        ...(maxBytes ? { maxBytes } : {}),
       });
       return { channel: "telegram-user", ...result };
     },
