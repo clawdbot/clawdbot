@@ -1,0 +1,42 @@
+{
+  "id": "discord-status",
+  "name": "Discord Status",
+  "version": "0.1.0",
+  "description": "Updates Discord bot status with session context usage after each message",
+  "author": "Clawdbot Contributors",
+  "homepage": "https://github.com/clawdbot/clawdbot",
+  "entrypoint": "./index.ts",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable Discord status updates"
+      },
+      "format": {
+        "type": "string",
+        "description": "Status format string. Use {tokens} for token count.",
+        "default": "📊 {tokens} tokens"
+      },
+      "activityType": {
+        "type": "string",
+        "enum": ["Playing", "Watching", "Listening", "Competing", "Custom"],
+        "description": "Discord activity type",
+        "default": "Custom"
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Status Updates"
+    },
+    "format": {
+      "label": "Status Format",
+      "placeholder": "📊 {tokens} tokens"
+    },
+    "activityType": {
+      "label": "Activity Type"
+    }
+  }
+}

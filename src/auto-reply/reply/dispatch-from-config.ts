@@ -331,6 +331,40 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+
+    // Trigger message_sent hook for final replies
+    if (hookRunner?.hasHooks("message_sent") && replies.length > 0) {
+      const targetSessionKey =
+        ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+      const agentSessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
+      const agentId = agentSessionKey
+        ? resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg })
+        : undefined;
+      const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+      const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
+      for (const reply of replies) {
+        void hookRunner
+          .runMessageSent(
+            {
+              to: conversationId ?? "",
+              content: reply.text ?? "",
+              success: queuedFinal,
+            },
+            {
+              channelId,
+              accountId: ctx.AccountId,
+              conversationId,
+              sessionKey: agentSessionKey,
+              agentId,
+            },
+          )
+          .catch((err) => {
+            logVerbose(`dispatch-from-config: message_sent hook failed: ${String(err)}`);
+          });
+      }
+    }
+
     recordProcessed("completed");
     markIdle("message_completed");
     return { queuedFinal, counts };

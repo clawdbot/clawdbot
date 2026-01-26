@@ -346,6 +346,8 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  sessionKey?: string;
+  agentId?: string;
 };
 
 // message_received hook
@@ -374,6 +376,20 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   error?: string;
+  /** Usage statistics from the agent run (if available) */
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    cacheReadTokens?: number;
+    cacheCreationTokens?: number;
+    /** Model used for this response */
+    model?: string;
+    /** Provider used (e.g., "anthropic", "openai") */
+    provider?: string;
+  };
+  /** Duration of the agent run in milliseconds */
+  durationMs?: number;
 };
 
 // Tool context
