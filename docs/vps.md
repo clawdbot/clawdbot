@@ -11,7 +11,7 @@ deployments work at a high level.
 
 ## Pick a provider
 
-- **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month forever, 4 OCPU + 24GB RAM (ARM)
+- **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
 - **Fly.io**: [Fly.io](/platforms/fly)
 - **Hetzner (Docker)**: [Hetzner](/platforms/hetzner)
 - **GCP (Compute Engine)**: [GCP](/platforms/gcp)
