@@ -112,6 +112,10 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  analyticsLoading: boolean;
+  analyticsError: string | null;
+  analyticsData: unknown | null;
+  analyticsDays: number;
   cronLoading: boolean;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;

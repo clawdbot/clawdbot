@@ -50,6 +50,7 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices";
 import { renderSkills } from "./views/skills";
+import { renderAnalytics } from "./views/analytics";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadChannels } from "./controllers/channels";
 import { loadPresence } from "./controllers/presence";
@@ -81,6 +82,7 @@ import {
 import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
+import { loadAnalytics } from "./controllers/analytics";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -303,6 +305,20 @@ export function renderApp(state: AppViewState) {
 	              onDelete: (key) => deleteSession(state, key),
 	            })
 	          : nothing}
+
+        ${state.tab === "analytics"
+          ? renderAnalytics({
+              loading: state.analyticsLoading,
+              error: state.analyticsError,
+              data: state.analyticsData,
+              days: state.analyticsDays,
+              onDaysChange: (days) => {
+                state.analyticsDays = days;
+                void loadAnalytics(state);
+              },
+              onRefresh: () => loadAnalytics(state),
+            })
+          : nothing}
 
         ${state.tab === "cron"
           ? renderCron({

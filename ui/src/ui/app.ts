@@ -202,6 +202,11 @@ export class ClawdbotApp extends LitElement {
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
 
+  @state() analyticsLoading = false;
+  @state() analyticsError: string | null = null;
+  @state() analyticsData: unknown | null = null;
+  @state() analyticsDays = 30;
+
   @state() cronLoading = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronStatus: CronStatus | null = null;

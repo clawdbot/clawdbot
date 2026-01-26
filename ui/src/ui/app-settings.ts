@@ -1,3 +1,4 @@
+import { loadAnalytics } from "./controllers/analytics";
 import { loadConfig, loadConfigSchema } from "./controllers/config";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron";
 import { loadChannels } from "./controllers/channels";
@@ -146,6 +147,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "channels") await loadChannelsTab(host);
   if (host.tab === "instances") await loadPresence(host as unknown as ClawdbotApp);
   if (host.tab === "sessions") await loadSessions(host as unknown as ClawdbotApp);
+  if (host.tab === "analytics") await loadAnalytics(host as unknown as ClawdbotApp);
   if (host.tab === "cron") await loadCron(host);
   if (host.tab === "skills") await loadSkills(host as unknown as ClawdbotApp);
   if (host.tab === "nodes") {
