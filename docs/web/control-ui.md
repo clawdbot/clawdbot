@@ -161,3 +161,49 @@ Notes:
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
 
 Remote access setup details: [Remote access](/gateway/remote).
+
+## PWA customization
+
+The Control UI supports installation as a Progressive Web App (PWA) for a
+native-like experience. The PWA name and display settings are defined in
+`dist/control-ui/manifest.json`.
+
+### Automatic name customization
+
+If your workspace contains an `IDENTITY.md` file with a `Name` field, Clawdbot
+automatically customizes the PWA manifest at build/install time:
+
+```markdown
+# IDENTITY.md
+- **Name:** Nova
+```
+
+This updates the manifest to:
+
+```json
+{
+  "name": "Nova - Clawdbot Control",
+  "short_name": "Nova",
+  ...
+}
+```
+
+The customized PWA name appears in app launchers, browser tabs, and the OS app
+switcher.
+
+### Updating the name after initial setup
+
+**Important:** Name changes after initial setup are not automatically applied to
+the manifest. This is a known limitation.
+
+**Manual workaround:**
+1. Edit `IDENTITY.md` with the new name
+2. Manually edit `<install-path>/dist/control-ui/manifest.json`:
+   - Update `"name"` to `"YourNewName - Clawdbot Control"`
+   - Update `"short_name"` to `"YourNewName"`
+3. Restart the gateway: `clawdbot gateway restart`
+4. Force a hard browser refresh (Ctrl+Shift+R or Cmd+Shift+R)
+5. Reinstall the PWA if the name doesn't update
+
+See [Agent workspace](/concepts/agent-workspace#workspace-file-map-what-each-file-means)
+for the full IDENTITY.md structure and usage.

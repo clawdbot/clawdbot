@@ -77,6 +77,16 @@ These are the standard files Clawdbot expects inside the workspace:
 - `IDENTITY.md`
   - The agent's name, vibe, and emoji.
   - Created/updated during the bootstrap ritual.
+  - **PWA customization:** The agent's `Name` field automatically customizes the
+    Control UI PWA manifest at build/install time. For example, if your
+    IDENTITY.md contains `- **Name:** Nova`, the PWA will appear as
+    "Nova - Clawdbot Control" in app launchers and browsers.
+  - **Runtime limitation:** Changes to the name after initial setup are not
+    automatically applied to the manifest. To update the PWA name after changing
+    IDENTITY.md, manually edit
+    `<install-path>/dist/control-ui/manifest.json` and restart the gateway. A
+    hard browser refresh (Ctrl+Shift+R) is required due to aggressive PWA
+    caching.
 
 - `TOOLS.md`
   - Notes about your local tools and conventions.
