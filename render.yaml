@@ -2,7 +2,7 @@ services:
   - type: web
     name: clawdbot
     runtime: docker
-    plan: starter
+    plan: standard
     healthCheckPath: /health
     envVars:
       - key: PORT
