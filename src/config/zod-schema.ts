@@ -640,6 +640,26 @@ const MSTeamsConfigSchema = z
     });
   });
 
+const GoogleChatAccountSchema = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+  projectId: z.string().optional(),
+  subscriptionName: z.string().optional(),
+  credentialsPath: z.string().optional(),
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  allowFrom: z.array(z.string()).optional(),
+  spacePolicy: GroupPolicySchema.optional().default("disabled"),
+  allowSpaces: z.array(z.string()).optional(),
+  historyLimit: z.number().int().min(0).optional(),
+  dmHistoryLimit: z.number().int().min(0).optional(),
+  textChunkLimit: z.number().int().positive().optional(),
+  messagePrefix: z.string().optional(),
+});
+
+const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
+  accounts: z.record(z.string(), GoogleChatAccountSchema.optional()).optional(),
+});
+
 const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -1475,6 +1495,7 @@ export const ClawdbotSchema = z
     signal: SignalConfigSchema.optional(),
     imessage: IMessageConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
+    googlechat: GoogleChatConfigSchema.optional(),
     bridge: z
       .object({
         enabled: z.boolean().optional(),
