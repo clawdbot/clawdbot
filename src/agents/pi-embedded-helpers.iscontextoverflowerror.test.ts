@@ -46,4 +46,12 @@ describe("isContextOverflowError", () => {
     expect(isContextOverflowError("model not found")).toBe(false);
     expect(isContextOverflowError("authentication failed")).toBe(false);
   });
+
+  it("ignores normal conversation text mentioning context overflow", () => {
+    // These are legitimate conversation snippets, not error messages
+    expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
+    expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
+    expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
+    expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
+  });
 });
