@@ -115,7 +115,7 @@ moltbot gateway --port 18789 --verbose
 ```
 
 Dashboard (local loopback): `http://127.0.0.1:18789/`
-If a token is configured, paste it into the Control UI settings (stored as `connect.params.auth.token`).
+If a token is configured, paste it into **Overview → Gateway Access** (stored as `connect.params.auth.token`).
 
 ⚠️ **Bun warning (WhatsApp + Telegram):** Bun has known issues with these
 channels. If you use WhatsApp or Telegram, run the Gateway with **Node**.
