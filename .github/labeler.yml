@@ -1,0 +1,174 @@
+"channel: bluebubbles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bluebubbles/**"
+          - "docs/channels/bluebubbles.md"
+"channel: discord":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/discord/**"
+          - "extensions/discord/**"
+          - "docs/channels/discord.md"
+"channel: googlechat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/googlechat/**"
+          - "docs/channels/googlechat.md"
+"channel: imessage":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/imessage/**"
+          - "extensions/imessage/**"
+          - "docs/channels/imessage.md"
+"channel: line":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/line/**"
+"channel: matrix":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/matrix/**"
+          - "docs/channels/matrix.md"
+"channel: mattermost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mattermost/**"
+          - "docs/channels/mattermost.md"
+"channel: msteams":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/msteams/**"
+          - "docs/channels/msteams.md"
+"channel: nextcloud-talk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nextcloud-talk/**"
+          - "docs/channels/nextcloud-talk.md"
+"channel: nostr":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nostr/**"
+          - "docs/channels/nostr.md"
+"channel: signal":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/signal/**"
+          - "extensions/signal/**"
+          - "docs/channels/signal.md"
+"channel: slack":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/slack/**"
+          - "extensions/slack/**"
+          - "docs/channels/slack.md"
+"channel: telegram":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/telegram/**"
+          - "extensions/telegram/**"
+          - "docs/channels/telegram.md"
+"channel: tlon":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tlon/**"
+          - "docs/channels/tlon.md"
+"channel: voice-call":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/voice-call/**"
+"channel: whatsapp-web":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/web/**"
+          - "extensions/whatsapp/**"
+          - "docs/channels/whatsapp.md"
+"channel: zalo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zalo/**"
+          - "docs/channels/zalo.md"
+"channel: zalouser":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zalouser/**"
+          - "docs/channels/zalouser.md"
+
+"app: android":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/**"
+          - "docs/platforms/android.md"
+"app: ios":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/ios/**"
+          - "docs/platforms/ios.md"
+"app: macos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/macos/**"
+          - "docs/platforms/macos.md"
+          - "docs/platforms/mac/**"
+"app: web-ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ui/**"
+          - "src/gateway/control-ui.ts"
+          - "src/gateway/control-ui-shared.ts"
+          - "src/gateway/protocol/**"
+          - "src/gateway/server-methods/chat.ts"
+          - "src/infra/control-ui-assets.ts"
+
+"gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/gateway/**"
+          - "src/daemon/**"
+          - "docs/gateway/**"
+
+"docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "docs.acp.md"
+
+"extensions: copilot-proxy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot-proxy/**"
+"extensions: diagnostics-otel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-otel/**"
+"extensions: google-antigravity-auth":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-antigravity-auth/**"
+"extensions: google-gemini-cli-auth":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-gemini-cli-auth/**"
+"extensions: llm-task":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llm-task/**"
+"extensions: lobster":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lobster/**"
+"extensions: memory-core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-core/**"
+"extensions: memory-lancedb":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-lancedb/**"
+"extensions: open-prose":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/open-prose/**"
+"extensions: qwen-portal-auth":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qwen-portal-auth/**"

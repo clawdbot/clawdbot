@@ -357,7 +357,7 @@ importers:
   extensions/memory-core:
     dependencies:
       clawdbot:
-        specifier: '>=2026.1.24'
+        specifier: '>=2026.1.25'
         version: link:../..
 
   extensions/memory-lancedb:

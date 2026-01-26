@@ -1,0 +1,59 @@
+name: Auto response
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  auto-response:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Handle labeled items
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const rules = [
+              {
+                label: "skill-clawdhub",
+                close: true,
+                message:
+                  "Thanks for the contribution! New skills should be published to Clawdhub for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
+              },
+            ];
+
+            const labelName = context.payload.label?.name;
+            if (!labelName) {
+              return;
+            }
+
+            const rule = rules.find((item) => item.label === labelName);
+            if (!rule) {
+              return;
+            }
+
+            const issueNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
+            if (!issueNumber) {
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: rule.message,
+            });
+
+            if (rule.close) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                state: "closed",
+              });
+            }
