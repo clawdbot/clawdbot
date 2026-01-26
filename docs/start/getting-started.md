@@ -9,6 +9,10 @@ read_when:
 
 Goal: go from **zero** → **first working chat** (with sane defaults) as quickly as possible.
 
+Fastest chat: open the Control UI (no channel setup needed). Run `clawdbot dashboard`
+and chat in the browser, or open `http://127.0.0.1:18789/` on the gateway host.
+Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
+
 Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It sets up:
 - model/auth (OAuth recommended)
 - gateway settings
@@ -121,6 +125,7 @@ channels. If you use WhatsApp or Telegram, run the Gateway with **Node**.
 ```bash
 clawdbot status
 clawdbot health
+clawdbot security audit --deep
 ```
 
 ## 4) Pair + connect your first chat surface

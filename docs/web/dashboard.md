@@ -19,6 +19,10 @@ Key references:
 Authentication is enforced at the WebSocket handshake via `connect.params.auth`
 (token or password). See `gateway.auth` in [Gateway configuration](/gateway/configuration).
 
+Security note: the Control UI is an **admin surface** (chat, config, exec approvals).
+Do not expose it publicly. The UI stores the token in `localStorage` after first load.
+Prefer localhost, Tailscale Serve, or an SSH tunnel.
+
 ## Fast path (recommended)
 
 - After onboarding, the CLI now auto-opens the dashboard with your token and prints the same tokenized link.

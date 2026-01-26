@@ -21,6 +21,22 @@ export type DebugProps = {
 };
 
 export function renderDebug(props: DebugProps) {
+  const securityAudit =
+    props.status && typeof props.status === "object"
+      ? (props.status as { securityAudit?: { summary?: Record<string, number> } }).securityAudit
+      : null;
+  const securitySummary = securityAudit?.summary ?? null;
+  const critical = securitySummary?.critical ?? 0;
+  const warn = securitySummary?.warn ?? 0;
+  const info = securitySummary?.info ?? 0;
+  const securityTone = critical > 0 ? "danger" : warn > 0 ? "warn" : "success";
+  const securityLabel =
+    critical > 0
+      ? `${critical} critical`
+      : warn > 0
+        ? `${warn} warnings`
+        : "No critical issues";
+
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
@@ -36,6 +52,12 @@ export function renderDebug(props: DebugProps) {
         <div class="stack" style="margin-top: 12px;">
           <div>
             <div class="muted">Status</div>
+            ${securitySummary
+              ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
+                  Security audit: ${securityLabel}${info > 0 ? ` · ${info} info` : ""}. Run
+                  <span class="mono">clawdbot security audit --deep</span> for details.
+                </div>`
+              : nothing}
             <pre class="code-block">${JSON.stringify(props.status ?? {}, null, 2)}</pre>
           </div>
           <div>

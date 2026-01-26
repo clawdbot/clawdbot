@@ -10,13 +10,14 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 
 ## Quick setup (beginner)
 1) Create a Discord bot and copy the bot token.
-2) Set the token for Clawdbot:
+2) In the Discord app settings, enable **Message Content Intent** (and **Server Members Intent** if you plan to use allowlists or name lookups).
+3) Set the token for Clawdbot:
    - Env: `DISCORD_BOT_TOKEN=...`
    - Or config: `channels.discord.token: "..."`.
    - If both are set, config takes precedence (env fallback is default-account only).
-3) Invite the bot to your server with message permissions.
-4) Start the gateway.
-5) DM access is pairing by default; approve the pairing code on first contact.
+4) Invite the bot to your server with message permissions (create a private server if you just want DMs).
+5) Start the gateway.
+6) DM access is pairing by default; approve the pairing code on first contact.
 
 Minimal config:
 ```json5

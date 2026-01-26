@@ -26,6 +26,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
 - [Nostr](/channels/nostr) — Decentralized DMs via NIP-04 (plugin, installed separately).
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
+- [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.

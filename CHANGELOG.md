@@ -48,6 +48,7 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
 - Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
 - Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
