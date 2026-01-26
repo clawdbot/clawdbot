@@ -7,7 +7,9 @@ export async function ensureBinary(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   // Abort early if a required CLI tool is missing.
-  await exec("which", [name]).catch(() => {
+  // Use `where` on Windows, `which` elsewhere.
+  const cmd = process.platform === "win32" ? "where" : "which";
+  await exec(cmd, [name]).catch(() => {
     runtime.error(`Missing required binary: ${name}. Please install it.`);
     runtime.exit(1);
   });
