@@ -298,4 +298,26 @@ describe("gateway server health/presence", () => {
 
     ws.close();
   });
+
+  test("HTTP /healthz endpoint returns 200 OK", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("cache-control")).toBe("no-cache, no-store");
+    const body = await res.json();
+    expect(body).toEqual({ status: "ok" });
+  });
+
+  test("HTTP /health endpoint returns 200 OK", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = await res.json();
+    expect(body).toEqual({ status: "ok" });
+  });
+
+  test("HTTP health endpoints only accept GET", async () => {
+    const postRes = await fetch(`http://127.0.0.1:${port}/healthz`, { method: "POST" });
+    expect(postRes.status).not.toBe(200);
+  });
 });
