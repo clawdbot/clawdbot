@@ -278,6 +278,8 @@ jobs:
   checks-macos:
     if: github.event_name == 'pull_request'
     runs-on: macos-latest
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     strategy:
       fail-fast: false
       matrix:
