@@ -20,6 +20,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts ./scripts
+# Ensure startup script is executable
+RUN chmod +x scripts/render-start.sh
 
 RUN pnpm install --frozen-lockfile
 

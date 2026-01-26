@@ -17,30 +17,25 @@ echo "CLAWDBOT_STATE_DIR=${CLAWDBOT_STATE_DIR}"
 echo "User: $(whoami)"
 echo "UID: $(id -u)"
 
-# Determine config directory - try to use preferred locations, fallback to HOME
-# Temporarily disable set -e for permission testing
-set +e
+# Determine config directory
+# Use CLAWDBOT_STATE_DIR if set and writable, otherwise try /data/.clawdbot, fallback to HOME
 CONFIG_DIR="${HOME}/.clawdbot"
 
-# Try CLAWDBOT_STATE_DIR if set (test by trying to create it)
+# Try preferred locations (disable set -e temporarily for testing)
+set +e
 if [ -n "${CLAWDBOT_STATE_DIR}" ]; then
-  mkdir -p "${CLAWDBOT_STATE_DIR}" 2>/dev/null
+  mkdir -p "${CLAWDBOT_STATE_DIR}" 2>/dev/null && touch "${CLAWDBOT_STATE_DIR}/.test" 2>/dev/null && rm -f "${CLAWDBOT_STATE_DIR}/.test" 2>/dev/null
   if [ $? -eq 0 ]; then
     CONFIG_DIR="${CLAWDBOT_STATE_DIR}"
-    echo "Using CLAWDBOT_STATE_DIR: ${CONFIG_DIR}"
   fi
 fi
 
-# Try /data/.clawdbot if CLAWDBOT_STATE_DIR didn't work
 if [ "${CONFIG_DIR}" = "${HOME}/.clawdbot" ]; then
-  mkdir -p "/data/.clawdbot" 2>/dev/null
+  mkdir -p "/data/.clawdbot" 2>/dev/null && touch "/data/.clawdbot/.test" 2>/dev/null && rm -f "/data/.clawdbot/.test" 2>/dev/null
   if [ $? -eq 0 ]; then
     CONFIG_DIR="/data/.clawdbot"
-    echo "Using /data/.clawdbot: ${CONFIG_DIR}"
   fi
 fi
-
-# Re-enable set -e
 set -e
 
 CONFIG_FILE="${CONFIG_DIR}/clawdbot.json"
