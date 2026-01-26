@@ -35,6 +35,9 @@ RUN npm install && npm run build
 # Stage 3: Production image
 FROM node:22-bookworm-slim
 
+# Install jq for config merging
+RUN apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy built clawdbot
@@ -55,9 +58,15 @@ RUN rm -rf node_modules && npm install --omit=dev
 
 # Create entrypoint script
 RUN echo '#!/bin/sh\n\
-echo "Deploying config from repo..."\n\
 mkdir -p /root/.clawdbot\n\
-cp /app/clawdbot.default.json /root/.clawdbot/clawdbot.json\n\
+if [ -f "/root/.clawdbot/clawdbot.json" ]; then\n\
+  echo "Merging repo config with existing config..."\n\
+  jq -s ".[0] * .[1]" /root/.clawdbot/clawdbot.json /app/clawdbot.default.json > /tmp/merged.json\n\
+  mv /tmp/merged.json /root/.clawdbot/clawdbot.json\n\
+else\n\
+  echo "Creating config from repo..."\n\
+  cp /app/clawdbot.default.json /root/.clawdbot/clawdbot.json\n\
+fi\n\
 echo "Installing checkins plugin..."\n\
 mkdir -p /root/.clawdbot/extensions\n\
 cp -r /app/bundled-plugins/checkins /root/.clawdbot/extensions/\n\
