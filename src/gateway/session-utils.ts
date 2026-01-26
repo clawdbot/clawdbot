@@ -381,6 +381,31 @@ export function resolveGatewaySessionStoreTarget(params: { cfg: ClawdbotConfig; 
   };
 }
 
+// Merge with existing entry based on latest timestamp to ensure data consistency and avoid overwriting with less complete data.
+function mergeSessionEntryIntoCombined(params: {
+  combined: Record<string, SessionEntry>;
+  entry: SessionEntry;
+  agentId: string;
+  canonicalKey: string;
+}) {
+  const { combined, entry, agentId, canonicalKey } = params;
+  const existing = combined[canonicalKey];
+
+  if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
+    combined[canonicalKey] = {
+      ...entry,
+      ...existing,
+      spawnedBy: canonicalizeSpawnedByForAgent(agentId, existing.spawnedBy ?? entry.spawnedBy),
+    };
+  } else {
+    combined[canonicalKey] = {
+      ...existing,
+      ...entry,
+      spawnedBy: canonicalizeSpawnedByForAgent(agentId, entry.spawnedBy ?? existing?.spawnedBy),
+    };
+  }
+}
+
 export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -393,10 +418,12 @@ export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
-      combined[canonicalKey] = {
-        ...entry,
-        spawnedBy: canonicalizeSpawnedByForAgent(defaultAgentId, entry.spawnedBy),
-      };
+      mergeSessionEntryIntoCombined({
+        combined,
+        entry,
+        agentId: defaultAgentId,
+        canonicalKey,
+      });
     }
     return { storePath, store: combined };
   }
@@ -408,13 +435,12 @@ export function loadCombinedSessionStoreForGateway(cfg: ClawdbotConfig): {
     const store = loadSessionStore(storePath);
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
-      // Merge with existing entry if present (avoid overwriting with less complete data)
-      const existing = combined[canonicalKey];
-      combined[canonicalKey] = {
-        ...existing,
-        ...entry,
-        spawnedBy: canonicalizeSpawnedByForAgent(agentId, entry.spawnedBy ?? existing?.spawnedBy),
-      };
+      mergeSessionEntryIntoCombined({
+        combined,
+        entry,
+        agentId,
+        canonicalKey,
+      });
     }
   }
 

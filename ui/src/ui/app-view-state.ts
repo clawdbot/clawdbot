@@ -19,7 +19,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type { ChatQueueItem, CronFormState } from "./ui-types";
+import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
 import type {
@@ -49,6 +49,7 @@ export type AppViewState = {
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
+  chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;

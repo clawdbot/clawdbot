@@ -13,11 +13,9 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const content =
-    readStringParam(params, "message", {
-      required: !mediaUrl,
-      allowEmpty: true,
-    }) ?? "";
+  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const caption = readStringParam(params, "caption", { allowEmpty: true });
+  const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;

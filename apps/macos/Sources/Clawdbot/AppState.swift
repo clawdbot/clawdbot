@@ -413,10 +413,17 @@ final class AppState {
     }
 
     private func updateRemoteTarget(host: String) {
-        let parsed = CommandResolver.parseSSHTarget(self.remoteTarget)
-        let user = parsed?.user ?? NSUserName()
-        let port = parsed?.port ?? 22
-        let assembled = port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
+        let trimmed = self.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = CommandResolver.parseSSHTarget(trimmed) else { return }
+        let trimmedUser = parsed.user?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = (trimmedUser?.isEmpty ?? true) ? nil : trimmedUser
+        let port = parsed.port
+        let assembled: String
+        if let user {
+            assembled = port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
+        } else {
+            assembled = port == 22 ? host : "\(host):\(port)"
+        }
         if assembled != self.remoteTarget {
             self.remoteTarget = assembled
         }

@@ -1,6 +1,7 @@
-import type { GatewayBrowserClient } from "../gateway";
 import { extractText } from "../chat/message-extract";
+import type { GatewayBrowserClient } from "../gateway";
 import { generateUUID } from "../uuid";
+import type { ChatAttachment } from "../ui-types";
 
 export type ChatState = {
   client: GatewayBrowserClient | null;
@@ -11,6 +12,7 @@ export type ChatState = {
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
+  chatAttachments: ChatAttachment[];
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -43,17 +45,44 @@ export async function loadChatHistory(state: ChatState) {
   }
 }
 
-export async function sendChatMessage(state: ChatState, message: string): Promise<boolean> {
+function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) return null;
+  return { mimeType: match[1], content: match[2] };
+}
+
+export async function sendChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<boolean> {
   if (!state.client || !state.connected) return false;
   const msg = message.trim();
-  if (!msg) return false;
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) return false;
 
   const now = Date.now();
+
+  // Build user message content blocks
+  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  if (msg) {
+    contentBlocks.push({ type: "text", text: msg });
+  }
+  // Add image previews to the message for display
+  if (hasAttachments) {
+    for (const att of attachments) {
+      contentBlocks.push({
+        type: "image",
+        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+      });
+    }
+  }
+
   state.chatMessages = [
     ...state.chatMessages,
     {
       role: "user",
-      content: [{ type: "text", text: msg }],
+      content: contentBlocks,
       timestamp: now,
     },
   ];
@@ -64,12 +93,29 @@ export async function sendChatMessage(state: ChatState, message: string): Promis
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+
+  // Convert attachments to API format
+  const apiAttachments = hasAttachments
+    ? attachments
+        .map((att) => {
+          const parsed = dataUrlToBase64(att.dataUrl);
+          if (!parsed) return null;
+          return {
+            type: "image",
+            mimeType: parsed.mimeType,
+            content: parsed.content,
+          };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+    : undefined;
+
   try {
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
       deliver: false,
       idempotencyKey: runId,
+      attachments: apiAttachments,
     });
     return true;
   } catch (err) {
@@ -115,8 +161,17 @@ export function handleChatEvent(
 ) {
   if (!payload) return null;
   if (payload.sessionKey !== state.sessionKey) return null;
-  if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId)
+
+  // Final from another run (e.g. sub-agent announce): refresh history to show new message.
+  // See https://github.com/clawdbot/clawdbot/issues/1909
+  if (
+    payload.runId &&
+    state.chatRunId &&
+    payload.runId !== state.chatRunId
+  ) {
+    if (payload.state === "final") return "final";
     return null;
+  }
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);

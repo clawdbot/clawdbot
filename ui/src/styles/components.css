@@ -1303,9 +1303,8 @@
 /* Chat compose */
 .chat-compose {
   margin-top: 12px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 

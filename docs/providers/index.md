@@ -51,5 +51,9 @@ See [Venice AI](/providers/venice).
 
 - [Deepgram (audio transcription)](/providers/deepgram)
 
+## Community tools
+
+- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Use Claude Max/Pro subscription as an OpenAI-compatible API endpoint
+
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

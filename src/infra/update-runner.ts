@@ -346,10 +346,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const channel: UpdateChannel = opts.channel ?? "dev";
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
     const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
-    gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 10 : 9) : 8;
+    gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
 
     const statusCheck = await runStep(
-      step("clean check", ["git", "-C", gitRoot, "status", "--porcelain"], gitRoot),
+      step(
+        "clean check",
+        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
+        gitRoot,
+      ),
     );
     steps.push(statusCheck);
     const hasUncommittedChanges =
@@ -653,6 +657,17 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
     );
     steps.push(uiBuildStep);
+
+    // Restore dist/control-ui/ to committed state to prevent dirty repo after update
+    // (ui:build regenerates assets with new hashes, which would block future updates)
+    const restoreUiStep = await runStep(
+      step(
+        "restore control-ui",
+        ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
+        gitRoot,
+      ),
+    );
+    steps.push(restoreUiStep);
 
     const doctorStep = await runStep(
       step(

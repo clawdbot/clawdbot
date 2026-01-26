@@ -63,16 +63,28 @@ export async function sendGroupMessage({
   const story = [{ inline: [text] }];
   const sentAt = Date.now();
 
+  // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
+  let formattedReplyId = replyToId;
+  if (replyToId && /^\d+$/.test(replyToId)) {
+    try {
+      formattedReplyId = formatUd(BigInt(replyToId));
+    } catch {
+      // Fall back to raw ID if formatting fails
+    }
+  }
+
   const action = {
     channel: {
       nest: `chat/${hostShip}/${channelName}`,
-      action: replyToId
+      action: formattedReplyId
         ? {
-            reply: {
-              id: replyToId,
-              delta: {
-                add: {
-                  memo: {
+            // Thread reply - needs post wrapper around reply action
+            // ReplyActionAdd takes Memo: {content, author, sent} - no kind/blob/meta
+            post: {
+              reply: {
+                id: formattedReplyId,
+                action: {
+                  add: {
                     content: story,
                     author: fromShip,
                     sent: sentAt,
@@ -82,6 +94,7 @@ export async function sendGroupMessage({
             },
           }
         : {
+            // Regular post
             post: {
               add: {
                 content: story,

@@ -11,6 +11,12 @@ export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
 export const DEFAULT_ACCOUNT_ID = "default";
 
+// Pre-compiled regex
+const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
+const LEADING_DASH_RE = /^-+/;
+const TRAILING_DASH_RE = /-+$/;
+
 function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -52,14 +58,14 @@ export function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return DEFAULT_AGENT_ID;
   // Keep it path-safe + shell-friendly.
-  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) return trimmed.toLowerCase();
+  if (VALID_ID_RE.test(trimmed)) return trimmed.toLowerCase();
   // Best-effort fallback: collapse invalid characters to "-"
   return (
     trimmed
       .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+/, "")
-      .replace(/-+$/, "")
+      .replace(INVALID_CHARS_RE, "-")
+      .replace(LEADING_DASH_RE, "")
+      .replace(TRAILING_DASH_RE, "")
       .slice(0, 64) || DEFAULT_AGENT_ID
   );
 }
@@ -67,13 +73,13 @@ export function normalizeAgentId(value: string | undefined | null): string {
 export function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return DEFAULT_AGENT_ID;
-  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) return trimmed.toLowerCase();
+  if (VALID_ID_RE.test(trimmed)) return trimmed.toLowerCase();
   return (
     trimmed
       .toLowerCase()
-      .replace(/[^a-z0-9_-]+/gi, "-")
-      .replace(/^-+/, "")
-      .replace(/-+$/, "")
+      .replace(INVALID_CHARS_RE, "-")
+      .replace(LEADING_DASH_RE, "")
+      .replace(TRAILING_DASH_RE, "")
       .slice(0, 64) || DEFAULT_AGENT_ID
   );
 }
@@ -81,13 +87,13 @@ export function sanitizeAgentId(value: string | undefined | null): string {
 export function normalizeAccountId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return DEFAULT_ACCOUNT_ID;
-  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) return trimmed.toLowerCase();
+  if (VALID_ID_RE.test(trimmed)) return trimmed.toLowerCase();
   return (
     trimmed
       .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+/, "")
-      .replace(/-+$/, "")
+      .replace(INVALID_CHARS_RE, "-")
+      .replace(LEADING_DASH_RE, "")
+      .replace(TRAILING_DASH_RE, "")
       .slice(0, 64) || DEFAULT_ACCOUNT_ID
   );
 }

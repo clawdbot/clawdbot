@@ -6,7 +6,36 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
-- TBD.
+- Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
+- Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
+- Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
+- Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
+- Docs: add Render deployment guide. (#1975) Thanks @anurag.
+- Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.
+- Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.
+- Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.
+- Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.
+- Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
+- Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
+- Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
+- Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.
+- Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.
+- CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
+- macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
+- Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
+- Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
+- Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
+- Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
+- Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
+- Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
+- TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
+- Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
+- Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
+- Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
+- macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
+
+### Fixes
+- Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
 
 ## 2026.1.24-3
 
@@ -41,7 +70,7 @@ Status: unreleased.
 - Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.
 - Telegram: add `channels.telegram.linkPreview` to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.clawd.bot/channels/telegram
 - Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.clawd.bot/tools/web
-- UI: refresh Control UI dashboard design system (typography, colors, spacing). (#1786) Thanks @mousberg.
+- UI: refresh Control UI dashboard design system (colors, icons, typography). (#1745, #1786) Thanks @EnzeD, @mousberg.
 - Exec approvals: forward approval prompts to chat with `/approve` for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands
 - Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.
 - Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.clawd.bot/diagnostics/flags

@@ -281,6 +281,7 @@ async function loginAntigravity(params: {
   openUrl: (url: string) => Promise<void>;
   prompt: (message: string) => Promise<string>;
   note: (message: string, title?: string) => Promise<void>;
+  log: (message: string) => void;
   progress: { update: (msg: string) => void; stop: (msg?: string) => void };
 }): Promise<{
   access: string;
@@ -314,6 +315,11 @@ async function loginAntigravity(params: {
       ].join("\n"),
       "Google Antigravity OAuth",
     );
+    // Output raw URL below the box for easy copying (fixes #1772)
+    params.log("");
+    params.log("Copy this URL:");
+    params.log(authUrl);
+    params.log("");
   }
 
   if (!needsManual) {
@@ -382,6 +388,7 @@ const antigravityPlugin = {
                 openUrl: ctx.openUrl,
                 prompt: async (message) => String(await ctx.prompter.text({ message })),
                 note: ctx.prompter.note,
+                log: (message) => ctx.runtime.log(message),
                 progress: spin,
               });
 

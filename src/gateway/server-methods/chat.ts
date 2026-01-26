@@ -338,6 +338,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                 : undefined,
         }))
         .filter((a) => a.content) ?? [];
+    const rawMessage = p.message.trim();
+    if (!rawMessage && normalizedAttachments.length === 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message or attachment required"),
+      );
+      return;
+    }
     let parsedMessage = p.message;
     let parsedImages: ChatImageContent[] = [];
     if (normalizedAttachments.length > 0) {
