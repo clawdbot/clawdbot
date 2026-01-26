@@ -77,7 +77,7 @@ clawdbot onboard --non-interactive \
 ### 3. Verify Setup
 
 ```bash
-clawdbot chat --model redpill/deepseek/deepseek-v3.2 "Hello, are you working?"
+clawdbot agent --message "Hello, are you working?"
 ```
 
 ## Model Selection
@@ -169,17 +169,14 @@ All GPU TEE models incur costs based on:
 ## Usage Examples
 
 ```bash
-# Use default model
-clawdbot chat --model redpill/deepseek/deepseek-v3.2
+# Use default model (configured in agents.defaults.model.primary)
+clawdbot agent --message "Your question here"
 
-# Use reasoning model
-clawdbot chat --model redpill/deepseek/deepseek-r1-0528
+# Configure a specific default model
+clawdbot config set agents.defaults.model.primary redpill/deepseek/deepseek-r1-0528
 
-# Use coding model
-clawdbot chat --model redpill/qwen/qwen3-coder-480b-a35b-instruct
-
-# Use vision model with image
-clawdbot chat --model redpill/qwen/qwen3-vl-30b-a3b-instruct
+# Use with local session
+clawdbot agent --local --session-id my-session --message "Your question here"
 
 # Switch model mid-chat using /model directive
 > /model redpill/moonshotai/kimi-k2-thinking
