@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
 
 const sendMediaTelegramUser = vi.fn<
   typeof import("./send.js").sendMediaTelegramUser
@@ -74,5 +74,43 @@ describe("telegram-user channel plugin", () => {
     expect(sendMediaTelegramUser).toHaveBeenCalledTimes(1);
     const [, , opts] = sendMediaTelegramUser.mock.calls[0] ?? [];
     expect(opts).not.toHaveProperty("maxBytes");
+  });
+
+  it("lists peers and groups from config like the telegram plugin directory", async () => {
+    const cfg = {
+      channels: {
+        "telegram-user": {
+          allowFrom: ["123", "@alice", "telegram-user:456", "user:@bob", "*"],
+          groupAllowFrom: ["tg:carol", 789],
+          groups: {
+            "-1001": {},
+            "*": {},
+          },
+        },
+      },
+    } satisfies Partial<ClawdbotConfig> as unknown as ClawdbotConfig;
+
+    const mod = await import("./channel.js");
+    const runtime = {
+      log: () => {},
+      warn: () => {},
+      error: () => {},
+      exit: (): never => {
+        throw new Error("exit called");
+      },
+    } satisfies RuntimeEnv;
+    const peers = await mod.telegramUserPlugin.directory?.listPeers?.({
+      cfg,
+      runtime,
+    });
+    const groups = await mod.telegramUserPlugin.directory?.listGroups?.({
+      cfg,
+      runtime,
+    });
+
+    expect(peers?.map((p) => p.id).sort()).toEqual(
+      ["123", "456", "@alice", "@bob", "@carol", "789"].sort(),
+    );
+    expect(groups?.map((g) => g.id)).toEqual(["-1001"]);
   });
 });

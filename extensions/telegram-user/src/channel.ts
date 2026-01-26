@@ -23,6 +23,10 @@ import {
   type ResolvedTelegramUserAccount,
 } from "./accounts.js";
 import { TelegramUserConfigSchema } from "./config-schema.js";
+import {
+  listTelegramUserDirectoryGroupsFromConfig,
+  listTelegramUserDirectoryPeersFromConfig,
+} from "./directory-config.js";
 import { loginTelegramUser } from "./login.js";
 import { monitorTelegramUserProvider } from "./monitor/index.js";
 import {
@@ -116,6 +120,11 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
       looksLikeId: looksLikeTelegramUserTargetId,
       hint: "<userId or @username>",
     },
+  },
+  directory: {
+    self: async () => null,
+    listPeers: async (params) => listTelegramUserDirectoryPeersFromConfig(params),
+    listGroups: async (params) => listTelegramUserDirectoryGroupsFromConfig(params),
   },
   reload: { configPrefixes: ["channels.telegram-user"] },
   configSchema: buildChannelConfigSchema(TelegramUserConfigSchema),
