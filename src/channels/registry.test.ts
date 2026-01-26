@@ -9,6 +9,8 @@ import {
 describe("channel registry", () => {
   it("normalizes aliases", () => {
     expect(normalizeChatChannelId("imsg")).toBe("imessage");
+    expect(normalizeChatChannelId("gchat")).toBe("googlechat");
+    expect(normalizeChatChannelId("google-chat")).toBe("googlechat");
     expect(normalizeChatChannelId("web")).toBeNull();
   });
 

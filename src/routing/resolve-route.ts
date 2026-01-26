@@ -7,6 +7,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  sanitizeAgentId,
 } from "./session-key.js";
 
 export type RoutePeerKind = "dm" | "group" | "channel";
@@ -93,13 +94,13 @@ function listAgents(cfg: ClawdbotConfig) {
 
 function pickFirstExistingAgentId(cfg: ClawdbotConfig, agentId: string): string {
   const trimmed = (agentId ?? "").trim();
-  if (!trimmed) return normalizeAgentId(resolveDefaultAgentId(cfg));
+  if (!trimmed) return sanitizeAgentId(resolveDefaultAgentId(cfg));
   const normalized = normalizeAgentId(trimmed);
   const agents = listAgents(cfg);
-  if (agents.length === 0) return normalized;
+  if (agents.length === 0) return sanitizeAgentId(trimmed);
   const match = agents.find((agent) => normalizeAgentId(agent.id) === normalized);
-  if (match?.id?.trim()) return normalizeAgentId(match.id.trim());
-  return normalizeAgentId(resolveDefaultAgentId(cfg));
+  if (match?.id?.trim()) return sanitizeAgentId(match.id.trim());
+  return sanitizeAgentId(resolveDefaultAgentId(cfg));
 }
 
 function matchesChannel(

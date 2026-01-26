@@ -214,7 +214,8 @@ export class SearchableSelectList implements Component {
       const maxValueWidth = Math.min(30, width - prefixWidth - 4);
       const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
       const valueText = this.highlightMatch(truncatedValue, query);
-      const spacing = " ".repeat(Math.max(1, 32 - visibleWidth(valueText)));
+      const spacingWidth = Math.max(1, 32 - visibleWidth(valueText));
+      const spacing = " ".repeat(spacingWidth);
       const descriptionStart = prefixWidth + visibleWidth(valueText) + spacing.length;
       const remainingWidth = width - descriptionStart - 2;
       if (remainingWidth > 10) {

@@ -4,7 +4,7 @@ import { completeSimple } from "@mariozechner/pi-ai";
 
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import { _test, resolveTtsConfig } from "./tts.js";
+import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
   completeSimple: vi.fn(),
@@ -37,6 +37,8 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
+const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+
 const {
   isValidVoiceId,
   isValidOpenAIVoice,
@@ -47,6 +49,7 @@ const {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveEdgeOutputFormat,
 } = _test;
 
 describe("tts", () => {
@@ -106,13 +109,13 @@ describe("tts", () => {
   });
 
   describe("isValidOpenAIModel", () => {
-    it("accepts gpt-4o-mini-tts model", () => {
+    it("accepts supported models", () => {
       expect(isValidOpenAIModel("gpt-4o-mini-tts")).toBe(true);
+      expect(isValidOpenAIModel("tts-1")).toBe(true);
+      expect(isValidOpenAIModel("tts-1-hd")).toBe(true);
     });
 
-    it("rejects other models", () => {
-      expect(isValidOpenAIModel("tts-1")).toBe(false);
-      expect(isValidOpenAIModel("tts-1-hd")).toBe(false);
+    it("rejects unsupported models", () => {
       expect(isValidOpenAIModel("invalid")).toBe(false);
       expect(isValidOpenAIModel("")).toBe(false);
       expect(isValidOpenAIModel("gpt-4")).toBe(false);
@@ -120,9 +123,11 @@ describe("tts", () => {
   });
 
   describe("OPENAI_TTS_MODELS", () => {
-    it("contains only gpt-4o-mini-tts", () => {
+    it("contains supported models", () => {
       expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
-      expect(OPENAI_TTS_MODELS).toHaveLength(1);
+      expect(OPENAI_TTS_MODELS).toContain("tts-1");
+      expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
+      expect(OPENAI_TTS_MODELS).toHaveLength(3);
     });
 
     it("is a non-empty array", () => {
@@ -149,6 +154,30 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveEdgeOutputFormat", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("uses default output format when edge output format is not configured", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(resolveEdgeOutputFormat(config)).toBe("audio-24khz-48kbitrate-mono-mp3");
+    });
+
+    it("uses configured output format when provided", () => {
+      const config = resolveTtsConfig({
+        ...baseCfg,
+        messages: {
+          tts: {
+            edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
+          },
+        },
+      });
+      expect(resolveEdgeOutputFormat(config)).toBe("audio-24khz-96kbitrate-mono-mp3");
+    });
+  });
+
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
@@ -163,6 +192,14 @@ describe("tts", () => {
       expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
       expect(result.overrides.elevenlabs?.voiceSettings?.stability).toBe(0.4);
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
+    });
+
+    it("accepts edge as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=edge]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("edge");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -312,6 +349,215 @@ describe("tts", () => {
           timeoutMs: 30_000,
         }),
       ).rejects.toThrow("No summary returned");
+    });
+  });
+
+  describe("getTtsProvider", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    const restoreEnv = (snapshot: Record<string, string | undefined>) => {
+      const keys = ["OPENAI_API_KEY", "ELEVENLABS_API_KEY", "XI_API_KEY"] as const;
+      for (const key of keys) {
+        const value = snapshot[key];
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    const withEnv = (env: Record<string, string | undefined>, run: () => void) => {
+      const snapshot = {
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
+        XI_API_KEY: process.env.XI_API_KEY,
+      };
+      try {
+        for (const [key, value] of Object.entries(env)) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+        run();
+      } finally {
+        restoreEnv(snapshot);
+      }
+    };
+
+    it("prefers OpenAI when no provider is configured and API key exists", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: "test-openai-key",
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-openai.json");
+          expect(provider).toBe("openai");
+        },
+      );
+    });
+
+    it("prefers ElevenLabs when OpenAI is missing and ElevenLabs key exists", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: "test-elevenlabs-key",
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-elevenlabs.json");
+          expect(provider).toBe("elevenlabs");
+        },
+      );
+    });
+
+    it("falls back to Edge when no API keys are present", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-edge.json");
+          expect(provider).toBe("edge");
+        },
+      );
+    });
+  });
+
+  describe("maybeApplyTtsToPayload", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "inbound",
+          provider: "openai",
+          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+        },
+      },
+    };
+
+    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const payload = { text: "Hello world" };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg: baseCfg,
+        kind: "final",
+        inboundAudio: false,
+      });
+
+      expect(result).toBe(payload);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
+    });
+
+    it("attempts auto-TTS when inbound audio gating is on and the message is audio", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "Hello world" },
+        cfg: baseCfg,
+        kind: "final",
+        inboundAudio: true,
+      });
+
+      expect(result.mediaUrl).toBeDefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
+    });
+
+    it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const cfg = {
+        ...baseCfg,
+        messages: {
+          ...baseCfg.messages,
+          tts: { ...baseCfg.messages.tts, auto: "tagged" },
+        },
+      };
+
+      const payload = { text: "Hello world" };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        kind: "final",
+      });
+
+      expect(result).toBe(payload);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
+    });
+
+    it("runs auto-TTS in tagged mode when tags are present", async () => {
+      const prevPrefs = process.env.CLAWDBOT_TTS_PREFS;
+      process.env.CLAWDBOT_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const cfg = {
+        ...baseCfg,
+        messages: {
+          ...baseCfg.messages,
+          tts: { ...baseCfg.messages.tts, auto: "tagged" },
+        },
+      };
+
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+        cfg,
+        kind: "final",
+      });
+
+      expect(result.mediaUrl).toBeDefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      globalThis.fetch = originalFetch;
+      process.env.CLAWDBOT_TTS_PREFS = prevPrefs;
     });
   });
 });

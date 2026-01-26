@@ -15,4 +15,3 @@ describe("zalouser outbound chunker", () => {
     expect(chunks.every((c) => c.length <= limit)).toBe(true);
   });
 });
-

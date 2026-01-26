@@ -7,4 +7,3 @@ export function generateNotifyTwiml(message: string, voice: string): string {
   <Hangup/>
 </Response>`;
 }
-

@@ -24,7 +24,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
 - `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
 - `node` (string): node id/name for `host=node`
-- `elevated` (bool): alias for `host=gateway` + `security=full` when sandboxed and allowed
+- `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
 
 Notes:
 - `host` defaults to `sandbox`.

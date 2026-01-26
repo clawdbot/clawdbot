@@ -42,6 +42,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 
+import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
@@ -290,6 +291,7 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      let overflowCompactionAttempted = false;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -358,9 +360,42 @@ export async function runEmbeddedPiAgent(
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
-              const kind = isCompactionFailureError(errorText)
-                ? "compaction_failure"
-                : "context_overflow";
+              const isCompactionFailure = isCompactionFailureError(errorText);
+              // Attempt auto-compaction on context overflow (not compaction_failure)
+              if (!isCompactionFailure && !overflowCompactionAttempted) {
+                log.warn(
+                  `context overflow detected; attempting auto-compaction for ${provider}/${modelId}`,
+                );
+                overflowCompactionAttempted = true;
+                const compactResult = await compactEmbeddedPiSessionDirect({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  messageProvider: params.messageProvider,
+                  agentAccountId: params.agentAccountId,
+                  authProfileId: lastProfileId,
+                  sessionFile: params.sessionFile,
+                  workspaceDir: params.workspaceDir,
+                  agentDir,
+                  config: params.config,
+                  skillsSnapshot: params.skillsSnapshot,
+                  provider,
+                  model: modelId,
+                  thinkLevel,
+                  reasoningLevel: params.reasoningLevel,
+                  bashElevated: params.bashElevated,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  ownerNumbers: params.ownerNumbers,
+                });
+                if (compactResult.compacted) {
+                  log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                  continue;
+                }
+                log.warn(
+                  `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+                );
+              }
+              const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
               return {
                 payloads: [
                   {
@@ -564,7 +599,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
-            inlineToolResultsAllowed: !params.onPartialReply && !params.onToolResult,
+            inlineToolResultsAllowed: false,
           });
 
           log.debug(

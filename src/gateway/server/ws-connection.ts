@@ -73,6 +73,7 @@ export function attachGatewayWsConnectionHandler(params: {
     const requestOrigin = headerValue(upgradeReq.headers.origin);
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
+    const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
 
     const canvasHostPortForWs = canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
     const canvasHostOverride =
@@ -228,6 +229,7 @@ export function attachGatewayWsConnectionHandler(params: {
       connId,
       remoteAddr,
       forwardedFor,
+      realIp,
       requestHost,
       requestOrigin,
       requestUserAgent,

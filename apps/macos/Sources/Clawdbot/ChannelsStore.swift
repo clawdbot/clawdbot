@@ -85,6 +85,28 @@ struct ChannelsStatusSnapshot: Codable {
         let lastProbeAt: Double?
     }
 
+    struct GoogleChatProbe: Codable {
+        let ok: Bool
+        let status: Int?
+        let error: String?
+        let elapsedMs: Double?
+    }
+
+    struct GoogleChatStatus: Codable {
+        let configured: Bool
+        let credentialSource: String?
+        let audienceType: String?
+        let audience: String?
+        let webhookPath: String?
+        let webhookUrl: String?
+        let running: Bool
+        let lastStartAt: Double?
+        let lastStopAt: Double?
+        let lastError: String?
+        let probe: GoogleChatProbe?
+        let lastProbeAt: Double?
+    }
+
     struct SignalProbe: Codable {
         let ok: Bool
         let status: Int?

@@ -16,6 +16,56 @@ function normalizeIPv4MappedAddress(ip: string): string {
   return ip;
 }
 
+function normalizeIp(ip: string | undefined): string | undefined {
+  const trimmed = ip?.trim();
+  if (!trimmed) return undefined;
+  return normalizeIPv4MappedAddress(trimmed.toLowerCase());
+}
+
+function stripOptionalPort(ip: string): string {
+  if (ip.startsWith("[")) {
+    const end = ip.indexOf("]");
+    if (end !== -1) return ip.slice(1, end);
+  }
+  if (net.isIP(ip)) return ip;
+  const lastColon = ip.lastIndexOf(":");
+  if (lastColon > -1 && ip.includes(".") && ip.indexOf(":") === lastColon) {
+    const candidate = ip.slice(0, lastColon);
+    if (net.isIP(candidate) === 4) return candidate;
+  }
+  return ip;
+}
+
+function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
+  const raw = forwardedFor?.split(",")[0]?.trim();
+  if (!raw) return undefined;
+  return normalizeIp(stripOptionalPort(raw));
+}
+
+function parseRealIp(realIp?: string): string | undefined {
+  const raw = realIp?.trim();
+  if (!raw) return undefined;
+  return normalizeIp(stripOptionalPort(raw));
+}
+
+export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
+  const normalized = normalizeIp(ip);
+  if (!normalized || !trustedProxies || trustedProxies.length === 0) return false;
+  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+}
+
+export function resolveGatewayClientIp(params: {
+  remoteAddr?: string;
+  forwardedFor?: string;
+  realIp?: string;
+  trustedProxies?: string[];
+}): string | undefined {
+  const remote = normalizeIp(params.remoteAddr);
+  if (!remote) return undefined;
+  if (!isTrustedProxyAddress(remote, params.trustedProxies)) return remote;
+  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp) ?? remote;
+}
+
 export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (isLoopbackAddress(ip)) return true;
   if (!ip) return false;
@@ -47,14 +97,14 @@ export async function resolveGatewayBindHost(
 
   if (mode === "loopback") {
     // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindTo("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
     return "0.0.0.0"; // extreme fallback
   }
 
   if (mode === "tailnet") {
     const tailnetIP = pickPrimaryTailnetIPv4();
-    if (tailnetIP && (await canBindTo(tailnetIP))) return tailnetIP;
-    if (await canBindTo("127.0.0.1")) return "127.0.0.1";
+    if (tailnetIP && (await canBindToHost(tailnetIP))) return tailnetIP;
+    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
     return "0.0.0.0";
   }
 
@@ -66,13 +116,13 @@ export async function resolveGatewayBindHost(
     const host = customHost?.trim();
     if (!host) return "0.0.0.0"; // invalid config → fall back to all
 
-    if (isValidIPv4(host) && (await canBindTo(host))) return host;
+    if (isValidIPv4(host) && (await canBindToHost(host))) return host;
     // Custom IP failed → fall back to LAN
     return "0.0.0.0";
   }
 
   if (mode === "auto") {
-    if (await canBindTo("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
     return "0.0.0.0";
   }
 
@@ -86,7 +136,7 @@ export async function resolveGatewayBindHost(
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-async function canBindTo(host: string): Promise<boolean> {
+export async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -99,6 +149,16 @@ async function canBindTo(host: string): Promise<boolean> {
     // Use port 0 to let OS pick an available port for testing
     testServer.listen(0, host);
   });
+}
+
+export async function resolveGatewayListenHosts(
+  bindHost: string,
+  opts?: { canBindToHost?: (host: string) => Promise<boolean> },
+): Promise<string[]> {
+  if (bindHost !== "127.0.0.1") return [bindHost];
+  const canBind = opts?.canBindToHost ?? canBindToHost;
+  if (await canBind("::1")) return [bindHost, "::1"];
+  return [bindHost];
 }
 
 /**

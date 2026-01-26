@@ -114,3 +114,9 @@ Git requirement:
 
 If you choose `-InstallMethod git` and Git is missing, the installer will print the
 Git for Windows link (`https://git-scm.com/download/win`) and exit.
+
+Common Windows issues:
+
+- **npm error spawn git / ENOENT**: install Git for Windows and reopen PowerShell, then rerun the installer.
+- **"clawdbot" is not recognized**: your npm global bin folder is not on PATH. Most systems use
+  `%AppData%\\npm`. You can also run `npm config get prefix` and add `\\bin` to PATH, then reopen PowerShell.

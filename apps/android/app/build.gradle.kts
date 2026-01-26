@@ -21,8 +21,8 @@ android {
     applicationId = "com.clawdbot.android"
     minSdk = 31
     targetSdk = 36
-    versionCode = 202601240
-    versionName = "2026.1.24"
+    versionCode = 202601250
+    versionName = "2026.1.25"
   }
 
   buildTypes {

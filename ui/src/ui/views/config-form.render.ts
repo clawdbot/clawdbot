@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types";
+import { icons } from "../icons";
 import {
   hintForPath,
   humanize,
@@ -93,16 +94,16 @@ function matchesSearch(key: string, schema: JsonSchema, query: string): boolean 
   if (!query) return true;
   const q = query.toLowerCase();
   const meta = SECTION_META[key];
-  
+
   // Check key name
   if (key.toLowerCase().includes(q)) return true;
-  
+
   // Check label and description
   if (meta) {
     if (meta.label.toLowerCase().includes(q)) return true;
     if (meta.description.toLowerCase().includes(q)) return true;
   }
-  
+
   return schemaMatches(schema, q);
 }
 
@@ -189,10 +190,10 @@ export function renderConfigForm(props: ConfigFormProps) {
   if (filteredEntries.length === 0) {
     return html`
       <div class="config-empty">
-        <div class="config-empty__icon">🔍</div>
+        <div class="config-empty__icon">${icons.search}</div>
         <div class="config-empty__text">
-          ${searchQuery 
-            ? `No settings match "${searchQuery}"` 
+          ${searchQuery
+            ? `No settings match "${searchQuery}"`
             : "No settings in this section"}
         </div>
       </div>

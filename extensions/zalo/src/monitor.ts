@@ -596,6 +596,8 @@ async function processMessageWithPipeline(params: {
           chatId,
           runtime,
           core,
+          config,
+          accountId: account.accountId,
           statusSink,
           fetcher,
           tableMode,
@@ -614,11 +616,13 @@ async function deliverZaloReply(params: {
   chatId: string;
   runtime: ZaloRuntimeEnv;
   core: ZaloCoreRuntime;
+  config: ClawdbotConfig;
+  accountId?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   fetcher?: ZaloFetch;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { payload, token, chatId, runtime, core, statusSink, fetcher } = params;
+  const { payload, token, chatId, runtime, core, config, accountId, statusSink, fetcher } = params;
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
@@ -644,7 +648,12 @@ async function deliverZaloReply(params: {
   }
 
   if (text) {
-    const chunks = core.channel.text.chunkMarkdownText(text, ZALO_TEXT_LIMIT);
+    const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
+    const chunks = core.channel.text.chunkMarkdownTextWithMode(
+      text,
+      ZALO_TEXT_LIMIT,
+      chunkMode,
+    );
     for (const chunk of chunks) {
       try {
         await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);

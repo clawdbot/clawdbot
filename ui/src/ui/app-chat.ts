@@ -8,11 +8,13 @@ import { normalizeBasePath } from "./navigation";
 import type { GatewayHelloOk } from "./gateway";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import type { ClawdbotApp } from "./app";
+import type { ChatAttachment, ChatQueueItem } from "./ui-types";
 
 type ChatHost = {
   connected: boolean;
   chatMessage: string;
-  chatQueue: Array<{ id: string; text: string; createdAt: number }>;
+  chatAttachments: ChatAttachment[];
+  chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
   sessionKey: string;
@@ -45,15 +47,17 @@ export async function handleAbortChat(host: ChatHost) {
   await abortChatRun(host as unknown as ClawdbotApp);
 }
 
-function enqueueChatMessage(host: ChatHost, text: string) {
+function enqueueChatMessage(host: ChatHost, text: string, attachments?: ChatAttachment[]) {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  const hasAttachments = Boolean(attachments && attachments.length > 0);
+  if (!trimmed && !hasAttachments) return;
   host.chatQueue = [
     ...host.chatQueue,
     {
       id: generateUUID(),
       text: trimmed,
       createdAt: Date.now(),
+      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
     },
   ];
 }
@@ -61,18 +65,30 @@ function enqueueChatMessage(host: ChatHost, text: string) {
 async function sendChatMessageNow(
   host: ChatHost,
   message: string,
-  opts?: { previousDraft?: string; restoreDraft?: boolean },
+  opts?: {
+    previousDraft?: string;
+    restoreDraft?: boolean;
+    attachments?: ChatAttachment[];
+    previousAttachments?: ChatAttachment[];
+    restoreAttachments?: boolean;
+  },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const ok = await sendChatMessage(host as unknown as ClawdbotApp, message);
+  const ok = await sendChatMessage(host as unknown as ClawdbotApp, message, opts?.attachments);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
+  }
+  if (!ok && opts?.previousAttachments) {
+    host.chatAttachments = opts.previousAttachments;
   }
   if (ok) {
     setLastActiveSessionKey(host as unknown as Parameters<typeof setLastActiveSessionKey>[0], host.sessionKey);
   }
   if (ok && opts?.restoreDraft && opts.previousDraft?.trim()) {
     host.chatMessage = opts.previousDraft;
+  }
+  if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
+    host.chatAttachments = opts.previousAttachments;
   }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
@@ -86,7 +102,7 @@ async function flushChatQueue(host: ChatHost) {
   const [next, ...rest] = host.chatQueue;
   if (!next) return;
   host.chatQueue = rest;
-  const ok = await sendChatMessageNow(host, next.text);
+  const ok = await sendChatMessageNow(host, next.text, { attachments: next.attachments });
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
   }
@@ -104,7 +120,12 @@ export async function handleSendChat(
   if (!host.connected) return;
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
-  if (!message) return;
+  const attachments = host.chatAttachments ?? [];
+  const attachmentsToSend = messageOverride == null ? attachments : [];
+  const hasAttachments = attachmentsToSend.length > 0;
+
+  // Allow sending with just attachments (no message text required)
+  if (!message && !hasAttachments) return;
 
   if (isChatStopCommand(message)) {
     await handleAbortChat(host);
@@ -113,16 +134,21 @@ export async function handleSendChat(
 
   if (messageOverride == null) {
     host.chatMessage = "";
+    // Clear attachments when sending
+    host.chatAttachments = [];
   }
 
   if (isChatBusy(host)) {
-    enqueueChatMessage(host, message);
+    enqueueChatMessage(host, message, attachmentsToSend);
     return;
   }
 
   await sendChatMessageNow(host, message, {
     previousDraft: messageOverride == null ? previousDraft : undefined,
     restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+    attachments: hasAttachments ? attachmentsToSend : undefined,
+    previousAttachments: messageOverride == null ? attachments : undefined,
+    restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
   });
 }
 

@@ -150,6 +150,14 @@
       "destination": "/channels/discord"
     },
     {
+      "source": "/providers/googlechat",
+      "destination": "/channels/googlechat"
+    },
+    {
+      "source": "/providers/googlechat/",
+      "destination": "/channels/googlechat"
+    },
+    {
       "source": "/providers/grammy",
       "destination": "/channels/grammy"
     },
@@ -772,6 +780,22 @@
     {
       "source": "/plugins",
       "destination": "/plugin"
+    },
+    {
+      "source": "/install/railway",
+      "destination": "/railway"
+    },
+    {
+      "source": "/install/railway/",
+      "destination": "/railway"
+    },
+    {
+      "source": "/gcp",
+      "destination": "/platforms/gcp"
+    },
+    {
+      "source": "/gcp/",
+      "destination": "/platforms/gcp"
     }
   ],
   "navigation": {
@@ -810,6 +834,8 @@
           "install/ansible",
           "install/nix",
           "install/docker",
+          "railway",
+          "render",
           "install/bun"
         ]
       },
@@ -943,6 +969,7 @@
           "channels/grammy",
           "channels/discord",
           "channels/slack",
+          "channels/googlechat",
           "channels/mattermost",
           "channels/signal",
           "channels/imessage",
@@ -965,6 +992,7 @@
           "bedrock",
           "providers/moonshot",
           "providers/minimax",
+          "providers/vercel-ai-gateway",
           "providers/openrouter",
           "providers/synthetic",
           "providers/opencode",
@@ -1030,12 +1058,14 @@
         "pages": [
           "platforms",
           "platforms/macos",
+          "platforms/macos-vm",
           "platforms/ios",
           "platforms/android",
           "platforms/windows",
           "platforms/linux",
           "platforms/fly",
           "platforms/hetzner",
+          "platforms/gcp",
           "platforms/exe-dev"
         ]
       },

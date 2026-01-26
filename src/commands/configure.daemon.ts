@@ -11,6 +11,7 @@ import {
 } from "./daemon-runtime.js";
 import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
+import { loadConfig } from "../config/config.js";
 
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
@@ -81,12 +82,14 @@ export async function maybeInstallDaemon(params: {
 
         progress.setLabel("Preparing Gateway service…");
 
+        const cfg = loadConfig();
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: params.port,
           token: params.gatewayToken,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
+          config: cfg,
         });
 
         progress.setLabel("Installing Gateway service…");

@@ -158,6 +158,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
     textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();

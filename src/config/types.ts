@@ -2,6 +2,7 @@
 
 export * from "./types.agent-defaults.js";
 export * from "./types.agents.js";
+export * from "./types.approvals.js";
 export * from "./types.auth.js";
 export * from "./types.base.js";
 export * from "./types.browser.js";
@@ -9,6 +10,7 @@ export * from "./types.channels.js";
 export * from "./types.clawdbot.js";
 export * from "./types.cron.js";
 export * from "./types.discord.js";
+export * from "./types.googlechat.js";
 export * from "./types.gateway.js";
 export * from "./types.hooks.js";
 export * from "./types.imessage.js";

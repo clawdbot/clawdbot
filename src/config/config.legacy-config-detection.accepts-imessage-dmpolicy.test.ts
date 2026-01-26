@@ -138,6 +138,16 @@ describe("legacy config detection", () => {
     expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
     expect(res.config?.channels?.telegram?.requireMention).toBeUndefined();
   });
+  it("migrates messages.tts.enabled to messages.tts.auto", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      messages: { tts: { enabled: true } },
+    });
+    expect(res.changes).toContain("Moved messages.tts.enabled → messages.tts.auto (always).");
+    expect(res.config?.messages?.tts?.auto).toBe("always");
+    expect(res.config?.messages?.tts?.enabled).toBeUndefined();
+  });
   it("migrates legacy model config to agent.models + model lists", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");

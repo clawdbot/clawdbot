@@ -37,6 +37,7 @@ import {
   createDiscordCommandArgFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -406,6 +407,31 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }),
   );
 
+  // Initialize exec approvals handler if enabled
+  const execApprovalsConfig = discordCfg.execApprovals ?? {};
+  const execApprovalsHandler = execApprovalsConfig.enabled
+    ? new DiscordExecApprovalHandler({
+        token,
+        accountId: account.accountId,
+        config: execApprovalsConfig,
+        cfg,
+        runtime,
+      })
+    : null;
+
+  const components = [
+    createDiscordCommandArgFallbackButton({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      sessionPrefix,
+    }),
+  ];
+
+  if (execApprovalsHandler) {
+    components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
+  }
+
   const client = new Client(
     {
       baseUrl: "http://localhost",
@@ -418,14 +444,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     {
       commands,
       listeners: [],
-      components: [
-        createDiscordCommandArgFallbackButton({
-          cfg,
-          discordConfig: discordCfg,
-          accountId: account.accountId,
-          sessionPrefix,
-        }),
-      ],
+      components,
     },
     [
       new GatewayPlugin({
@@ -510,6 +529,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 
+  // Start exec approvals handler after client is ready
+  if (execApprovalsHandler) {
+    await execApprovalsHandler.start();
+  }
+
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
   const gatewayEmitter = getDiscordGatewayEmitter(gateway);
   const stopGatewayLogging = attachDiscordGatewayLogging({
@@ -575,6 +599,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (helloTimeoutId) clearTimeout(helloTimeoutId);
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     abortSignal?.removeEventListener("abort", onAbort);
+    if (execApprovalsHandler) {
+      await execApprovalsHandler.stop();
+    }
   }
 }
 

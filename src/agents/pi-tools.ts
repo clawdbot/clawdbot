@@ -313,6 +313,7 @@ export function createClawdbotCodingTools(options?: {
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,
+      requesterAgentIdOverride: agentId,
     }),
   ];
   const coreToolNames = new Set(

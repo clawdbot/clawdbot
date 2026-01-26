@@ -52,4 +52,6 @@ export type ReplyPayload = {
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;
+  /** Channel-specific payload data (per-channel envelope). */
+  channelData?: Record<string, unknown>;
 };

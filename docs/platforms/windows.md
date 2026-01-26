@@ -7,7 +7,8 @@ read_when:
 # Windows (WSL2)
 
 Clawdbot on Windows is recommended **via WSL2** (Ubuntu recommended). The
-CLI + Gateway run inside Linux, which keeps the runtime consistent. Native
+CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
+tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Native
 Windows installs are untested and more problematic.
 
 Native Windows companion apps are planned.

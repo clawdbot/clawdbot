@@ -105,7 +105,7 @@ describe("web auto-reply", () => {
     vi.useRealTimers();
   });
 
-  it("sends tool summaries immediately with responsePrefix", async () => {
+  it("skips tool summaries and sends final reply with responsePrefix", async () => {
     setLoadConfigMock(() => ({
       channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
@@ -125,15 +125,7 @@ describe("web auto-reply", () => {
       return { close: vi.fn() };
     };
 
-    const resolver = vi
-      .fn()
-      .mockImplementation(
-        async (_ctx, opts?: { onToolResult?: (r: { text: string }) => Promise<void> }) => {
-          await opts?.onToolResult?.({ text: "🧩 tool1" });
-          await opts?.onToolResult?.({ text: "🧩 tool2" });
-          return { text: "final" };
-        },
-      );
+    const resolver = vi.fn().mockResolvedValue({ text: "final" });
 
     await monitorWebChannel(false, listenerFactory, false, resolver);
     expect(capturedOnMessage).toBeDefined();
@@ -149,7 +141,7 @@ describe("web auto-reply", () => {
     });
 
     const replies = reply.mock.calls.map((call) => call[0]);
-    expect(replies).toEqual(["🦞 🧩 tool1", "🦞 🧩 tool2", "🦞 final"]);
+    expect(replies).toEqual(["🦞 final"]);
     resetLoadConfigMock();
   });
   it("uses identity.name for messagePrefix when set", async () => {

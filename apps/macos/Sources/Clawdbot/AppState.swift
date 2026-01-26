@@ -24,6 +24,11 @@ final class AppState {
         case remote
     }
 
+    enum RemoteTransport: String {
+        case ssh
+        case direct
+    }
+
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
@@ -166,6 +171,10 @@ final class AppState {
         }
     }
 
+    var remoteTransport: RemoteTransport {
+        didSet { self.syncGatewayConfigIfNeeded() }
+    }
+
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
@@ -198,6 +207,10 @@ final class AppState {
             self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
             self.syncGatewayConfigIfNeeded()
         }
+    }
+
+    var remoteUrl: String {
+        didSet { self.syncGatewayConfigIfNeeded() }
     }
 
     var remoteIdentity: String {
@@ -263,13 +276,15 @@ final class AppState {
         }
 
         let configRoot = ClawdbotConfigFile.loadDict()
-        let configGateway = configRoot["gateway"] as? [String: Any]
-        let configRemoteUrl = (configGateway?["remote"] as? [String: Any])?["url"] as? String
+        let configRemoteUrl = GatewayRemoteConfig.resolveUrlString(root: configRoot)
+        let configRemoteTransport = GatewayRemoteConfig.resolveTransport(root: configRoot)
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
+        self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
 
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
+           configRemoteTransport != .direct,
            storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let host = AppState.remoteHost(from: configRemoteUrl)
         {
@@ -277,6 +292,7 @@ final class AppState {
         } else {
             self.remoteTarget = storedRemoteTarget
         }
+        self.remoteUrl = configRemoteUrl ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
@@ -354,10 +370,11 @@ final class AppState {
     private func applyConfigOverrides(_ root: [String: Any]) {
         let gateway = root["gateway"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remoteUrl = (gateway?["remote"] as? [String: Any])?["url"] as? String
+        let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
         let hasRemoteUrl = !(remoteUrl?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
+        let remoteTransport = GatewayRemoteConfig.resolveTransport(root: root)
 
         let desiredMode: ConnectionMode? = switch modeRaw {
         case "local":
@@ -378,8 +395,17 @@ final class AppState {
             self.connectionMode = .remote
         }
 
+        if remoteTransport != self.remoteTransport {
+            self.remoteTransport = remoteTransport
+        }
+        let remoteUrlText = remoteUrl ?? ""
+        if remoteUrlText != self.remoteUrl {
+            self.remoteUrl = remoteUrlText
+        }
+
         let targetMode = desiredMode ?? self.connectionMode
         if targetMode == .remote,
+           remoteTransport != .direct,
            let host = AppState.remoteHost(from: remoteUrl)
         {
             self.updateRemoteTarget(host: host)
@@ -387,10 +413,17 @@ final class AppState {
     }
 
     private func updateRemoteTarget(host: String) {
-        let parsed = CommandResolver.parseSSHTarget(self.remoteTarget)
-        let user = parsed?.user ?? NSUserName()
-        let port = parsed?.port ?? 22
-        let assembled = port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
+        let trimmed = self.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = CommandResolver.parseSSHTarget(trimmed) else { return }
+        let trimmedUser = parsed.user?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = (trimmedUser?.isEmpty ?? true) ? nil : trimmedUser
+        let port = parsed.port
+        let assembled: String
+        if let user {
+            assembled = port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
+        } else {
+            assembled = port == 22 ? host : "\(host):\(port)"
+        }
         if assembled != self.remoteTarget {
             self.remoteTarget = assembled
         }
@@ -402,6 +435,8 @@ final class AppState {
         let connectionMode = self.connectionMode
         let remoteTarget = self.remoteTarget
         let remoteIdentity = self.remoteIdentity
+        let remoteTransport = self.remoteTransport
+        let remoteUrl = self.remoteUrl
         let desiredMode: String? = switch connectionMode {
         case .local:
             "local"
@@ -435,39 +470,63 @@ final class AppState {
                 var remote = gateway["remote"] as? [String: Any] ?? [:]
                 var remoteChanged = false
 
-                if let host = remoteHost {
-                    let existingUrl = (remote["url"] as? String)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-                    let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-                    let port = parsedExisting?.port ?? 18789
-                    let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-                    if existingUrl != desiredUrl {
-                        remote["url"] = desiredUrl
+                if remoteTransport == .direct {
+                    let trimmedUrl = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmedUrl.isEmpty {
+                        if remote["url"] != nil {
+                            remote.removeValue(forKey: "url")
+                            remoteChanged = true
+                        }
+                    } else {
+                        let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) ?? trimmedUrl
+                        if (remote["url"] as? String) != normalizedUrl {
+                            remote["url"] = normalizedUrl
+                            remoteChanged = true
+                        }
+                    }
+                    if (remote["transport"] as? String) != RemoteTransport.direct.rawValue {
+                        remote["transport"] = RemoteTransport.direct.rawValue
                         remoteChanged = true
                     }
-                }
+                } else {
+                    if remote["transport"] != nil {
+                        remote.removeValue(forKey: "transport")
+                        remoteChanged = true
+                    }
+                    if let host = remoteHost {
+                        let existingUrl = (remote["url"] as? String)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
+                        let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
+                        let port = parsedExisting?.port ?? 18789
+                        let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
+                        if existingUrl != desiredUrl {
+                            remote["url"] = desiredUrl
+                            remoteChanged = true
+                        }
+                    }
 
-                let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
-                if !sanitizedTarget.isEmpty {
-                    if (remote["sshTarget"] as? String) != sanitizedTarget {
-                        remote["sshTarget"] = sanitizedTarget
+                    let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
+                    if !sanitizedTarget.isEmpty {
+                        if (remote["sshTarget"] as? String) != sanitizedTarget {
+                            remote["sshTarget"] = sanitizedTarget
+                            remoteChanged = true
+                        }
+                    } else if remote["sshTarget"] != nil {
+                        remote.removeValue(forKey: "sshTarget")
                         remoteChanged = true
                     }
-                } else if remote["sshTarget"] != nil {
-                    remote.removeValue(forKey: "sshTarget")
-                    remoteChanged = true
-                }
 
-                let trimmedIdentity = remoteIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedIdentity.isEmpty {
-                    if (remote["sshIdentity"] as? String) != trimmedIdentity {
-                        remote["sshIdentity"] = trimmedIdentity
+                    let trimmedIdentity = remoteIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedIdentity.isEmpty {
+                        if (remote["sshIdentity"] as? String) != trimmedIdentity {
+                            remote["sshIdentity"] = trimmedIdentity
+                            remoteChanged = true
+                        }
+                    } else if remote["sshIdentity"] != nil {
+                        remote.removeValue(forKey: "sshIdentity")
                         remoteChanged = true
                     }
-                } else if remote["sshIdentity"] != nil {
-                    remote.removeValue(forKey: "sshIdentity")
-                    remoteChanged = true
                 }
 
                 if remoteChanged {
@@ -621,8 +680,10 @@ extension AppState {
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
+        state.remoteTransport = .ssh
         state.canvasEnabled = true
         state.remoteTarget = "user@example.com"
+        state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteIdentity = "~/.ssh/id_ed25519"
         state.remoteProjectRoot = "~/Projects/clawdbot"
         state.remoteCliPath = ""

@@ -143,7 +143,7 @@ export class CallManager {
       // For notify mode with a message, use inline TwiML with <Say>
       let inlineTwiml: string | undefined;
       if (mode === "notify" && initialMessage) {
-        const pollyVoice = mapVoiceToPolly(this.config.tts.voice);
+        const pollyVoice = mapVoiceToPolly(this.config.tts?.openai?.voice);
         inlineTwiml = this.generateNotifyTwiml(initialMessage, pollyVoice);
         console.log(
           `[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`,
@@ -210,11 +210,13 @@ export class CallManager {
       this.addTranscriptEntry(call, "bot", text);
 
       // Play TTS
+      const voice =
+        this.provider?.name === "twilio" ? this.config.tts?.openai?.voice : undefined;
       await this.provider.playTts({
         callId,
         providerCallId: call.providerCallId,
         text,
-        voice: this.config.tts.voice,
+        voice,
       });
 
       return { success: true };

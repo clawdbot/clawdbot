@@ -38,6 +38,7 @@ export async function installGatewayDaemonNonInteractive(params: {
     token: gatewayToken,
     runtime: daemonRuntimeRaw,
     warn: (message) => runtime.log(message),
+    config: params.nextConfig,
   });
   try {
     await service.install({

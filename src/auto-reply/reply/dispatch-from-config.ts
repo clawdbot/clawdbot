@@ -1,4 +1,6 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -14,7 +16,55 @@ import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
+
+const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
+const AUDIO_HEADER_RE = /^\[Audio\b/i;
+
+const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+
+const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
+  const rawTypes = [
+    typeof ctx.MediaType === "string" ? ctx.MediaType : undefined,
+    ...(Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : []),
+  ].filter(Boolean) as string[];
+  const types = rawTypes.map((type) => normalizeMediaType(type));
+  if (types.some((type) => type === "audio" || type.startsWith("audio/"))) return true;
+
+  const body =
+    typeof ctx.BodyForCommands === "string"
+      ? ctx.BodyForCommands
+      : typeof ctx.CommandBody === "string"
+        ? ctx.CommandBody
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+  const trimmed = body.trim();
+  if (!trimmed) return false;
+  if (AUDIO_PLACEHOLDER_RE.test(trimmed)) return true;
+  return AUDIO_HEADER_RE.test(trimmed);
+};
+
+const resolveSessionTtsAuto = (
+  ctx: FinalizedMsgContext,
+  cfg: ClawdbotConfig,
+): string | undefined => {
+  const targetSessionKey =
+    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
+  if (!sessionKey) return undefined;
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  try {
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
+    return normalizeTtsAutoMode(entry?.ttsAuto);
+  } catch {
+    return undefined;
+  }
+};
 
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
@@ -81,6 +131,8 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
+  const inboundAudio = isInboundAudioContext(ctx);
+  const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {
     const timestamp =
@@ -154,6 +206,7 @@ export async function dispatchReplyFromConfig(params: {
   const sendPayloadAsync = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
+    mirror?: boolean,
   ): Promise<void> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
@@ -168,6 +221,7 @@ export async function dispatchReplyFromConfig(params: {
       threadId: ctx.MessageThreadId,
       cfg,
       abortSignal,
+      mirror,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -216,22 +270,6 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
-        onToolResult: (payload: ReplyPayload) => {
-          const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "tool",
-            });
-            if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload);
-            } else {
-              dispatcher.sendToolResult(ttsPayload);
-            }
-          };
-          return run();
-        },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -239,9 +277,11 @@ export async function dispatchReplyFromConfig(params: {
               cfg,
               channel: ttsChannel,
               kind: "block",
+              inboundAudio,
+              ttsAuto: sessionTtsAuto,
             });
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal);
+              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendBlockReply(ttsPayload);
             }
@@ -262,6 +302,8 @@ export async function dispatchReplyFromConfig(params: {
         cfg,
         channel: ttsChannel,
         kind: "final",
+        inboundAudio,
+        ttsAuto: sessionTtsAuto,
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.

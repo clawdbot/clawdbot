@@ -332,6 +332,8 @@ async function processMessage(
           isGroup,
           runtime,
           core,
+          config,
+          accountId: account.accountId,
           statusSink,
           tableMode: core.channel.text.resolveMarkdownTableMode({
             cfg: config,
@@ -356,10 +358,13 @@ async function deliverZalouserReply(params: {
   isGroup: boolean;
   runtime: RuntimeEnv;
   core: ZalouserCoreRuntime;
+  config: ClawdbotConfig;
+  accountId?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { payload, profile, chatId, isGroup, runtime, core, statusSink } = params;
+  const { payload, profile, chatId, isGroup, runtime, core, config, accountId, statusSink } =
+    params;
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
@@ -390,7 +395,12 @@ async function deliverZalouserReply(params: {
   }
 
   if (text) {
-    const chunks = core.channel.text.chunkMarkdownText(text, ZALOUSER_TEXT_LIMIT);
+    const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
+    const chunks = core.channel.text.chunkMarkdownTextWithMode(
+      text,
+      ZALOUSER_TEXT_LIMIT,
+      chunkMode,
+    );
     logVerbose(core, runtime, `Sending ${chunks.length} text chunk(s) to ${chatId}`);
     for (const chunk of chunks) {
       try {

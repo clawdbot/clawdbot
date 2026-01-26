@@ -1,3 +1,4 @@
+import { ChannelType } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
   removeAckReactionAfterReply,
@@ -21,6 +22,7 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
@@ -129,6 +131,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`
       : (senderDisplay ?? senderTag ?? author.id);
+  const isForumParent =
+    threadParentType === ChannelType.GuildForum || threadParentType === ChannelType.GuildMedia;
+  const forumParentSlug =
+    isForumParent && threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+  const threadChannelId = threadChannel?.id;
+  const isForumStarter =
+    Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
+  const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupChannel;
   const channelDescription = channelInfo?.topic?.trim();
@@ -181,6 +191,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   if (replyContext) {
     combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
+  }
+  if (forumContextLine) {
+    combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
 
   let threadStarterBody: string | undefined;
@@ -335,6 +348,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         textLimit,
         maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
         tableMode,
+        chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
       replyReference.markSent();
     },

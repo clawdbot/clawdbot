@@ -135,7 +135,7 @@ class SmsManager(private val context: Context) {
 
     /**
      * Send an SMS message.
-     * 
+     *
      * @param paramsJson JSON with "to" (phone number) and "message" (text) fields
      * @return SendResult indicating success or failure
      */

@@ -25,7 +25,7 @@ async function fetchMatrixMediaBuffer(params: {
   // matrix-bot-sdk provides mxcToHttp helper
   const url = params.client.mxcToHttp(params.mxcUrl);
   if (!url) return null;
-  
+
   // Use the client's download method which handles auth
   try {
     const buffer = await params.client.downloadContent(params.mxcUrl);
@@ -40,6 +40,7 @@ async function fetchMatrixMediaBuffer(params: {
 
 /**
  * Download and decrypt encrypted media from a Matrix room.
+ * Uses matrix-bot-sdk's decryptMedia which handles both download and decryption.
  */
 async function fetchEncryptedMediaBuffer(params: {
   client: MatrixClient;
@@ -50,18 +51,13 @@ async function fetchEncryptedMediaBuffer(params: {
     throw new Error("Cannot decrypt media: crypto not enabled");
   }
 
-  // Download the encrypted content
-  const encryptedBuffer = await params.client.downloadContent(params.file.url);
-  if (encryptedBuffer.byteLength > params.maxBytes) {
+  // decryptMedia handles downloading and decrypting the encrypted content internally
+  const decrypted = await params.client.crypto.decryptMedia(params.file);
+
+  if (decrypted.byteLength > params.maxBytes) {
     throw new Error("Matrix media exceeds configured size limit");
   }
 
-  // Decrypt using matrix-bot-sdk crypto
-  const decrypted = await params.client.crypto.decryptMedia(
-    Buffer.from(encryptedBuffer),
-    params.file,
-  );
-  
   return { buffer: decrypted };
 }
 
@@ -69,6 +65,7 @@ export async function downloadMatrixMedia(params: {
   client: MatrixClient;
   mxcUrl: string;
   contentType?: string;
+  sizeBytes?: number;
   maxBytes: number;
   file?: EncryptedFile;
 }): Promise<{
@@ -77,7 +74,13 @@ export async function downloadMatrixMedia(params: {
   placeholder: string;
 } | null> {
   let fetched: { buffer: Buffer; headerType?: string } | null;
-  
+  if (
+    typeof params.sizeBytes === "number" &&
+    params.sizeBytes > params.maxBytes
+  ) {
+    throw new Error("Matrix media exceeds configured size limit");
+  }
+
   if (params.file) {
     // Encrypted media
     fetched = await fetchEncryptedMediaBuffer({
@@ -93,7 +96,7 @@ export async function downloadMatrixMedia(params: {
       maxBytes: params.maxBytes,
     });
   }
-  
+
   if (!fetched) return null;
   const headerType = fetched.headerType ?? params.contentType ?? undefined;
   const saved = await getMatrixRuntime().channel.media.saveMediaBuffer(

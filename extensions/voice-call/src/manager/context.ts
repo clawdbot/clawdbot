@@ -19,4 +19,3 @@ export type CallManagerContext = {
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
 };
-

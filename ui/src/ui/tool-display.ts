@@ -1,4 +1,5 @@
 import rawConfig from "./tool-display.json";
+import type { IconName } from "./icons";
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -6,7 +7,7 @@ type ToolDisplayActionSpec = {
 };
 
 type ToolDisplaySpec = {
-  emoji?: string;
+  icon?: string;
   title?: string;
   label?: string;
   detailKeys?: string[];
@@ -21,7 +22,7 @@ type ToolDisplayConfig = {
 
 export type ToolDisplay = {
   name: string;
-  emoji: string;
+  icon: IconName;
   title: string;
   label: string;
   verb?: string;
@@ -29,7 +30,7 @@ export type ToolDisplay = {
 };
 
 const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
 const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
 
 function normalizeToolName(name?: string): string {
@@ -135,7 +136,7 @@ export function resolveToolDisplay(params: {
   const name = normalizeToolName(params.name);
   const key = name.toLowerCase();
   const spec = TOOL_MAP[key];
-  const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
+  const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? name;
   const actionRaw =
@@ -168,7 +169,7 @@ export function resolveToolDisplay(params: {
 
   return {
     name,
-    emoji,
+    icon,
     title,
     label,
     verb,
@@ -186,9 +187,7 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
 
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
-  return detail
-    ? `${display.emoji} ${display.label}: ${detail}`
-    : `${display.emoji} ${display.label}`;
+  return detail ? `${display.label}: ${detail}` : display.label;
 }
 
 function shortenHomeInString(input: string): string {

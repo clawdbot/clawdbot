@@ -2,42 +2,13 @@ import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 
 import {
-  BlockStreamingChunkSchema,
-  BlockStreamingCoalesceSchema,
-  DmPolicySchema,
   ExecutableTokenSchema,
-  GroupPolicySchema,
   HexColorSchema,
-  MarkdownConfigSchema,
-  MarkdownTableModeSchema,
   MSTeamsReplyStyleSchema,
-  ProviderCommandsSchema,
-  ReplyToModeSchema,
   RetryConfigSchema,
-  NativeCommandsSettingSchema,
-  TtsConfigSchema,
-  TtsModeSchema,
-  TtsProviderSchema,
 } from "./zod-schema.leaf.js";
 
-export {
-  BlockStreamingChunkSchema,
-  BlockStreamingCoalesceSchema,
-  DmPolicySchema,
-  ExecutableTokenSchema,
-  GroupPolicySchema,
-  HexColorSchema,
-  MarkdownConfigSchema,
-  MarkdownTableModeSchema,
-  MSTeamsReplyStyleSchema,
-  ProviderCommandsSchema,
-  ReplyToModeSchema,
-  RetryConfigSchema,
-  NativeCommandsSettingSchema,
-  TtsConfigSchema,
-  TtsModeSchema,
-  TtsProviderSchema,
-};
+export { ExecutableTokenSchema, HexColorSchema, MSTeamsReplyStyleSchema, RetryConfigSchema };
 
 export const ModelApiSchema = z.union([
   z.literal("openai-completions"),
@@ -65,18 +36,19 @@ export const ModelDefinitionSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
-    reasoning: z.boolean(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])),
+    reasoning: z.boolean().optional(),
+    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
     cost: z
       .object({
-        input: z.number(),
-        output: z.number(),
-        cacheRead: z.number(),
-        cacheWrite: z.number(),
+        input: z.number().optional(),
+        output: z.number().optional(),
+        cacheRead: z.number().optional(),
+        cacheWrite: z.number().optional(),
       })
-      .strict(),
-    contextWindow: z.number().positive(),
-    maxTokens: z.number().positive(),
+      .strict()
+      .optional(),
+    contextWindow: z.number().positive().optional(),
+    maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
   })
@@ -155,6 +127,117 @@ export const QueueDropSchema = z.union([
   z.literal("new"),
   z.literal("summarize"),
 ]);
+export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), z.literal("all")]);
+
+// GroupPolicySchema: controls how group messages are handled
+// Used with .default("allowlist").optional() pattern:
+//   - .optional() allows field omission in input config
+//   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
+export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
+
+export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+
+export const BlockStreamingCoalesceSchema = z
+  .object({
+    minChars: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    idleMs: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export const BlockStreamingChunkSchema = z
+  .object({
+    minChars: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    breakPreference: z
+      .union([z.literal("paragraph"), z.literal("newline"), z.literal("sentence")])
+      .optional(),
+  })
+  .strict();
+
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+
+export const MarkdownConfigSchema = z
+  .object({
+    tables: MarkdownTableModeSchema.optional(),
+  })
+  .strict()
+  .optional();
+
+export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsModeSchema = z.enum(["final", "all"]);
+export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
+export const TtsConfigSchema = z
+  .object({
+    auto: TtsAutoSchema.optional(),
+    enabled: z.boolean().optional(),
+    mode: TtsModeSchema.optional(),
+    provider: TtsProviderSchema.optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowText: z.boolean().optional(),
+        allowProvider: z.boolean().optional(),
+        allowVoice: z.boolean().optional(),
+        allowModelId: z.boolean().optional(),
+        allowVoiceSettings: z.boolean().optional(),
+        allowNormalization: z.boolean().optional(),
+        allowSeed: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    elevenlabs: z
+      .object({
+        apiKey: z.string().optional(),
+        baseUrl: z.string().optional(),
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+        seed: z.number().int().min(0).max(4294967295).optional(),
+        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+        languageCode: z.string().optional(),
+        voiceSettings: z
+          .object({
+            stability: z.number().min(0).max(1).optional(),
+            similarityBoost: z.number().min(0).max(1).optional(),
+            style: z.number().min(0).max(1).optional(),
+            useSpeakerBoost: z.boolean().optional(),
+            speed: z.number().min(0.5).max(2).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    openai: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    edge: z
+      .object({
+        enabled: z.boolean().optional(),
+        voice: z.string().optional(),
+        lang: z.string().optional(),
+        outputFormat: z.string().optional(),
+        pitch: z.string().optional(),
+        rate: z.string().optional(),
+        volume: z.string().optional(),
+        saveSubtitles: z.boolean().optional(),
+        proxy: z.string().optional(),
+        timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 
 export const HumanDelaySchema = z
   .object({
@@ -374,6 +457,36 @@ export const ToolsMediaSchema = z
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),
+  })
+  .strict()
+  .optional();
+
+export const LinkModelSchema = z
+  .object({
+    type: z.literal("cli").optional(),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const ToolsLinksSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxLinks: z.number().int().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    models: z.array(LinkModelSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
+
+export const ProviderCommandsSchema = z
+  .object({
+    native: NativeCommandsSettingSchema.optional(),
+    nativeSkills: NativeCommandsSettingSchema.optional(),
   })
   .strict()
   .optional();

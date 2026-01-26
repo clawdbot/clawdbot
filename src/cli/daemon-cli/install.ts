@@ -100,6 +100,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (json) warnings.push(message);
       else defaultRuntime.log(message);
     },
+    config: cfg,
   });
 
   try {

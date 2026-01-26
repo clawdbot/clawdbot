@@ -80,7 +80,7 @@ export async function ensureClawdbotModelsJson(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveClawdbotAgentDir();
 
   const explicitProviders = (cfg.models?.providers ?? {}) as Record<string, ProviderConfig>;
-  const implicitProviders = resolveImplicitProviders({ agentDir });
+  const implicitProviders = await resolveImplicitProviders({ agentDir });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,

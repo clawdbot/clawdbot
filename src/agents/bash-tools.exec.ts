@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -27,6 +27,7 @@ import {
 } from "../infra/shell-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo, logWarn } from "../logger.js";
+import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
 import {
   type ProcessSession,
   type SessionStdin,
@@ -362,23 +363,38 @@ async function runExecProcess(opts: {
   let stdin: SessionStdin | undefined;
 
   if (opts.sandbox) {
-    child = spawn(
-      "docker",
-      buildDockerExecArgs({
-        containerName: opts.sandbox.containerName,
-        command: opts.command,
-        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-        env: opts.env,
-        tty: opts.usePty,
-      }),
-      {
+    const { child: spawned } = await spawnWithFallback({
+      argv: [
+        "docker",
+        ...buildDockerExecArgs({
+          containerName: opts.sandbox.containerName,
+          command: opts.command,
+          workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+          env: opts.env,
+          tty: opts.usePty,
+        }),
+      ],
+      options: {
         cwd: opts.workdir,
         env: process.env,
         detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
-    ) as ChildProcessWithoutNullStreams;
+      fallbacks: [
+        {
+          label: "no-detach",
+          options: { detached: false },
+        },
+      ],
+      onFallback: (err, fallback) => {
+        const errText = formatSpawnError(err);
+        const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
+        logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
+        opts.warnings.push(warning);
+      },
+    });
+    child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
   } else if (opts.usePty) {
     const { shell, args: shellArgs } = getShellConfig();
@@ -422,24 +438,56 @@ async function runExecProcess(opts: {
       const warning = `Warning: PTY spawn failed (${errText}); retrying without PTY for \`${opts.command}\`.`;
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
-      child = spawn(shell, [...shellArgs, opts.command], {
+      const { child: spawned } = await spawnWithFallback({
+        argv: [shell, ...shellArgs, opts.command],
+        options: {
+          cwd: opts.workdir,
+          env: opts.env,
+          detached: process.platform !== "win32",
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        },
+        fallbacks: [
+          {
+            label: "no-detach",
+            options: { detached: false },
+          },
+        ],
+        onFallback: (fallbackErr, fallback) => {
+          const fallbackText = formatSpawnError(fallbackErr);
+          const fallbackWarning = `Warning: spawn failed (${fallbackText}); retrying with ${fallback.label}.`;
+          logWarn(`exec: spawn failed (${fallbackText}); retrying with ${fallback.label}.`);
+          opts.warnings.push(fallbackWarning);
+        },
+      });
+      child = spawned as ChildProcessWithoutNullStreams;
+      stdin = child.stdin;
+    }
+  } else {
+    const { shell, args: shellArgs } = getShellConfig();
+    const { child: spawned } = await spawnWithFallback({
+      argv: [shell, ...shellArgs, opts.command],
+      options: {
         cwd: opts.workdir,
         env: opts.env,
         detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-      }) as ChildProcessWithoutNullStreams;
-      stdin = child.stdin;
-    }
-  } else {
-    const { shell, args: shellArgs } = getShellConfig();
-    child = spawn(shell, [...shellArgs, opts.command], {
-      cwd: opts.workdir,
-      env: opts.env,
-      detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    }) as ChildProcessWithoutNullStreams;
+      },
+      fallbacks: [
+        {
+          label: "no-detach",
+          options: { detached: false },
+        },
+      ],
+      onFallback: (err, fallback) => {
+        const errText = formatSpawnError(err);
+        const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
+        logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
+        opts.warnings.push(warning);
+      },
+    });
+    child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
   }
 
@@ -791,7 +839,7 @@ export function createExecTool(
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
-      if (elevatedRequested) {
+      if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       const configuredAsk = defaults?.ask ?? "on-miss";

@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 
 import { formatToolDetail, resolveToolDisplay } from "../tool-display";
+import { icons } from "../icons";
 import type { ToolCard } from "../types/chat-types";
 import { TOOL_INLINE_THRESHOLD } from "./constants";
 import {
@@ -95,13 +96,13 @@ export function renderToolCardSidebar(
     >
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${display.emoji}</span>
+          <span class="chat-tool-card__icon">${icons[display.icon]}</span>
           <span>${display.label}</span>
         </div>
         ${canClick
-          ? html`<span class="chat-tool-card__action">${hasText ? "View ›" : "›"}</span>`
+          ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
           : nothing}
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">✓</span>` : nothing}
+        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
       </div>
       ${detail
         ? html`<div class="chat-tool-card__detail">${detail}</div>`

@@ -1,5 +1,6 @@
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type VerboseLevel = "off" | "on" | "full";
+export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
@@ -85,6 +86,16 @@ export function formatXHighModelHint(): string {
 
 // Normalize verbose flags used to toggle agent verbosity.
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+  if (!raw) return undefined;
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0"].includes(key)) return "off";
+  if (["full", "all", "everything"].includes(key)) return "full";
+  if (["on", "minimal", "true", "yes", "1"].includes(key)) return "on";
+  return undefined;
+}
+
+// Normalize system notice flags used to toggle system notifications.
+export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
   if (!raw) return undefined;
   const key = raw.toLowerCase();
   if (["off", "false", "no", "0"].includes(key)) return "off";

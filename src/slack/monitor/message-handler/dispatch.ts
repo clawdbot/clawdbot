@@ -141,7 +141,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   markDispatchIdle();
 
-  if (!queuedFinal) {
+  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+
+  if (!anyReplyDelivered) {
     if (prepared.isRoomish) {
       clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,

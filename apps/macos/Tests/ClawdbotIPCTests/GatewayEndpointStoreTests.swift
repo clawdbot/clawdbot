@@ -175,4 +175,10 @@ import Testing
             customBindHost: "192.168.1.10")
         #expect(host == "192.168.1.10")
     }
+
+    @Test func normalizeGatewayUrlAddsDefaultPortForWs() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway")
+        #expect(url?.port == 18789)
+        #expect(url?.absoluteString == "ws://gateway:18789")
+    }
 }

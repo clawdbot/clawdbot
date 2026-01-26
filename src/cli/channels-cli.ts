@@ -35,6 +35,9 @@ const optionNamesAdd = [
   "httpHost",
   "httpPort",
   "webhookPath",
+  "webhookUrl",
+  "audienceType",
+  "audience",
   "useEnv",
   "homeserver",
   "userId",
@@ -168,7 +171,10 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
-    .option("--webhook-path <path>", "BlueBubbles webhook path")
+    .option("--webhook-path <path>", "Webhook path (Google Chat/BlueBubbles)")
+    .option("--webhook-url <url>", "Google Chat webhook URL")
+    .option("--audience-type <type>", "Google Chat audience type (app-url|project-number)")
+    .option("--audience <value>", "Google Chat audience value (app URL or project number)")
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")

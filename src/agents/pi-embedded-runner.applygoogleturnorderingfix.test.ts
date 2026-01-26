@@ -72,7 +72,7 @@ const _makeOpenAiConfig = (modelIds: string[]) =>
   }) satisfies ClawdbotConfig;
 
 const _ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
-  ensureClawdbotModelsJson(cfg, agentDir);
+  ensureClawdbotModelsJson(cfg, agentDir) as unknown;
 
 const _textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;

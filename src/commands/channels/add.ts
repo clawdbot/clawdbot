@@ -33,6 +33,9 @@ export type ChannelsAddOptions = {
   httpHost?: string;
   httpPort?: string;
   webhookPath?: string;
+  webhookUrl?: string;
+  audienceType?: string;
+  audience?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;
@@ -198,6 +201,9 @@ export async function channelsAddCommand(
       httpHost: opts.httpHost,
       httpPort: opts.httpPort,
       webhookPath: opts.webhookPath,
+      webhookUrl: opts.webhookUrl,
+      audienceType: opts.audienceType,
+      audience: opts.audience,
       homeserver: opts.homeserver,
       userId: opts.userId,
       accessToken: opts.accessToken,
@@ -238,6 +244,9 @@ export async function channelsAddCommand(
     httpHost: opts.httpHost,
     httpPort: opts.httpPort,
     webhookPath: opts.webhookPath,
+    webhookUrl: opts.webhookUrl,
+    audienceType: opts.audienceType,
+    audience: opts.audience,
     homeserver: opts.homeserver,
     userId: opts.userId,
     accessToken: opts.accessToken,

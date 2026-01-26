@@ -100,7 +100,12 @@ export function formatTargetDisplay(params: {
   if (!trimmedTarget) return trimmedTarget;
   if (trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) return trimmedTarget;
 
-  const withoutPrefix = trimmedTarget.replace(/^telegram:/i, "");
+  const channelPrefix = `${params.channel}:`;
+  const withoutProvider = trimmedTarget.toLowerCase().startsWith(channelPrefix)
+    ? trimmedTarget.slice(channelPrefix.length)
+    : trimmedTarget;
+
+  const withoutPrefix = withoutProvider.replace(/^telegram:/i, "");
   if (/^channel:/i.test(withoutPrefix)) {
     return `#${withoutPrefix.replace(/^channel:/i, "")}`;
   }
@@ -119,14 +124,23 @@ function preserveTargetCase(channel: ChannelId, raw: string, normalized: string)
   return trimmed;
 }
 
-function detectTargetKind(raw: string, preferred?: TargetResolveKind): TargetResolveKind {
+function detectTargetKind(
+  channel: ChannelId,
+  raw: string,
+  preferred?: TargetResolveKind,
+): TargetResolveKind {
   if (preferred) return preferred;
   const trimmed = raw.trim();
   if (!trimmed) return "group";
+
   if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) return "user";
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
-    return "group";
+  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) return "group";
+
+  // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
+  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
+    return "user";
   }
+
   return "group";
 }
 
@@ -282,7 +296,7 @@ export async function resolveMessagingTarget(params: {
   const plugin = getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
-  const kind = detectTargetKind(raw, params.preferredKind);
+  const kind = detectTargetKind(params.channel, raw, params.preferredKind);
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
   const looksLikeTargetId = (): boolean => {
     const trimmed = raw.trim();
@@ -291,7 +305,12 @@ export async function resolveMessagingTarget(params: {
     if (lookup) return lookup(trimmed, normalized);
     if (/^(channel|group|user):/i.test(trimmed)) return true;
     if (/^[@#]/.test(trimmed)) return true;
-    if (/^\+?\d{6,}$/.test(trimmed)) return true;
+    if (/^\+?\d{6,}$/.test(trimmed)) {
+      // BlueBubbles/iMessage phone numbers should usually resolve via the directory to a DM chat,
+      // otherwise the provider may pick an existing group containing that handle.
+      if (params.channel === "bluebubbles" || params.channel === "imessage") return false;
+      return true;
+    }
     if (trimmed.includes("@thread")) return true;
     if (/^(conversation|user):/i.test(trimmed)) return true;
     return false;
@@ -353,6 +372,24 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
+  // For iMessage-style channels, allow sending directly to the normalized handle
+  // even if the directory doesn't contain an entry yet.
+  if (
+    (params.channel === "bluebubbles" || params.channel === "imessage") &&
+    /^\+?\d{6,}$/.test(query)
+  ) {
+    const directTarget = preserveTargetCase(params.channel, raw, normalized);
+    return {
+      ok: true,
+      target: {
+        to: directTarget,
+        kind,
+        display: stripTargetPrefixes(raw),
+        source: "normalized",
+      },
+    };
+  }
+
   return {
     ok: false,
     error: unknownTargetError(providerLabel, raw, hint),
@@ -367,16 +404,32 @@ export async function lookupDirectoryDisplay(params: {
   runtime?: RuntimeEnv;
 }): Promise<string | undefined> {
   const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
-  const candidates = await getDirectoryEntries({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: "group",
-    runtime: params.runtime,
-    preferLiveOnMiss: false,
-  });
-  const entry = candidates.find(
-    (candidate) => normalizeDirectoryEntryId(params.channel, candidate) === normalized,
-  );
+
+  // Targets can resolve to either peers (DMs) or groups. Try both.
+  const [groups, users] = await Promise.all([
+    getDirectoryEntries({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      kind: "group",
+      runtime: params.runtime,
+      preferLiveOnMiss: false,
+    }),
+    getDirectoryEntries({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      kind: "user",
+      runtime: params.runtime,
+      preferLiveOnMiss: false,
+    }),
+  ]);
+
+  const findMatch = (candidates: ChannelDirectoryEntry[]) =>
+    candidates.find(
+      (candidate) => normalizeDirectoryEntryId(params.channel, candidate) === normalized,
+    );
+
+  const entry = findMatch(groups) ?? findMatch(users);
   return entry?.name ?? entry?.handle ?? undefined;
 }

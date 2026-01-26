@@ -55,11 +55,13 @@ export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): 
 export async function resolveTailnetDnsHint(opts?: {
   env?: NodeJS.ProcessEnv;
   exec?: typeof runExec;
+  enabled?: boolean;
 }): Promise<string | undefined> {
   const env = opts?.env ?? process.env;
   const envRaw = env.CLAWDBOT_TAILNET_DNS?.trim();
   const envValue = envRaw && envRaw.length > 0 ? envRaw.replace(/\.$/, "") : "";
   if (envValue) return envValue;
+  if (opts?.enabled === false) return undefined;
 
   const exec =
     opts?.exec ??

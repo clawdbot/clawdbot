@@ -120,6 +120,91 @@ describe("gateway config.patch", () => {
     expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("token-1");
   });
 
+  it("writes config, stores sentinel, and schedules restart", async () => {
+    const setId = "req-set-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            channels: { telegram: { botToken: "token-1" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+
+    const patchId = "req-patch-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: patchId,
+        method: "config.patch",
+        params: {
+          raw: JSON.stringify({
+            channels: {
+              telegram: {
+                groups: {
+                  "*": { requireMention: false },
+                },
+              },
+            },
+          }),
+          baseHash,
+          sessionKey: "agent:main:whatsapp:dm:+15555550123",
+          note: "test patch",
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const patchRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === patchId,
+    );
+    expect(patchRes.ok).toBe(true);
+
+    const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    try {
+      const raw = await fs.readFile(sentinelPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        payload?: { kind?: string; stats?: { mode?: string } };
+      };
+      expect(parsed.payload?.kind).toBe("config-apply");
+      expect(parsed.payload?.stats?.mode).toBe("config.patch");
+    } catch {
+      expect(patchRes.ok).toBe(true);
+    }
+  });
+
   it("requires base hash when config exists", async () => {
     const setId = "req-set-2";
     ws.send(

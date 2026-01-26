@@ -1,6 +1,14 @@
 import { createRequire } from "node:module";
 
-import { chunkMarkdownText, chunkText, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import {
+  chunkByNewline,
+  chunkMarkdownText,
+  chunkMarkdownTextWithMode,
+  chunkText,
+  chunkTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
 import {
   hasControlCommand,
   isControlCommandMessage,
@@ -33,6 +41,7 @@ import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/a
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
+import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
 import { monitorWebChannel } from "../../channels/web/index.js";
@@ -115,6 +124,26 @@ import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import { registerMemoryCli } from "../../cli/memory-cli.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
+import { textToSpeechTelephony } from "../../tts/tts.js";
+import {
+  listLineAccountIds,
+  normalizeAccountId as normalizeLineAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../../line/accounts.js";
+import { probeLineBot } from "../../line/probe.js";
+import {
+  createQuickReplyItems,
+  pushMessageLine,
+  pushMessagesLine,
+  pushFlexMessage,
+  pushTemplateMessage,
+  pushLocationMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "../../line/send.js";
+import { monitorLineProvider } from "../../line/monitor.js";
+import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
 
 import type { PluginRuntime } from "./types.js";
 
@@ -153,6 +182,9 @@ export function createPluginRuntime(): PluginRuntime {
       getImageMetadata,
       resizeToJpeg,
     },
+    tts: {
+      textToSpeechTelephony,
+    },
     tools: {
       createMemoryGetTool,
       createMemorySearchTool,
@@ -160,8 +192,12 @@ export function createPluginRuntime(): PluginRuntime {
     },
     channel: {
       text: {
+        chunkByNewline,
         chunkMarkdownText,
+        chunkMarkdownTextWithMode,
         chunkText,
+        chunkTextWithMode,
+        resolveChunkMode,
         resolveTextChunkLimit,
         hasControlCommand,
         resolveMarkdownTableMode,
@@ -259,6 +295,7 @@ export function createPluginRuntime(): PluginRuntime {
         probeSignal,
         sendMessageSignal,
         monitorSignalProvider,
+        messageActions: signalMessageActions,
       },
       imessage: {
         monitorIMessageProvider,
@@ -280,6 +317,23 @@ export function createPluginRuntime(): PluginRuntime {
         monitorWebChannel,
         handleWhatsAppAction,
         createLoginTool: createWhatsAppLoginTool,
+      },
+      line: {
+        listLineAccountIds,
+        resolveDefaultLineAccountId,
+        resolveLineAccount,
+        normalizeAccountId: normalizeLineAccountId,
+        probeLineBot,
+        sendMessageLine,
+        pushMessageLine,
+        pushMessagesLine,
+        pushFlexMessage,
+        pushTemplateMessage,
+        pushLocationMessage,
+        pushTextMessageWithQuickReplies,
+        createQuickReplyItems,
+        buildTemplateMessageFromPayload,
+        monitorLineProvider,
       },
     },
     logging: {

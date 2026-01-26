@@ -7,12 +7,19 @@ import type { FailoverReason } from "./types.js";
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) return false;
   const lower = errorMessage.toLowerCase();
+  const hasRequestSizeExceeds = lower.includes("request size exceeds");
+  const hasContextWindow =
+    lower.includes("context window") ||
+    lower.includes("context length") ||
+    lower.includes("maximum context length");
   return (
     lower.includes("request_too_large") ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
+    lower.includes("exceeds model context window") ||
+    (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow") ||
     (lower.includes("413") && lower.includes("too large"))
   );
@@ -68,6 +75,29 @@ const HTTP_ERROR_HINTS = [
 function stripFinalTagsFromText(text: string): string {
   if (!text) return text;
   return text.replace(FINAL_TAG_RE, "");
+}
+
+function collapseConsecutiveDuplicateBlocks(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+  const blocks = trimmed.split(/\n{2,}/);
+  if (blocks.length < 2) return text;
+
+  const normalizeBlock = (value: string) => value.trim().replace(/\s+/g, " ");
+  const result: string[] = [];
+  let lastNormalized: string | null = null;
+
+  for (const block of blocks) {
+    const normalized = normalizeBlock(block);
+    if (lastNormalized && normalized === lastNormalized) {
+      continue;
+    }
+    result.push(block.trim());
+    lastNormalized = normalized;
+  }
+
+  if (result.length === blocks.length) return text;
+  return result.join("\n\n");
 }
 
 function isLikelyHttpErrorText(raw: string): boolean {
@@ -320,7 +350,7 @@ export function sanitizeUserFacingText(text: string): string {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
-  return stripped;
+  return collapseConsecutiveDuplicateBlocks(stripped);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

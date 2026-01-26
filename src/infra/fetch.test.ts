@@ -3,6 +3,20 @@ import { describe, expect, it, vi } from "vitest";
 import { wrapFetchWithAbortSignal } from "./fetch.js";
 
 describe("wrapFetchWithAbortSignal", () => {
+  it("adds duplex for requests with a body", async () => {
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenInit = init;
+      return {} as Response;
+    });
+
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    await wrapped("https://example.com", { method: "POST", body: "hi" });
+
+    expect(seenInit?.duplex).toBe("half");
+  });
+
   it("converts foreign abort signals to native controllers", async () => {
     let seenSignal: AbortSignal | undefined;
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

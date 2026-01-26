@@ -41,6 +41,26 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "messages.tts.enabled->auto",
+    describe: "Move messages.tts.enabled to messages.tts.auto",
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      const tts = getRecord(messages?.tts);
+      if (!tts) return;
+      if (tts.auto !== undefined) {
+        if ("enabled" in tts) {
+          delete tts.enabled;
+          changes.push("Removed messages.tts.enabled (messages.tts.auto already set).");
+        }
+        return;
+      }
+      if (typeof tts.enabled !== "boolean") return;
+      tts.auto = tts.enabled ? "always" : "off";
+      delete tts.enabled;
+      changes.push(`Moved messages.tts.enabled → messages.tts.auto (${String(tts.auto)}).`);
+    },
+  },
+  {
     id: "agent.defaults-v2",
     describe: "Move agent config to agents.defaults and tools",
     apply: (raw, changes) => {

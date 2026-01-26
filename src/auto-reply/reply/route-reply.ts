@@ -33,6 +33,8 @@ export type RouteReplyParams = {
   cfg: ClawdbotConfig;
   /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
+  /** Mirror reply into session transcript (default: true when sessionKey is set). */
+  mirror?: boolean;
 };
 
 export type RouteReplyResult = {
@@ -118,14 +120,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       abortSignal,
-      mirror: params.sessionKey
-        ? {
-            sessionKey: params.sessionKey,
-            agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
-            text,
-            mediaUrls,
-          }
-        : undefined,
+      mirror:
+        params.mirror !== false && params.sessionKey
+          ? {
+              sessionKey: params.sessionKey,
+              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+              text,
+              mediaUrls,
+            }
+          : undefined,
     });
 
     const last = results.at(-1);

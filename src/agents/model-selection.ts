@@ -131,14 +131,24 @@ export function resolveConfiguredModelRef(params: {
       cfg: params.cfg,
       defaultProvider: params.defaultProvider,
     });
+    if (!trimmed.includes("/")) {
+      const aliasKey = normalizeAliasKey(trimmed);
+      const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+      if (aliasMatch) return aliasMatch.ref;
+
+      // Default to anthropic if no provider is specified, but warn as this is deprecated.
+      console.warn(
+        `[clawdbot] Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
+      );
+      return { provider: "anthropic", model: trimmed };
+    }
+
     const resolved = resolveModelRefFromString({
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
     if (resolved) return resolved.ref;
-    // TODO(steipete): drop this fallback once provider-less agents.defaults.model is fully deprecated.
-    return { provider: "anthropic", model: trimmed };
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
 }

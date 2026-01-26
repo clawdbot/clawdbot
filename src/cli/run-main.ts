@@ -11,7 +11,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
-import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
+import { getPrimaryCommand } from "./argv.js";
 import { tryRouteCli } from "./route.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
@@ -50,12 +50,11 @@ export async function runCli(argv: string[] = process.argv) {
   });
 
   const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
-  if (hasHelpOrVersion(parseArgv)) {
-    const primary = getPrimaryCommand(parseArgv);
-    if (primary) {
-      const { registerSubCliByName } = await import("./program/register.subclis.js");
-      await registerSubCliByName(program, primary);
-    }
+  // Register the primary subcommand if one exists (for lazy-loading)
+  const primary = getPrimaryCommand(parseArgv);
+  if (primary) {
+    const { registerSubCliByName } = await import("./program/register.subclis.js");
+    await registerSubCliByName(program, primary);
   }
   await program.parseAsync(parseArgv);
 }

@@ -12,6 +12,7 @@ import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -154,10 +155,7 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = {
-  /** Text response to send back to the user */
-  text: string;
-};
+export type PluginCommandResult = ReplyPayload;
 
 /**
  * Handler function for plugin commands.
@@ -186,6 +184,11 @@ export type ClawdbotPluginHttpHandler = (
   req: IncomingMessage,
   res: ServerResponse,
 ) => Promise<boolean> | boolean;
+
+export type ClawdbotPluginHttpRouteHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<void> | void;
 
 export type ClawdbotPluginCliContext = {
   program: Command;
@@ -249,6 +252,7 @@ export type ClawdbotPluginApi = {
     opts?: ClawdbotPluginHookOptions,
   ) => void;
   registerHttpHandler: (handler: ClawdbotPluginHttpHandler) => void;
+  registerHttpRoute: (params: { path: string; handler: ClawdbotPluginHttpRouteHandler }) => void;
   registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: ClawdbotPluginCliRegistrar, opts?: { commands?: string[] }) => void;

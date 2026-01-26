@@ -6,9 +6,10 @@ read_when:
 # Elevated Mode (/elevated directives)
 
 ## What it does
-- `/elevated on` is a **shortcut** for `exec.host=gateway` + `exec.security=full` (approvals still apply).
+- `/elevated on` runs on the gateway host and keeps exec approvals (same as `/elevated ask`).
 - `/elevated full` runs on the gateway host **and** auto-approves exec (skips exec approvals).
 - `/elevated ask` runs on the gateway host but keeps exec approvals (same as `/elevated on`).
+- `on`/`ask` do **not** force `exec.security=full`; configured security/ask policy still applies.
 - Only changes behavior when the agent is **sandboxed** (otherwise exec already runs on the host).
 - Directive forms: `/elevated on|off|ask|full`, `/elev on|off|ask|full`.
 - Only `on|off|ask|full` are accepted; anything else returns a hint and does not change state.
@@ -18,8 +19,8 @@ read_when:
 - **Per-session state**: `/elevated on|off|ask|full` sets the elevated level for the current session key.
 - **Inline directive**: `/elevated on|ask|full` inside a message applies to that message only.
 - **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
-- **Host execution**: elevated forces `exec` onto the gateway host with full security.
-- **Approvals**: `full` skips exec approvals; `on`/`ask` still honor them.
+- **Host execution**: elevated forces `exec` onto the gateway host; `full` also sets `security=full`.
+- **Approvals**: `full` skips exec approvals; `on`/`ask` honor them when allowlist/ask rules require.
 - **Unsandboxed agents**: no-op for location; only affects gating, logging, and status.
 - **Tool policy still applies**: if `exec` is denied by tool policy, elevated cannot be used.
 

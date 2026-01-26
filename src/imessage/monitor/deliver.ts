@@ -1,4 +1,4 @@
-import { chunkText } from "../../auto-reply/chunk.js";
+import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
@@ -23,13 +23,14 @@ export async function deliverReplies(params: {
     channel: "imessage",
     accountId,
   });
+  const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const text = convertMarkdownTables(rawText, tableMode);
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(text, textLimit)) {
+      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         await sendMessageIMessage(target, chunk, {
           maxBytes,
           client,

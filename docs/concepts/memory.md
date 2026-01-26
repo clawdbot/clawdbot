@@ -31,6 +31,8 @@ These files live under the workspace (`agents.defaults.workspace`, default
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
 - Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
 - If someone says "remember this," write it down (do not keep it in RAM).
+- This area is still evolving. It helps to remind the model to store memories; it will know what to do.
+- If you want something to stick, **ask the bot to write it** into memory.
 
 ## Automatic memory flush (pre-compaction ping)
 

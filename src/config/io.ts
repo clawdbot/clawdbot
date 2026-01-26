@@ -24,6 +24,7 @@ import {
 } from "./defaults.js";
 import { VERSION } from "../version.js";
 import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
@@ -149,24 +150,7 @@ function warnIfConfigFromFuture(cfg: ClawdbotConfig, logger: Pick<typeof console
 }
 
 function applyConfigEnv(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): void {
-  const envConfig = cfg.env;
-  if (!envConfig) return;
-
-  const entries: Record<string, string> = {};
-
-  if (envConfig.vars) {
-    for (const [key, value] of Object.entries(envConfig.vars)) {
-      if (!value) continue;
-      entries[key] = value;
-    }
-  }
-
-  for (const [key, value] of Object.entries(envConfig)) {
-    if (key === "shellEnv" || key === "vars") continue;
-    if (typeof value !== "string" || !value.trim()) continue;
-    entries[key] = value;
-  }
-
+  const entries = collectConfigEnvVars(cfg);
   for (const [key, value] of Object.entries(entries)) {
     if (env[key]?.trim()) continue;
     env[key] = value;
@@ -226,6 +210,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
         parseJson: (raw) => deps.json5.parse(raw),
       });
+
+      // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars
+      if (resolved && typeof resolved === "object" && "env" in resolved) {
+        applyConfigEnv(resolved as ClawdbotConfig, deps.env);
+      }
 
       // Substitute ${VAR} env var references
       const substituted = resolveConfigEnvVars(resolved, deps.env);
@@ -379,6 +368,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           warnings: [],
           legacyIssues: [],
         };
+      }
+
+      // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars
+      if (resolved && typeof resolved === "object" && "env" in resolved) {
+        applyConfigEnv(resolved as ClawdbotConfig, deps.env);
       }
 
       // Substitute ${VAR} env var references

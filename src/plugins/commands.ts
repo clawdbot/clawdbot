@@ -6,7 +6,11 @@
  */
 
 import type { ClawdbotConfig } from "../config/config.js";
-import type { ClawdbotPluginCommandDefinition, PluginCommandContext } from "./types.js";
+import type {
+  ClawdbotPluginCommandDefinition,
+  PluginCommandContext,
+  PluginCommandResult,
+} from "./types.js";
 import { logVerbose } from "../globals.js";
 
 type RegisteredPluginCommand = ClawdbotPluginCommandDefinition & {
@@ -218,7 +222,7 @@ export async function executePluginCommand(params: {
   isAuthorizedSender: boolean;
   commandBody: string;
   config: ClawdbotConfig;
-}): Promise<{ text: string }> {
+}): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
   // Check authorization
@@ -249,7 +253,7 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
-    return { text: result.text };
+    return result;
   } catch (err) {
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);

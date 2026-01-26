@@ -10,6 +10,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
+import { resolveGatewayListenHosts } from "./net.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -38,11 +39,14 @@ export async function createGatewayRuntimeState(params: {
   canvasHostEnabled: boolean;
   allowCanvasHostInTests?: boolean;
   logCanvas: { info: (msg: string) => void; warn: (msg: string) => void };
+  log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
 }): Promise<{
   canvasHost: CanvasHostHandler | null;
   httpServer: HttpServer;
+  httpServers: HttpServer[];
+  httpBindHosts: string[];
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   broadcast: (
@@ -100,30 +104,49 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
-  const httpServer = createGatewayHttpServer({
-    canvasHost,
-    controlUiEnabled: params.controlUiEnabled,
-    controlUiBasePath: params.controlUiBasePath,
-    openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
-    openResponsesEnabled: params.openResponsesEnabled,
-    openResponsesConfig: params.openResponsesConfig,
-    handleHooksRequest,
-    handlePluginRequest,
-    resolvedAuth: params.resolvedAuth,
-    tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-  });
-
-  await listenGatewayHttpServer({
-    httpServer,
-    bindHost: params.bindHost,
-    port: params.port,
-  });
+  const bindHosts = await resolveGatewayListenHosts(params.bindHost);
+  const httpServers: HttpServer[] = [];
+  const httpBindHosts: string[] = [];
+  for (const host of bindHosts) {
+    const httpServer = createGatewayHttpServer({
+      canvasHost,
+      controlUiEnabled: params.controlUiEnabled,
+      controlUiBasePath: params.controlUiBasePath,
+      openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
+      openResponsesEnabled: params.openResponsesEnabled,
+      openResponsesConfig: params.openResponsesConfig,
+      handleHooksRequest,
+      handlePluginRequest,
+      resolvedAuth: params.resolvedAuth,
+      tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+    });
+    try {
+      await listenGatewayHttpServer({
+        httpServer,
+        bindHost: host,
+        port: params.port,
+      });
+      httpServers.push(httpServer);
+      httpBindHosts.push(host);
+    } catch (err) {
+      if (host === bindHosts[0]) throw err;
+      params.log.warn(
+        `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+      );
+    }
+  }
+  const httpServer = httpServers[0];
+  if (!httpServer) {
+    throw new Error("Gateway HTTP server failed to start");
+  }
 
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
   });
-  attachGatewayUpgradeHandler({ httpServer, wss, canvasHost });
+  for (const server of httpServers) {
+    attachGatewayUpgradeHandler({ httpServer: server, wss, canvasHost });
+  }
 
   const clients = new Set<GatewayWsClient>();
   const { broadcast } = createGatewayBroadcaster({ clients });
@@ -140,6 +163,8 @@ export async function createGatewayRuntimeState(params: {
   return {
     canvasHost,
     httpServer,
+    httpServers,
+    httpBindHosts,
     wss,
     clients,
     broadcast,

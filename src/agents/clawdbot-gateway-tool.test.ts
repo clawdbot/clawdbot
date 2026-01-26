@@ -89,6 +89,32 @@ describe("gateway tool", () => {
     );
   });
 
+  it("passes config.patch through gateway call", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = createClawdbotTools({
+      agentSessionKey: "agent:main:whatsapp:dm:+15555550123",
+    }).find((candidate) => candidate.name === "gateway");
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error("missing gateway tool");
+
+    const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
+    await tool.execute("call4", {
+      action: "config.patch",
+      raw,
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({
+        raw: raw.trim(),
+        baseHash: "hash-1",
+        sessionKey: "agent:main:whatsapp:dm:+15555550123",
+      }),
+    );
+  });
+
   it("passes update.run through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const tool = createClawdbotTools({

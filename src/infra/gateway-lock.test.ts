@@ -7,12 +7,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 
 async function makeEnv() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gateway-lock-"));
   const configPath = path.join(dir, "clawdbot.json");
   await fs.writeFile(configPath, "{}", "utf8");
+  await fs.mkdir(resolveGatewayLockDir(), { recursive: true });
   return {
     env: {
       ...process.env,
@@ -29,7 +30,8 @@ function resolveLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
-  return { lockPath: path.join(stateDir, `gateway.${hash}.lock`), configPath };
+  const lockDir = resolveGatewayLockDir();
+  return { lockPath: path.join(lockDir, `gateway.${hash}.lock`), configPath };
 }
 
 function makeProcStat(pid: number, startTime: number) {

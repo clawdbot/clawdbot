@@ -19,6 +19,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "google-gemini-cli": "google-gemini-cli",
   "zai-api-key": "zai",
   "synthetic-api-key": "synthetic",
+  "venice-api-key": "venice",
   "github-copilot": "github-copilot",
   "copilot-proxy": "copilot-proxy",
   "minimax-cloud": "minimax",

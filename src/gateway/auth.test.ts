@@ -142,4 +142,19 @@ describe("gateway auth", () => {
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
   });
+
+  it("treats trusted proxy loopback clients as direct", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: true },
+      connectAuth: null,
+      trustedProxies: ["10.0.0.2"],
+      req: {
+        socket: { remoteAddress: "10.0.0.2" },
+        headers: { host: "localhost", "x-forwarded-for": "127.0.0.1" },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
 });

@@ -23,11 +23,8 @@ beforeEach(() => {
 });
 
 describe("monitorSlackProvider tool results", () => {
-  it("sends tool summaries with responsePrefix", async () => {
-    replyMock.mockImplementation(async (_ctx, opts) => {
-      await opts?.onToolResult?.({ text: "tool update" });
-      return { text: "final reply" };
-    });
+  it("skips tool summaries with responsePrefix", async () => {
+    replyMock.mockResolvedValue({ text: "final reply" });
 
     const controller = new AbortController();
     const run = monitorSlackProvider({
@@ -55,9 +52,8 @@ describe("monitorSlackProvider tool results", () => {
     controller.abort();
     await run;
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
-    expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
   it("drops events with mismatched api_app_id", async () => {
@@ -130,10 +126,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    replyMock.mockImplementation(async (_ctx, opts) => {
-      await opts?.onToolResult?.({ text: "tool update" });
-      return { text: "final reply" };
-    });
+    replyMock.mockResolvedValue({ text: "final reply" });
 
     const controller = new AbortController();
     const run = monitorSlackProvider({
@@ -161,9 +154,8 @@ describe("monitorSlackProvider tool results", () => {
     controller.abort();
     await run;
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock.mock.calls[0][1]).toBe("tool update");
-    expect(sendMock.mock.calls[1][1]).toBe("final reply");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("final reply");
   });
 
   it("preserves RawBody without injecting processed room history", async () => {

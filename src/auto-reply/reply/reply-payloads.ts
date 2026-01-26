@@ -45,7 +45,8 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
     payload.text ||
     payload.mediaUrl ||
     (payload.mediaUrls && payload.mediaUrls.length > 0) ||
-    payload.audioAsVoice,
+    payload.audioAsVoice ||
+    payload.channelData,
   );
 }
 

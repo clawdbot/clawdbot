@@ -38,6 +38,8 @@ export interface RealtimeSTTSession {
   onPartial(callback: (partial: string) => void): void;
   /** Set callback for final transcripts */
   onTranscript(callback: (transcript: string) => void): void;
+  /** Set callback when speech starts (VAD) */
+  onSpeechStart(callback: () => void): void;
   /** Close the session */
   close(): void;
   /** Check if session is connected */
@@ -91,6 +93,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
   private pendingTranscript = "";
   private onTranscriptCallback: ((transcript: string) => void) | null = null;
   private onPartialCallback: ((partial: string) => void) | null = null;
+  private onSpeechStartCallback: (() => void) | null = null;
 
   constructor(
     private readonly apiKey: string,
@@ -243,6 +246,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
       case "input_audio_buffer.speech_started":
         console.log("[RealtimeSTT] Speech started");
         this.pendingTranscript = "";
+        this.onSpeechStartCallback?.();
         break;
 
       case "error":
@@ -271,6 +275,10 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
   onTranscript(callback: (transcript: string) => void): void {
     this.onTranscriptCallback = callback;
+  }
+
+  onSpeechStart(callback: () => void): void {
+    this.onSpeechStartCallback = callback;
   }
 
   async waitForTranscript(timeoutMs = 30000): Promise<string> {

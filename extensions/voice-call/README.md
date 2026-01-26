@@ -75,6 +75,27 @@ Notes:
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 
+## TTS for calls
+
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+same shape — overrides deep-merge with `messages.tts`.
+
+```json5
+{
+  tts: {
+    provider: "openai",
+    openai: {
+      voice: "alloy"
+    }
+  }
+}
+```
+
+Notes:
+- Edge TTS is ignored for voice calls (telephony audio needs PCM; Edge output is unreliable).
+- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+
 ## CLI
 
 ```bash

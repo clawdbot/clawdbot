@@ -1,0 +1,25 @@
+# ShellCheck configuration
+# https://www.shellcheck.net/wiki/
+
+# Disable common false positives and style suggestions
+
+# SC2034: Variable appears unused (often exported or used indirectly)
+disable=SC2034
+
+# SC2155: Declare and assign separately (common idiom, rarely causes issues)
+disable=SC2155
+
+# SC2295: Expansions inside ${..} need quoting (info-level, rarely causes issues)
+disable=SC2295
+
+# SC1012: \r is literal (tr -d '\r' works as intended on most systems)
+disable=SC1012
+
+# SC2026: Word outside quotes (info-level, often intentional)
+disable=SC2026
+
+# SC2016: Expressions don't expand in single quotes (often intentional in sed/awk)
+disable=SC2016
+
+# SC2129: Consider using { cmd1; cmd2; } >> file (style preference)
+disable=SC2129

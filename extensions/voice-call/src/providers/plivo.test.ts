@@ -26,4 +26,3 @@ describe("PlivoProvider", () => {
     expect(result.providerResponseBody).toContain('length="300"');
   });
 });
-

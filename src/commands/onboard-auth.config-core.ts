@@ -4,6 +4,12 @@ import {
   SYNTHETIC_DEFAULT_MODEL_REF,
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
+import {
+  buildVeniceModelDefinition,
+  VENICE_BASE_URL,
+  VENICE_DEFAULT_MODEL_REF,
+  VENICE_MODEL_CATALOG,
+} from "../agents/venice-models.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -324,6 +330,81 @@ export function applySyntheticConfig(cfg: ClawdbotConfig): ClawdbotConfig {
               }
             : undefined),
           primary: SYNTHETIC_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply Venice provider configuration without changing the default model.
+ * Registers Venice models and sets up the provider, but preserves existing model selection.
+ */
+export function applyVeniceProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[VENICE_DEFAULT_MODEL_REF] = {
+    ...models[VENICE_DEFAULT_MODEL_REF],
+    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.venice;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...veniceModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.venice = {
+    ...existingProviderRest,
+    baseUrl: VENICE_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : veniceModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Venice provider configuration AND set Venice as the default model.
+ * Use this when Venice is the primary provider choice during onboarding.
+ */
+export function applyVeniceConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyVeniceProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: VENICE_DEFAULT_MODEL_REF,
         },
       },
     },

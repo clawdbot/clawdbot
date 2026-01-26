@@ -6,6 +6,7 @@ import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
+import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -21,13 +22,16 @@ export function normalizeReplyPayload(
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
   const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
+  const hasChannelData = Boolean(
+    payload.channelData && Object.keys(payload.channelData).length > 0,
+  );
   const trimmed = payload.text?.trim() ?? "";
-  if (!trimmed && !hasMedia) return null;
+  if (!trimmed && !hasMedia && !hasChannelData) return null;
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
-    if (!hasMedia) return null;
+    if (!hasMedia && !hasChannelData) return null;
     text = "";
   }
   if (text && !trimmed) {
@@ -39,14 +43,21 @@ export function normalizeReplyPayload(
   if (shouldStripHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     if (stripped.didStrip) opts.onHeartbeatStrip?.();
-    if (stripped.shouldSkip && !hasMedia) return null;
+    if (stripped.shouldSkip && !hasMedia && !hasChannelData) return null;
     text = stripped.text;
   }
 
   if (text) {
     text = sanitizeUserFacingText(text);
   }
-  if (!text?.trim() && !hasMedia) return null;
+  if (!text?.trim() && !hasMedia && !hasChannelData) return null;
+
+  // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
+  let enrichedPayload: ReplyPayload = { ...payload, text };
+  if (text && hasLineDirectives(text)) {
+    enrichedPayload = parseLineDirectives(enrichedPayload);
+    text = enrichedPayload.text;
+  }
 
   // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
@@ -62,5 +73,5 @@ export function normalizeReplyPayload(
     text = `${effectivePrefix} ${text}`;
   }
 
-  return { ...payload, text };
+  return { ...enrichedPayload, text };
 }

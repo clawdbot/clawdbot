@@ -257,17 +257,72 @@ export async function resolveChatGuidForTarget(params: {
           return guid;
         }
         if (!participantMatch && guid) {
-          const participants = extractParticipantAddresses(chat).map((entry) =>
-            normalizeBlueBubblesHandle(entry),
-          );
-          if (participants.includes(normalizedHandle)) {
-            participantMatch = guid;
+          // Only consider DM chats (`;-;` separator) as participant matches.
+          // Group chats (`;+;` separator) should never match when searching by handle/phone.
+          // This prevents routing "send to +1234567890" to a group chat that contains that number.
+          const isDmChat = guid.includes(";-;");
+          if (isDmChat) {
+            const participants = extractParticipantAddresses(chat).map((entry) =>
+              normalizeBlueBubblesHandle(entry),
+            );
+            if (participants.includes(normalizedHandle)) {
+              participantMatch = guid;
+            }
           }
         }
       }
     }
   }
   return participantMatch;
+}
+
+/**
+ * Creates a new chat (DM) and optionally sends an initial message.
+ * Requires Private API to be enabled in BlueBubbles.
+ */
+async function createNewChatWithMessage(params: {
+  baseUrl: string;
+  password: string;
+  address: string;
+  message: string;
+  timeoutMs?: number;
+}): Promise<BlueBubblesSendResult> {
+  const url = buildBlueBubblesApiUrl({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/chat/new",
+    password: params.password,
+  });
+  const payload = {
+    addresses: [params.address],
+    message: params.message,
+  };
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    params.timeoutMs,
+  );
+  if (!res.ok) {
+    const errorText = await res.text();
+    // Check for Private API not enabled error
+    if (res.status === 400 || res.status === 403 || errorText.toLowerCase().includes("private api")) {
+      throw new Error(
+        `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,
+      );
+    }
+    throw new Error(`BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`);
+  }
+  const body = await res.text();
+  if (!body) return { messageId: "ok" };
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return { messageId: extractMessageId(parsed) };
+  } catch {
+    return { messageId: "ok" };
+  }
 }
 
 export async function sendMessageBlueBubbles(
@@ -297,6 +352,17 @@ export async function sendMessageBlueBubbles(
     target,
   });
   if (!chatGuid) {
+    // If target is a phone number/handle and no existing chat found,
+    // auto-create a new DM chat using the /api/v1/chat/new endpoint
+    if (target.kind === "handle") {
+      return createNewChatWithMessage({
+        baseUrl,
+        password,
+        address: target.address,
+        message: trimmedText,
+        timeoutMs: opts.timeoutMs,
+      });
+    }
     throw new Error(
       "BlueBubbles send failed: chatGuid not found for target. Use a chat_guid target or ensure the chat exists.",
     );

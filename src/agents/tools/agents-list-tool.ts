@@ -19,7 +19,11 @@ type AgentListEntry = {
   configured: boolean;
 };
 
-export function createAgentsListTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
+export function createAgentsListTool(opts?: {
+  agentSessionKey?: string;
+  /** Explicit agent ID override for cron/hook sessions. */
+  requesterAgentIdOverride?: string;
+}): AnyAgentTool {
   return {
     label: "Agents",
     name: "agents_list",
@@ -37,7 +41,9 @@ export function createAgentsListTool(opts?: { agentSessionKey?: string }): AnyAg
             })
           : alias;
       const requesterAgentId = normalizeAgentId(
-        parseAgentSessionKey(requesterInternalKey)?.agentId ?? DEFAULT_AGENT_ID,
+        opts?.requesterAgentIdOverride ??
+          parseAgentSessionKey(requesterInternalKey)?.agentId ??
+          DEFAULT_AGENT_ID,
       );
 
       const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];

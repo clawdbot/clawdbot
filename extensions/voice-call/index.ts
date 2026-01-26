@@ -74,9 +74,26 @@ const voiceCallConfigSchema = {
     },
     "streaming.sttModel": { label: "Realtime STT Model", advanced: true },
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
-    "tts.model": { label: "TTS Model", advanced: true },
-    "tts.voice": { label: "TTS Voice", advanced: true },
-    "tts.instructions": { label: "TTS Instructions", advanced: true },
+    "tts.provider": {
+      label: "TTS Provider Override",
+      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      advanced: true,
+    },
+    "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
+    "tts.openai.voice": { label: "OpenAI TTS Voice", advanced: true },
+    "tts.openai.apiKey": {
+      label: "OpenAI API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "tts.elevenlabs.modelId": { label: "ElevenLabs Model ID", advanced: true },
+    "tts.elevenlabs.voiceId": { label: "ElevenLabs Voice ID", advanced: true },
+    "tts.elevenlabs.apiKey": {
+      label: "ElevenLabs API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "tts.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
     publicUrl: { label: "Public Webhook URL", advanced: true },
     skipSignatureVerification: {
       label: "Skip Signature Verification",
@@ -161,6 +178,7 @@ const voiceCallPlugin = {
         runtimePromise = createVoiceCallRuntime({
           config: cfg,
           coreConfig: api.config as CoreConfig,
+          ttsRuntime: api.runtime.tts,
           logger: api.logger,
         });
       }

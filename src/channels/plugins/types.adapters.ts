@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -81,9 +82,14 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
 };
 
+export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
+  payload: ReplyPayload;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number) => string[]) | null;
+  chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   pollMaxOptions?: number;
   resolveTarget?: (params: {
@@ -93,6 +99,7 @@ export type ChannelOutboundAdapter = {
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };
+  sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;

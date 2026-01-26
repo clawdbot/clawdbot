@@ -157,6 +157,36 @@ Actions:
 - **Always allow** → add to allowlist + run
 - **Deny** → block
 
+## Approval forwarding to chat channels
+
+You can forward exec approval prompts to any chat channel (including plugin channels) and approve
+them with `/approve`. This uses the normal outbound delivery pipeline.
+
+Config:
+```json5
+{
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "session", // "session" | "targets" | "both"
+      agentFilter: ["main"],
+      sessionFilter: ["discord"], // substring or regex
+      targets: [
+        { channel: "slack", to: "U12345678" },
+        { channel: "telegram", to: "123456789" }
+      ]
+    }
+  }
+}
+```
+
+Reply in chat:
+```
+/approve <id> allow-once
+/approve <id> allow-always
+/approve <id> deny
+```
+
 ### macOS IPC flow
 ```
 Gateway -> Node Service (WS)

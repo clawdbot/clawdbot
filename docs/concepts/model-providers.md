@@ -89,6 +89,8 @@ Clawdbot ships with the pi‑ai catalog. These providers require **no**
 - Gemini CLI OAuth is shipped as a bundled plugin (`google-gemini-cli-auth`, disabled by default).
   - Enable: `clawdbot plugins enable google-gemini-cli-auth`
   - Login: `clawdbot models auth login --provider google-gemini-cli --set-default`
+  - Note: you do **not** paste a client id or secret into `clawdbot.json`. The CLI login flow stores
+    tokens in auth profiles on the gateway host.
 
 ### Z.AI (GLM)
 
@@ -236,6 +238,30 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
+### Ollama
+
+Ollama is a local LLM runtime that provides an OpenAI-compatible API:
+
+- Provider: `ollama`
+- Auth: None required (local server)
+- Example model: `ollama/llama3.3`
+- Installation: https://ollama.ai
+
+```bash
+# Install Ollama, then pull a model:
+ollama pull llama3.3
+```
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "ollama/llama3.3" } }
+  }
+}
+```
+
+Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
+
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
 Example (OpenAI‑compatible):
@@ -270,6 +296,16 @@ Example (OpenAI‑compatible):
   }
 }
 ```
+
+Notes:
+- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
+  When omitted, Clawdbot defaults to:
+  - `reasoning: false`
+  - `input: ["text"]`
+  - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
+  - `contextWindow: 200000`
+  - `maxTokens: 8192`
+- Recommended: set explicit values that match your proxy/model limits.
 
 ## CLI examples
 

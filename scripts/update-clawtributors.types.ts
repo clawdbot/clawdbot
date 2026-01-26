@@ -30,4 +30,3 @@ export type Entry = {
   avatar_url: string;
   lines: number;
 };
-

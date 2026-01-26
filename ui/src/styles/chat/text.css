@@ -14,8 +14,8 @@
 }
 
 :root[data-theme="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.18);
-  background: rgba(16, 24, 40, 0.03);
+  border-color: rgba(16, 24, 40, 0.25);
+  background: rgba(16, 24, 40, 0.04);
 }
 
 .chat-text {
@@ -75,9 +75,46 @@
 }
 
 .chat-text :where(blockquote) {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   padding-left: 12px;
+  margin-left: 0;
   color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.chat-text :where(blockquote blockquote) {
+  margin-top: 8px;
+  border-left-color: var(--border-hover);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-text :where(blockquote blockquote blockquote) {
+  border-left-color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="light"] .chat-text :where(blockquote) {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+:root[data-theme="light"] .chat-text :where(blockquote blockquote) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+:root[data-theme="light"] .chat-text :where(blockquote blockquote blockquote) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+:root[data-theme="light"] .chat-text :where(pre) {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .chat-text :where(hr) {
@@ -85,4 +122,3 @@
   border-top: 1px solid var(--border);
   margin: 1em 0;
 }
-

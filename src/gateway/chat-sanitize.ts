@@ -6,6 +6,7 @@ const ENVELOPE_CHANNELS = [
   "Signal",
   "Slack",
   "Discord",
+  "Google Chat",
   "iMessage",
   "Teams",
   "Matrix",

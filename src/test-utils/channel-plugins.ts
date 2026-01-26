@@ -17,6 +17,7 @@ export const createTestRegistry = (channels: PluginRegistry["channels"] = []): P
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],

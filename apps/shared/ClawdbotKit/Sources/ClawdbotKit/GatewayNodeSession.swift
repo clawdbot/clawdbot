@@ -143,7 +143,7 @@ public actor GatewayNodeSession {
             "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
         ]
         do {
-            _ = try await channel.request(method: "node.event", params: params, timeoutMs: 8000)
+            try await channel.send(method: "node.event", params: params)
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -224,7 +224,7 @@ public actor GatewayNodeSession {
             ])
         }
         do {
-            _ = try await channel.request(method: "node.invoke.result", params: params, timeoutMs: 15000)
+            try await channel.send(method: "node.invoke.result", params: params)
         } catch {
             self.logger.error("node invoke result failed: \(error.localizedDescription, privacy: .public)")
         }

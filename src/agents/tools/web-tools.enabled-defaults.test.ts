@@ -88,6 +88,40 @@ describe("web_search country and language parameters", () => {
     const url = new URL(mockFetch.mock.calls[0][0] as string);
     expect(url.searchParams.get("ui_lang")).toBe("de");
   });
+
+  it("should pass freshness parameter to Brave API", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.(1, { query: "test", freshness: "pw" });
+
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    expect(url.searchParams.get("freshness")).toBe("pw");
+  });
+
+  it("rejects invalid freshness values", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.(1, { query: "test", freshness: "yesterday" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "invalid_freshness" });
+  });
 });
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -118,6 +152,27 @@ describe("web_search perplexity baseUrl defaults", () => {
 
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
+  });
+
+  it("rejects freshness for Perplexity provider", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "perplexity" } } } },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.(1, { query: "test", freshness: "pw" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "unsupported_freshness" });
   });
 
   it("defaults to OpenRouter when OPENROUTER_API_KEY is set", async () => {

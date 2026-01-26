@@ -154,13 +154,13 @@ const COMPACTION_TOAST_DURATION_MS = 5000;
 export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
-  
+
   // Clear any existing timer
   if (host.compactionClearTimer != null) {
     window.clearTimeout(host.compactionClearTimer);
     host.compactionClearTimer = null;
   }
-  
+
   if (phase === "start") {
     host.compactionStatus = {
       active: true,
@@ -183,13 +183,13 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) return;
-  
+
   // Handle compaction events
   if (payload.stream === "compaction") {
     handleCompactionEvent(host as CompactionHost, payload);
     return;
   }
-  
+
   if (payload.stream !== "tool") return;
   const sessionKey =
     typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;

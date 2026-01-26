@@ -84,7 +84,7 @@ curl http://127.0.0.1:8000/places/{place_id}
       "open_now": true
     }
   ],
-  "next_page_token": "..." 
+  "next_page_token": "..."
 }
 ```
 

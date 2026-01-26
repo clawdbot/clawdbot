@@ -33,4 +33,3 @@ export async function loadPresence(state: PresenceState) {
     state.presenceLoading = false;
   }
 }
-

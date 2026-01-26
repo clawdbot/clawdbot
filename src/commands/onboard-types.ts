@@ -16,6 +16,7 @@ export type AuthChoice =
   | "moonshot-api-key"
   | "kimi-code-api-key"
   | "synthetic-api-key"
+  | "venice-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
@@ -68,6 +69,7 @@ export type OnboardOptions = {
   zaiApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
+  veniceApiKey?: string;
   opencodeZenApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;

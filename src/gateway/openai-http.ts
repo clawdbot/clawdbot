@@ -20,6 +20,7 @@ import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./h
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
+  trustedProxies?: string[];
 };
 
 type OpenAiChatMessage = {
@@ -168,6 +169,7 @@ export async function handleOpenAiHttpRequest(
     auth: opts.auth,
     connectAuth: { token, password: token },
     req,
+    trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
     sendUnauthorized(res);

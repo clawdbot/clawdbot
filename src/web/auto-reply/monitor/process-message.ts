@@ -1,5 +1,5 @@
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
-import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
+import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
@@ -229,6 +229,7 @@ export async function processMessage(params: {
       : undefined;
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
+  const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "whatsapp",
@@ -338,6 +339,7 @@ export async function processMessage(params: {
           msg: params.msg,
           maxMediaBytes: params.maxMediaBytes,
           textLimit,
+          chunkMode,
           replyLogger: params.replyLogger,
           connectionId: params.connectionId,
           // Tool + block updates are noisy; skip their log lines.

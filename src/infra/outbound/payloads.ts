@@ -5,12 +5,14 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
+  channelData?: Record<string, unknown>;
 };
 
 export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
   mediaUrls?: string[];
+  channelData?: Record<string, unknown>;
 };
 
 function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>): string[] {
@@ -58,11 +60,23 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
 
 export function normalizeOutboundPayloads(payloads: ReplyPayload[]): NormalizedOutboundPayload[] {
   return normalizeReplyPayloadsForDelivery(payloads)
-    .map((payload) => ({
-      text: payload.text ?? "",
-      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
-    }))
-    .filter((payload) => payload.text || payload.mediaUrls.length > 0);
+    .map((payload) => {
+      const channelData = payload.channelData;
+      const normalized: NormalizedOutboundPayload = {
+        text: payload.text ?? "",
+        mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+      };
+      if (channelData && Object.keys(channelData).length > 0) {
+        normalized.channelData = channelData;
+      }
+      return normalized;
+    })
+    .filter(
+      (payload) =>
+        payload.text ||
+        payload.mediaUrls.length > 0 ||
+        Boolean(payload.channelData && Object.keys(payload.channelData).length > 0),
+    );
 }
 
 export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): OutboundPayloadJson[] {
@@ -70,6 +84,7 @@ export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): Outb
     text: payload.text ?? "",
     mediaUrl: payload.mediaUrl ?? null,
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+    channelData: payload.channelData,
   }));
 }
 

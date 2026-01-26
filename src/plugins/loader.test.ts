@@ -350,6 +350,33 @@ describe("loadClawdbotPlugins", () => {
     expect(httpPlugin?.httpHandlers).toBe(1);
   });
 
+  it("registers http routes", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "http-route-demo",
+      body: `export default { id: "http-route-demo", register(api) {
+  api.registerHttpRoute({ path: "/demo", handler: async (_req, res) => { res.statusCode = 200; res.end("ok"); } });
+} };`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["http-route-demo"],
+        },
+      },
+    });
+
+    const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-route-demo");
+    expect(route).toBeDefined();
+    expect(route?.path).toBe("/demo");
+    const httpPlugin = registry.plugins.find((entry) => entry.id === "http-route-demo");
+    expect(httpPlugin?.httpHandlers).toBe(1);
+  });
+
   it("respects explicit disable in config", () => {
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({

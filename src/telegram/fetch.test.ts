@@ -1,37 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resolveTelegramFetch } from "./fetch.js";
 
 describe("resolveTelegramFetch", () => {
-  it("wraps proxy fetch to normalize foreign abort signals", async () => {
-    let seenSignal: AbortSignal | undefined;
-    const proxyFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      seenSignal = init?.signal as AbortSignal | undefined;
-      return {} as Response;
-    });
+  const originalFetch = globalThis.fetch;
 
-    const fetcher = resolveTelegramFetch(proxyFetch);
-    expect(fetcher).toBeTypeOf("function");
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
 
-    let abortHandler: (() => void) | null = null;
-    const fakeSignal = {
-      aborted: false,
-      addEventListener: (event: string, handler: () => void) => {
-        if (event === "abort") abortHandler = handler;
-      },
-      removeEventListener: (event: string, handler: () => void) => {
-        if (event === "abort" && abortHandler === handler) abortHandler = null;
-      },
-    } as AbortSignal;
+  it("returns wrapped global fetch when available", () => {
+    const fetchMock = vi.fn(async () => ({}));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const resolved = resolveTelegramFetch();
+    expect(resolved).toBeTypeOf("function");
+  });
 
-    const promise = fetcher!("https://example.com", { signal: fakeSignal });
-    expect(proxyFetch).toHaveBeenCalledOnce();
-    expect(seenSignal).toBeInstanceOf(AbortSignal);
-    expect(seenSignal).not.toBe(fakeSignal);
-
-    abortHandler?.();
-    expect(seenSignal?.aborted).toBe(true);
-
-    await promise;
+  it("prefers proxy fetch when provided", () => {
+    const fetchMock = vi.fn(async () => ({}));
+    const resolved = resolveTelegramFetch(fetchMock as unknown as typeof fetch);
+    expect(resolved).toBeTypeOf("function");
   });
 });

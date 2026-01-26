@@ -6,6 +6,7 @@ import type {
   ChannelUiMetaEntry,
   ChannelsStatusSnapshot,
   DiscordStatus,
+  GoogleChatStatus,
   IMessageStatus,
   NostrProfile,
   NostrStatus,
@@ -22,6 +23,7 @@ import type {
 import { channelEnabled, renderChannelAccountCount } from "./channels.shared";
 import { renderChannelConfigSection } from "./channels.config";
 import { renderDiscordCard } from "./channels.discord";
+import { renderGoogleChatCard } from "./channels.googlechat";
 import { renderIMessageCard } from "./channels.imessage";
 import { renderNostrCard } from "./channels.nostr";
 import { renderSignalCard } from "./channels.signal";
@@ -38,6 +40,7 @@ export function renderChannels(props: ChannelsProps) {
     | TelegramStatus
     | undefined;
   const discord = (channels?.discord ?? null) as DiscordStatus | null;
+  const googlechat = (channels?.googlechat ?? null) as GoogleChatStatus | null;
   const slack = (channels?.slack ?? null) as SlackStatus | null;
   const signal = (channels?.signal ?? null) as SignalStatus | null;
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
@@ -61,6 +64,7 @@ export function renderChannels(props: ChannelsProps) {
           whatsapp,
           telegram,
           discord,
+          googlechat,
           slack,
           signal,
           imessage,
@@ -97,7 +101,16 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
   }
-  return ["whatsapp", "telegram", "discord", "slack", "signal", "imessage", "nostr"];
+  return [
+    "whatsapp",
+    "telegram",
+    "discord",
+    "googlechat",
+    "slack",
+    "signal",
+    "imessage",
+    "nostr",
+  ];
 }
 
 function renderChannel(
@@ -127,6 +140,12 @@ function renderChannel(
       return renderDiscordCard({
         props,
         discord: data.discord,
+        accountCountLabel,
+      });
+    case "googlechat":
+      return renderGoogleChatCard({
+        props,
+        googlechat: data.googlechat,
         accountCountLabel,
       });
     case "slack":

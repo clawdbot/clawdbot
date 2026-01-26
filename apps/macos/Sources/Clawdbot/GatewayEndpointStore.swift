@@ -311,6 +311,19 @@ actor GatewayEndpointStore {
                 token: token,
                 password: password))
         case .remote:
+            let root = ClawdbotConfigFile.loadDict()
+            if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
+                guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+                    self.cancelRemoteEnsure()
+                    self.setState(.unavailable(
+                        mode: .remote,
+                        reason: "gateway.remote.url missing or invalid for direct transport"))
+                    return
+                }
+                self.cancelRemoteEnsure()
+                self.setState(.ready(mode: .remote, url: url, token: token, password: password))
+                return
+            }
             let port = await self.deps.remotePortIfRunning()
             guard let port else {
                 self.setState(.connecting(mode: .remote, detail: Self.remoteConnectingDetail))
@@ -340,6 +353,25 @@ actor GatewayEndpointStore {
                 domain: "RemoteTunnel",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+        }
+        let root = ClawdbotConfigFile.loadDict()
+        if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
+            guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+                throw NSError(
+                    domain: "GatewayEndpoint",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+            }
+            guard let port = GatewayRemoteConfig.defaultPort(for: url),
+                  let portInt = UInt16(exactly: port)
+            else {
+                throw NSError(
+                    domain: "GatewayEndpoint",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Invalid gateway.remote.url port"])
+            }
+            self.logger.info("remote transport direct; skipping SSH tunnel")
+            return portInt
         }
         let config = try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
         guard let portInt = config.0.port, let port = UInt16(exactly: portInt) else {
@@ -399,6 +431,21 @@ actor GatewayEndpointStore {
                 domain: "RemoteTunnel",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+        }
+
+        let root = ClawdbotConfigFile.loadDict()
+        if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
+            guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+                throw NSError(
+                    domain: "GatewayEndpoint",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+            }
+            let token = self.deps.token()
+            let password = self.deps.password()
+            self.cancelRemoteEnsure()
+            self.setState(.ready(mode: .remote, url: url, token: token, password: password))
+            return (url, token, password)
         }
 
         self.kickRemoteEnsureIfNeeded(detail: detail)

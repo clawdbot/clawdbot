@@ -121,6 +121,10 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
       "agent.imageModelFallbacks was replaced by agents.defaults.imageModel.fallbacks (auto-migrated on load).",
   },
   {
+    path: ["messages", "tts", "enabled"],
+    message: "messages.tts.enabled was replaced by messages.tts.auto (auto-migrated on load).",
+  },
+  {
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },

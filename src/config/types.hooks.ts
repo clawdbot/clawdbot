@@ -23,6 +23,7 @@ export type HookMappingConfig = {
     | "whatsapp"
     | "telegram"
     | "discord"
+    | "googlechat"
     | "slack"
     | "signal"
     | "imessage"

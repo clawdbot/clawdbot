@@ -21,6 +21,7 @@ export type AuthChoiceGroupId =
   | "opencode-zen"
   | "minimax"
   | "synthetic"
+  | "venice"
   | "qwen";
 
 export type AuthChoiceGroup = {
@@ -65,6 +66,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Synthetic",
     hint: "Anthropic-compatible (multi-model)",
     choices: ["synthetic-api-key"],
+  },
+  {
+    value: "venice",
+    label: "Venice AI",
+    hint: "Privacy-focused (uncensored models)",
+    choices: ["venice-api-key"],
   },
   {
     value: "google",
@@ -190,6 +197,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
   options.push({ value: "kimi-code-api-key", label: "Kimi Code API key" });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
+  options.push({
+    value: "venice-api-key",
+    label: "Venice AI API key",
+    hint: "Privacy-focused inference (uncensored models)",
+  });
   options.push({
     value: "github-copilot",
     label: "GitHub Copilot (GitHub device login)",

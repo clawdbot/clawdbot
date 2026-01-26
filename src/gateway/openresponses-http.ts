@@ -60,6 +60,7 @@ type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
+  trustedProxies?: string[];
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -331,6 +332,7 @@ export async function handleOpenResponsesHttpRequest(
     auth: opts.auth,
     connectAuth: { token, password: token },
     req,
+    trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
     sendUnauthorized(res);

@@ -41,7 +41,7 @@ clawdbot agent --agent ops --message "Generate report" --deliver --reply-channel
 
 - `--local`: run locally (requires model provider API keys in your shell)
 - `--deliver`: send the reply to the chosen channel
-- `--channel`: delivery channel (`whatsapp|telegram|discord|slack|signal|imessage`, default: `whatsapp`)
+- `--channel`: delivery channel (`whatsapp|telegram|discord|googlechat|slack|signal|imessage`, default: `whatsapp`)
 - `--reply-to`: delivery target override
 - `--reply-channel`: delivery channel override
 - `--reply-account`: delivery account id override

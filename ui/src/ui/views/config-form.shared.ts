@@ -89,4 +89,3 @@ export function isSensitivePath(path: Array<string | number>): boolean {
     key.endsWith("key")
   );
 }
-

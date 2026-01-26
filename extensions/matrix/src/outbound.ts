@@ -6,6 +6,7 @@ import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ to, text, deps, replyToId, threadId }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;

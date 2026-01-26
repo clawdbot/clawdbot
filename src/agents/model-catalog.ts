@@ -8,6 +8,7 @@ export type ModelCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
+  input?: Array<"text" | "image">;
 };
 
 type DiscoveredModel = {
@@ -16,6 +17,7 @@ type DiscoveredModel = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
+  input?: Array<"text" | "image">;
 };
 
 type PiSdkModule = typeof import("@mariozechner/pi-coding-agent");
@@ -80,7 +82,10 @@ export async function loadModelCatalog(params?: {
             ? entry.contextWindow
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning });
+        const input = Array.isArray(entry?.input)
+          ? (entry.input as Array<"text" | "image">)
+          : undefined;
+        models.push({ id, name, provider, contextWindow, reasoning, input });
       }
 
       if (models.length === 0) {
@@ -104,4 +109,28 @@ export async function loadModelCatalog(params?: {
   })();
 
   return modelCatalogPromise;
+}
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return entry?.input?.includes("image") ?? false;
+}
+
+/**
+ * Find a model in the catalog by provider and model ID.
+ */
+export function findModelInCatalog(
+  catalog: ModelCatalogEntry[],
+  provider: string,
+  modelId: string,
+): ModelCatalogEntry | undefined {
+  const normalizedProvider = provider.toLowerCase().trim();
+  const normalizedModelId = modelId.toLowerCase().trim();
+  return catalog.find(
+    (entry) =>
+      entry.provider.toLowerCase() === normalizedProvider &&
+      entry.id.toLowerCase() === normalizedModelId,
+  );
 }

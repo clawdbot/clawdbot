@@ -1,5 +1,7 @@
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ChunkMode } from "../../auto-reply/chunk.js";
+import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -118,6 +120,7 @@ export async function deliverSlackSlashReplies(params: {
   ephemeral: boolean;
   textLimit: number;
   tableMode?: MarkdownTableMode;
+  chunkMode?: ChunkMode;
 }) {
   const messages: string[] = [];
   const chunkLimit = Math.min(params.textLimit, 4000);
@@ -129,9 +132,16 @@ export async function deliverSlackSlashReplies(params: {
       .filter(Boolean)
       .join("\n");
     if (!combined) continue;
-    for (const chunk of markdownToSlackMrkdwnChunks(combined, chunkLimit, {
-      tableMode: params.tableMode,
-    })) {
+    const chunkMode = params.chunkMode ?? "length";
+    const markdownChunks =
+      chunkMode === "newline"
+        ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
+        : [combined];
+    const chunks = markdownChunks.flatMap((markdown) =>
+      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
+    );
+    if (!chunks.length && combined) chunks.push(combined);
+    for (const chunk of chunks) {
       messages.push(chunk);
     }
   }

@@ -38,6 +38,8 @@ export type BlueBubblesAccountConfig = {
   dms?: Record<string, unknown>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Chunking mode: "newline" (default) splits on every newline; "length" splits by size. */
+  chunkMode?: "length" | "newline";
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: Record<string, unknown>;

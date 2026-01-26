@@ -70,7 +70,7 @@ const _makeOpenAiConfig = (modelIds: string[]) =>
   }) satisfies ClawdbotConfig;
 
 const _ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
-  ensureClawdbotModelsJson(cfg, agentDir);
+  ensureClawdbotModelsJson(cfg, agentDir) as unknown;
 
 const _textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;
@@ -120,6 +120,26 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       channels: { telegram: { dmHistoryLimit: 10 } },
     } as ClawdbotConfig;
     expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
+  });
+  it("strips thread suffix from dm session keys", () => {
+    const config = {
+      channels: { telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } } },
+    } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123:thread:999", config)).toBe(
+      7,
+    );
+    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123:topic:555", config)).toBe(7);
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123:thread:999", config)).toBe(7);
+  });
+  it("keeps non-numeric thread markers in dm ids", () => {
+    const config = {
+      channels: {
+        telegram: { dms: { "user:thread:abc": { historyLimit: 9 } } },
+      },
+    } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:user:thread:abc", config)).toBe(
+      9,
+    );
   });
   it("returns undefined for non-dm session kinds", () => {
     const config = {

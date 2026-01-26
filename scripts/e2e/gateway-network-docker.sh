@@ -102,12 +102,12 @@ ws.send(
 	);
 	const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
 	if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
-	
+
 	ws.send(JSON.stringify({ type: \"req\", id: \"h1\", method: \"health\" }));
 	const healthRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"h1\", 10000);
 	if (!healthRes.ok) throw new Error(\"health failed: \" + (healthRes.error?.message ?? \"unknown\"));
 	if (healthRes.payload?.ok !== true) throw new Error(\"unexpected health payload\");
-	
+
 	ws.close();
 	console.log(\"ok\");
 NODE"

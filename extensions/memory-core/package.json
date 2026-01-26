@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/memory-core",
-  "version": "2026.1.23",
+  "version": "2026.1.25",
   "type": "module",
   "description": "Clawdbot core memory search plugin",
   "clawdbot": {
@@ -8,7 +8,7 @@
       "./index.ts"
     ]
   },
-  "dependencies": {
-    "clawdbot": "workspace:*"
+  "peerDependencies": {
+    "clawdbot": ">=2026.1.25"
   }
 }

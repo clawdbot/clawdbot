@@ -1,15 +1,16 @@
 import type {
-  ChannelAccountSnapshot,
-  ChannelsStatusSnapshot,
-  ConfigUiHints,
-  DiscordStatus,
-  IMessageStatus,
-  NostrProfile,
-  NostrStatus,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
-  WhatsAppStatus,
+    ChannelAccountSnapshot,
+    ChannelsStatusSnapshot,
+    ConfigUiHints,
+    DiscordStatus,
+    GoogleChatStatus,
+    IMessageStatus,
+    NostrProfile,
+    NostrStatus,
+    SignalStatus,
+    SlackStatus,
+    TelegramStatus,
+    WhatsAppStatus,
 } from "../types";
 import type { NostrProfileFormState } from "./channels.nostr-profile-form";
 
@@ -52,6 +53,7 @@ export type ChannelsChannelData = {
   whatsapp?: WhatsAppStatus;
   telegram?: TelegramStatus;
   discord?: DiscordStatus | null;
+  googlechat?: GoogleChatStatus | null;
   slack?: SlackStatus | null;
   signal?: SignalStatus | null;
   imessage?: IMessageStatus | null;

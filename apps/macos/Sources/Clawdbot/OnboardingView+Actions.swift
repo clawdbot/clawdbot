@@ -25,7 +25,11 @@ extension OnboardingView {
         self.preferredGatewayID = gateway.stableID
         GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
 
-        if let host = gateway.tailnetDns ?? gateway.lanHost {
+        if self.state.remoteTransport == .direct {
+            if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
+                self.state.remoteUrl = url
+            }
+        } else if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
             let user = NSUserName()
             self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
                 user: user,

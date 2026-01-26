@@ -64,6 +64,7 @@ export type RunMessageActionParams = {
   sessionKey?: string;
   agentId?: string;
   dryRun?: boolean;
+  abortSignal?: AbortSignal;
 };
 
 export type MessageActionRunResult =
@@ -507,6 +508,7 @@ type ResolvedActionContext = {
   input: RunMessageActionParams;
   agentId?: string;
   resolvedTarget?: ResolvedMessagingTarget;
+  abortSignal?: AbortSignal;
 };
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) return undefined;
@@ -524,6 +526,7 @@ async function handleBroadcastAction(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ): Promise<MessageActionRunResult> {
+  throwIfAborted(input.abortSignal);
   const broadcastEnabled = input.cfg.tools?.message?.broadcast?.enabled !== false;
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
@@ -548,8 +551,11 @@ async function handleBroadcastAction(
     error?: string;
     result?: MessageSendResult;
   }> = [];
+  const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
   for (const targetChannel of targetChannels) {
+    throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
+      throwIfAborted(input.abortSignal);
       try {
         const resolved = await resolveChannelTarget({
           cfg: input.cfg,
@@ -573,6 +579,7 @@ async function handleBroadcastAction(
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
+        if (isAbortError(err)) throw err;
         results.push({
           channel: targetChannel,
           to: target,
@@ -592,8 +599,28 @@ async function handleBroadcastAction(
   };
 }
 
+function throwIfAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    const err = new Error("Message send aborted");
+    err.name = "AbortError";
+    throw err;
+  }
+}
+
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input, agentId, resolvedTarget } = ctx;
+  const {
+    cfg,
+    params,
+    channel,
+    accountId,
+    dryRun,
+    gateway,
+    input,
+    agentId,
+    resolvedTarget,
+    abortSignal,
+  } = ctx;
+  throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
   // Support media, path, and filePath parameters for attachments
@@ -676,6 +703,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
       cfg,
@@ -695,6 +723,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
               mediaUrls: mirrorMediaUrls,
             }
           : undefined,
+      abortSignal,
     },
     to,
     message,
@@ -718,7 +747,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
+  throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readStringParam(params, "to", { required: true });
   const question = readStringParam(params, "pollQuestion", {
@@ -777,7 +807,8 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
+  throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
   if (dryRun) {
     return {
@@ -930,6 +961,7 @@ export async function runMessageAction(
       input,
       agentId: resolvedAgentId,
       resolvedTarget,
+      abortSignal: input.abortSignal,
     });
   }
 
@@ -942,6 +974,7 @@ export async function runMessageAction(
       dryRun,
       gateway,
       input,
+      abortSignal: input.abortSignal,
     });
   }
 
@@ -953,5 +986,6 @@ export async function runMessageAction(
     dryRun,
     gateway,
     input,
+    abortSignal: input.abortSignal,
   });
 }

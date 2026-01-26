@@ -11,9 +11,12 @@ Last updated: 2026-01-21
 
 Clawdbot ships three update channels:
 
-- **stable**: tagged releases (`vYYYY.M.D` or `vYYYY.M.D-<patch>`). npm dist-tag: `latest`.
-- **beta**: prerelease tags (`vYYYY.M.D-beta.N`). npm dist-tag: `beta`.
+- **stable**: npm dist-tag `latest`.
+- **beta**: npm dist-tag `beta` (builds under test).
 - **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
+
+We ship builds to **beta**, test them, then **promote a vetted build to `latest`**
+without changing the version number — dist-tags are the source of truth for npm installs.
 
 ## Switching channels
 
@@ -25,7 +28,7 @@ clawdbot update --channel beta
 clawdbot update --channel dev
 ```
 
-- `stable`/`beta` check out the latest matching tag.
+- `stable`/`beta` check out the latest matching tag (often the same tag).
 - `dev` switches to `main` and rebases on the upstream.
 
 npm/pnpm global install:
@@ -56,12 +59,11 @@ When you switch channels with `clawdbot update`, Clawdbot also syncs plugin sour
 
 ## Tagging best practices
 
-- Stable: tag each release (`vYYYY.M.D` or `vYYYY.M.D-<patch>`).
-- Beta: use `vYYYY.M.D-beta.N` (increment `N`).
+- Tag releases you want git checkouts to land on (`vYYYY.M.D` or `vYYYY.M.D-<patch>`).
 - Keep tags immutable: never move or reuse a tag.
-- Publish dist-tags alongside git tags:
+- npm dist-tags remain the source of truth for npm installs:
   - `latest` → stable
-  - `beta` → prerelease
+  - `beta` → candidate build
   - `dev` → main snapshot (optional)
 
 ## macOS app availability

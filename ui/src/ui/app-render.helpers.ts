@@ -3,6 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 
 import type { AppViewState } from "./app-view-state";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
+import { icons } from "./icons";
 import { loadChatHistory } from "./controllers/chat";
 import { syncUrlWithSessionKey } from "./app-settings";
 import type { SessionsListResult } from "./types";
@@ -31,7 +32,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
       }}
       title=${titleForTab(tab)}
     >
-      <span class="nav-item__icon" aria-hidden="true">${iconForTab(tab)}</span>
+      <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
       <span class="nav-item__text">${titleForTab(tab)}</span>
     </a>
   `;
@@ -108,7 +109,7 @@ export function renderChatControls(state: AppViewState) {
           ? "Disabled during onboarding"
           : "Toggle assistant thinking/working output"}
       >
-        🧠
+        ${icons.brain}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"

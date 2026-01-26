@@ -12,4 +12,3 @@ If you believe you’ve found a security issue in Clawdbot, please report it pri
 For threat model + hardening guidance (including `clawdbot security audit --deep` and `--fix`), see:
 
 - `https://docs.clawd.bot/gateway/security`
-

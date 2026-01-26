@@ -99,16 +99,39 @@
       "label": "Media Stream Path",
       "advanced": true
     },
-    "tts.model": {
-      "label": "TTS Model",
+    "tts.provider": {
+      "label": "TTS Provider Override",
+      "help": "Deep-merges with messages.tts (Edge is ignored for calls).",
       "advanced": true
     },
-    "tts.voice": {
-      "label": "TTS Voice",
+    "tts.openai.model": {
+      "label": "OpenAI TTS Model",
       "advanced": true
     },
-    "tts.instructions": {
-      "label": "TTS Instructions",
+    "tts.openai.voice": {
+      "label": "OpenAI TTS Voice",
+      "advanced": true
+    },
+    "tts.openai.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tts.elevenlabs.modelId": {
+      "label": "ElevenLabs Model ID",
+      "advanced": true
+    },
+    "tts.elevenlabs.voiceId": {
+      "label": "ElevenLabs Voice ID",
+      "advanced": true
+    },
+    "tts.elevenlabs.apiKey": {
+      "label": "ElevenLabs API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tts.elevenlabs.baseUrl": {
+      "label": "ElevenLabs Base URL",
       "advanced": true
     },
     "publicUrl": {
@@ -370,20 +393,193 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "auto": {
+            "type": "string",
+            "enum": [
+              "off",
+              "always",
+              "inbound",
+              "tagged"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "final",
+              "all"
+            ]
+          },
           "provider": {
             "type": "string",
             "enum": [
-              "openai"
+              "openai",
+              "elevenlabs",
+              "edge"
             ]
           },
-          "model": {
+          "summaryModel": {
             "type": "string"
           },
-          "voice": {
+          "modelOverrides": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "allowText": {
+                "type": "boolean"
+              },
+              "allowProvider": {
+                "type": "boolean"
+              },
+              "allowVoice": {
+                "type": "boolean"
+              },
+              "allowModelId": {
+                "type": "boolean"
+              },
+              "allowVoiceSettings": {
+                "type": "boolean"
+              },
+              "allowNormalization": {
+                "type": "boolean"
+              },
+              "allowSeed": {
+                "type": "boolean"
+              }
+            }
+          },
+          "elevenlabs": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "voiceId": {
+                "type": "string"
+              },
+              "modelId": {
+                "type": "string"
+              },
+              "seed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "applyTextNormalization": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "on",
+                  "off"
+                ]
+              },
+              "languageCode": {
+                "type": "string"
+              },
+              "voiceSettings": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stability": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "similarityBoost": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "style": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "useSpeakerBoost": {
+                    "type": "boolean"
+                  },
+                  "speed": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 2
+                  }
+                }
+              }
+            }
+          },
+          "openai": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "voice": {
+                "type": "string"
+              }
+            }
+          },
+          "edge": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "voice": {
+                "type": "string"
+              },
+              "lang": {
+                "type": "string"
+              },
+              "outputFormat": {
+                "type": "string"
+              },
+              "pitch": {
+                "type": "string"
+              },
+              "rate": {
+                "type": "string"
+              },
+              "volume": {
+                "type": "string"
+              },
+              "saveSubtitles": {
+                "type": "boolean"
+              },
+              "proxy": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 120000
+              }
+            }
+          },
+          "prefsPath": {
             "type": "string"
           },
-          "instructions": {
-            "type": "string"
+          "maxTextLength": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 120000
           }
         }
       },

@@ -35,6 +35,7 @@ import {
 } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { peekSystemEvents } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -87,6 +88,14 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "last";
 const ACTIVE_HOURS_TIME_PATTERN = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
+
+// Prompt used when an async exec has completed and the result should be relayed to the user.
+// This overrides the standard heartbeat prompt to ensure the model responds with the exec result
+// instead of just "HEARTBEAT_OK".
+const EXEC_EVENT_PROMPT =
+  "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+  "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
+  "If it failed, explain what went wrong.";
 
 function resolveActiveHoursTimezone(cfg: ClawdbotConfig, raw?: string): string {
   const trimmed = raw?.trim();
@@ -453,11 +462,13 @@ export async function runHeartbeatOnce(opts: {
 
   // Skip heartbeat if HEARTBEAT.md exists but has no actionable content.
   // This saves API calls/costs when the file is effectively empty (only comments/headers).
+  // EXCEPTION: Don't skip for exec events - they have pending system events to process.
+  const isExecEventReason = opts.reason === "exec-event";
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
+    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && !isExecEventReason) {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "empty-heartbeat-file",
@@ -483,12 +494,20 @@ export async function runHeartbeatOnce(opts: {
       : { showOk: false, showAlerts: true, useIndicator: true };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix;
-  const prompt = resolveHeartbeatPrompt(cfg, heartbeat);
+
+  // Check if this is an exec event with pending exec completion system events.
+  // If so, use a specialized prompt that instructs the model to relay the result
+  // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
+  const isExecEvent = opts.reason === "exec-event";
+  const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
+  const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
+
+  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: prompt,
     From: sender,
     To: sender,
-    Provider: "heartbeat",
+    Provider: hasExecCompletion ? "exec-event" : "heartbeat",
     SessionKey: sessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
@@ -558,7 +577,19 @@ export async function runHeartbeatOnce(opts: {
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia;
+    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
+    // The model should be responding with exec results, not ack tokens.
+    // Also, if normalized.text is empty due to token stripping but we have exec completion,
+    // fall back to the original reply text.
+    const execFallbackText =
+      hasExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
+        ? replyPayload.text.trim()
+        : null;
+    if (execFallbackText) {
+      normalized.text = execFallbackText;
+      normalized.shouldSkip = false;
+    }
+    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,

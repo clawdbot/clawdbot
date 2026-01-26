@@ -1,4 +1,4 @@
-import { unixToDa, formatUd } from "@urbit/aura";
+import { scot, da } from "@urbit/aura";
 
 export type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
@@ -14,7 +14,7 @@ type SendTextParams = {
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
   const story = [{ inline: [text] }];
   const sentAt = Date.now();
-  const idUd = formatUd(unixToDa(sentAt));
+  const idUd = scot('ud', da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
 
   const delta = {
@@ -63,16 +63,28 @@ export async function sendGroupMessage({
   const story = [{ inline: [text] }];
   const sentAt = Date.now();
 
+  // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
+  let formattedReplyId = replyToId;
+  if (replyToId && /^\d+$/.test(replyToId)) {
+    try {
+      formattedReplyId = formatUd(BigInt(replyToId));
+    } catch {
+      // Fall back to raw ID if formatting fails
+    }
+  }
+
   const action = {
     channel: {
       nest: `chat/${hostShip}/${channelName}`,
-      action: replyToId
+      action: formattedReplyId
         ? {
-            reply: {
-              id: replyToId,
-              delta: {
-                add: {
-                  memo: {
+            // Thread reply - needs post wrapper around reply action
+            // ReplyActionAdd takes Memo: {content, author, sent} - no kind/blob/meta
+            post: {
+              reply: {
+                id: formattedReplyId,
+                action: {
+                  add: {
                     content: story,
                     author: fromShip,
                     sent: sentAt,
@@ -82,6 +94,7 @@ export async function sendGroupMessage({
             },
           }
         : {
+            // Regular post
             post: {
               add: {
                 content: story,

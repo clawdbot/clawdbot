@@ -10,7 +10,13 @@ This flow lets the macOS app act as a full remote control for a Clawdbot gateway
 
 ## Modes
 - **Local (this Mac)**: Everything runs on the laptop. No SSH involved.
-- **Remote over SSH**: Clawdbot commands are executed on the remote host. The mac app opens an SSH connection with `-o BatchMode` plus your chosen identity/key.
+- **Remote over SSH (default)**: Clawdbot commands are executed on the remote host. The mac app opens an SSH connection with `-o BatchMode` plus your chosen identity/key and a local port-forward.
+- **Remote direct (ws/wss)**: No SSH tunnel. The mac app connects to the gateway URL directly (for example, via Tailscale Serve or a public HTTPS reverse proxy).
+
+## Remote transports
+Remote mode supports two transports:
+- **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
+- **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
 
 ## Prereqs on the remote host
 1) Install Node + pnpm and build/install the Clawdbot CLI (`pnpm install && pnpm build && pnpm link --global`).
@@ -20,16 +26,19 @@ This flow lets the macOS app act as a full remote control for a Clawdbot gateway
 ## macOS app setup
 1) Open *Settings → General*.
 2) Under **Clawdbot runs**, pick **Remote over SSH** and set:
+   - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
    - **SSH target**: `user@host` (optional `:port`).
      - If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
+   - **Gateway URL** (Direct only): `wss://gateway.example.ts.net` (or `ws://...` for local/LAN).
    - **Identity file** (advanced): path to your key.
    - **Project root** (advanced): remote checkout path used for commands.
    - **CLI path** (advanced): optional path to a runnable `clawdbot` entrypoint/binary (auto-filled when advertised).
 3) Hit **Test remote**. Success indicates the remote `clawdbot status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn’t found remotely.
 4) Health checks and Web Chat will now run through this SSH tunnel automatically.
 
-## Web Chat over SSH
-- Web Chat connects to the gateway over the forwarded WebSocket control port (default 18789).
+## Web Chat
+- **SSH tunnel**: Web Chat connects to the gateway over the forwarded WebSocket control port (default 18789).
+- **Direct (ws/wss)**: Web Chat connects straight to the configured gateway URL.
 - There is no separate WebChat HTTP server anymore.
 
 ## Permissions
@@ -49,6 +58,7 @@ This flow lets the macOS app act as a full remote control for a Clawdbot gateway
 - **exit 127 / not found**: `clawdbot` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
 - **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`clawdbot status --json`).
 - **Web Chat stuck**: confirm the gateway is running on the remote host and the forwarded port matches the gateway WS port; the UI requires a healthy WS connection.
+- **Node IP shows 127.0.0.1**: expected with the SSH tunnel. Switch **Transport** to **Direct (ws/wss)** if you want the gateway to see the real client IP.
 - **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
 
 ## Notification sounds

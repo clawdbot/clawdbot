@@ -15,6 +15,7 @@ function createState(): ConfigState {
     applySessionKey: "main",
     configLoading: false,
     configRaw: "",
+    configRawOriginal: "",
     configValid: null,
     configIssues: [],
     configSaving: false,
@@ -26,6 +27,7 @@ function createState(): ConfigState {
     configSchemaLoading: false,
     configUiHints: {},
     configForm: null,
+    configFormOriginal: null,
     configFormDirty: false,
     configFormMode: "form",
     lastError: null,
@@ -62,6 +64,37 @@ describe("applyConfigSnapshot", () => {
     });
 
     expect(state.configForm).toEqual({ gateway: { mode: "local" } });
+  });
+
+  it("sets configRawOriginal when clean for change detection", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{ "gateway": { "mode": "local" } }',
+    });
+
+    expect(state.configRawOriginal).toBe('{ "gateway": { "mode": "local" } }');
+    expect(state.configFormOriginal).toEqual({ gateway: { mode: "local" } });
+  });
+
+  it("preserves configRawOriginal when dirty", () => {
+    const state = createState();
+    state.configFormDirty = true;
+    state.configRawOriginal = '{ "original": true }';
+    state.configFormOriginal = { original: true };
+
+    applyConfigSnapshot(state, {
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{ "gateway": { "mode": "local" } }',
+    });
+
+    // Original values should be preserved when dirty
+    expect(state.configRawOriginal).toBe('{ "original": true }');
+    expect(state.configFormOriginal).toEqual({ original: true });
   });
 });
 

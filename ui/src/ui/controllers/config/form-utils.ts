@@ -74,4 +74,3 @@ export function removePathValue(
     delete (current as Record<string, unknown>)[lastKey];
   }
 }
-

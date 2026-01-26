@@ -56,6 +56,35 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  it("handles registered http routes before generic handlers", async () => {
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 200;
+    });
+    const fallback = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "route",
+            path: "/demo",
+            handler: routeHandler,
+            source: "route",
+          },
+        ],
+        httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+
+    const { res } = makeResponse();
+    const handled = await handler({ url: "/demo" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
   it("logs and responds with 500 when a handler throws", async () => {
     const log = { warn: vi.fn() } as unknown as Parameters<
       typeof createGatewayPluginRequestHandler

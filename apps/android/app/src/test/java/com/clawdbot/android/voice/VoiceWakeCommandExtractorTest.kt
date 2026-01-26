@@ -23,4 +23,3 @@ class VoiceWakeCommandExtractorTest {
     assertNull(VoiceWakeCommandExtractor.extractCommand("hey claude!", listOf("claude")))
   }
 }
-

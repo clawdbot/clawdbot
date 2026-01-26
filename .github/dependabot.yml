@@ -1,0 +1,113 @@
+# Dependabot configuration
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+
+registries:
+  npm-npmjs:
+    type: npm-registry
+    url: https://registry.npmjs.org
+    replaces-base: true
+
+updates:
+  # npm dependencies (root)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      production:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+    registries:
+      - npm-npmjs
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  # Swift Package Manager - macOS app
+  - package-ecosystem: swift
+    directory: /apps/macos
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      swift-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  # Swift Package Manager - shared ClawdbotKit
+  - package-ecosystem: swift
+    directory: /apps/shared/ClawdbotKit
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      swift-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  # Swift Package Manager - Swabble
+  - package-ecosystem: swift
+    directory: /Swabble
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      swift-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  # Gradle - Android app
+  - package-ecosystem: gradle
+    directory: /apps/android
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      android-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5

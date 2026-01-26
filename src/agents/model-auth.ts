@@ -282,6 +282,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     "kimi-code": "KIMICODE_API_KEY",
     minimax: "MINIMAX_API_KEY",
     synthetic: "SYNTHETIC_API_KEY",
+    venice: "VENICE_API_KEY",
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
   };

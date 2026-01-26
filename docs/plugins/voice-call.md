@@ -104,6 +104,87 @@ Notes:
 - `mock` is a local dev provider (no network calls).
 - `skipSignatureVerification` is for local testing only.
 
+## TTS for calls
+
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+**same shape** — it deep‑merges with `messages.tts`.
+
+```json5
+{
+  tts: {
+    provider: "elevenlabs",
+    elevenlabs: {
+      voiceId: "pMsXgVXv3BLzUgSXRplE",
+      modelId: "eleven_multilingual_v2"
+    }
+  }
+}
+```
+
+Notes:
+- **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
+- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+
+### More examples
+
+Use core TTS only (no override):
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "openai",
+      openai: { voice: "alloy" }
+    }
+  }
+}
+```
+
+Override to ElevenLabs just for calls (keep core default elsewhere):
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tts: {
+            provider: "elevenlabs",
+            elevenlabs: {
+              apiKey: "elevenlabs_key",
+              voiceId: "pMsXgVXv3BLzUgSXRplE",
+              modelId: "eleven_multilingual_v2"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Override only the OpenAI model for calls (deep‑merge example):
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tts: {
+            openai: {
+              model: "gpt-4o-mini-tts",
+              voice: "marin"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ## Inbound calls
 
 Inbound policy defaults to `disabled`. To enable inbound calls, set:

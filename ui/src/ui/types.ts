@@ -41,6 +41,11 @@ export type ChannelAccountSnapshot = {
   tokenSource?: string | null;
   botTokenSource?: string | null;
   appTokenSource?: string | null;
+  credentialSource?: string | null;
+  audienceType?: string | null;
+  audience?: string | null;
+  webhookPath?: string | null;
+  webhookUrl?: string | null;
   baseUrl?: string | null;
   allowUnmentionedGroups?: boolean | null;
   cliPath?: string | null;
@@ -130,6 +135,28 @@ export type DiscordStatus = {
   lastStopAt?: number | null;
   lastError?: string | null;
   probe?: DiscordProbe | null;
+  lastProbeAt?: number | null;
+};
+
+export type GoogleChatProbe = {
+  ok: boolean;
+  status?: number | null;
+  error?: string | null;
+  elapsedMs?: number | null;
+};
+
+export type GoogleChatStatus = {
+  configured: boolean;
+  credentialSource?: string | null;
+  audienceType?: string | null;
+  audience?: string | null;
+  webhookPath?: string | null;
+  webhookUrl?: string | null;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: GoogleChatProbe | null;
   lastProbeAt?: number | null;
 };
 

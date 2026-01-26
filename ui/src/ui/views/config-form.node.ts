@@ -120,7 +120,7 @@ export function renderNode(params: {
       const hasString = normalizedTypes.has("string");
       const hasNumber = normalizedTypes.has("number");
       const hasBoolean = normalizedTypes.has("boolean");
-      
+
       if (hasBoolean && normalizedTypes.size === 1) {
         return renderNode({
           ...params,
@@ -383,14 +383,14 @@ function renderObject(params: {
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
-  
+
   const fallback = value ?? schema.default;
   const obj = fallback && typeof fallback === "object" && !Array.isArray(fallback)
     ? (fallback as Record<string, unknown>)
     : {};
   const props = schema.properties ?? {};
   const entries = Object.entries(props);
-  
+
   // Sort by hint order
   const sorted = entries.sort((a, b) => {
     const orderA = hintForPath([...path, a[0]], hints)?.order ?? 0;
@@ -514,7 +514,7 @@ function renderArray(params: {
         </button>
       </div>
       ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
-      
+
       ${arr.length === 0 ? html`
         <div class="cfg-array__empty">
           No items yet. Click "Add" to create one.
@@ -597,7 +597,7 @@ function renderMapField(params: {
           Add Entry
         </button>
       </div>
-      
+
       ${entries.length === 0 ? html`
         <div class="cfg-map__empty">No custom entries.</div>
       ` : html`

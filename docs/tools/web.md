@@ -174,6 +174,7 @@ Search the web using your configured provider.
 - `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
 - `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
 - `ui_lang` (optional): ISO language code for UI elements
+- `freshness` (optional, Brave only): filter by discovery time (`pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`)
 
 **Examples:**
 
@@ -192,6 +193,12 @@ await web_search({
   country: "FR",
   search_lang: "fr",
   ui_lang: "fr"
+});
+
+// Recent results (past week)
+await web_search({
+  query: "TMBG interview",
+  freshness: "pw"
 });
 ```
 

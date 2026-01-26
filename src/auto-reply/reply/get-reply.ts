@@ -12,6 +12,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -88,6 +89,10 @@ export async function getReplyFromConfig(
       cfg,
       agentDir,
       activeModel: { provider, model },
+    });
+    await applyLinkUnderstanding({
+      ctx: finalized,
+      cfg,
     });
   }
 

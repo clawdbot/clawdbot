@@ -321,6 +321,44 @@ describe("runMessageAction context isolation", () => {
       }),
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
+
+  it("aborts send when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "hi",
+        },
+        dryRun: true,
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("aborts broadcast when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "broadcast",
+        params: {
+          targets: ["channel:C12345678"],
+          channel: "slack",
+          message: "hi",
+        },
+        dryRun: true,
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
 });
 
 describe("runMessageAction sendAttachment hydration", () => {

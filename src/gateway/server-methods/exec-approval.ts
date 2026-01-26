@@ -1,4 +1,5 @@
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -9,7 +10,10 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-export function createExecApprovalHandlers(manager: ExecApprovalManager): GatewayRequestHandlers {
+export function createExecApprovalHandlers(
+  manager: ExecApprovalManager,
+  opts?: { forwarder?: ExecApprovalForwarder },
+): GatewayRequestHandlers {
   return {
     "exec.approval.request": async ({ params, respond, context }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -69,6 +73,16 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         },
         { dropIfSlow: true },
       );
+      void opts?.forwarder
+        ?.handleRequested({
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        })
+        .catch((err) => {
+          context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
+        });
       const decision = await decisionPromise;
       respond(
         true,
@@ -112,6 +126,11 @@ export function createExecApprovalHandlers(manager: ExecApprovalManager): Gatewa
         { id: p.id, decision, resolvedBy, ts: Date.now() },
         { dropIfSlow: true },
       );
+      void opts?.forwarder
+        ?.handleResolved({ id: p.id, decision, resolvedBy, ts: Date.now() })
+        .catch((err) => {
+          context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
+        });
       respond(true, { ok: true }, undefined);
     },
   };

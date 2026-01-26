@@ -1167,17 +1167,29 @@ public struct ConfigApplyParams: Codable, Sendable {
 public struct ConfigPatchParams: Codable, Sendable {
     public let raw: String
     public let basehash: String?
+    public let sessionkey: String?
+    public let note: String?
+    public let restartdelayms: Int?
 
     public init(
         raw: String,
-        basehash: String?
+        basehash: String?,
+        sessionkey: String?,
+        note: String?,
+        restartdelayms: Int?
     ) {
         self.raw = raw
         self.basehash = basehash
+        self.sessionkey = sessionkey
+        self.note = note
+        self.restartdelayms = restartdelayms
     }
     private enum CodingKeys: String, CodingKey {
         case raw
         case basehash = "baseHash"
+        case sessionkey = "sessionKey"
+        case note
+        case restartdelayms = "restartDelayMs"
     }
 }
 

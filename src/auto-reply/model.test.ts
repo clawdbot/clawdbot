@@ -10,11 +10,17 @@ describe("extractModelDirective", () => {
       expect(result.cleaned).toBe("");
     });
 
-    it("extracts /models with argument", () => {
+    it("does not treat /models as a /model directive", () => {
       const result = extractModelDirective("/models gpt-5");
-      expect(result.hasDirective).toBe(true);
-      expect(result.rawModel).toBe("gpt-5");
-      expect(result.cleaned).toBe("");
+      expect(result.hasDirective).toBe(false);
+      expect(result.rawModel).toBeUndefined();
+      expect(result.cleaned).toBe("/models gpt-5");
+    });
+
+    it("does not parse /models as a /model directive (no args)", () => {
+      const result = extractModelDirective("/models");
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleaned).toBe("/models");
     });
 
     it("extracts /model with provider/model format", () => {

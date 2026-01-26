@@ -1,252 +1,139 @@
-import { describe, expect, it } from "vitest";
-
-import type { ClawdbotConfig } from "../config/config.js";
-import { DEFAULT_PROVIDER } from "./defaults.js";
+import { describe, it, expect, vi } from "vitest";
 import {
-  buildAllowedModelSet,
-  modelKey,
   parseModelRef,
-  resolveAllowedModelRef,
-  resolveHooksGmailModel,
+  resolveModelRefFromString,
+  resolveConfiguredModelRef,
+  buildModelAliasIndex,
+  normalizeProviderId,
+  modelKey,
 } from "./model-selection.js";
+import type { ClawdbotConfig } from "../config/config.js";
 
-const catalog = [
-  {
-    provider: "openai",
-    id: "gpt-4",
-    name: "GPT-4",
-  },
-];
-
-describe("buildAllowedModelSet", () => {
-  it("always allows the configured default model", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-4": { alias: "gpt4" },
-          },
-        },
-      },
-    } as ClawdbotConfig;
-
-    const allowed = buildAllowedModelSet({
-      cfg,
-      catalog,
-      defaultProvider: "claude-cli",
-      defaultModel: "opus-4.5",
-    });
-
-    expect(allowed.allowAny).toBe(false);
-    expect(allowed.allowedKeys.has(modelKey("openai", "gpt-4"))).toBe(true);
-    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(true);
-  });
-
-  it("includes the default model when no allowlist is set", () => {
-    const cfg = {
-      agents: { defaults: {} },
-    } as ClawdbotConfig;
-
-    const allowed = buildAllowedModelSet({
-      cfg,
-      catalog,
-      defaultProvider: "claude-cli",
-      defaultModel: "opus-4.5",
-    });
-
-    expect(allowed.allowAny).toBe(true);
-    expect(allowed.allowedKeys.has(modelKey("openai", "gpt-4"))).toBe(true);
-    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(true);
-  });
-
-  it("allows explicit custom providers from models.providers", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "moonshot/kimi-k2-0905-preview": { alias: "kimi" },
-          },
-        },
-      },
-      models: {
-        mode: "merge",
-        providers: {
-          moonshot: {
-            baseUrl: "https://api.moonshot.ai/v1",
-            apiKey: "x",
-            api: "openai-completions",
-            models: [{ id: "kimi-k2-0905-preview", name: "Kimi" }],
-          },
-        },
-      },
-    } as ClawdbotConfig;
-
-    const allowed = buildAllowedModelSet({
-      cfg,
-      catalog: [],
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-    });
-
-    expect(allowed.allowAny).toBe(false);
-    expect(allowed.allowedKeys.has(modelKey("moonshot", "kimi-k2-0905-preview"))).toBe(true);
-  });
-});
-
-describe("parseModelRef", () => {
-  it("normalizes anthropic/opus-4.5 to claude-opus-4-5", () => {
-    const ref = parseModelRef("anthropic/opus-4.5", "anthropic");
-    expect(ref).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-4-5",
+describe("model-selection", () => {
+  describe("normalizeProviderId", () => {
+    it("should normalize provider names", () => {
+      expect(normalizeProviderId("Anthropic")).toBe("anthropic");
+      expect(normalizeProviderId("Z.ai")).toBe("zai");
+      expect(normalizeProviderId("z-ai")).toBe("zai");
+      expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
+      expect(normalizeProviderId("qwen")).toBe("qwen-portal");
     });
   });
 
-  it("normalizes google gemini 3 models to preview ids", () => {
-    expect(parseModelRef("google/gemini-3-pro", "anthropic")).toEqual({
-      provider: "google",
-      model: "gemini-3-pro-preview",
-    });
-    expect(parseModelRef("google/gemini-3-flash", "anthropic")).toEqual({
-      provider: "google",
-      model: "gemini-3-flash-preview",
-    });
-  });
-
-  it("normalizes default-provider google models", () => {
-    expect(parseModelRef("gemini-3-pro", "google")).toEqual({
-      provider: "google",
-      model: "gemini-3-pro-preview",
-    });
-  });
-});
-
-describe("resolveHooksGmailModel", () => {
-  it("returns null when hooks.gmail.model is not set", () => {
-    const cfg = {} satisfies ClawdbotConfig;
-    const result = resolveHooksGmailModel({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when hooks.gmail.model is empty", () => {
-    const cfg = {
-      hooks: { gmail: { model: "" } },
-    } satisfies ClawdbotConfig;
-    const result = resolveHooksGmailModel({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    expect(result).toBeNull();
-  });
-
-  it("parses provider/model from hooks.gmail.model", () => {
-    const cfg = {
-      hooks: { gmail: { model: "openrouter/meta-llama/llama-3.3-70b:free" } },
-    } satisfies ClawdbotConfig;
-    const result = resolveHooksGmailModel({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    expect(result).toEqual({
-      provider: "openrouter",
-      model: "meta-llama/llama-3.3-70b:free",
-    });
-  });
-
-  it("resolves alias from agent.models", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
-          },
-        },
-      },
-      hooks: { gmail: { model: "Sonnet" } },
-    } satisfies ClawdbotConfig;
-    const result = resolveHooksGmailModel({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    expect(result).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet-4-1",
-    });
-  });
-
-  it("uses default provider when model omits provider", () => {
-    const cfg = {
-      hooks: { gmail: { model: "claude-haiku-3-5" } },
-    } satisfies ClawdbotConfig;
-    const result = resolveHooksGmailModel({
-      cfg,
-      defaultProvider: "anthropic",
-    });
-    expect(result).toEqual({
-      provider: "anthropic",
-      model: "claude-haiku-3-5",
-    });
-  });
-});
-
-describe("resolveAllowedModelRef", () => {
-  it("resolves aliases when allowed", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
-          },
-        },
-      },
-    } satisfies ClawdbotConfig;
-    const resolved = resolveAllowedModelRef({
-      cfg,
-      catalog: [
-        {
-          provider: "anthropic",
-          id: "claude-sonnet-4-1",
-          name: "Sonnet",
-        },
-      ],
-      raw: "Sonnet",
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-    });
-    expect("error" in resolved).toBe(false);
-    if ("ref" in resolved) {
-      expect(resolved.ref).toEqual({
+  describe("parseModelRef", () => {
+    it("should parse full model refs", () => {
+      expect(parseModelRef("anthropic/claude-3-5-sonnet", "openai")).toEqual({
         provider: "anthropic",
-        model: "claude-sonnet-4-1",
+        model: "claude-3-5-sonnet",
       });
-    }
+    });
+
+    it("should use default provider if none specified", () => {
+      expect(parseModelRef("claude-3-5-sonnet", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-3-5-sonnet",
+      });
+    });
+
+    it("should return null for empty strings", () => {
+      expect(parseModelRef("", "anthropic")).toBeNull();
+      expect(parseModelRef("  ", "anthropic")).toBeNull();
+    });
+
+    it("should handle invalid slash usage", () => {
+      expect(parseModelRef("/", "anthropic")).toBeNull();
+      expect(parseModelRef("anthropic/", "anthropic")).toBeNull();
+      expect(parseModelRef("/model", "anthropic")).toBeNull();
+    });
   });
 
-  it("rejects disallowed models", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-4": { alias: "GPT4" },
+  describe("buildModelAliasIndex", () => {
+    it("should build alias index from config", () => {
+      const cfg: Partial<ClawdbotConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-3-5-sonnet": { alias: "fast" },
+              "openai/gpt-4o": { alias: "smart" },
+            },
           },
         },
-      },
-    } satisfies ClawdbotConfig;
-    const resolved = resolveAllowedModelRef({
-      cfg,
-      catalog: [
-        { provider: "openai", id: "gpt-4", name: "GPT-4" },
-        { provider: "anthropic", id: "claude-sonnet-4-1", name: "Sonnet" },
-      ],
-      raw: "anthropic/claude-sonnet-4-1",
-      defaultProvider: "openai",
-      defaultModel: "gpt-4",
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as ClawdbotConfig,
+        defaultProvider: "anthropic",
+      });
+
+      expect(index.byAlias.get("fast")?.ref).toEqual({
+        provider: "anthropic",
+        model: "claude-3-5-sonnet",
+      });
+      expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
+      expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
     });
-    expect(resolved).toEqual({
-      error: "model not allowed: anthropic/claude-sonnet-4-1",
+  });
+
+  describe("resolveModelRefFromString", () => {
+    it("should resolve from string with alias", () => {
+      const index = {
+        byAlias: new Map([
+          ["fast", { alias: "fast", ref: { provider: "anthropic", model: "sonnet" } }],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "fast",
+        defaultProvider: "openai",
+        aliasIndex: index,
+      });
+
+      expect(resolved?.ref).toEqual({ provider: "anthropic", model: "sonnet" });
+      expect(resolved?.alias).toBe("fast");
+    });
+
+    it("should resolve direct ref if no alias match", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openai/gpt-4",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("resolveConfiguredModelRef", () => {
+    it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const cfg: Partial<ClawdbotConfig> = {
+        agents: {
+          defaults: {
+            model: "claude-3-5-sonnet",
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as ClawdbotConfig,
+        defaultProvider: "google",
+        defaultModel: "gemini-pro",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("should use default provider/model if config is empty", () => {
+      const cfg: Partial<ClawdbotConfig> = {};
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as ClawdbotConfig,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+      });
+      expect(result).toEqual({ provider: "openai", model: "gpt-4" });
     });
   });
 });

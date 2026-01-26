@@ -1,0 +1,39 @@
+{
+  "name": "@clawdbot/googlechat",
+  "version": "2026.1.25",
+  "type": "module",
+  "description": "Clawdbot Google Chat channel plugin",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "googlechat",
+      "label": "Google Chat",
+      "selectionLabel": "Google Chat (Chat API)",
+      "detailLabel": "Google Chat",
+      "docsPath": "/channels/googlechat",
+      "docsLabel": "googlechat",
+      "blurb": "Google Workspace Chat app via HTTP webhooks.",
+      "aliases": [
+        "gchat",
+        "google-chat"
+      ],
+      "order": 55
+    },
+    "install": {
+      "npmSpec": "@clawdbot/googlechat",
+      "localPath": "extensions/googlechat",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {
+    "google-auth-library": "^10.5.0"
+  },
+  "devDependencies": {
+    "clawdbot": "workspace:*"
+  },
+  "peerDependencies": {
+    "clawdbot": ">=2026.1.25"
+  }
+}

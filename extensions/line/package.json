@@ -1,0 +1,29 @@
+{
+  "name": "@clawdbot/line",
+  "version": "2026.1.25",
+  "type": "module",
+  "description": "Clawdbot LINE channel plugin",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "line",
+      "label": "LINE",
+      "selectionLabel": "LINE (Messaging API)",
+      "docsPath": "/channels/line",
+      "docsLabel": "line",
+      "blurb": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+      "order": 75,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@clawdbot/line",
+      "localPath": "extensions/line",
+      "defaultChoice": "npm"
+    }
+  },
+  "devDependencies": {
+    "clawdbot": "workspace:*"
+  }
+}

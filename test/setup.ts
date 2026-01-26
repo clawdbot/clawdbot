@@ -1,5 +1,8 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
+// Ensure Vitest environment is properly set
+process.env.VITEST = "true";
+
 import type {
   ChannelId,
   ChannelOutboundAdapter,

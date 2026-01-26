@@ -22,11 +22,11 @@ parallel:
   security = session: security_expert
     prompt: "Perform a deep security audit of the changes. Look for OWASP top 10 issues."
     context: overview
-  
+
   perf = session: performance_expert
     prompt: "Analyze the performance implications. Identify potential bottlenecks or regressions."
     context: overview
-  
+
   style = session: reviewer
     prompt: "Review for code style, maintainability, and adherence to best practices."
     context: overview

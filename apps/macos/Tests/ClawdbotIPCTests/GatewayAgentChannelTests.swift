@@ -11,6 +11,7 @@ import Testing
         #expect(GatewayAgentChannel.last.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.whatsapp.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.telegram.shouldDeliver(true) == true)
+        #expect(GatewayAgentChannel.googlechat.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.bluebubbles.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.last.shouldDeliver(false) == false)
     }
@@ -19,6 +20,7 @@ import Testing
         #expect(GatewayAgentChannel(raw: nil) == .last)
         #expect(GatewayAgentChannel(raw: "  ") == .last)
         #expect(GatewayAgentChannel(raw: "WEBCHAT") == .webchat)
+        #expect(GatewayAgentChannel(raw: "googlechat") == .googlechat)
         #expect(GatewayAgentChannel(raw: "BLUEBUBBLES") == .bluebubbles)
         #expect(GatewayAgentChannel(raw: "unknown") == .last)
     }

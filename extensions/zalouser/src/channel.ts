@@ -506,6 +506,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       if (remaining.length) chunks.push(remaining);
       return chunks;
     },
+    chunkerMode: "text",
     textChunkLimit: 2000,
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg as ClawdbotConfig, accountId });

@@ -10,6 +10,7 @@ export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): Plu
     providers: [],
     gatewayHandlers: {},
     httpHandlers: [],
+    httpRoutes: [],
     cliRegistrars: [],
     services: [],
     commands: [],
@@ -20,5 +21,6 @@ export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): Plu
     ...merged,
     gatewayHandlers: merged.gatewayHandlers ?? {},
     httpHandlers: merged.httpHandlers ?? [],
+    httpRoutes: merged.httpRoutes ?? [],
   };
 };

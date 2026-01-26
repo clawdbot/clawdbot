@@ -20,6 +20,7 @@ import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../conf
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
@@ -136,6 +137,13 @@ export const buildTelegramMessageContext = async ({
       id: peerId,
     },
   });
+  const baseSessionKey = route.sessionKey;
+  const dmThreadId = !isGroup ? resolvedThreadId : undefined;
+  const threadKeys =
+    dmThreadId != null
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+      : null;
+  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
@@ -325,7 +333,7 @@ export const buildTelegramMessageContext = async ({
   const activationOverride = resolveGroupActivation({
     chatId,
     messageThreadId: resolvedThreadId,
-    sessionKey: route.sessionKey,
+    sessionKey: sessionKey,
     agentId: route.agentId,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);
@@ -432,7 +440,7 @@ export const buildTelegramMessageContext = async ({
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
-    sessionKey: route.sessionKey,
+    sessionKey: sessionKey,
   });
   const body = formatInboundEnvelope({
     channel: "Telegram",
@@ -482,7 +490,7 @@ export const buildTelegramMessageContext = async ({
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
     To: `telegram:${chatId}`,
-    SessionKey: route.sessionKey,
+    SessionKey: sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
@@ -526,7 +534,7 @@ export const buildTelegramMessageContext = async ({
 
   await recordInboundSession({
     storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    sessionKey: ctxPayload.SessionKey ?? sessionKey,
     ctx: ctxPayload,
     updateLastRoute: !isGroup
       ? {

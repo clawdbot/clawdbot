@@ -8,21 +8,37 @@ read_when:
 
 # Text-to-speech (TTS)
 
-Clawdbot can convert outbound replies into audio using ElevenLabs or OpenAI.
+Clawdbot can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
 It works anywhere Clawdbot can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
-## Required keys
+### Edge TTS notes
 
-At least one of:
+Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
+library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
+not require an API key. `node-edge-tts` exposes speech configuration options and
+output formats, but not all options are supported by the Edge service. citeturn2search0
+
+Because Edge TTS is a public web service without a published SLA or quota, treat it
+as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
+Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
+does not publish limits, so assume similar or lower limits. citeturn0search3
+
+## Optional keys
+
+If you want OpenAI or ElevenLabs:
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-If both are configured, the selected provider is used first and the other is a fallback.
+Edge TTS does **not** require an API key. If no API keys are found, Clawdbot defaults
+to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
+
+If multiple providers are configured, the selected provider is used first and the others are fallback options.
 Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
 so that provider must also be authenticated if you enable summaries.
 
@@ -32,11 +48,16 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
+- [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
 ## Is it enabled by default?
 
-No. TTS is **disabled** by default. Enable it in config or with `/tts on`,
-which writes a local preference override.
+No. Auto‑TTS is **off** by default. Enable it in config with
+`messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
+
+Edge TTS **is** enabled by default once TTS is on, and is used automatically
+when no OpenAI or ElevenLabs API keys are available.
 
 ## Config
 
@@ -49,7 +70,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       provider: "elevenlabs"
     }
   }
@@ -62,7 +83,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       provider: "openai",
       summaryModel: "openai/gpt-4.1-mini",
       modelOverrides: {
@@ -94,16 +115,63 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Edge TTS primary (no API key)
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "edge",
+      edge: {
+        enabled: true,
+        voice: "en-US-MichelleNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        rate: "+10%",
+        pitch: "-5%"
+      }
+    }
+  }
+}
+```
+
+### Disable Edge TTS
+
+```json5
+{
+  messages: {
+    tts: {
+      edge: {
+        enabled: false
+      }
+    }
+  }
+}
+```
+
 ### Custom limits + prefs path
 
 ```json5
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always",
       maxTextLength: 4000,
       timeoutMs: 30000,
       prefsPath: "~/.clawdbot/settings/tts.json"
+    }
+  }
+}
+```
+
+### Only reply with audio after an inbound voice note
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "inbound"
     }
   }
 }
@@ -115,7 +183,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 {
   messages: {
     tts: {
-      enabled: true
+      auto: "always"
     }
   }
 }
@@ -129,15 +197,20 @@ Then run:
 
 ### Notes on fields
 
-- `enabled`: master toggle (default `false`; local prefs can override).
+- `auto`: auto‑TTS mode (`off`, `always`, `inbound`, `tagged`).
+  - `inbound` only sends audio after an inbound voice note.
+  - `tagged` only sends audio when the reply includes `[[tts]]` tags.
+- `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"` or `"openai"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- If `provider` is **unset**, Clawdbot prefers `openai` (if key), then `elevenlabs` (if key),
+  otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
-- `prefsPath`: override the local prefs JSON path.
+- `prefsPath`: override the local prefs JSON path (provider/limit/summary).
 - `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `elevenlabs.voiceSettings`:
@@ -147,10 +220,20 @@ Then run:
 - `elevenlabs.applyTextNormalization`: `auto|on|off`
 - `elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
 - `elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
+- `edge.enabled`: allow Edge TTS usage (default `true`; no API key).
+- `edge.voice`: Edge neural voice name (e.g. `en-US-MichelleNeural`).
+- `edge.lang`: language code (e.g. `en-US`).
+- `edge.outputFormat`: Edge output format (e.g. `audio-24khz-48kbitrate-mono-mp3`).
+  - See Microsoft Speech output formats for valid values; not all formats are supported by Edge.
+- `edge.rate` / `edge.pitch` / `edge.volume`: percent strings (e.g. `+10%`, `-5%`).
+- `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
+- `edge.proxy`: proxy URL for Edge TTS requests.
+- `edge.timeoutMs`: request timeout override (ms).
 
 ## Model-driven overrides (default on)
 
 By default, the model **can** emit TTS directives for a single reply.
+When `messages.tts.auto` is `tagged`, these directives are required to trigger audio.
 
 When enabled, the model can emit `[[tts:...]]` directives to override the voice
 for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
@@ -167,7 +250,7 @@ Here you go.
 ```
 
 Available directive keys (when enabled):
-- `provider` (`openai` | `elevenlabs`)
+- `provider` (`openai` | `elevenlabs` | `edge`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
@@ -225,8 +308,15 @@ These override `messages.tts.*` for that host.
   - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
+- **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
+  - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
+    from the Edge service. citeturn2search0
+  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
+  - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
+    guaranteed Opus voice notes. citeturn1search1
+  - If the configured Edge output format fails, Clawdbot retries with MP3.
 
-This is not configurable; Telegram expects Opus for voice-note UX.
+OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
 
 ## Auto-TTS behavior
 
@@ -264,8 +354,10 @@ Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
 ```
-/tts on
 /tts off
+/tts always
+/tts inbound
+/tts tagged
 /tts status
 /tts provider openai
 /tts limit 2000
@@ -276,6 +368,7 @@ Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
 Notes:
 - Commands require an authorized sender (allowlist/owner rules still apply).
 - `commands.text` or native command registration must be enabled.
+- `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
 - `limit` and `summary` are stored in local prefs, not the main config.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
 

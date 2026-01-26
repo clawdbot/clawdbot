@@ -5,6 +5,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
 import { ToolPolicySchema, ValyuConfigSchema } from "./zod-schema.leaf.js";
@@ -424,6 +425,7 @@ export const ToolsSchema = z
     byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
+    links: ToolsLinksSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

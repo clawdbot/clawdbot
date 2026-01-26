@@ -192,6 +192,30 @@ Use this if you want diagnostics events available to plugins or custom sinks:
 }
 ```
 
+### Diagnostics flags (targeted logs)
+
+Use flags to turn on extra, targeted debug logs without raising `logging.level`.
+Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
+
+```json
+{
+  "diagnostics": {
+    "flags": ["telegram.http"]
+  }
+}
+```
+
+Env override (one-off):
+
+```
+CLAWDBOT_DIAGNOSTICS=telegram.http,telegram.payload
+```
+
+Notes:
+- Flag logs go to the standard log file (same as `logging.file`).
+- Output is still redacted according to `logging.redactSensitive`.
+- Full guide: [/diagnostics/flags](/diagnostics/flags).
+
 ### Export to OpenTelemetry
 
 Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This

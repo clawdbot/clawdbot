@@ -1,4 +1,4 @@
-import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -15,6 +15,7 @@ export async function deliverWebReply(params: {
   msg: WebInboundMsg;
   maxMediaBytes: number;
   textLimit: number;
+  chunkMode?: ChunkMode;
   replyLogger: {
     info: (obj: unknown, msg: string) => void;
     warn: (obj: unknown, msg: string) => void;
@@ -26,8 +27,9 @@ export async function deliverWebReply(params: {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
   const tableMode = params.tableMode ?? "code";
+  const chunkMode = params.chunkMode ?? "length";
   const convertedText = convertMarkdownTables(replyResult.text || "", tableMode);
-  const textChunks = chunkMarkdownText(convertedText, textLimit);
+  const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl

@@ -152,6 +152,62 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("42");
   });
 
+  it("adds link_preview_options when previews are disabled in config", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 7,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    loadConfig.mockReturnValue({
+      channels: { telegram: { linkPreview: false } },
+    });
+
+    await sendMessageTelegram(chatId, "hi", { token: "tok", api });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hi", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("keeps link_preview_options on plain-text fallback when disabled", async () => {
+    const chatId = "123";
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({
+        message_id: 42,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    loadConfig.mockReturnValue({
+      channels: { telegram: { linkPreview: false } },
+    });
+
+    await sendMessageTelegram(chatId, "_oops_", {
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "<i>oops</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_oops_", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
   it("uses native fetch for BAN compatibility when api is omitted", async () => {
     const originalFetch = globalThis.fetch;
     const originalBun = (globalThis as { Bun?: unknown }).Bun;

@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
+import { isTrustedProxyAddress, resolveGatewayClientIp } from "./net.js";
 export type ResolvedGatewayAuthMode = "none" | "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -53,9 +54,26 @@ function getHostName(hostHeader?: string): string {
   return name ?? "";
 }
 
-function isLocalDirectRequest(req?: IncomingMessage): boolean {
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveRequestClientIp(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+): string | undefined {
+  if (!req) return undefined;
+  return resolveGatewayClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    realIp: headerValue(req.headers?.["x-real-ip"]),
+    trustedProxies,
+  });
+}
+
+function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
   if (!req) return false;
-  const clientIp = req.socket?.remoteAddress ?? "";
+  const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
   if (!isLoopbackAddress(clientIp)) return false;
 
   const host = getHostName(req.headers?.host);
@@ -68,7 +86,8 @@ function isLocalDirectRequest(req?: IncomingMessage): boolean {
     req.headers?.["x-forwarded-host"],
   );
 
-  return (hostIsLocal || hostIsTailscaleServe) && !hasForwarded;
+  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
+  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -135,9 +154,10 @@ export async function authorizeGatewayConnect(params: {
   auth: ResolvedGatewayAuth;
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
+  trustedProxies?: string[];
 }): Promise<GatewayAuthResult> {
-  const { auth, connectAuth, req } = params;
-  const localDirect = isLocalDirectRequest(req);
+  const { auth, connectAuth, req, trustedProxies } = params;
+  const localDirect = isLocalDirectRequest(req, trustedProxies);
 
   if (auth.allowTailscale && !localDirect) {
     const tailscaleUser = getTailscaleUser(req);

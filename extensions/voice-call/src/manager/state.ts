@@ -48,4 +48,3 @@ export function addTranscriptEntry(
   };
   call.transcript.push(entry);
 }
-

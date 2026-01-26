@@ -8,7 +8,7 @@ read_when:
 # `clawdbot message`
 
 Single outbound command for sending messages and channel actions
-(Discord/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/MS Teams).
+(Discord/Google Chat/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/MS Teams).
 
 ## Usage
 
@@ -19,12 +19,13 @@ clawdbot message <subcommand> [flags]
 Channel selection:
 - `--channel` required if more than one channel is configured.
 - If exactly one channel is configured, it becomes the default.
-- Values: `whatsapp|telegram|discord|slack|mattermost|signal|imessage|msteams` (Mattermost requires plugin)
+- Values: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams` (Mattermost requires plugin)
 
 Target formats (`--target`):
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
 - Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are treated as channels)
+- Google Chat: `spaces/<spaceId>` or `users/<userId>`
 - Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
 - Mattermost (plugin): `channel:<id>`, `user:<id>`, or `@username` (bare ids are treated as channels)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
@@ -50,7 +51,7 @@ Name lookup:
 ### Core
 
 - `send`
-  - Channels: WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams
   - Required: `--target`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
@@ -65,14 +66,15 @@ Name lookup:
   - Discord only: `--poll-duration-hours`, `--message`
 
 - `react`
-  - Channels: Discord/Slack/Telegram/WhatsApp
+  - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
   - Required: `--message-id`, `--target`
-  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`
+  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--target-author`, `--target-author-uuid`
   - Note: `--remove` requires `--emoji` (omit `--emoji` to clear own reactions where supported; see /tools/reactions)
   - WhatsApp only: `--participant`, `--from-me`
+  - Signal group reactions: `--target-author` or `--target-author-uuid` required
 
 - `reactions`
-  - Channels: Discord/Slack
+  - Channels: Discord/Google Chat/Slack
   - Required: `--message-id`, `--target`
   - Optional: `--limit`
 
@@ -210,6 +212,13 @@ React in Slack:
 ```
 clawdbot message react --channel slack \
   --target C123 --message-id 456 --emoji "✅"
+```
+
+React in a Signal group:
+```
+clawdbot message react --channel signal \
+  --target signal:group:abc123 --message-id 1737630212345 \
+  --emoji "✅" --target-author-uuid 123e4567-e89b-12d3-a456-426614174000
 ```
 
 Send Telegram inline buttons:

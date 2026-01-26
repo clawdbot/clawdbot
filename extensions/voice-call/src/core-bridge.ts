@@ -2,10 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import type { VoiceCallTtsConfig } from "./config.js";
+
 export type CoreConfig = {
   session?: {
     store?: string;
   };
+  messages?: {
+    tts?: VoiceCallTtsConfig;
+  };
+  [key: string]: unknown;
 };
 
 type CoreAgentDeps = {

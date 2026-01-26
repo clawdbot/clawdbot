@@ -1,4 +1,4 @@
-import { normalizeAgentId } from "../routing/session-key.js";
+import { sanitizeAgentId } from "../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
@@ -76,7 +76,7 @@ export function normalizeCronJobInput(
       next.agentId = null;
     } else if (typeof agentId === "string") {
       const trimmed = agentId.trim();
-      if (trimmed) next.agentId = normalizeAgentId(trimmed);
+      if (trimmed) next.agentId = sanitizeAgentId(trimmed);
       else delete next.agentId;
     }
   }

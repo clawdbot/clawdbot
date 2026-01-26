@@ -1189,9 +1189,53 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToId).toBe("msg-0");
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
-      // Body uses just the ID (no sender) for token savings
-      expect(callArgs.ctx.Body).toContain("[Replying to id:msg-0]");
-      expect(callArgs.ctx.Body).toContain("original message");
+      // Body uses inline [[reply_to:N]] tag format
+      expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
+    });
+
+    it("preserves part index prefixes in reply tags when short IDs are unavailable", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          replyTo: {
+            guid: "p:1/msg-0",
+            text: "original message",
+            handle: { address: "+15550000000", displayName: "Alice" },
+          },
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.ReplyToId).toBe("p:1/msg-0");
+      expect(callArgs.ctx.ReplyToIdFull).toBe("p:1/msg-0");
+      expect(callArgs.ctx.Body).toContain("[[reply_to:p:1/msg-0]]");
     });
 
     it("hydrates missing reply sender/body from the recent-message cache", async () => {
@@ -1260,9 +1304,8 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToIdFull).toBe("cache-msg-0");
       expect(callArgs.ctx.ReplyToBody).toBe("original message (cached)");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
-      // Body uses just the short ID (no sender) for token savings
-      expect(callArgs.ctx.Body).toContain("[Replying to id:1]");
-      expect(callArgs.ctx.Body).toContain("original message (cached)");
+      // Body uses inline [[reply_to:N]] tag format with short ID
+      expect(callArgs.ctx.Body).toContain("[[reply_to:1]]");
     });
 
     it("falls back to threadOriginatorGuid when reply metadata is absent", async () => {
@@ -1302,6 +1345,88 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+    });
+  });
+
+  describe("tapback text parsing", () => {
+    it("does not rewrite tapback-like text without metadata", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "Loved this idea",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.RawBody).toBe("Loved this idea");
+      expect(callArgs.ctx.Body).toContain("Loved this idea");
+      expect(callArgs.ctx.Body).not.toContain("reacted with");
+    });
+
+    it("parses tapback text with custom emoji when metadata is present", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Reacted 😅 to "nice one"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-2",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.RawBody).toBe("reacted with 😅");
+      expect(callArgs.ctx.Body).toContain("reacted with 😅");
+      expect(callArgs.ctx.Body).not.toContain("[[reply_to:");
     });
   });
 
@@ -1759,7 +1884,7 @@ describe("BlueBubbles webhook monitor", () => {
       await flushAsync();
 
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
-        expect.stringContaining("reaction added"),
+        expect.stringContaining("reacted with ❤️ [[reply_to:"),
         expect.any(Object),
       );
     });
@@ -1799,7 +1924,7 @@ describe("BlueBubbles webhook monitor", () => {
       await flushAsync();
 
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
-        expect.stringContaining("reaction removed"),
+        expect.stringContaining("removed ❤️ reaction [[reply_to:"),
         expect.any(Object),
       );
     });
@@ -1905,7 +2030,7 @@ describe("BlueBubbles webhook monitor", () => {
           handle: { address: "+15551234567" },
           isGroup: false,
           isFromMe: false,
-          guid: "msg-uuid-12345",
+          guid: "p:1/msg-uuid-12345",
           chatGuid: "iMessage;-;+15551234567",
           date: Date.now(),
         },
@@ -1921,7 +2046,7 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       // MessageSid should be short ID "1" instead of full UUID
       expect(callArgs.ctx.MessageSid).toBe("1");
-      expect(callArgs.ctx.MessageSidFull).toBe("msg-uuid-12345");
+      expect(callArgs.ctx.MessageSidFull).toBe("p:1/msg-uuid-12345");
     });
 
     it("resolves short ID back to UUID", async () => {
@@ -1945,7 +2070,7 @@ describe("BlueBubbles webhook monitor", () => {
           handle: { address: "+15551234567" },
           isGroup: false,
           isFromMe: false,
-          guid: "msg-uuid-12345",
+          guid: "p:1/msg-uuid-12345",
           chatGuid: "iMessage;-;+15551234567",
           date: Date.now(),
         },
@@ -1958,7 +2083,7 @@ describe("BlueBubbles webhook monitor", () => {
       await flushAsync();
 
       // The short ID "1" should resolve back to the full UUID
-      expect(resolveBlueBubblesMessageId("1")).toBe("msg-uuid-12345");
+      expect(resolveBlueBubblesMessageId("1")).toBe("p:1/msg-uuid-12345");
     });
 
     it("returns UUID unchanged when not in cache", () => {

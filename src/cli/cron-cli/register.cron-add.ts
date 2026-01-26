@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { sanitizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -140,7 +140,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const agentId =
             typeof opts.agent === "string" && opts.agent.trim()
-              ? normalizeAgentId(opts.agent.trim())
+              ? sanitizeAgentId(opts.agent.trim())
               : undefined;
 
           const payload = (() => {

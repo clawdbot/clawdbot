@@ -67,6 +67,22 @@ Plugins can register:
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
+## Runtime helpers
+
+Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
+
+```ts
+const result = await api.runtime.tts.textToSpeechTelephony({
+  text: "Hello from Clawdbot",
+  cfg: api.config,
+});
+```
+
+Notes:
+- Uses core `messages.tts` configuration (OpenAI or ElevenLabs).
+- Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
+- Edge TTS is not supported for telephony.
+
 ## Discovery & precedence
 
 Clawdbot scans, in order:

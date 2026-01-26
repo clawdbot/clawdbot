@@ -68,7 +68,7 @@ export async function initiateCall(
     // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
     if (mode === "notify" && initialMessage) {
-      const pollyVoice = mapVoiceToPolly(ctx.config.tts.voice);
+      const pollyVoice = mapVoiceToPolly(ctx.config.tts?.openai?.voice);
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
     }
@@ -120,11 +120,13 @@ export async function speak(
 
     addTranscriptEntry(call, "bot", text);
 
+    const voice =
+      ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
     await ctx.provider.playTts({
       callId,
       providerCallId: call.providerCallId,
       text,
-      voice: ctx.config.tts.voice,
+      voice,
     });
 
     return { success: true };
@@ -244,4 +246,3 @@ export async function endCall(
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
-

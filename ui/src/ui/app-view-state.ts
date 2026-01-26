@@ -19,7 +19,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type { ChatQueueItem, CronFormState } from "./ui-types";
+import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
 import type {
@@ -49,6 +49,7 @@ export type AppViewState = {
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
+  chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
@@ -74,6 +75,7 @@ export type AppViewState = {
   execApprovalError: string | null;
   configLoading: boolean;
   configRaw: string;
+  configRawOriginal: string;
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
@@ -84,6 +86,7 @@ export type AppViewState = {
   configSchemaLoading: boolean;
   configUiHints: Record<string, unknown>;
   configForm: Record<string, unknown> | null;
+  configFormOriginal: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
   channelsLoading: boolean;
   channelsSnapshot: ChannelsStatusSnapshot | null;

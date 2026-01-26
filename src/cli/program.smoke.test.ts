@@ -67,6 +67,28 @@ describe("cli program (smoke)", () => {
     expect(messageCommand).toHaveBeenCalled();
   });
 
+  it("runs message react with signal author fields", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "message",
+        "react",
+        "--channel",
+        "signal",
+        "--target",
+        "signal:group:abc123",
+        "--message-id",
+        "1737630212345",
+        "--emoji",
+        "✅",
+        "--target-author-uuid",
+        "123e4567-e89b-12d3-a456-426614174000",
+      ],
+      { from: "user" },
+    );
+    expect(messageCommand).toHaveBeenCalled();
+  });
+
   it("runs status command", async () => {
     const program = buildProgram();
     await program.parseAsync(["status"], { from: "user" });

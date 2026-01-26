@@ -1,3 +1,5 @@
+import { stripReasoningTagsFromText } from "../../../src/shared/text/reasoning-tags.js";
+
 export function formatMs(ms?: number | null): string {
   if (!ms && ms !== 0) return "n/a";
   return new Date(ms).toLocaleString();
@@ -67,38 +69,6 @@ export function parseList(input: string): string[] {
     .filter((v) => v.length > 0);
 }
 
-const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
-const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
-const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
-
 export function stripThinkingTags(value: string): string {
-  if (!value) return value;
-  const hasOpen = THINKING_OPEN_RE.test(value);
-  const hasClose = THINKING_CLOSE_RE.test(value);
-  if (!hasOpen && !hasClose) return value;
-  // If we don't have a balanced pair, avoid dropping trailing content.
-  if (hasOpen !== hasClose) {
-    if (!hasOpen) return value.replace(THINKING_CLOSE_RE, "").trimStart();
-    return value.replace(THINKING_OPEN_RE, "").trimStart();
-  }
-
-  if (!THINKING_TAG_RE.test(value)) return value;
-  THINKING_TAG_RE.lastIndex = 0;
-
-  let result = "";
-  let lastIndex = 0;
-  let inThinking = false;
-  for (const match of value.matchAll(THINKING_TAG_RE)) {
-    const idx = match.index ?? 0;
-    if (!inThinking) {
-      result += value.slice(lastIndex, idx);
-    }
-    const tag = match[0].toLowerCase();
-    inThinking = !tag.includes("/");
-    lastIndex = idx + match[0].length;
-  }
-  if (!inThinking) {
-    result += value.slice(lastIndex);
-  }
-  return result.trimStart();
+  return stripReasoningTagsFromText(value, { mode: "preserve", trim: "start" });
 }

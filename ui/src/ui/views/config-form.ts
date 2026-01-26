@@ -5,4 +5,3 @@ export {
 } from "./config-form.analyze";
 export { renderNode } from "./config-form.node";
 export { schemaType, type JsonSchema } from "./config-form.shared";
-

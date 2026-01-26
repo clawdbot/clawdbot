@@ -80,6 +80,7 @@ primary_region = "iad"
 |---------|-----|
 | `--bind lan` | Binds to `0.0.0.0` so Fly's proxy can reach the gateway |
 | `--allow-unconfigured` | Starts without a config file (you'll create one after) |
+| `internal_port = 3000` | Must match `--port 3000` (or `CLAWDBOT_GATEWAY_PORT`) for Fly health checks |
 | `memory = "2048mb"` | 512MB is too small; 2GB recommended |
 | `CLAWDBOT_STATE_DIR = "/data"` | Persists state on the volume |
 
@@ -181,7 +182,7 @@ cat > /data/clawdbot.json << 'EOF'
     "bind": "auto"
   },
   "meta": {
-    "lastTouchedVersion": "2026.1.24"
+    "lastTouchedVersion": "2026.1.25"
   }
 }
 EOF
@@ -235,6 +236,12 @@ The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 **Fix:** Add `--bind lan` to your process command in `fly.toml`.
 
+### Health checks failing / connection refused
+
+Fly can't reach the gateway on the configured port.
+
+**Fix:** Ensure `internal_port` matches the gateway port (set `--port 3000` or `CLAWDBOT_GATEWAY_PORT=3000`).
+
 ### OOM / Memory Issues
 
 Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, or silent restarts.
@@ -268,11 +275,11 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
-If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/.clawdbot/clawdbot.json` should be read on restart.
+If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/clawdbot.json` should be read on restart.
 
 Verify the config exists:
 ```bash
-fly ssh console --command "cat /data/.clawdbot/clawdbot.json"
+fly ssh console --command "cat /data/clawdbot.json"
 ```
 
 ### Writing Config via SSH
@@ -281,17 +288,23 @@ The `fly ssh console -C` command doesn't support shell redirection. To write a c
 
 ```bash
 # Use echo + tee (pipe from local to remote)
-echo '{"your":"config"}' | fly ssh console -C "tee /data/.clawdbot/clawdbot.json"
+echo '{"your":"config"}' | fly ssh console -C "tee /data/clawdbot.json"
 
 # Or use sftp
 fly sftp shell
-> put /local/path/config.json /data/.clawdbot/clawdbot.json
+> put /local/path/config.json /data/clawdbot.json
 ```
 
 **Note:** `fly sftp` may fail if the file already exists. Delete first:
 ```bash
-fly ssh console --command "rm /data/.clawdbot/clawdbot.json"
+fly ssh console --command "rm /data/clawdbot.json"
 ```
+
+### State Not Persisting
+
+If you lose credentials or sessions after a restart, the state dir is writing to the container filesystem.
+
+**Fix:** Ensure `CLAWDBOT_STATE_DIR=/data` is set in `fly.toml` and redeploy.
 
 ## Updates
 
@@ -330,6 +343,7 @@ fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js g
 - The Dockerfile is compatible with both architectures
 - For WhatsApp/Telegram onboarding, use `fly ssh console`
 - Persistent data lives on the volume at `/data`
+- Signal requires Java + signal-cli; use a custom image and keep memory at 2GB+.
 
 ## Cost
 

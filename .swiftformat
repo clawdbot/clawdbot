@@ -23,7 +23,7 @@
 # Whitespace
 --trimwhitespace always
 --emptybraces no-space
---nospaceoperators ...,..< 
+--nospaceoperators ...,..<
 --ranges no-space
 --someAny true
 --voidtype void

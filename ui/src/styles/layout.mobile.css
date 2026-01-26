@@ -1,12 +1,15 @@
-/* Tablet/Mobile nav fix (under 1100px) - single horizontal scroll row */
+/* ===========================================
+   Mobile Layout
+   =========================================== */
+
+/* Tablet: Horizontal nav */
 @media (max-width: 1100px) {
-  /* Flatten nav into single horizontal scroll */
   .nav {
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
-    gap: 6px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 10px 14px;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
@@ -16,21 +19,18 @@
     display: none;
   }
 
-  /* Nav groups should flow inline, not stack */
   .nav-group {
-    display: contents; /* Flatten group wrapper - items flow directly into .nav */
+    display: contents;
   }
 
   .nav-group__items {
-    display: contents; /* Flatten items wrapper too */
+    display: contents;
   }
 
-  /* Hide group labels on tablet/mobile */
   .nav-label {
     display: none;
   }
 
-  /* Don't hide nav items even if group is "collapsed" */
   .nav-group--collapsed .nav-group__items {
     display: contents;
   }
@@ -38,27 +38,22 @@
   .nav-item {
     padding: 8px 14px;
     font-size: 13px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     white-space: nowrap;
     flex-shrink: 0;
   }
-
-  .nav-item::before {
-    display: none;
-  }
 }
 
-/* Mobile-specific improvements */
+/* Mobile-specific styles */
 @media (max-width: 600px) {
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
   }
 
-  /* Compact topbar for mobile */
+  /* Topbar */
   .topbar {
     padding: 10px 12px;
-    border-radius: 12px;
     gap: 8px;
     flex-direction: row;
     flex-wrap: wrap;
@@ -72,8 +67,7 @@
   }
 
   .brand-title {
-    font-size: 15px;
-    letter-spacing: 0.3px;
+    font-size: 14px;
   }
 
   .brand-sub {
@@ -100,11 +94,10 @@
     display: none;
   }
 
-  /* Horizontal scrollable nav for mobile */
+  /* Nav */
   .nav {
-    padding: 8px;
-    border-radius: 12px;
-    gap: 8px;
+    padding: 8px 10px;
+    gap: 4px;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
@@ -122,18 +115,14 @@
   }
 
   .nav-item {
-    padding: 7px 10px;
+    padding: 6px 10px;
     font-size: 12px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     white-space: nowrap;
     flex-shrink: 0;
   }
 
-  .nav-item::before {
-    display: none;
-  }
-
-  /* Hide page title on mobile - nav already shows where you are */
+  /* Content */
   .content-header {
     display: none;
   }
@@ -143,17 +132,17 @@
     gap: 12px;
   }
 
-  /* Smaller cards on mobile */
+  /* Cards */
   .card {
     padding: 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
   }
 
   .card-title {
-    font-size: 14px;
+    font-size: 13px;
   }
 
-  /* Stat grid adjustments */
+  /* Stats */
   .stat-grid {
     gap: 8px;
     grid-template-columns: repeat(2, 1fr);
@@ -161,24 +150,24 @@
 
   .stat {
     padding: 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
   }
 
   .stat-label {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .stat-value {
-    font-size: 16px;
+    font-size: 18px;
   }
 
-  /* Notes grid */
+  /* Notes */
   .note-grid {
     grid-template-columns: 1fr;
-    gap: 10px;
+    gap: 8px;
   }
 
-  /* Form fields */
+  /* Forms */
   .form-grid {
     grid-template-columns: 1fr;
     gap: 10px;
@@ -188,14 +177,14 @@
   .field textarea,
   .field select {
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     font-size: 14px;
   }
 
   /* Buttons */
   .btn {
     padding: 8px 12px;
-    font-size: 13px;
+    font-size: 12px;
   }
 
   /* Pills */
@@ -204,7 +193,7 @@
     font-size: 12px;
   }
 
-  /* Chat-specific mobile improvements */
+  /* Chat */
   .chat-header {
     flex-direction: column;
     align-items: stretch;
@@ -227,17 +216,16 @@
 
   .chat-thread {
     margin-top: 8px;
-    padding: 10px 8px;
-    border-radius: 12px;
+    padding: 12px 8px;
   }
 
   .chat-msg {
-    max-width: 92%;
+    max-width: 90%;
   }
 
   .chat-bubble {
-    padding: 8px 10px;
-    border-radius: 12px;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
   }
 
   .chat-compose {
@@ -247,14 +235,14 @@
   .chat-compose__field textarea {
     min-height: 60px;
     padding: 8px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     font-size: 14px;
   }
 
-  /* Log stream mobile */
+  /* Log stream */
   .log-stream {
-    border-radius: 10px;
-    max-height: 400px;
+    border-radius: var(--radius-md);
+    max-height: 380px;
   }
 
   .log-row {
@@ -279,14 +267,14 @@
     font-size: 12px;
   }
 
-  /* List items */
+  /* Lists */
   .list-item {
     padding: 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
   }
 
   .list-title {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .list-sub {
@@ -296,19 +284,91 @@
   /* Code blocks */
   .code-block {
     padding: 8px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     font-size: 11px;
   }
 
-  /* Theme toggle smaller */
+  /* Theme toggle */
   .theme-toggle {
     --theme-item: 24px;
-    --theme-gap: 4px;
-    --theme-pad: 4px;
+    --theme-gap: 2px;
+    --theme-pad: 3px;
   }
 
   .theme-icon {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
+  }
+}
+
+/* Small mobile */
+@media (max-width: 400px) {
+  .shell {
+    --shell-pad: 4px;
+  }
+
+  .topbar {
+    padding: 8px 10px;
+  }
+
+  .brand-title {
+    font-size: 13px;
+  }
+
+  .nav {
+    padding: 6px 8px;
+  }
+
+  .nav-item {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  .content {
+    padding: 4px 4px 12px;
+    gap: 10px;
+  }
+
+  .card {
+    padding: 10px;
+  }
+
+  .stat {
+    padding: 8px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .chat-bubble {
+    padding: 8px 10px;
+  }
+
+  .chat-compose__field textarea {
+    min-height: 52px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .btn {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  .topbar-status .pill {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
+
+  .theme-toggle {
+    --theme-item: 22px;
+    --theme-gap: 2px;
+    --theme-pad: 2px;
+  }
+
+  .theme-icon {
+    width: 11px;
+    height: 11px;
   }
 }

@@ -13,6 +13,7 @@ export async function startGatewayDiscovery(params: {
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
+  tailscaleMode: "off" | "serve" | "funnel";
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
@@ -20,8 +21,11 @@ export async function startGatewayDiscovery(params: {
     process.env.CLAWDBOT_DISABLE_BONJOUR !== "1" &&
     process.env.NODE_ENV !== "test" &&
     !process.env.VITEST;
+  const tailscaleEnabled = params.tailscaleMode !== "off";
   const needsTailnetDns = bonjourEnabled || params.wideAreaDiscoveryEnabled;
-  const tailnetDns = needsTailnetDns ? await resolveTailnetDnsHint() : undefined;
+  const tailnetDns = needsTailnetDns
+    ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
+    : undefined;
   const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
   const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
   const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;

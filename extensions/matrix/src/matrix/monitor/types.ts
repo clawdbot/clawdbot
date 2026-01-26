@@ -29,6 +29,7 @@ export type RoomMessageEventContent = MessageEventContent & {
   file?: EncryptedFile;
   info?: {
     mimetype?: string;
+    size?: number;
   };
   "m.relates_to"?: {
     rel_type?: string;

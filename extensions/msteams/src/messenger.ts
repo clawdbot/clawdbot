@@ -1,4 +1,5 @@
 import {
+  type ChunkMode,
   isSilentReplyText,
   loadWebMedia,
   type MarkdownTableMode,
@@ -63,6 +64,7 @@ export type MSTeamsReplyRenderOptions = {
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
   tableMode?: MarkdownTableMode;
+  chunkMode?: ChunkMode;
 };
 
 /**
@@ -129,11 +131,16 @@ function pushTextMessages(
   opts: {
     chunkText: boolean;
     chunkLimit: number;
+    chunkMode: ChunkMode;
   },
 ) {
   if (!text) return;
   if (opts.chunkText) {
-    for (const chunk of getMSTeamsRuntime().channel.text.chunkMarkdownText(text, opts.chunkLimit)) {
+    for (const chunk of getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
+      text,
+      opts.chunkLimit,
+      opts.chunkMode,
+    )) {
       const trimmed = chunk.trim();
       if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) continue;
       out.push({ text: trimmed });
@@ -197,6 +204,7 @@ export function renderReplyPayloadsToMessages(
   const out: MSTeamsRenderedMessage[] = [];
   const chunkLimit = Math.min(options.textChunkLimit, 4000);
   const chunkText = options.chunkText !== false;
+  const chunkMode = options.chunkMode ?? "length";
   const mediaMode = options.mediaMode ?? "split";
   const tableMode =
     options.tableMode ??
@@ -215,7 +223,7 @@ export function renderReplyPayloadsToMessages(
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
-      pushTextMessages(out, text, { chunkText, chunkLimit });
+      pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
       continue;
     }
 
@@ -229,13 +237,13 @@ export function renderReplyPayloadsToMessages(
           if (mediaList[i]) out.push({ mediaUrl: mediaList[i] });
         }
       } else {
-        pushTextMessages(out, text, { chunkText, chunkLimit });
+        pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
       }
       continue;
     }
 
     // mediaMode === "split"
-    pushTextMessages(out, text, { chunkText, chunkLimit });
+    pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
     for (const mediaUrl of mediaList) {
       if (!mediaUrl) continue;
       out.push({ mediaUrl });

@@ -6,8 +6,9 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
-import { OpenAITTSProvider } from "./providers/tts-openai.js";
 import { TwilioProvider } from "./providers/twilio.js";
+import type { TelephonyTtsRuntime } from "./telephony-tts.js";
+import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
 import {
   cleanupTailscaleExposure,
@@ -81,9 +82,10 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
 export async function createVoiceCallRuntime(params: {
   config: VoiceCallConfig;
   coreConfig: CoreConfig;
+  ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
 }): Promise<VoiceCallRuntime> {
-  const { config, coreConfig, logger } = params;
+  const { config, coreConfig, ttsRuntime, logger } = params;
   const log = logger ?? {
     info: console.log,
     warn: console.warn,
@@ -149,27 +151,24 @@ export async function createVoiceCallRuntime(params: {
 
   if (provider.name === "twilio" && config.streaming?.enabled) {
     const twilioProvider = provider as TwilioProvider;
-    const openaiApiKey =
-      config.streaming.openaiApiKey || process.env.OPENAI_API_KEY;
-    if (openaiApiKey) {
+    if (ttsRuntime?.textToSpeechTelephony) {
       try {
-        const ttsProvider = new OpenAITTSProvider({
-          apiKey: openaiApiKey,
-          voice: config.tts.voice,
-          model: config.tts.model,
-          instructions: config.tts.instructions,
+        const ttsProvider = createTelephonyTtsProvider({
+          coreConfig,
+          ttsOverride: config.tts,
+          runtime: ttsRuntime,
         });
         twilioProvider.setTTSProvider(ttsProvider);
-        log.info("[voice-call] OpenAI TTS provider configured");
+        log.info("[voice-call] Telephony TTS provider configured");
       } catch (err) {
         log.warn(
-          `[voice-call] Failed to initialize OpenAI TTS: ${
+          `[voice-call] Failed to initialize telephony TTS: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
       }
     } else {
-      log.warn("[voice-call] OpenAI TTS key missing; streaming TTS disabled");
+      log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
     }
 
     const mediaHandler = webhookServer.getMediaStreamHandler();

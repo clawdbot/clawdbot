@@ -1,0 +1,96 @@
+---
+title: Deploy on Railway
+---
+
+Deploy Clawdbot on Railway with a one-click template and finish setup in your browser.
+This is the easiest “no terminal on the server” path: Railway runs the Gateway for you,
+and you configure everything via the `/setup` web wizard.
+
+## Quick checklist (new users)
+
+1) Click **Deploy on Railway** (below).
+2) Add a **Volume** mounted at `/data`.
+3) Set the required **Variables** (at least `SETUP_PASSWORD`).
+4) Enable **HTTP Proxy** on port `8080`.
+5) Open `https://<your-railway-domain>/setup` and finish the wizard.
+
+## One-click deploy
+
+<a href="https://railway.com/deploy/clawdbot-railway-template" target="_blank" rel="noreferrer">Deploy on Railway</a>
+
+After deploy, find your public URL in **Railway → your service → Settings → Domains**.
+
+Railway will either:
+- give you a generated domain (often `https://<something>.up.railway.app`), or
+- use your custom domain if you attached one.
+
+Then open:
+
+- `https://<your-railway-domain>/setup` — setup wizard (password protected)
+- `https://<your-railway-domain>/clawdbot` — Control UI
+
+## What you get
+
+- Hosted Clawdbot Gateway + Control UI
+- Web setup wizard at `/setup` (no terminal commands)
+- Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
+- Backup export at `/setup/export` to migrate off Railway later
+
+## Required Railway settings
+
+### Public Networking
+
+Enable **HTTP Proxy** for the service.
+
+- Port: `8080`
+
+### Volume (required)
+
+Attach a volume mounted at:
+
+- `/data`
+
+### Variables
+
+Set these variables on the service:
+
+- `SETUP_PASSWORD` (required)
+- `PORT=8080` (required — must match the port in Public Networking)
+- `CLAWDBOT_STATE_DIR=/data/.clawdbot` (recommended)
+- `CLAWDBOT_WORKSPACE_DIR=/data/workspace` (recommended)
+- `CLAWDBOT_GATEWAY_TOKEN` (recommended; treat as an admin secret)
+
+## Setup flow
+
+1) Visit `https://<your-railway-domain>/setup` and enter your `SETUP_PASSWORD`.
+2) Choose a model/auth provider and paste your key.
+3) (Optional) Add Telegram/Discord/Slack tokens.
+4) Click **Run setup**.
+
+If Telegram DMs are set to pairing, the setup wizard can approve the pairing code.
+
+## Getting chat tokens
+
+### Telegram bot token
+
+1) Message `@BotFather` in Telegram
+2) Run `/newbot`
+3) Copy the token (looks like `123456789:AA...`)
+4) Paste it into `/setup`
+
+### Discord bot token
+
+1) Go to https://discord.com/developers/applications
+2) **New Application** → choose a name
+3) **Bot** → **Add Bot**
+4) **Enable MESSAGE CONTENT INTENT** under Bot → Privileged Gateway Intents (required or the bot will crash on startup)
+5) Copy the **Bot Token** and paste into `/setup`
+6) Invite the bot to your server (OAuth2 URL Generator; scopes: `bot`, `applications.commands`)
+
+## Backups & migration
+
+Download a backup at:
+
+- `https://<your-railway-domain>/setup/export`
+
+This exports your Clawdbot state + workspace so you can migrate to another host without losing config or memory.

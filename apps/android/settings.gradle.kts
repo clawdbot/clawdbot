@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "ClawdbotNodeAndroid"
 include(":app")
-

@@ -72,6 +72,17 @@ export type DiscordActionConfig = {
   channels?: boolean;
 };
 
+export type DiscordExecApprovalConfig = {
+  /** Enable exec approval forwarding to Discord DMs. Default: false. */
+  enabled?: boolean;
+  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  approvers?: Array<string | number>;
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+};
+
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -97,6 +108,8 @@ export type DiscordAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
+  chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -124,6 +137,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Exec approval forwarding configuration. */
+  execApprovals?: DiscordExecApprovalConfig;
 };
 
 export type DiscordConfig = {

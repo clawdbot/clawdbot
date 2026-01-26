@@ -40,3 +40,13 @@ Please include in your PR:
 - [ ] Confirm you understand what the code does
 
 AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+
+## Current Focus & Roadmap 🗺
+
+We are currently prioritizing:
+- **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram).
+- **UX**: Improving the onboarding wizard and error messages.
+- **Skills**: Expanding the library of bundled skills and improving the Skill Creation developer experience.
+- **Performance**: Optimizing token usage and compaction logic.
+
+Check the [GitHub Issues](https://github.com/clawdbot/clawdbot/issues) for "good first issue" labels!

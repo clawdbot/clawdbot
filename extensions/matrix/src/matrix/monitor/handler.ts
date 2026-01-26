@@ -329,16 +329,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
-      const contentType =
-        "info" in content && content.info && "mimetype" in content.info
-          ? (content.info as { mimetype?: string }).mimetype
+      const contentInfo =
+        "info" in content && content.info && typeof content.info === "object"
+          ? (content.info as { mimetype?: string; size?: number })
           : undefined;
+      const contentType = contentInfo?.mimetype;
+      const contentSize =
+        typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
       if (mediaUrl?.startsWith("mxc://")) {
         try {
           media = await downloadMatrixMedia({
             client,
             mxcUrl: mediaUrl,
             contentType,
+            sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: contentFile,
           });

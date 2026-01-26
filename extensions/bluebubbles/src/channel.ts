@@ -25,9 +25,11 @@ import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { probeBlueBubbles, type BlueBubblesProbe } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
 import {
+  extractHandleFromChatGuid,
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesHandle,
   normalizeBlueBubblesMessagingTarget,
+  parseBlueBubblesTarget,
 } from "./targets.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
@@ -147,6 +149,58 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     targetResolver: {
       looksLikeId: looksLikeBlueBubblesTargetId,
       hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
+    },
+    formatTargetDisplay: ({ target, display }) => {
+      const shouldParseDisplay = (value: string): boolean => {
+        if (looksLikeBlueBubblesTargetId(value)) return true;
+        return /^(bluebubbles:|chat_guid:|chat_id:|chat_identifier:)/i.test(value);
+      };
+
+      // Helper to extract a clean handle from any BlueBubbles target format
+      const extractCleanDisplay = (value: string | undefined): string | null => {
+        const trimmed = value?.trim();
+        if (!trimmed) return null;
+        try {
+          const parsed = parseBlueBubblesTarget(trimmed);
+          if (parsed.kind === "chat_guid") {
+            const handle = extractHandleFromChatGuid(parsed.chatGuid);
+            if (handle) return handle;
+          }
+          if (parsed.kind === "handle") {
+            return normalizeBlueBubblesHandle(parsed.to);
+          }
+        } catch {
+          // Fall through
+        }
+        // Strip common prefixes and try raw extraction
+        const stripped = trimmed
+          .replace(/^bluebubbles:/i, "")
+          .replace(/^chat_guid:/i, "")
+          .replace(/^chat_id:/i, "")
+          .replace(/^chat_identifier:/i, "");
+        const handle = extractHandleFromChatGuid(stripped);
+        if (handle) return handle;
+        // Don't return raw chat_guid formats - they contain internal routing info
+        if (stripped.includes(";-;") || stripped.includes(";+;")) return null;
+        return stripped;
+      };
+
+      // Try to get a clean display from the display parameter first
+      const trimmedDisplay = display?.trim();
+      if (trimmedDisplay) {
+        if (!shouldParseDisplay(trimmedDisplay)) {
+          return trimmedDisplay;
+        }
+        const cleanDisplay = extractCleanDisplay(trimmedDisplay);
+        if (cleanDisplay) return cleanDisplay;
+      }
+
+      // Fall back to extracting from target
+      const cleanTarget = extractCleanDisplay(target);
+      if (cleanTarget) return cleanTarget;
+
+      // Last resort: return display or target as-is
+      return display?.trim() || target?.trim() || "";
     },
   },
   setup: {

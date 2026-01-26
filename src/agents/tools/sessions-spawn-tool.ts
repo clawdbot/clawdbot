@@ -67,6 +67,8 @@ export function createSessionsSpawnTool(opts?: {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   sandboxed?: boolean;
+  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+  requesterAgentIdOverride?: string;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -129,7 +131,7 @@ export function createSessionsSpawnTool(opts?: {
       });
 
       const requesterAgentId = normalizeAgentId(
-        parseAgentSessionKey(requesterInternalKey)?.agentId,
+        opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
       const targetAgentId = requestedAgentId
         ? normalizeAgentId(requestedAgentId)

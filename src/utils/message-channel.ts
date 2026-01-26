@@ -22,6 +22,7 @@ const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
   "telegram",
   "signal",
   "discord",
+  "googlechat",
   "tui",
   INTERNAL_MESSAGE_CHANNEL,
 ]);

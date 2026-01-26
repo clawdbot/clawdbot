@@ -47,7 +47,8 @@ function mergeBlueBubblesAccountConfig(
   };
   const { accounts: _ignored, ...rest } = base;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...rest, ...account };
+  const chunkMode = account.chunkMode ?? rest.chunkMode ?? "length";
+  return { ...rest, ...account, chunkMode };
 }
 
 export function resolveBlueBubblesAccount(params: {

@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../agents/model-catalog.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
@@ -1012,6 +1017,42 @@ export async function runCapability(params: {
         attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
       },
     };
+  }
+
+  // Skip image understanding when the primary model supports vision natively.
+  // The image will be injected directly into the model context instead.
+  const activeProvider = params.activeModel?.provider?.trim();
+  if (capability === "image" && activeProvider) {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
+    if (modelSupportsVision(entry)) {
+      if (shouldLogVerbose()) {
+        logVerbose("Skipping image understanding: primary model supports vision natively");
+      }
+      const model = params.activeModel?.model?.trim();
+      const reason = "primary model supports vision natively";
+      return {
+        outputs: [],
+        decision: {
+          capability,
+          outcome: "skipped",
+          attachments: selected.map((item) => {
+            const attempt = {
+              type: "provider" as const,
+              provider: activeProvider,
+              model: model || undefined,
+              outcome: "skipped" as const,
+              reason,
+            };
+            return {
+              attachmentIndex: item.index,
+              attempts: [attempt],
+              chosen: attempt,
+            };
+          }),
+        },
+      };
+    }
   }
 
   const entries = resolveModelEntries({

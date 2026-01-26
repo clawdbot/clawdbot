@@ -27,4 +27,3 @@ export function verifyTwilioProviderWebhook(params: {
     reason: result.reason,
   };
 }
-

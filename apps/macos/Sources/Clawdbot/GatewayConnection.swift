@@ -11,6 +11,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case whatsapp
     case telegram
     case discord
+    case googlechat
     case slack
     case signal
     case imessage

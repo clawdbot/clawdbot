@@ -52,8 +52,8 @@
   flex: 1 1 0; /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
-  margin: 0 -12px;
+  padding: 12px 4px;
+  margin: 0 -4px;
   min-height: 0; /* Allow shrinking for flex scroll behavior */
   border-radius: 12px;
   background: transparent;
@@ -87,23 +87,154 @@
   border-color: var(--accent);
 }
 
+.chat-focus-exit svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Chat compose - sticky at bottom */
 .chat-compose {
   position: sticky;
   bottom: 0;
   flex-shrink: 0;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 12px;
   margin-top: auto; /* Push to bottom of flex container */
-  padding: 16px 0 4px;
+  padding: 12px 4px 4px;
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
+}
+
+/* Image attachments preview */
+.chat-attachments {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  background: var(--panel);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start; /* Don't stretch in flex column parent */
+}
+
+.chat-attachment {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.chat-attachment__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.chat-attachment__remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.chat-attachment:hover .chat-attachment__remove {
+  opacity: 1;
+}
+
+.chat-attachment__remove:hover {
+  background: rgba(220, 38, 38, 0.9);
+}
+
+.chat-attachment__remove svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+}
+
+/* Light theme attachment overrides */
+:root[data-theme="light"] .chat-attachments {
+  background: #f8fafc;
+  border-color: rgba(16, 24, 40, 0.1);
+}
+
+:root[data-theme="light"] .chat-attachment {
+  border-color: rgba(16, 24, 40, 0.15);
+  background: #fff;
+}
+
+:root[data-theme="light"] .chat-attachment__remove {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Message images (sent images displayed in chat) */
+.chat-message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-message-image {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: 8px;
+  object-fit: contain;
+  cursor: pointer;
+  transition: transform 150ms ease-out;
+}
+
+.chat-message-image:hover {
+  transform: scale(1.02);
+}
+
+/* User message images align right */
+.chat-group.user .chat-message-images {
+  justify-content: flex-end;
+}
+
+/* Compose input row - horizontal layout */
+.chat-compose__row {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  flex: 1;
+}
+
+:root[data-theme="light"] .chat-compose {
+  background: linear-gradient(to bottom, transparent, var(--bg-content) 20%);
 }
 
 .chat-compose__field {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: stretch;
 }
 
 /* Hide the "Message" label - keep textarea only */
@@ -114,10 +245,11 @@
 /* Override .field textarea min-height (180px) from components.css */
 .chat-compose .chat-compose__field textarea {
   width: 100%;
-  min-height: 36px;
+  height: 40px;
+  min-height: 40px;
   max-height: 150px;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
   resize: vertical;
   white-space: pre-wrap;
   font-family: var(--font-body);
@@ -134,13 +266,18 @@
   flex-shrink: 0;
   display: flex;
   align-items: stretch;
+  gap: 8px;
 }
 
 .chat-compose .chat-compose__actions .btn {
-  padding: 8px 16px;
+  padding: 0 16px;
   font-size: 13px;
-  min-height: 36px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  line-height: 1;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 /* Chat controls - moved to content-header area, left aligned */
@@ -194,20 +331,27 @@
 
 /* Light theme icon button overrides */
 :root[data-theme="light"] .btn--icon {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: rgba(16, 24, 40, 0.2);
+  background: #ffffff;
+  border-color: var(--border);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-  color: rgba(16, 24, 40, 0.7);
+  color: var(--muted);
 }
 
 :root[data-theme="light"] .btn--icon:hover {
-  background: rgba(255, 255, 255, 1);
-  border-color: rgba(16, 24, 40, 0.3);
-  color: rgba(16, 24, 40, 0.9);
+  background: #ffffff;
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 .btn--icon svg {
   display: block;
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-controls__session select {
@@ -250,4 +394,3 @@
     min-width: 120px;
   }
 }
-

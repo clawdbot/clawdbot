@@ -10,6 +10,7 @@ import {
 
 export type ConfigProps = {
   raw: string;
+  originalRaw: string;
   valid: boolean | null;
   issues: unknown[];
   loading: boolean;
@@ -137,7 +138,7 @@ function computeDiff(
 ): Array<{ path: string; from: unknown; to: unknown }> {
   if (!original || !current) return [];
   const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
-  
+
   function compare(orig: unknown, curr: unknown, path: string) {
     if (orig === curr) return;
     if (typeof orig !== typeof curr) {
@@ -163,7 +164,7 @@ function computeDiff(
       compare(origObj[key], currObj[key], path ? `${path}.${key}` : key);
     }
   }
-  
+
   compare(original, current, "");
   return changes;
 }
@@ -187,29 +188,17 @@ export function renderConfig(props: ConfigProps) {
   const formUnsafe = analysis.schema
     ? analysis.unsupportedPaths.length > 0
     : false;
-  const canSaveForm =
-    Boolean(props.formValue) && !props.loading && !formUnsafe;
-  const canSave =
-    props.connected &&
-    !props.saving &&
-    (props.formMode === "raw" ? true : canSaveForm);
-  const canApply =
-    props.connected &&
-    !props.applying &&
-    !props.updating &&
-    (props.formMode === "raw" ? true : canSaveForm);
-  const canUpdate = props.connected && !props.applying && !props.updating;
 
   // Get available sections from schema
   const schemaProps = analysis.schema?.properties ?? {};
   const availableSections = SECTIONS.filter(s => s.key in schemaProps);
-  
+
   // Add any sections in schema but not in our list
   const knownKeys = new Set(SECTIONS.map(s => s.key));
   const extraSections = Object.keys(schemaProps)
     .filter(k => !knownKeys.has(k))
     .map(k => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
-  
+
   const allSections = [...availableSections, ...extraSections];
 
   const activeSectionSchema =
@@ -236,12 +225,30 @@ export function renderConfig(props: ConfigProps) {
     : isAllSubsection
       ? null
       : props.activeSubsection ?? (subsections[0]?.key ?? null);
-  
-  // Compute diff for showing changes
-  const diff = props.formMode === "form" 
+
+  // Compute diff for showing changes (works for both form and raw modes)
+  const diff = props.formMode === "form"
     ? computeDiff(props.originalValue, props.formValue)
     : [];
-  const hasChanges = diff.length > 0;
+  const hasRawChanges = props.formMode === "raw" && props.raw !== props.originalRaw;
+  const hasChanges = props.formMode === "form" ? diff.length > 0 : hasRawChanges;
+
+  // Save/apply buttons require actual changes to be enabled.
+  // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
+  const canSaveForm =
+    Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
+  const canSave =
+    props.connected &&
+    !props.saving &&
+    hasChanges &&
+    (props.formMode === "raw" ? true : canSaveForm);
+  const canApply =
+    props.connected &&
+    !props.applying &&
+    !props.updating &&
+    hasChanges &&
+    (props.formMode === "raw" ? true : canSaveForm);
+  const canUpdate = props.connected && !props.applying && !props.updating;
 
   return html`
     <div class="config-layout">
@@ -251,7 +258,7 @@ export function renderConfig(props: ConfigProps) {
           <div class="config-sidebar__title">Settings</div>
           <span class="pill pill--sm ${validity === "valid" ? "pill--ok" : validity === "invalid" ? "pill--danger" : ""}">${validity}</span>
         </div>
-        
+
         <!-- Search -->
         <div class="config-search">
           <svg class="config-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -266,13 +273,13 @@ export function renderConfig(props: ConfigProps) {
             @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
           />
           ${props.searchQuery ? html`
-            <button 
+            <button
               class="config-search__clear"
               @click=${() => props.onSearchChange("")}
             >×</button>
           ` : nothing}
         </div>
-        
+
         <!-- Section nav -->
         <nav class="config-nav">
           <button
@@ -292,7 +299,7 @@ export function renderConfig(props: ConfigProps) {
             </button>
           `)}
         </nav>
-        
+
         <!-- Mode toggle at bottom -->
         <div class="config-sidebar__footer">
           <div class="config-mode-toggle">
@@ -312,14 +319,14 @@ export function renderConfig(props: ConfigProps) {
           </div>
         </div>
       </aside>
-      
+
       <!-- Main content -->
       <main class="config-main">
         <!-- Action bar -->
         <div class="config-actions">
           <div class="config-actions__left">
             ${hasChanges ? html`
-              <span class="config-changes-badge">${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}</span>
+              <span class="config-changes-badge">${props.formMode === "raw" ? "Unsaved changes" : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span>
             ` : html`
               <span class="config-status muted">No changes</span>
             `}
@@ -351,9 +358,9 @@ export function renderConfig(props: ConfigProps) {
             </button>
           </div>
         </div>
-        
-        <!-- Diff panel -->
-        ${hasChanges ? html`
+
+        <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
+        ${hasChanges && props.formMode === "form" ? html`
           <details class="config-diff">
             <summary class="config-diff__summary">
               <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>

@@ -4,6 +4,8 @@
   border-radius: 8px;
   padding: 12px;
   margin-top: 8px;
+  background: var(--card);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
   transition: border-color 150ms ease-out, background 150ms ease-out;
   /* Fixed max-height to ensure cards don't expand too much */
   max-height: 120px;
@@ -11,8 +13,8 @@
 }
 
 .chat-tool-card:hover {
-  border-color: var(--accent);
-  background: rgba(0, 0, 0, 0.06);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 
 /* First tool card in a group - no top margin */
@@ -50,21 +52,40 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  font-size: 14px;
-  line-height: 1;
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  vertical-align: middle;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
+}
+
+.chat-tool-card__icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* "View >" action link */
 .chat-tool-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   color: var(--accent);
   opacity: 0.8;
   transition: opacity 150ms ease-out;
+}
+
+.chat-tool-card__action svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-tool-card--clickable:hover .chat-tool-card__action {
@@ -73,8 +94,19 @@
 
 /* Status indicator for completed/empty results */
 .chat-tool-card__status {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
   color: var(--ok);
+}
+
+.chat-tool-card__status svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-tool-card__status-text {
@@ -94,18 +126,18 @@
   color: var(--muted);
   margin-top: 8px;
   padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.08);
-  border-radius: 6px;
+  background: var(--secondary);
+  border-radius: var(--radius-md);
   white-space: pre-wrap;
   overflow: hidden;
   max-height: 44px;
   line-height: 1.4;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
 }
 
 .chat-tool-card--clickable:hover .chat-tool-card__preview {
-  background: rgba(0, 0, 0, 0.12);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 /* Short inline output */
@@ -114,8 +146,8 @@
   color: var(--text);
   margin-top: 6px;
   padding: 6px 8px;
-  background: rgba(0, 0, 0, 0.06);
-  border-radius: 4px;
+  background: var(--secondary);
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -164,4 +196,3 @@
     transform: scale(1);
   }
 }
-

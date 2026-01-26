@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: clawdbot
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: SETUP_PASSWORD
+        sync: false
+      - key: CLAWDBOT_STATE_DIR
+        value: /data/.clawdbot
+      - key: CLAWDBOT_WORKSPACE_DIR
+        value: /data/workspace
+      - key: CLAWDBOT_GATEWAY_TOKEN
+        generateValue: true
+    disk:
+      name: clawdbot-data
+      mountPath: /data
+      sizeGB: 1

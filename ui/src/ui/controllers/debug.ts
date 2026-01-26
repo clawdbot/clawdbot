@@ -54,4 +54,3 @@ export async function callDebugMethod(state: DebugState) {
     state.debugCallError = String(err);
   }
 }
-

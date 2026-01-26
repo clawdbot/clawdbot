@@ -82,31 +82,82 @@ export const SttConfigSchema = z
   .default({ provider: "openai", model: "whisper-1" });
 export type SttConfig = z.infer<typeof SttConfigSchema>;
 
+export const TtsProviderSchema = z.enum(["openai", "elevenlabs", "edge"]);
+export const TtsModeSchema = z.enum(["final", "all"]);
+export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
+
 export const TtsConfigSchema = z
   .object({
-    /** TTS provider (currently only OpenAI supported) */
-    provider: z.literal("openai").default("openai"),
-    /**
-     * TTS model to use:
-     * - gpt-4o-mini-tts: newest, supports instructions for tone/style control (recommended)
-     * - tts-1: lower latency
-     * - tts-1-hd: higher quality
-     */
-    model: z.string().min(1).default("gpt-4o-mini-tts"),
-    /**
-     * Voice ID. For best quality, use marin or cedar.
-     * All voices: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar
-     */
-    voice: z.string().min(1).default("coral"),
-    /**
-     * Instructions for speech style (only works with gpt-4o-mini-tts).
-     * Examples: "Speak in a cheerful tone", "Talk like a sympathetic customer service agent"
-     */
-    instructions: z.string().optional(),
+    auto: TtsAutoSchema.optional(),
+    enabled: z.boolean().optional(),
+    mode: TtsModeSchema.optional(),
+    provider: TtsProviderSchema.optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowText: z.boolean().optional(),
+        allowProvider: z.boolean().optional(),
+        allowVoice: z.boolean().optional(),
+        allowModelId: z.boolean().optional(),
+        allowVoiceSettings: z.boolean().optional(),
+        allowNormalization: z.boolean().optional(),
+        allowSeed: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    elevenlabs: z
+      .object({
+        apiKey: z.string().optional(),
+        baseUrl: z.string().optional(),
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+        seed: z.number().int().min(0).max(4294967295).optional(),
+        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+        languageCode: z.string().optional(),
+        voiceSettings: z
+          .object({
+            stability: z.number().min(0).max(1).optional(),
+            similarityBoost: z.number().min(0).max(1).optional(),
+            style: z.number().min(0).max(1).optional(),
+            useSpeakerBoost: z.boolean().optional(),
+            speed: z.number().min(0.5).max(2).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    openai: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    edge: z
+      .object({
+        enabled: z.boolean().optional(),
+        voice: z.string().optional(),
+        lang: z.string().optional(),
+        outputFormat: z.string().optional(),
+        pitch: z.string().optional(),
+        rate: z.string().optional(),
+        volume: z.string().optional(),
+        saveSubtitles: z.boolean().optional(),
+        proxy: z.string().optional(),
+        timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
   })
   .strict()
-  .default({ provider: "openai", model: "gpt-4o-mini-tts", voice: "coral" });
-export type TtsConfig = z.infer<typeof TtsConfigSchema>;
+  .optional();
+export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
@@ -307,7 +358,7 @@ export const VoiceCallConfigSchema = z
   /** STT configuration */
   stt: SttConfigSchema,
 
-  /** TTS configuration */
+  /** TTS override (deep-merges with core messages.tts) */
   tts: TtsConfigSchema,
 
   /** Store path for call logs */

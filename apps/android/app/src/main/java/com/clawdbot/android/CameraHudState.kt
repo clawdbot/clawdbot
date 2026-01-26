@@ -12,4 +12,3 @@ data class CameraHudState(
   val kind: CameraHudKind,
   val message: String,
 )
-

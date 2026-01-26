@@ -1,7 +1,8 @@
-import type { ReasoningLevel } from "../thinking.js";
+import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
   normalizeElevatedLevel,
+  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -112,6 +113,22 @@ export function extractVerboseDirective(body?: string): {
   };
 }
 
+export function extractNoticeDirective(body?: string): {
+  cleaned: string;
+  noticeLevel?: NoticeLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) return { cleaned: "", hasDirective: false };
+  const extracted = extractLevelDirective(body, ["notice", "notices"], normalizeNoticeLevel);
+  return {
+    cleaned: extracted.cleaned,
+    noticeLevel: extracted.level,
+    rawLevel: extracted.rawLevel,
+    hasDirective: extracted.hasDirective,
+  };
+}
+
 export function extractElevatedDirective(body?: string): {
   cleaned: string;
   elevatedLevel?: ElevatedLevel;
@@ -152,5 +169,5 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, ["status"]);
 }
 
-export type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
+export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";

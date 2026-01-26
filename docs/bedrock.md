@@ -75,10 +75,10 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
         auth: "aws-sdk",
         models: [
           {
-            id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-            name: "Claude 3.7 Sonnet (Bedrock)",
+            id: "anthropic.claude-opus-4-5-20251101-v1:0",
+            name: "Claude Opus 4.5 (Bedrock)",
             reasoning: true,
-            input: ["text"],
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 200000,
             maxTokens: 8192
@@ -89,10 +89,73 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
   },
   agents: {
     defaults: {
-      model: { primary: "amazon-bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0" }
+      model: { primary: "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0" }
     }
   }
 }
+```
+
+## EC2 Instance Roles
+
+When running Clawdbot on an EC2 instance with an IAM role attached, the AWS SDK
+will automatically use the instance metadata service (IMDS) for authentication.
+However, Clawdbot's credential detection currently only checks for environment
+variables, not IMDS credentials.
+
+**Workaround:** Set `AWS_PROFILE=default` to signal that AWS credentials are
+available. The actual authentication still uses the instance role via IMDS.
+
+```bash
+# Add to ~/.bashrc or your shell profile
+export AWS_PROFILE=default
+export AWS_REGION=us-east-1
+```
+
+**Required IAM permissions** for the EC2 instance role:
+- `bedrock:InvokeModel`
+- `bedrock:InvokeModelWithResponseStream`
+- `bedrock:ListFoundationModels` (for automatic discovery)
+
+Or attach the managed policy `AmazonBedrockFullAccess`.
+
+**Quick setup:**
+
+```bash
+# 1. Create IAM role and instance profile
+aws iam create-role --role-name EC2-Bedrock-Access \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {"Service": "ec2.amazonaws.com"},
+      "Action": "sts:AssumeRole"
+    }]
+  }'
+
+aws iam attach-role-policy --role-name EC2-Bedrock-Access \
+  --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+
+aws iam create-instance-profile --instance-profile-name EC2-Bedrock-Access
+aws iam add-role-to-instance-profile \
+  --instance-profile-name EC2-Bedrock-Access \
+  --role-name EC2-Bedrock-Access
+
+# 2. Attach to your EC2 instance
+aws ec2 associate-iam-instance-profile \
+  --instance-id i-xxxxx \
+  --iam-instance-profile Name=EC2-Bedrock-Access
+
+# 3. On the EC2 instance, enable discovery
+clawdbot config set models.bedrockDiscovery.enabled true
+clawdbot config set models.bedrockDiscovery.region us-east-1
+
+# 4. Set the workaround env vars
+echo 'export AWS_PROFILE=default' >> ~/.bashrc
+echo 'export AWS_REGION=us-east-1' >> ~/.bashrc
+source ~/.bashrc
+
+# 5. Verify models are discovered
+clawdbot models list
 ```
 
 ## Notes

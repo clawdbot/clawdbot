@@ -29,6 +29,8 @@ Clawdbot is both a product and an experiment: you’re wiring frontier-model beh
 - where the bot is allowed to act
 - what the bot can touch
 
+Start with the smallest access that still works, then widen it as you gain confidence.
+
 ### What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
@@ -56,10 +58,27 @@ When the audit prints findings, treat this as a priority order:
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
 identity. If you enable `gateway.controlUi.allowInsecureAuth`, the UI falls back
-to **token-only auth** on plain HTTP and skips device pairing. This is a security
+to **token-only auth** and skips device pairing (even on HTTPS). This is a security
 downgrade—prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 `clawdbot security audit` warns when this setting is enabled.
+
+## Reverse Proxy Configuration
+
+If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
+
+When the Gateway detects proxy headers (`X-Forwarded-For` or `X-Real-IP`) from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
+
+```yaml
+gateway:
+  trustedProxies:
+    - "127.0.0.1"  # if your proxy runs on localhost
+  auth:
+    mode: password
+    password: ${CLAWDBOT_GATEWAY_PASSWORD}
+```
+
+When `trustedProxies` is configured, the Gateway will use `X-Forwarded-For` headers to determine the real client IP for local client detection. Make sure your proxy overwrites (not appends to) incoming `X-Forwarded-For` headers to prevent spoofing.
 
 ## Local session logs live on disk
 
@@ -321,6 +340,11 @@ Tailscale.
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
 `gateway.auth.allowTailscale` and use token/password auth instead.
+
+Trusted proxies:
+- If you terminate TLS in front of the Gateway, set `gateway.trustedProxies` to your proxy IPs.
+- Clawdbot will trust `x-forwarded-for` (or `x-real-ip`) from those IPs to determine the client IP for local pairing checks and HTTP auth/local checks.
+- Ensure your proxy **overwrites** `x-forwarded-for` and blocks direct access to the Gateway port.
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 

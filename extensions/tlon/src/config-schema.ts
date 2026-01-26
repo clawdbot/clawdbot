@@ -10,7 +10,7 @@ export const TlonChannelRuleSchema = z.object({
 });
 
 export const TlonAuthorizationSchema = z.object({
-  channelRules: z.record(TlonChannelRuleSchema).optional(),
+  channelRules: z.record(z.string(), TlonChannelRuleSchema).optional(),
 });
 
 export const TlonAccountSchema = z.object({
@@ -37,7 +37,7 @@ export const TlonConfigSchema = z.object({
   showModelSignature: z.boolean().optional(),
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
-  accounts: z.record(TlonAccountSchema).optional(),
+  accounts: z.record(z.string(), TlonAccountSchema).optional(),
 });
 
 export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema);

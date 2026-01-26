@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 
 import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
+import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -78,19 +79,22 @@ export async function runCommandWithTimeout(
     if (resolvedEnv.npm_config_fund == null) resolvedEnv.npm_config_fund = "false";
   }
 
+  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  const child = spawn(argv[0], argv.slice(1), {
+    stdio,
+    cwd,
+    env: resolvedEnv,
+    windowsVerbatimArguments,
+  });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    const child = spawn(argv[0], argv.slice(1), {
-      stdio: [hasInput ? "pipe" : "inherit", "pipe", "pipe"],
-      cwd,
-      env: resolvedEnv,
-      windowsVerbatimArguments,
-    });
     let stdout = "";
     let stderr = "";
     let settled = false;
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      if (typeof child.kill === "function") {
+        child.kill("SIGKILL");
+      }
     }, timeoutMs);
 
     if (hasInput && child.stdin) {

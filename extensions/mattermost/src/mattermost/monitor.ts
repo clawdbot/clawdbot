@@ -738,7 +738,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
           if (mediaUrls.length === 0) {
-            const chunks = core.channel.text.chunkMarkdownText(text, textLimit);
+            const chunkMode = core.channel.text.resolveChunkMode(
+              cfg,
+              "mattermost",
+              account.accountId,
+            );
+            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
             for (const chunk of chunks.length > 0 ? chunks : [text]) {
               if (!chunk) continue;
               await sendMessageMattermost(to, chunk, {

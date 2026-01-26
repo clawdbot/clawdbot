@@ -355,7 +355,7 @@ Options:
 ## Channel helpers
 
 ### `channels`
-Manage chat channel accounts (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
 
 Subcommands:
 - `channels list`: show configured channels and auth profiles (Claude Code + Codex CLI OAuth sync included).
@@ -368,7 +368,7 @@ Subcommands:
 - `channels logout`: log out of a channel session (if supported).
 
 Common options:
-- `--channel <name>`: `whatsapp|telegram|discord|slack|mattermost|signal|imessage|msteams`
+- `--channel <name>`: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams`
 - `--account <id>`: channel account id (default `default`)
 - `--name <label>`: display name for the account
 
@@ -666,7 +666,7 @@ Subcommands:
 
 Common RPCs:
 - `config.apply` (validate + write config + restart + wake)
-- `config.patch` (merge a partial update without clobbering unrelated keys)
+- `config.patch` (merge a partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from

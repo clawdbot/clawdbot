@@ -26,7 +26,7 @@ Minimal config:
 ```
 
 ### Setup
-1) Create a Slack app (From scratch) in https://api.channels.slack.com/apps.
+1) Create a Slack app (From scratch) in https://api.slack.com/apps.
 2) **Socket Mode** → toggle on. Then go to **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** with scope `connections:write`. Copy the **App Token** (`xapp-...`).
 3) **OAuth & Permissions** → add bot token scopes (use the manifest below). Click **Install to Workspace**. Copy the **Bot User OAuth Token** (`xoxb-...`).
 4) Optional: **OAuth & Permissions** → add **User Token Scopes** (see the read-only list below). Reinstall the app and copy the **User OAuth Token** (`xoxp-...`).
@@ -245,29 +245,29 @@ If you enable native commands, add one `slash_commands` entry per command you wa
 ## Scopes (current vs optional)
 Slack's Conversations API is type-scoped: you only need the scopes for the
 conversation types you actually touch (channels, groups, im, mpim). See
-https://api.channels.slack.com/docs/conversations-api for the overview.
+https://docs.slack.dev/apis/web-api/using-the-conversations-api/ for the overview.
 
 ### Bot token scopes (required)
 - `chat:write` (send/update/delete messages via `chat.postMessage`)
-  https://api.channels.slack.com/methods/chat.postMessage
+  https://docs.slack.dev/reference/methods/chat.postMessage
 - `im:write` (open DMs via `conversations.open` for user DMs)
-  https://api.channels.slack.com/methods/conversations.open
+  https://docs.slack.dev/reference/methods/conversations.open
 - `channels:history`, `groups:history`, `im:history`, `mpim:history`
-  https://api.channels.slack.com/methods/conversations.history
+  https://docs.slack.dev/reference/methods/conversations.history
 - `channels:read`, `groups:read`, `im:read`, `mpim:read`
-  https://api.channels.slack.com/methods/conversations.info
+  https://docs.slack.dev/reference/methods/conversations.info
 - `users:read` (user lookup)
-  https://api.channels.slack.com/methods/users.info
+  https://docs.slack.dev/reference/methods/users.info
 - `reactions:read`, `reactions:write` (`reactions.get` / `reactions.add`)
-  https://api.channels.slack.com/methods/reactions.get
-  https://api.channels.slack.com/methods/reactions.add
+  https://docs.slack.dev/reference/methods/reactions.get
+  https://docs.slack.dev/reference/methods/reactions.add
 - `pins:read`, `pins:write` (`pins.list` / `pins.add` / `pins.remove`)
-  https://api.channels.slack.com/scopes/pins:read
-  https://api.channels.slack.com/scopes/pins:write
+  https://docs.slack.dev/reference/scopes/pins.read
+  https://docs.slack.dev/reference/scopes/pins.write
 - `emoji:read` (`emoji.list`)
-  https://api.channels.slack.com/scopes/emoji:read
+  https://docs.slack.dev/reference/scopes/emoji.read
 - `files:write` (uploads via `files.uploadV2`)
-  https://api.channels.slack.com/messaging/files/uploading
+  https://docs.slack.dev/messaging/working-with-files/#upload
 
 ### User token scopes (optional, read-only by default)
 Add these under **User Token Scopes** if you configure `channels.slack.userToken`.
@@ -284,9 +284,9 @@ Add these under **User Token Scopes** if you configure `channels.slack.userToken
 - `mpim:write` (only if we add group-DM open/DM start via `conversations.open`)
 - `groups:write` (only if we add private-channel management: create/rename/invite/archive)
 - `chat:write.public` (only if we want to post to channels the bot isn't in)
-  https://api.channels.slack.com/scopes/chat:write.public
+  https://docs.slack.dev/reference/scopes/chat.write.public
 - `users:read.email` (only if we need email fields from `users.info`)
-  https://api.channels.slack.com/changelog/2017-04-narrowing-email-access
+  https://docs.slack.dev/changelog/2017-04-narrowing-email-access
 - `files:read` (only if we start listing/reading file metadata)
 
 ## Config
@@ -349,6 +349,7 @@ ack reaction after the bot replies.
 
 ## Limits
 - Outbound text is chunked to `channels.slack.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.slack.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Media uploads are capped by `channels.slack.mediaMaxMb` (default 20).
 
 ## Reply threading

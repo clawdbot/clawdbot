@@ -168,6 +168,83 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["w1", "w2"]);
   });
 
+  it("respects newline chunk mode for WhatsApp", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: ClawdbotConfig = {
+      channels: { whatsapp: { textChunkLimit: 4000, chunkMode: "newline" } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "Line one\n\nLine two" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "Line one",
+      expect.objectContaining({ verbose: false }),
+    );
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      "Line two",
+      expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("preserves fenced blocks for markdown chunkers in newline mode", async () => {
+    const chunker = vi.fn((text: string) => (text ? [text] : []));
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "r1",
+    }));
+    const sendMedia = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "r1",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker,
+              chunkerMode: "markdown",
+              textChunkLimit: 4000,
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const cfg: ClawdbotConfig = {
+      channels: { matrix: { textChunkLimit: 4000, chunkMode: "newline" } },
+    };
+    const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text }],
+    });
+
+    expect(chunker).toHaveBeenCalledTimes(1);
+    expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
+  });
+
   it("uses iMessage media maxBytes from agent fallback", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(
@@ -231,6 +308,28 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
+  });
+
+  it("passes normalized payload to onError", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("boom"));
+    const onError = vi.fn();
+    const cfg: ClawdbotConfig = {};
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://x.test/a.jpg" }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
+    );
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {

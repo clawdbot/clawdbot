@@ -1,0 +1,17 @@
+# actionlint configuration
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+self-hosted-runner:
+  labels:
+    # Blacksmith CI runners
+    - blacksmith-4vcpu-ubuntu-2404
+    - blacksmith-4vcpu-windows-2025
+
+# Ignore patterns for known issues
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      # Ignore shellcheck warnings (we run shellcheck separately)
+      - 'shellcheck reported issue.+'
+      # Ignore intentional if: false for disabled jobs
+      - 'constant expression "false" in condition'

@@ -460,6 +460,22 @@ File contents here`,
     expect(result).toBe("The actual answer.");
   });
 
+  it("strips final tags while keeping content", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<final>\nAnswer\n</final>",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Answer");
+  });
+
   it("strips thought tags", () => {
     const msg: AssistantMessage = {
       role: "assistant",

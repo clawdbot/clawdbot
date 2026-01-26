@@ -120,6 +120,13 @@ You can add custom commands to the menu via config:
 }
 ```
 
+## Troubleshooting
+
+- `setMyCommands failed` in logs usually means outbound HTTPS/DNS is blocked to `api.telegram.org`.
+- If you see `sendMessage` or `sendChatAction` failures, check IPv6 routing and DNS.
+
+More help: [Channel troubleshooting](/channels/troubleshooting).
+
 Notes:
 - Custom commands are **menu entries only**; Clawdbot does not implement them unless you handle them elsewhere.
 - Command names are normalized (leading `/` stripped, lowercased) and must match `a-z`, `0-9`, `_` (1–32 chars).
@@ -128,6 +135,7 @@ Notes:
 
 ## Limits
 - Outbound text is chunked to `channels.telegram.textChunkLimit` (default 4000).
+- Optional newline chunking: set `channels.telegram.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Media downloads/uploads are capped by `channels.telegram.mediaMaxMb` (default 5).
 - Telegram Bot API requests time out after `channels.telegram.timeoutSeconds` (default 500 via grammY). Set lower to avoid long hangs.
 - Group history context uses `channels.telegram.historyLimit` (or `channels.telegram.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
@@ -516,6 +524,8 @@ Provider options:
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
+- `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).

@@ -3,4 +3,3 @@ export type EventLogEntry = {
   event: string;
   payload?: unknown;
 };
-

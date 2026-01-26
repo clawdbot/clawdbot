@@ -26,6 +26,10 @@ Primary goals:
 - Keep the tool surface hard to misuse: sub-agents do **not** get session tools by default.
 - Avoid nested fan-out: sub-agents cannot spawn sub-agents.
 
+Cost note: each sub-agent has its **own** context and token usage. For heavy or repetitive
+tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
+You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
+
 ## Tool
 
 Use `sessions_spawn`:

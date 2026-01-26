@@ -1,6 +1,10 @@
 import { type FilesUploadV2Arguments, type WebClient } from "@slack/web-api";
 
-import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
@@ -149,7 +153,15 @@ export async function sendMessageSlack(
     channel: "slack",
     accountId: account.accountId,
   });
-  const chunks = markdownToSlackMrkdwnChunks(trimmedMessage, chunkLimit, { tableMode });
+  const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
+  const markdownChunks =
+    chunkMode === "newline"
+      ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
+      : [trimmedMessage];
+  const chunks = markdownChunks.flatMap((markdown) =>
+    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
+  );
+  if (!chunks.length && trimmedMessage) chunks.push(trimmedMessage);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024

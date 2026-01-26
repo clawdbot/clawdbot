@@ -46,10 +46,14 @@ better forms without hard-coding config knowledge.
 Use `config.apply` to validate + write the full config and restart the Gateway in one step.
 It writes a restart sentinel and pings the last active session after the Gateway comes back.
 
+Warning: `config.apply` replaces the **entire config**. If you want to change only a few keys,
+use `config.patch` or `clawdbot config set`. Keep a backup of `~/.clawdbot/clawdbot.json`.
+
 Params:
 - `raw` (string) — JSON5 payload for the entire config
 - `baseHash` (optional) — config hash from `config.get` (required when a config already exists)
 - `sessionKey` (optional) — last active session key for the wake-up ping
+- `note` (optional) — note to include in the restart sentinel
 - `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example (via `gateway call`):
@@ -71,10 +75,15 @@ unrelated keys. It applies JSON merge patch semantics:
 - objects merge recursively
 - `null` deletes a key
 - arrays replace
+Like `config.apply`, it validates, writes the config, stores a restart sentinel, and schedules
+the Gateway restart (with an optional wake when `sessionKey` is provided).
 
 Params:
 - `raw` (string) — JSON5 payload containing just the keys to change
 - `baseHash` (required) — config hash from `config.get`
+- `sessionKey` (optional) — last active session key for the wake-up ping
+- `note` (optional) — note to include in the restart sentinel
+- `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example:
 
@@ -82,7 +91,9 @@ Example:
 clawdbot gateway call config.get --params '{}' # capture payload.hash
 clawdbot gateway call config.patch --params '{
   "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
-  "baseHash": "<hash-from-config.get>"
+  "baseHash": "<hash-from-config.get>",
+  "sessionKey": "agent:main:whatsapp:dm:+15555550123",
+  "restartDelayMs": 1000
 }'
 ```
 
@@ -399,7 +410,7 @@ Optional per-agent identity used for defaults and UX. This is written by the mac
 
 If set, Clawdbot derives defaults (only when you haven’t set them explicitly):
 - `messages.ackReaction` from the **active agent**’s `identity.emoji` (falls back to 👀)
-- `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
+- `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp)
 - `identity.avatar` accepts a workspace-relative image path or a remote URL/data URL. Local files must live inside the agent workspace.
 
 `identity.avatar` accepts:
@@ -496,6 +507,7 @@ For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowF
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000, // optional outbound chunk size (chars)
+      chunkMode: "length", // optional chunking mode (length | newline)
       mediaMaxMb: 50 // optional inbound media cap (MB)
     }
   }
@@ -543,7 +555,7 @@ Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
 
-### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
+### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.googlechat.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
 Run multiple accounts per channel (each account has its own `accountId` and optional `name`):
 
@@ -574,7 +586,7 @@ Notes:
 
 ### Group chat mention gating (`agents.list[].groupChat` + `messages.groupChat`)
 
-Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
+Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
 **Mention types:**
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `channels.whatsapp.allowFrom`).
@@ -1009,6 +1021,7 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
       ],
       historyLimit: 50,                     // include last N group messages as context (0 disables)
       replyToMode: "first",                 // off | first | all
+      linkPreview: true,                   // toggle outbound link previews
       streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
       draftChunk: {                        // optional; only for streamMode=block
         minChars: 200,
@@ -1097,6 +1110,7 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
       },
       historyLimit: 20,                       // include last N guild messages as context
       textChunkLimit: 2000,                   // optional outbound text chunk size (chars)
+      chunkMode: "length",                    // optional chunking mode (length | newline)
       maxLinesPerMessage: 17,                 // soft max lines per message (Discord UI clipping)
       retry: {                                // outbound retry policy
         attempts: 3,
@@ -1117,8 +1131,46 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
-Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
+Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Set `channels.discord.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking. Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
+
+### `channels.googlechat` (Chat API webhook)
+
+Google Chat runs over HTTP webhooks with app-level auth (service account).
+Multi-account support lives under `channels.googlechat.accounts` (see the multi-account section above). Env vars only apply to the default account.
+
+```json5
+{
+  channels: {
+    "googlechat": {
+      enabled: true,
+      serviceAccountFile: "/path/to/service-account.json",
+      audienceType: "app-url",             // app-url | project-number
+      audience: "https://gateway.example.com/googlechat",
+      webhookPath: "/googlechat",
+      botUser: "users/1234567890",        // optional; improves mention detection
+      dm: {
+        enabled: true,
+        policy: "pairing",                // pairing | allowlist | open | disabled
+        allowFrom: ["users/1234567890"]   // optional; "open" requires ["*"]
+      },
+      groupPolicy: "allowlist",
+      groups: {
+        "spaces/AAAA": { allow: true, requireMention: true }
+      },
+      actions: { reactions: true },
+      typingIndicator: "message",
+      mediaMaxMb: 20
+    }
+  }
+}
+```
+
+Notes:
+- Service account JSON can be inline (`serviceAccount`) or file-based (`serviceAccountFile`).
+- Env fallbacks for the default account: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
+- `audienceType` + `audience` must match the Chat app’s webhook auth config.
+- Use `spaces/<spaceId>` or `users/<userId|email>` when setting delivery targets.
 
 ### `channels.slack` (socket mode)
 
@@ -1172,6 +1224,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
         ephemeral: true
       },
       textChunkLimit: 4000,
+      chunkMode: "length",
       mediaMaxMb: 20
     }
   }
@@ -1221,7 +1274,8 @@ Mattermost requires a bot token plus the base URL for your server:
       dmPolicy: "pairing",
       chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
-      textChunkLimit: 4000
+      textChunkLimit: 4000,
+      chunkMode: "length"
     }
   }
 }
@@ -1434,7 +1488,7 @@ WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (dep
 agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
-on channels that support reactions (Slack/Discord/Telegram). Defaults to the
+on channels that support reactions (Slack/Discord/Telegram/Google Chat). Defaults to the
 active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
 
 `ackReactionScope` controls when reactions fire:
@@ -1444,7 +1498,7 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 - `all`: all messages
 
 `removeAckAfterReply` removes the bot’s ack reaction after a reply is sent
-(Slack/Discord/Telegram only). Default: `false`.
+(Slack/Discord/Telegram/Google Chat only). Default: `false`.
 
 #### `messages.tts`
 
@@ -1456,7 +1510,7 @@ voice notes; other channels send MP3 audio.
 {
   messages: {
     tts: {
-      enabled: true,
+      auto: "always", // off | always | inbound | tagged
       mode: "final", // final | all (include tool/block replies)
       provider: "elevenlabs",
       summaryModel: "openai/gpt-4.1-mini",
@@ -1493,8 +1547,10 @@ voice notes; other channels send MP3 audio.
 ```
 
 Notes:
-- `messages.tts.enabled` can be overridden by local user prefs (see `/tts on`, `/tts off`).
-- `prefsPath` stores local overrides (enabled/provider/limit/summarize).
+- `messages.tts.auto` controls auto‑TTS (`off`, `always`, `inbound`, `tagged`).
+- `/tts off|always|inbound|tagged` sets the per‑session auto mode (overrides config).
+- `messages.tts.enabled` is legacy; doctor migrates it to `messages.tts.auto`.
+- `prefsPath` stores local overrides (provider/limit/summarize).
 - `maxTextLength` is a hard cap for TTS input; summaries are truncated to fit.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
   - Accepts `provider/model` or an alias from `agents.defaults.models`.
@@ -1829,11 +1885,12 @@ Block streaming:
   ```
 - `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
-  with `maxChars` capped to the channel text limit. Signal/Slack/Discord default
+  with `maxChars` capped to the channel text limit. Signal/Slack/Discord/Google Chat default
   to `minChars: 1500` unless overridden.
   Channel overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
   `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.mattermost.blockStreamingCoalesce`,
-  `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`
+  `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`,
+  `channels.googlechat.blockStreamingCoalesce`
   (and per-account variants).
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
@@ -2790,14 +2847,20 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
-- `gateway.controlUi.allowInsecureAuth` allows token-only auth over **HTTP** (no device identity).
-  Default: `false`. Prefer HTTPS (Tailscale Serve) or `127.0.0.1`.
+- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI and skips
+  device identity + pairing (even on HTTPS). Default: `false`. Prefer HTTPS
+  (Tailscale Serve) or `127.0.0.1`.
 
 Related docs:
 - [Control UI](/web/control-ui)
 - [Web overview](/web)
 - [Tailscale](/gateway/tailscale)
 - [Remote access](/gateway/remote)
+
+Trusted proxies:
+- `gateway.trustedProxies`: list of reverse proxy IPs that terminate TLS in front of the Gateway.
+- When a connection comes from one of these IPs, Clawdbot uses `x-forwarded-for` (or `x-real-ip`) to determine the client IP for local pairing checks and HTTP auth/local checks.
+- Only list proxies you fully control, and ensure they **overwrite** incoming `x-forwarded-for`.
 
 Notes:
 - `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
@@ -2825,13 +2888,14 @@ Auth and Tailscale:
 
 Remote client defaults (CLI):
 - `gateway.remote.url` sets the default Gateway WebSocket URL for CLI calls when `gateway.mode = "remote"`.
+- `gateway.remote.transport` selects the macOS remote transport (`ssh` default, `direct` for ws/wss). When `direct`, `gateway.remote.url` must be `ws://` or `wss://`. `ws://host` defaults to port `18789`.
 - `gateway.remote.token` supplies the token for remote calls (leave unset for no auth).
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
 
 macOS app behavior:
 - Clawdbot.app watches `~/.clawdbot/clawdbot.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
 - If `gateway.mode` is unset but `gateway.remote.url` is set, the macOS app treats it as remote mode.
-- When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` in remote mode) back to the config file.
+- When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` + `gateway.remote.transport` in remote mode) back to the config file.
 
 ```json5
 {
@@ -2841,6 +2905,21 @@ macOS app behavior:
       url: "ws://gateway.tailnet:18789",
       token: "your-token",
       password: "your-password"
+    }
+  }
+}
+```
+
+Direct transport example (macOS app):
+
+```json5
+{
+  gateway: {
+    mode: "remote",
+    remote: {
+      transport: "direct",
+      url: "wss://gateway.example.ts.net",
+      token: "your-token"
     }
   }
 }
@@ -2964,7 +3043,7 @@ Mapping notes:
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
 - `deliver: true` sends the final reply to a channel; `channel` defaults to `last` (falls back to WhatsApp).
-- If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage/MS Teams).
+- If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
 
 Gmail helper config (used by `clawdbot webhooks gmail setup` / `run`):
@@ -3140,7 +3219,7 @@ Template placeholders are expanded in `tools.media.*.models[].args` and `tools.m
 | `{{GroupMembers}}` | Group members preview (best effort) |
 | `{{SenderName}}` | Sender display name (best effort) |
 | `{{SenderE164}}` | Sender phone number (best effort) |
-| `{{Provider}}` | Provider hint (whatsapp|telegram|discord|slack|signal|imessage|msteams|webchat|…) |
+| `{{Provider}}` | Provider hint (whatsapp|telegram|discord|googlechat|slack|signal|imessage|msteams|webchat|…) |
 
 ## Cron (Gateway scheduler)
 

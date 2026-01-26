@@ -55,10 +55,10 @@ function extractErrorMessage(err: unknown): string | undefined {
 function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
   const message = extractErrorMessage(err);
   const label = describeNode(nodeId);
-  if (message?.includes("node not connected")) {
-    log.info(
-      `remote bin probe skipped: node not connected (${label}); check nodes list/status for ${label}`,
-    );
+  // Node unavailable errors (not connected or disconnected mid-operation) are expected
+  // when nodes have transient connections - log at info level instead of warn
+  if (message?.includes("node not connected") || message?.includes("node disconnected")) {
+    log.info(`remote bin probe skipped: node unavailable (${label})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
@@ -213,6 +213,15 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
   return [];
 }
 
+function areBinSetsEqual(a: Set<string> | undefined, b: Set<string>): boolean {
+  if (!a) return false;
+  if (a.size !== b.size) return false;
+  for (const bin of b) {
+    if (!a.has(bin)) return false;
+  }
+  return true;
+}
+
 export async function refreshRemoteNodeBins(params: {
   nodeId: string;
   platform?: string;
@@ -261,7 +270,11 @@ export async function refreshRemoteNodeBins(params: {
       return;
     }
     const bins = parseBinProbePayload(res.payloadJSON, res.payload);
+    const existingBins = remoteNodes.get(params.nodeId)?.bins;
+    const nextBins = new Set(bins);
+    const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     recordRemoteNodeBins(params.nodeId, bins);
+    if (!hasChanged) return;
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {

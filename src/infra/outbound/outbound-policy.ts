@@ -119,6 +119,8 @@ export async function buildCrossContextDecoration(params: {
   accountId?: string | null;
 }): Promise<CrossContextDecoration | null> {
   if (!params.toolContext?.currentChannelId) return null;
+  // Skip decoration for direct tool sends (agent composing, not forwarding)
+  if (params.toolContext.skipCrossContextDecoration) return null;
   if (!isCrossContextTarget(params)) return null;
 
   const markerConfig = params.cfg.tools?.message?.crossContext?.marker;
@@ -131,11 +133,11 @@ export async function buildCrossContextDecoration(params: {
       targetId: params.toolContext.currentChannelId,
       accountId: params.accountId ?? undefined,
     })) ?? params.toolContext.currentChannelId;
+  // Don't force group formatting here; currentChannelId can be a DM or a group.
   const originLabel = formatTargetDisplay({
     channel: params.channel,
     target: params.toolContext.currentChannelId,
     display: currentName,
-    kind: "group",
   });
   const prefixTemplate = markerConfig?.prefix ?? "[from {channel}] ";
   const suffixTemplate = markerConfig?.suffix ?? "";

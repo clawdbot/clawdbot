@@ -26,7 +26,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect } from "../../auth.js";
 import { loadConfig } from "../../../config/config.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
-import { isLocalGatewayAddress } from "../../net.js";
+import { isLocalGatewayAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import {
   type ConnectParams,
@@ -66,19 +66,34 @@ function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;
   reason?: string;
+  client?: { id?: string | null; mode?: string | null };
 }): string {
-  const { authMode, authProvided, reason } = params;
+  const { authMode, authProvided, reason, client } = params;
+  const isCli = isGatewayCliClient(client);
+  const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+  const isWebchat = isWebchatClient(client);
+  const uiHint = "open a tokenized dashboard URL or paste token in Control UI settings";
+  const tokenHint = isCli
+    ? "set gateway.remote.token to match gateway.auth.token"
+    : isControlUi || isWebchat
+      ? uiHint
+      : "provide gateway auth token";
+  const passwordHint = isCli
+    ? "set gateway.remote.password to match gateway.auth.password"
+    : isControlUi || isWebchat
+      ? "enter the password in Control UI settings"
+      : "provide gateway auth password";
   switch (reason) {
     case "token_missing":
-      return "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)";
+      return `unauthorized: gateway token missing (${tokenHint})`;
     case "token_mismatch":
-      return "unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)";
+      return `unauthorized: gateway token mismatch (${tokenHint})`;
     case "token_missing_config":
       return "unauthorized: gateway token not configured on gateway (set gateway.auth.token)";
     case "password_missing":
-      return "unauthorized: gateway password missing (set gateway.remote.password to match gateway.auth.password)";
+      return `unauthorized: gateway password missing (${passwordHint})`;
     case "password_mismatch":
-      return "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)";
+      return `unauthorized: gateway password mismatch (${passwordHint})`;
     case "password_missing_config":
       return "unauthorized: gateway password not configured on gateway (set gateway.auth.password)";
     case "tailscale_user_missing":
@@ -90,10 +105,10 @@ function formatGatewayAuthFailureMessage(params: {
   }
 
   if (authMode === "token" && authProvided === "none") {
-    return "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)";
+    return `unauthorized: gateway token missing (${tokenHint})`;
   }
   if (authMode === "password" && authProvided === "none") {
-    return "unauthorized: gateway password missing (set gateway.remote.password to match gateway.auth.password)";
+    return `unauthorized: gateway password missing (${passwordHint})`;
   }
   return "unauthorized";
 }
@@ -104,6 +119,7 @@ export function attachGatewayWsMessageHandler(params: {
   connId: string;
   remoteAddr?: string;
   forwardedFor?: string;
+  realIp?: string;
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
@@ -133,6 +149,7 @@ export function attachGatewayWsMessageHandler(params: {
     connId,
     remoteAddr,
     forwardedFor,
+    realIp,
     requestHost,
     requestOrigin,
     requestUserAgent,
@@ -156,6 +173,28 @@ export function attachGatewayWsMessageHandler(params: {
     logHealth,
     logWsControl,
   } = params;
+
+  const configSnapshot = loadConfig();
+  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+  const clientIp = resolveGatewayClientIp({ remoteAddr, forwardedFor, realIp, trustedProxies });
+
+  // If proxy headers are present but the remote address isn't trusted, don't treat
+  // the connection as local. This prevents auth bypass when running behind a reverse
+  // proxy without proper configuration - the proxy's loopback connection would otherwise
+  // cause all external requests to be treated as trusted local clients.
+  const hasProxyHeaders = Boolean(forwardedFor || realIp);
+  const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
+  const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
+  const isLocalClient = !hasUntrustedProxyHeaders && isLocalGatewayAddress(clientIp);
+  const reportedClientIp = hasUntrustedProxyHeaders ? undefined : clientIp;
+
+  if (hasUntrustedProxyHeaders) {
+    logWsControl.warn(
+      "Proxy headers detected from untrusted address. " +
+        "Connection will not be treated as local. " +
+        "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
+    );
+  }
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
 
@@ -296,13 +335,38 @@ export function attachGatewayWsMessageHandler(params: {
         let devicePublicKey: string | null = null;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
+        const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        const allowInsecureControlUi =
+          isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
+        if (hasUntrustedProxyHeaders && resolvedAuth.mode === "none") {
+          setHandshakeState("failed");
+          setCloseCause("proxy-auth-required", {
+            client: connectParams.client.id,
+            clientDisplayName: connectParams.client.displayName,
+            mode: connectParams.client.mode,
+            version: connectParams.client.version,
+          });
+          send({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "gateway auth required behind reverse proxy",
+              {
+                details: {
+                  hint: "set gateway.auth or configure gateway.trustedProxies",
+                },
+              },
+            ),
+          });
+          close(1008, "gateway auth required");
+          return;
+        }
 
         if (!device) {
-          const allowInsecureControlUi =
-            isControlUi && loadConfig().gateway?.controlUi?.allowInsecureAuth === true;
-          const canSkipDevice =
-            isControlUi && allowInsecureControlUi ? hasTokenAuth || hasPasswordAuth : hasTokenAuth;
+          const canSkipDevice = allowInsecureControlUi ? hasSharedAuth : hasTokenAuth;
 
           if (isControlUi && !allowInsecureControlUi) {
             const errorMessage = "control ui requires HTTPS or localhost (secure context)";
@@ -380,7 +444,7 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, "device signature expired");
             return;
           }
-          const nonceRequired = !isLocalGatewayAddress(remoteAddr);
+          const nonceRequired = !isLocalClient;
           const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
           if (nonceRequired && !providedNonce) {
             setHandshakeState("failed");
@@ -495,6 +559,7 @@ export function attachGatewayWsMessageHandler(params: {
           auth: resolvedAuth,
           connectAuth: connectParams.auth,
           req: upgradeReq,
+          trustedProxies,
         });
         let authOk = authResult.ok;
         let authMethod = authResult.method ?? "none";
@@ -524,6 +589,7 @@ export function attachGatewayWsMessageHandler(params: {
             authMode: resolvedAuth.mode,
             authProvided,
             reason: authResult.reason,
+            client: connectParams.client,
           });
           setCloseCause("unauthorized", {
             authMode: resolvedAuth.mode,
@@ -545,7 +611,8 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        if (device && devicePublicKey) {
+        const skipPairing = allowInsecureControlUi && hasSharedAuth;
+        if (device && devicePublicKey && !skipPairing) {
           const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
             const pairing = await requestDevicePairing({
               deviceId: device.id,
@@ -556,8 +623,8 @@ export function attachGatewayWsMessageHandler(params: {
               clientMode: connectParams.client.mode,
               role,
               scopes,
-              remoteIp: remoteAddr,
-              silent: isLocalGatewayAddress(remoteAddr),
+              remoteIp: reportedClientIp,
+              silent: isLocalClient,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -640,7 +707,7 @@ export function attachGatewayWsMessageHandler(params: {
               clientMode: connectParams.client.mode,
               role,
               scopes,
-              remoteIp: remoteAddr,
+              remoteIp: reportedClientIp,
             });
           }
         }
@@ -689,7 +756,7 @@ export function attachGatewayWsMessageHandler(params: {
         if (presenceKey) {
           upsertPresence(presenceKey, {
             host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-            ip: isLocalGatewayAddress(remoteAddr) ? undefined : remoteAddr,
+            ip: isLocalClient ? undefined : reportedClientIp,
             version: connectParams.client.version,
             platform: connectParams.client.platform,
             deviceFamily: connectParams.client.deviceFamily,
@@ -748,7 +815,9 @@ export function attachGatewayWsMessageHandler(params: {
         setHandshakeState("connected");
         if (role === "node") {
           const context = buildRequestContext();
-          const nodeSession = context.nodeRegistry.register(nextClient, { remoteIp: remoteAddr });
+          const nodeSession = context.nodeRegistry.register(nextClient, {
+            remoteIp: reportedClientIp,
+          });
           const instanceIdRaw = connectParams.client.instanceId;
           const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
