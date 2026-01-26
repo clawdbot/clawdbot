@@ -35,7 +35,9 @@ Status: unreleased.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
 
 ### Fixes
+- Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
 - Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
+- Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
 
 ## 2026.1.24-3
 

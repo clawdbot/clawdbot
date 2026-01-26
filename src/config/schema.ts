@@ -369,7 +369,8 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "gateway.auth.token": "Recommended for all gateways; required for non-loopback binds.",
+  "gateway.auth.token":
+    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdbot).",

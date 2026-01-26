@@ -125,6 +125,7 @@ describe("gateway auth", () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
       req: {
         socket: { remoteAddress: "127.0.0.1" },
         headers: {
@@ -141,6 +142,28 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+
+  it("rejects mismatched tailscale identity when required", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "alice@example.com", name: "Alice" }),
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+          "tailscale-user-login": "peter@example.com",
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("tailscale_user_mismatch");
   });
 
   it("treats trusted proxy loopback clients as direct", async () => {

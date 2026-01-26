@@ -34,7 +34,7 @@ const openWs = async (port: number) => {
 };
 
 describe("gateway server auth/connect", () => {
-  describe("default auth", () => {
+  describe("default auth (token)", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
 
@@ -234,6 +234,7 @@ describe("gateway server auth/connect", () => {
     test("returns control ui hint when token is missing", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
+        skipDefaultAuth: true,
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           version: "1.0.0",
@@ -352,6 +353,7 @@ describe("gateway server auth/connect", () => {
   });
 
   test("rejects proxied connections without auth when proxy headers are untrusted", async () => {
+    testState.gatewayAuth = { mode: "none" };
     const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     const port = await getFreePort();
@@ -360,7 +362,7 @@ describe("gateway server auth/connect", () => {
       headers: { "x-forwarded-for": "203.0.113.10" },
     });
     await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws);
+    const res = await connectReq(ws, { skipDefaultAuth: true });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("gateway auth required");
     ws.close();

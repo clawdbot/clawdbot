@@ -213,6 +213,18 @@ type ExecErrorDetails = {
   code?: unknown;
 };
 
+export type TailscaleWhoisIdentity = {
+  login: string;
+  name?: string;
+};
+
+type TailscaleWhoisCacheEntry = {
+  value: TailscaleWhoisIdentity | null;
+  expiresAt: number;
+};
+
+const whoisCache = new Map<string, TailscaleWhoisCacheEntry>();
+
 function extractExecErrorText(err: unknown) {
   const errOutput = err as ExecErrorDetails;
   const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
@@ -380,4 +392,74 @@ export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
+}
+
+function getString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIdentity | null {
+  const userProfile =
+    readRecord(payload.UserProfile) ?? readRecord(payload.userProfile) ?? readRecord(payload.User);
+  const login =
+    getString(userProfile?.LoginName) ??
+    getString(userProfile?.Login) ??
+    getString(userProfile?.login) ??
+    getString(payload.LoginName) ??
+    getString(payload.login);
+  if (!login) return null;
+  const name =
+    getString(userProfile?.DisplayName) ??
+    getString(userProfile?.Name) ??
+    getString(userProfile?.displayName) ??
+    getString(payload.DisplayName) ??
+    getString(payload.name);
+  return { login, name };
+}
+
+function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null | undefined {
+  const cached = whoisCache.get(ip);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= now) {
+    whoisCache.delete(ip);
+    return undefined;
+  }
+  return cached.value;
+}
+
+function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number) {
+  whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
+}
+
+export async function readTailscaleWhoisIdentity(
+  ip: string,
+  exec: typeof runExec = runExec,
+  opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number },
+): Promise<TailscaleWhoisIdentity | null> {
+  const normalized = ip.trim();
+  if (!normalized) return null;
+  const now = Date.now();
+  const cached = readCachedWhois(normalized, now);
+  if (cached !== undefined) return cached;
+
+  const cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
+  const errorTtlMs = opts?.errorTtlMs ?? 5_000;
+  try {
+    const tailscaleBin = await getTailscaleBinary();
+    const { stdout } = await exec(tailscaleBin, ["whois", "--json", normalized], {
+      timeoutMs: opts?.timeoutMs ?? 5_000,
+      maxBuffer: 200_000,
+    });
+    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    const identity = parseWhoisIdentity(parsed);
+    writeCachedWhois(normalized, identity, cacheTtlMs);
+    return identity;
+  } catch {
+    writeCachedWhois(normalized, null, errorTtlMs);
+    return null;
+  }
 }

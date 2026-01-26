@@ -28,11 +28,12 @@ let ws: WebSocket;
 let port: number;
 
 beforeAll(async () => {
-  const started = await startServerWithClient();
+  const token = "test-gateway-token-1234567890";
+  const started = await startServerWithClient(token);
   server = started.server;
   ws = started.ws;
   port = started.port;
-  await connectOk(ws);
+  await connectOk(ws, { token });
 });
 
 afterAll(async () => {
@@ -60,6 +61,7 @@ describe("late-arriving invoke results", () => {
           mode: GATEWAY_CLIENT_MODES.NODE,
         },
         commands: ["canvas.snapshot"],
+        token: "test-gateway-token-1234567890",
       });
 
       // Send an invoke result with an unknown ID (simulating late arrival after timeout)

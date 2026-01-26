@@ -100,6 +100,10 @@ function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
     case "tailscale_proxy_missing":
       return "unauthorized: tailscale proxy headers missing (use Tailscale Serve or gateway token/password)";
+    case "tailscale_whois_failed":
+      return "unauthorized: tailscale identity check failed (use Tailscale Serve auth or gateway token/password)";
+    case "tailscale_user_mismatch":
+      return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
     default:
       break;
   }

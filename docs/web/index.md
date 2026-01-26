@@ -91,7 +91,8 @@ Open:
 
 ## Security notes
 
-- Binding the Gateway to a non-loopback address **requires** auth (`gateway.auth` or `CLAWDBOT_GATEWAY_TOKEN`).
+- Gateway auth is required by default (token/password or Tailscale identity headers).
+- Non-loopback binds still **require** a shared token/password (`gateway.auth` or env).
 - The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
 - With Serve, Tailscale identity headers can satisfy auth when

@@ -90,10 +90,10 @@ The wizard will walk you through:
 clawdbot status
 
 # Check service
-systemctl status clawdbot
+systemctl --user status clawdbot-gateway.service
 
 # View logs
-journalctl -u clawdbot -f
+journalctl --user -u clawdbot-gateway.service -f
 ```
 
 ## 6) Access the Dashboard
@@ -108,18 +108,30 @@ ssh -L 18789:localhost:18789 root@YOUR_DROPLET_IP
 # Then open: http://localhost:18789
 ```
 
-**Option B: Tailscale (easier long-term)**
+**Option B: Tailscale Serve (HTTPS, loopback-only)**
 ```bash
 # On the droplet
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
-# Configure gateway to bind to Tailscale
+# Configure Gateway to use Tailscale Serve
+clawdbot config set gateway.tailscale.mode serve
+clawdbot gateway restart
+```
+
+Open: `https://<magicdns>/`
+
+Notes:
+- Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers.
+- To require token/password instead, set `gateway.auth.allowTailscale: false` or use `gateway.auth.mode: "password"`.
+
+**Option C: Tailnet bind (no Serve)**
+```bash
 clawdbot config set gateway.bind tailnet
 clawdbot gateway restart
 ```
 
-Then access via your Tailscale IP: `http://100.x.x.x:18789`
+Open: `http://<tailscale-ip>:18789` (token required).
 
 ## 7) Connect Your Channels
 
