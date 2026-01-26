@@ -59,6 +59,8 @@ apps/ios/*.dSYM.zip
 # provisioning profiles (local)
 apps/ios/*.mobileprovision
 .env
+.conda-env
+.envrc
 
 # Local untracked files
 .local/
