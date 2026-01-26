@@ -50,9 +50,29 @@ ls -la "${HOME_CONFIG_DIR}/"
 
 # Start the gateway with token from env var
 # Explicitly set CLAWDBOT_CONFIG_PATH to ensure config is loaded from the file we wrote
+# Disable config cache to ensure fresh reads
 echo "=== Starting gateway with CLAWDBOT_STATE_DIR=${CLAWDBOT_STATE_DIR} ==="
 echo "=== Setting CLAWDBOT_CONFIG_PATH=${CONFIG_FILE} ==="
+echo "=== Disabling config cache ==="
 export CLAWDBOT_CONFIG_PATH="${CONFIG_FILE}"
+export CLAWDBOT_CONFIG_CACHE_MS=0
+
+# Verify config can be read
+echo "=== Verifying config can be read ==="
+node -e "
+const fs = require('fs');
+const path = '${CONFIG_FILE}';
+if (fs.existsSync(path)) {
+  const content = fs.readFileSync(path, 'utf-8');
+  const parsed = JSON.parse(content);
+  console.log('Config loaded successfully:');
+  console.log('trustedProxies:', JSON.stringify(parsed.gateway?.trustedProxies));
+} else {
+  console.error('Config file not found:', path);
+  process.exit(1);
+}
+"
+
 exec node dist/index.js gateway \
   --port 8080 \
   --bind lan \
