@@ -20,9 +20,24 @@ const ExecApprovalForwardingSchema = z
   .strict()
   .optional();
 
+const MessageApprovalForwardingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
+    actions: z.array(z.string()).optional(),
+    channels: z.array(z.string()).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+    timeout: z.number().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
+    message: MessageApprovalForwardingSchema,
   })
   .strict()
   .optional();

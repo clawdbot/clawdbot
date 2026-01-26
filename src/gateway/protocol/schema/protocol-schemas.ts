@@ -61,6 +61,10 @@ import {
   ExecApprovalResolveParamsSchema,
 } from "./exec-approvals.js";
 import {
+  MessageApprovalRequestParamsSchema,
+  MessageApprovalResolveParamsSchema,
+} from "./message-approvals.js";
+import {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
   DevicePairRejectParamsSchema,
@@ -211,6 +215,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  MessageApprovalRequestParams: MessageApprovalRequestParamsSchema,
+  MessageApprovalResolveParams: MessageApprovalResolveParamsSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,
