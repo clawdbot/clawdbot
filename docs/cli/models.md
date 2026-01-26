@@ -64,5 +64,5 @@ clawdbot models auth paste-token
 `clawdbot plugins list` to see which providers are installed.
 
 Notes:
-- `setup-token` runs `claude setup-token` on the current machine (requires the Claude Code CLI).
-- `paste-token` accepts a token string generated elsewhere.
+- `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
+- `paste-token` accepts a token string generated elsewhere or from automation.

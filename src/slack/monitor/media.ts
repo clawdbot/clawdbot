@@ -5,6 +5,38 @@ import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { SlackFile } from "../types.js";
 
+/**
+ * Fetches a URL with Authorization header, handling cross-origin redirects.
+ * Node.js fetch strips Authorization headers on cross-origin redirects for security.
+ * Slack's files.slack.com URLs redirect to CDN domains with pre-signed URLs that
+ * don't need the Authorization header, so we handle the initial auth request manually.
+ */
+export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
+  // Initial request with auth and manual redirect handling
+  const initialRes = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: "manual",
+  });
+
+  // If not a redirect, return the response directly
+  if (initialRes.status < 300 || initialRes.status >= 400) {
+    return initialRes;
+  }
+
+  // Handle redirect - the redirected URL should be pre-signed and not need auth
+  const redirectUrl = initialRes.headers.get("location");
+  if (!redirectUrl) {
+    return initialRes;
+  }
+
+  // Resolve relative URLs against the original
+  const resolvedUrl = new URL(redirectUrl, url).toString();
+
+  // Follow the redirect without the Authorization header
+  // (Slack's CDN URLs are pre-signed and don't need it)
+  return fetch(resolvedUrl, { redirect: "follow" });
+}
+
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
@@ -19,10 +51,12 @@ export async function resolveSlackMedia(params: {
     const url = file.url_private_download ?? file.url_private;
     if (!url) continue;
     try {
-      const fetchImpl: FetchLike = (input, init) => {
-        const headers = new Headers(init?.headers);
-        headers.set("Authorization", `Bearer ${params.token}`);
-        return fetch(input, { ...init, headers });
+      // Note: We ignore init options because fetchWithSlackAuth handles
+      // redirect behavior specially. fetchRemoteMedia only passes the URL.
+      const fetchImpl: FetchLike = (input) => {
+        const inputUrl =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return fetchWithSlackAuth(inputUrl, params.token);
       };
       const fetched = await fetchRemoteMedia({
         url,

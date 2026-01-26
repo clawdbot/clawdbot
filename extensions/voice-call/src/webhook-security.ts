@@ -195,18 +195,6 @@ export function verifyTwilioWebhook(
     verificationUrl.includes(".ngrok-free.app") ||
     verificationUrl.includes(".ngrok.io");
 
-  if (isNgrokFreeTier && options?.allowNgrokFreeTier) {
-    console.warn(
-      "[voice-call] Twilio signature validation failed (proceeding for ngrok free tier compatibility)",
-    );
-    return {
-      ok: true,
-      reason: "ngrok free tier compatibility mode",
-      verificationUrl,
-      isNgrokFreeTier: true,
-    };
-  }
-
   return {
     ok: false,
     reason: `Invalid signature for URL: ${verificationUrl}`,

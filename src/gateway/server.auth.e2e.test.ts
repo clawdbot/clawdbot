@@ -122,6 +122,18 @@ describe("gateway server auth/connect", () => {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
+    test("requires nonce when host is non-local", async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { host: "example.com" },
+      });
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+
+      const res = await connectReq(ws);
+      expect(res.ok).toBe(false);
+      expect(res.error?.message).toBe("device nonce required");
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    });
+
     test(
       "invalid connect params surface in response and close reason",
       { timeout: 60_000 },
@@ -290,6 +302,7 @@ describe("gateway server auth/connect", () => {
 
   test("allows control ui with device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
+    testState.gatewayAuth = { mode: "token", token: "secret" };
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       gateway: {
@@ -352,19 +365,45 @@ describe("gateway server auth/connect", () => {
     }
   });
 
-  test("rejects proxied connections without auth when proxy headers are untrusted", async () => {
-    testState.gatewayAuth = { mode: "none" };
+  test("allows control ui with stale device identity when device auth is disabled", async () => {
+    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
+    testState.gatewayAuth = { mode: "token", token: "secret" };
     const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
     const port = await getFreePort();
     const server = await startGatewayServer(port);
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
-      headers: { "x-forwarded-for": "203.0.113.10" },
+    const ws = await openWs(port);
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const identity = loadOrCreateDeviceIdentity();
+    const signedAtMs = Date.now() - 60 * 60 * 1000;
+    const payload = buildDeviceAuthPayload({
+      deviceId: identity.deviceId,
+      clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      role: "operator",
+      scopes: [],
+      signedAtMs,
+      token: "secret",
     });
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws, { skipDefaultAuth: true });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("gateway auth required");
+    const device = {
+      id: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      signature: signDevicePayload(identity.privateKeyPem, payload),
+      signedAt: signedAtMs,
+    };
+    const res = await connectReq(ws, {
+      token: "secret",
+      device,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
     ws.close();
     await server.close();
     if (prevToken === undefined) {

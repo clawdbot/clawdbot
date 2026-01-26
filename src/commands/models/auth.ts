@@ -1,12 +1,6 @@
-import { spawnSync } from "node:child_process";
-
 import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
 
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-  upsertAuthProfile,
-} from "../../agents/auth-profiles.js";
+import { upsertAuthProfile } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   resolveAgentDir,
@@ -33,6 +27,7 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { validateAnthropicSetupToken } from "../auth-token.js";
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   clackConfirm({
@@ -73,9 +68,7 @@ export async function modelsAuthSetupTokenCommand(
 ) {
   const provider = resolveTokenProvider(opts.provider ?? "anthropic");
   if (provider !== "anthropic") {
-    throw new Error(
-      "Only --provider anthropic is supported for setup-token (uses `claude setup-token`).",
-    );
+    throw new Error("Only --provider anthropic is supported for setup-token.");
   }
 
   if (!process.stdin.isTTY) {
@@ -84,38 +77,38 @@ export async function modelsAuthSetupTokenCommand(
 
   if (!opts.yes) {
     const proceed = await confirm({
-      message: "Run `claude setup-token` now?",
+      message: "Have you run `claude setup-token` and copied the token?",
       initialValue: true,
     });
     if (!proceed) return;
   }
 
-  const res = spawnSync("claude", ["setup-token"], { stdio: "inherit" });
-  if (res.error) throw res.error;
-  if (typeof res.status === "number" && res.status !== 0) {
-    throw new Error(`claude setup-token failed (exit ${res.status})`);
-  }
-
-  const store = ensureAuthProfileStore(undefined, {
-    allowKeychainPrompt: true,
+  const tokenInput = await text({
+    message: "Paste Anthropic setup-token",
+    validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
   });
-  const synced = store.profiles[CLAUDE_CLI_PROFILE_ID];
-  if (!synced) {
-    throw new Error(
-      `No Claude Code CLI credentials found after setup-token. Expected auth profile ${CLAUDE_CLI_PROFILE_ID}.`,
-    );
-  }
+  const token = String(tokenInput).trim();
+  const profileId = resolveDefaultTokenProfileId(provider);
+
+  upsertAuthProfile({
+    profileId,
+    credential: {
+      type: "token",
+      provider,
+      token,
+    },
+  });
 
   await updateConfig((cfg) =>
     applyAuthProfileConfig(cfg, {
-      profileId: CLAUDE_CLI_PROFILE_ID,
-      provider: "anthropic",
-      mode: "oauth",
+      profileId,
+      provider,
+      mode: "token",
     }),
   );
 
   logConfigUpdated(runtime);
-  runtime.log(`Auth profile: ${CLAUDE_CLI_PROFILE_ID} (anthropic/oauth)`);
+  runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
 export async function modelsAuthPasteTokenCommand(
@@ -189,7 +182,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
             {
               value: "setup-token",
               label: "setup-token (claude)",
-              hint: "Runs `claude setup-token` (recommended)",
+              hint: "Paste a setup-token from `claude setup-token`",
             },
           ]
         : []),

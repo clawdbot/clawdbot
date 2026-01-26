@@ -1,5 +1,5 @@
 ---
-summary: "Model authentication: OAuth, API keys, and Claude Code token reuse"
+summary: "Model authentication: OAuth, API keys, and setup-token"
 read_when:
   - Debugging model auth or OAuth expiry
   - Documenting authentication or credential storage
@@ -7,8 +7,8 @@ read_when:
 # Authentication
 
 Clawdbot supports OAuth and API keys for model providers. For Anthropic
-accounts, we recommend using an **API key**. Clawdbot can also reuse Claude Code
-credentials, including the long‑lived token created by `claude setup-token`.
+accounts, we recommend using an **API key**. For Claude subscription access,
+use the long‑lived token created by `claude setup-token`.
 
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
@@ -47,29 +47,26 @@ API keys for daemon use: `clawdbot onboard`.
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.clawdbot/.env`, systemd/launchd).
 
-## Anthropic: Claude Code CLI setup-token (supported)
+## Anthropic: setup-token (subscription auth)
 
-For Anthropic, the recommended path is an **API key**. If you’re already using
-Claude Code CLI, the setup-token flow is also supported.
-Run it on the **gateway host**:
+For Anthropic, the recommended path is an **API key**. If you’re using a Claude
+subscription, the setup-token flow is also supported. Run it on the **gateway host**:
 
 ```bash
 claude setup-token
 ```
 
-Then verify and sync into Clawdbot:
+Then paste it into Clawdbot:
 
 ```bash
-clawdbot models status
-clawdbot doctor
+clawdbot models auth setup-token --provider anthropic
 ```
 
-This should create (or refresh) an auth profile like `anthropic:claude-cli` in
-the agent auth store.
+If the token was created on another machine, paste it manually:
 
-Clawdbot config sets `auth.profiles["anthropic:claude-cli"].mode` to `"oauth"` so
-the profile accepts both OAuth and setup-token credentials. Older configs that
-used `"token"` are auto-migrated on load.
+```bash
+clawdbot models auth paste-token --provider anthropic
+```
 
 If you see an Anthropic error like:
 
@@ -78,12 +75,6 @@ This credential is only authorized for use with Claude Code and cannot be used f
 ```
 
 …use an Anthropic API key instead.
-
-Alternative: run the wrapper (also updates Clawdbot config):
-
-```bash
-clawdbot models auth setup-token --provider anthropic
-```
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
@@ -101,10 +92,6 @@ clawdbot models status --check
 Optional ops scripts (systemd/Termux) are documented here:
 [/automation/auth-monitoring](/automation/auth-monitoring)
 
-`clawdbot models status` loads Claude Code credentials into Clawdbot’s
-`auth-profiles.json` and shows expiry (warns within 24h by default).
-`clawdbot doctor` also performs the sync when it runs.
-
 > `claude setup-token` requires an interactive TTY.
 
 ## Checking model auth status
@@ -118,7 +105,7 @@ clawdbot doctor
 
 ### Per-session (chat command)
 
-Use `/model <alias-or-id>@<profileId>` to pin a specific provider credential for the current session (example profile ids: `anthropic:claude-cli`, `anthropic:default`).
+Use `/model <alias-or-id>@<profileId>` to pin a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
 
 Use `/model` (or `/model list`) for a compact picker; use `/model status` for the full view (candidates + next auth profile, plus provider endpoint details when configured).
 
@@ -128,22 +115,11 @@ Set an explicit auth profile order override for an agent (stored in that agent�
 
 ```bash
 clawdbot models auth order get --provider anthropic
-clawdbot models auth order set --provider anthropic anthropic:claude-cli
+clawdbot models auth order set --provider anthropic anthropic:default
 clawdbot models auth order clear --provider anthropic
 ```
 
 Use `--agent <id>` to target a specific agent; omit it to use the configured default agent.
-
-## How sync works
-
-1. **Claude Code** stores credentials in `~/.claude/.credentials.json` (or
-   Keychain on macOS).
-2. **Clawdbot** syncs those into
-   `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` when the auth store is
-   loaded.
-3. Refreshable OAuth profiles can be refreshed automatically on use. Static
-   token profiles (including Claude Code CLI setup-token) are not refreshable by
-   Clawdbot.
 
 ## Troubleshooting
 
@@ -159,7 +135,7 @@ clawdbot models status
 ### Token expiring/expired
 
 Run `clawdbot models status` to confirm which profile is expiring. If the profile
-is `anthropic:claude-cli`, rerun `claude setup-token`.
+is missing, rerun `claude setup-token` and paste the token again.
 
 ## Requirements
 

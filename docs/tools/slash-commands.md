@@ -132,7 +132,7 @@ Examples:
 /model list
 /model 3
 /model openai/gpt-5.2
-/model opus@anthropic:claude-cli
+/model opus@anthropic:default
 /model status
 ```
 

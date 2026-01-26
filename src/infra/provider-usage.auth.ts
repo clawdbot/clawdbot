@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  CLAUDE_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -111,9 +110,7 @@ async function resolveOAuthToken(params: {
     provider: params.provider,
   });
 
-  // Claude Code CLI creds are the only Anthropic tokens that reliably include the
-  // `user:profile` scope required for the OAuth usage endpoint.
-  const candidates = params.provider === "anthropic" ? [CLAUDE_CLI_PROFILE_ID, ...order] : order;
+  const candidates = order;
   const deduped: string[] = [];
   for (const entry of candidates) {
     if (!deduped.includes(entry)) deduped.push(entry);

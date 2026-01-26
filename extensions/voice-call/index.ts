@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
-
 import type { CoreConfig } from "./src/core-bridge.js";
 import {
   VoiceCallConfigSchema,
+  resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
@@ -145,8 +145,10 @@ const voiceCallPlugin = {
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
   configSchema: voiceCallConfigSchema,
   register(api) {
-    const cfg = voiceCallConfigSchema.parse(api.pluginConfig);
-    const validation = validateProviderConfig(cfg);
+    const config = resolveVoiceCallConfig(
+      voiceCallConfigSchema.parse(api.pluginConfig),
+    );
+    const validation = validateProviderConfig(config);
 
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
       const raw = api.pluginConfig as Record<string, unknown>;
@@ -167,7 +169,7 @@ const voiceCallPlugin = {
     let runtime: VoiceCallRuntime | null = null;
 
     const ensureRuntime = async () => {
-      if (!cfg.enabled) {
+      if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
@@ -176,7 +178,7 @@ const voiceCallPlugin = {
       if (runtime) return runtime;
       if (!runtimePromise) {
         runtimePromise = createVoiceCallRuntime({
-          config: cfg,
+          config,
           coreConfig: api.config as CoreConfig,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,
@@ -457,7 +459,7 @@ const voiceCallPlugin = {
       ({ program }) =>
         registerVoiceCallCli({
           program,
-          config: cfg,
+          config,
           ensureRuntime,
           logger: api.logger,
         }),
@@ -467,7 +469,7 @@ const voiceCallPlugin = {
     api.registerService({
       id: "voicecall",
       start: async () => {
-        if (!cfg.enabled) return;
+        if (!config.enabled) return;
         try {
           await ensureRuntime();
         } catch (err) {

@@ -205,4 +205,29 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("rejects invalid signatures even with ngrok free tier enabled", () => {
+    const authToken = "test-auth-token";
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "127.0.0.1:3334",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "attacker.ngrok-free.app",
+          "x-twilio-signature": "invalid",
+        },
+        rawBody: postBody,
+        url: "http://127.0.0.1:3334/voice/webhook",
+        method: "POST",
+      },
+      authToken,
+      { allowNgrokFreeTier: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.isNgrokFreeTier).toBe(true);
+    expect(result.reason).toMatch(/Invalid signature/);
+  });
 });

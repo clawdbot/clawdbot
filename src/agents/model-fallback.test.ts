@@ -101,7 +101,7 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
-      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:claude-cli".'))
+      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:default".'))
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({

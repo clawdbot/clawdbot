@@ -10,7 +10,7 @@ const {
   disableTailscaleServe,
   ensureFunnel,
 } = tailscale;
-const tailscaleBin = expect.stringMatching(/tailscale$/);
+const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
 describe("tailscale helpers", () => {
   afterEach(() => {

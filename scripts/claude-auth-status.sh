@@ -54,7 +54,7 @@ calc_status_from_expires() {
 json_expires_for_claude_cli() {
     echo "$STATUS_JSON" | jq -r '
         [.auth.oauth.profiles[]
-          | select(.provider == "anthropic" and .type == "oauth" and .source == "claude-cli")
+          | select(.provider == "anthropic" and (.type == "oauth" or .type == "token"))
           | .expiresAt // 0]
         | max // 0
     ' 2>/dev/null || echo "0"

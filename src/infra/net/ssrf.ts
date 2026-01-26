@@ -1,4 +1,12 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
+import { Agent, type Dispatcher } from "undici";
+
+type LookupCallback = (
+  err: NodeJS.ErrnoException | null,
+  address: string | LookupAddress[],
+  family?: number,
+) => void;
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -101,10 +109,71 @@ export function isBlockedHostname(hostname: string): boolean {
   );
 }
 
-export async function assertPublicHostname(
+export function createPinnedLookup(params: {
+  hostname: string;
+  addresses: string[];
+  fallback?: typeof dnsLookupCb;
+}): typeof dnsLookupCb {
+  const normalizedHost = normalizeHostname(params.hostname);
+  const fallback = params.fallback ?? dnsLookupCb;
+  const fallbackLookup = fallback as unknown as (
+    hostname: string,
+    callback: LookupCallback,
+  ) => void;
+  const fallbackWithOptions = fallback as unknown as (
+    hostname: string,
+    options: unknown,
+    callback: LookupCallback,
+  ) => void;
+  const records = params.addresses.map((address) => ({
+    address,
+    family: address.includes(":") ? 6 : 4,
+  }));
+  let index = 0;
+
+  return ((host: string, options?: unknown, callback?: unknown) => {
+    const cb: LookupCallback =
+      typeof options === "function" ? (options as LookupCallback) : (callback as LookupCallback);
+    if (!cb) return;
+    const normalized = normalizeHostname(host);
+    if (!normalized || normalized !== normalizedHost) {
+      if (typeof options === "function" || options === undefined) {
+        return fallbackLookup(host, cb);
+      }
+      return fallbackWithOptions(host, options, cb);
+    }
+
+    const opts =
+      typeof options === "object" && options !== null
+        ? (options as { all?: boolean; family?: number })
+        : {};
+    const requestedFamily =
+      typeof options === "number" ? options : typeof opts.family === "number" ? opts.family : 0;
+    const candidates =
+      requestedFamily === 4 || requestedFamily === 6
+        ? records.filter((entry) => entry.family === requestedFamily)
+        : records;
+    const usable = candidates.length > 0 ? candidates : records;
+    if (opts.all) {
+      cb(null, usable as LookupAddress[]);
+      return;
+    }
+    const chosen = usable[index % usable.length];
+    index += 1;
+    cb(null, chosen.address, chosen.family);
+  }) as typeof dnsLookupCb;
+}
+
+export type PinnedHostname = {
+  hostname: string;
+  addresses: string[];
+  lookup: typeof dnsLookupCb;
+};
+
+export async function resolvePinnedHostname(
   hostname: string,
   lookupFn: LookupFn = dnsLookup,
-): Promise<void> {
+): Promise<PinnedHostname> {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     throw new Error("Invalid hostname");
@@ -128,4 +197,46 @@ export async function assertPublicHostname(
       throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
     }
   }
+
+  const addresses = Array.from(new Set(results.map((entry) => entry.address)));
+  if (addresses.length === 0) {
+    throw new Error(`Unable to resolve hostname: ${hostname}`);
+  }
+
+  return {
+    hostname: normalized,
+    addresses,
+    lookup: createPinnedLookup({ hostname: normalized, addresses }),
+  };
+}
+
+export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+  return new Agent({
+    connect: {
+      lookup: pinned.lookup,
+    },
+  });
+}
+
+export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
+  if (!dispatcher) return;
+  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  try {
+    if (typeof candidate.close === "function") {
+      await candidate.close();
+      return;
+    }
+    if (typeof candidate.destroy === "function") {
+      candidate.destroy();
+    }
+  } catch {
+    // ignore dispatcher cleanup errors
+  }
+}
+
+export async function assertPublicHostname(
+  hostname: string,
+  lookupFn: LookupFn = dnsLookup,
+): Promise<void> {
+  await resolvePinnedHostname(hostname, lookupFn);
 }

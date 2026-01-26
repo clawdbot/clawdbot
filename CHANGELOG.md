@@ -6,17 +6,25 @@ Docs: https://docs.clawd.bot
 Status: unreleased.
 
 ### Changes
+- Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
+- Docs: tighten Fly private deployment steps. (#2289) Thanks @dguido.
+- Gateway: warn on hook tokens via query params; document header auth preference. (#2200) Thanks @YuriNachos.
+- Gateway: add dangerous Control UI device auth bypass flag + audit warnings. (#2248)
 - Doctor: warn on gateway exposure without auth. (#2016) Thanks @Alex-Alaniz.
+- Discord: add configurable privileged gateway intents for presences/members. (#2266) Thanks @kentaro.
 - Docs: add Vercel AI Gateway to providers sidebar. (#1901) Thanks @jerilynzheng.
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
 - Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
 - Docs: add Render deployment guide. (#1975) Thanks @anurag.
 - Docs: add Claude Max API Proxy guide. (#1875) Thanks @atalovesyou.
 - Docs: add DigitalOcean deployment guide. (#1870) Thanks @0xJonHoldsCrypto.
+- Docs: add Oracle Cloud (OCI) platform guide + cross-links. (#2333) Thanks @hirefrank.
 - Docs: add Raspberry Pi install guide. (#1871) Thanks @0xJonHoldsCrypto.
 - Docs: add GCP Compute Engine deployment guide. (#1848) Thanks @hougangdev.
+- Docs: add LINE channel guide. Thanks @thewilloftheshadow.
 - Docs: credit both contributors for Control UI refresh. (#1852) Thanks @EnzeD.
 - Onboarding: add Venice API key to non-interactive flow. (#1893) Thanks @jonisjongithub.
+- Onboarding: strengthen security warning copy for beta + access control expectations.
 - Tlon: format thread reply IDs as @ud. (#1837) Thanks @wca4a.
 - Gateway: prefer newest session metadata when combining stores. (#1823) Thanks @emanuelst.
 - Web UI: keep sub-agent announce replies visible in WebChat. (#1977) Thanks @andrescardonas7.
@@ -25,7 +33,9 @@ Status: unreleased.
 - Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
 - Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
 - Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
+- Telegram: support plugin sendPayload channelData (media/buttons) and validate plugin commands. (#1917) Thanks @JoshuaLelon.
 - Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
+- Security: use Windows ACLs for permission audits and fixes on Windows. (#1957)
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
 - TUI: avoid width overflow when rendering selection lists. (#1686) Thanks @mossein.
@@ -34,16 +44,26 @@ Status: unreleased.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
 
+### Breaking
+- **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
+
 ### Fixes
+- Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
+- Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
 - Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
+- Build: align memory-core peer dependency with lockfile.
 - Security: add mDNS discovery mode with minimal default to reduce information disclosure. (#1882) Thanks @orlyjamie.
+- Security: harden URL fetches with DNS pinning to reduce rebinding risk. Thanks Chris Zheng.
 - Web UI: improve WebChat image paste previews and allow image-only sends. (#1925) Thanks @smartprogrammer93.
 - Security: wrap external hook content by default with a per-hook opt-out. (#1827) Thanks @mertcicekci0.
 - Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
+- Gateway: treat loopback + non-local Host connections as remote unless trusted proxy headers are present.
+- Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.
 
 ## 2026.1.24-3
 
 ### Fixes
+- Slack: fix image downloads failing due to missing Authorization header on cross-origin redirects. (#1936) Thanks @sanderhelgesen.
 - Gateway: harden reverse proxy handling for local-client detection and unauthenticated proxied connects. (#1795) Thanks @orlyjamie.
 - Security audit: flag loopback Control UI with auth disabled as critical. (#1795) Thanks @orlyjamie.
 - CLI: resume claude-cli sessions and stream CLI replies to TUI clients. (#1921) Thanks @rmorse.

@@ -16,6 +16,7 @@ vi.mock("@buape/carbon", () => ({
   MessageCreateListener: class {},
   MessageReactionAddListener: class {},
   MessageReactionRemoveListener: class {},
+  PresenceUpdateListener: class {},
   Row: class {
     constructor(_components: unknown[]) {}
   },

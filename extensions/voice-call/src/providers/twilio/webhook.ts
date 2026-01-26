@@ -11,7 +11,7 @@ export function verifyTwilioProviderWebhook(params: {
 }): WebhookVerificationResult {
   const result = verifyTwilioWebhook(params.ctx, params.authToken, {
     publicUrl: params.currentPublicUrl || undefined,
-    allowNgrokFreeTier: params.options.allowNgrokFreeTier ?? true,
+    allowNgrokFreeTier: params.options.allowNgrokFreeTier ?? false,
     skipVerification: params.options.skipVerification,
   });
 

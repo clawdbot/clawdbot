@@ -21,6 +21,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).
 - [iMessage](/channels/imessage) — macOS only; native integration via imsg (legacy, consider BlueBubbles for new setups).
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support (plugin, installed separately).
+- [LINE](/channels/line) — LINE Messaging API bot (plugin, installed separately).
 - [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
 - [Nostr](/channels/nostr) — Decentralized DMs via NIP-04 (plugin, installed separately).

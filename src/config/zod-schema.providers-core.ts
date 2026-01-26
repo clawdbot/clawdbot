@@ -256,6 +256,13 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    intents: z
+      .object({
+        presence: z.boolean().optional(),
+        guildMembers: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

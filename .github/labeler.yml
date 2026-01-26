@@ -24,6 +24,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/line/**"
+          - "docs/channels/line.md"
 "channel: matrix":
   - changed-files:
       - any-glob-to-any-file:
@@ -131,6 +132,17 @@
       - any-glob-to-any-file:
           - "docs/**"
           - "docs.acp.md"
+
+"cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cli/**"
+
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/cli/security.md"
+          - "docs/gateway/security.md"
 
 "extensions: copilot-proxy":
   - changed-files:

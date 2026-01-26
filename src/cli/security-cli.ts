@@ -87,16 +87,23 @@ export function registerSecurityCli(program: Command) {
             lines.push(muted(`  ${shortenHomeInString(change)}`));
           }
           for (const action of fixResult.actions) {
-            const mode = action.mode.toString(8).padStart(3, "0");
-            if (action.ok) lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
-            else if (action.skipped)
-              lines.push(
-                muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
-              );
-            else if (action.error)
-              lines.push(
-                muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
-              );
+            if (action.kind === "chmod") {
+              const mode = action.mode.toString(8).padStart(3, "0");
+              if (action.ok) lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
+              else if (action.skipped)
+                lines.push(
+                  muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
+                );
+              else if (action.error)
+                lines.push(
+                  muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
+                );
+              continue;
+            }
+            const command = shortenHomeInString(action.command);
+            if (action.ok) lines.push(muted(`  ${command}`));
+            else if (action.skipped) lines.push(muted(`  skip ${command} (${action.skipped})`));
+            else if (action.error) lines.push(muted(`  ${command} failed: ${action.error}`));
           }
           if (fixResult.errors.length > 0) {
             for (const err of fixResult.errors) {

@@ -487,7 +487,7 @@ export async function modelsStatusCommand(
     for (const provider of missingProvidersInUse) {
       const hint =
         provider === "anthropic"
-          ? `Run \`claude setup-token\` or \`${formatCliCommand("clawdbot configure")}\`.`
+          ? `Run \`claude setup-token\`, then \`${formatCliCommand("clawdbot models auth setup-token")}\` or \`${formatCliCommand("clawdbot configure")}\`.`
           : `Run \`${formatCliCommand("clawdbot configure")}\` or set an API key env var.`;
       runtime.log(`- ${theme.heading(provider)} ${hint}`);
     }
@@ -558,9 +558,7 @@ export async function modelsStatusCommand(
             : profile.expiresAt
               ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
               : " expires unknown";
-        const source =
-          profile.source !== "store" ? colorize(rich, theme.muted, ` (${profile.source})`) : "";
-        runtime.log(`  - ${label} ${status}${expiry}${source}`);
+        runtime.log(`  - ${label} ${status}${expiry}`);
       }
     }
   }

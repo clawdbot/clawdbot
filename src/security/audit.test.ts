@@ -82,7 +82,7 @@ describe("security audit", () => {
       gateway: {
         bind: "loopback",
         controlUi: { enabled: true },
-        auth: { mode: "none" as any },
+        auth: {},
       },
     };
 
@@ -118,6 +118,83 @@ describe("security audit", () => {
         expect.objectContaining({ checkId: "logging.redact_off", severity: "warn" }),
       ]),
     );
+  });
+
+  it("treats Windows ACL-only perms as secure", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-win-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    const configPath = path.join(stateDir, "clawdbot.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+
+    const user = "DESKTOP-TEST\\Tester";
+    const execIcacls = async (_cmd: string, args: string[]) => ({
+      stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n ${user}:(F)\n`,
+      stderr: "",
+    });
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      platform: "win32",
+      env: { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" },
+      execIcacls,
+    });
+
+    const forbidden = new Set([
+      "fs.state_dir.perms_world_writable",
+      "fs.state_dir.perms_group_writable",
+      "fs.state_dir.perms_readable",
+      "fs.config.perms_writable",
+      "fs.config.perms_world_readable",
+      "fs.config.perms_group_readable",
+    ]);
+    for (const id of forbidden) {
+      expect(res.findings.some((f) => f.checkId === id)).toBe(false);
+    }
+  });
+
+  it("flags Windows ACLs when Users can read the state dir", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-win-open-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    const configPath = path.join(stateDir, "clawdbot.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+
+    const user = "DESKTOP-TEST\\Tester";
+    const execIcacls = async (_cmd: string, args: string[]) => {
+      const target = args[0];
+      if (target === stateDir) {
+        return {
+          stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n ${user}:(F)\n`,
+          stderr: "",
+        };
+      }
+      return {
+        stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n ${user}:(F)\n`,
+        stderr: "",
+      };
+    };
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      platform: "win32",
+      env: { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" },
+      execIcacls,
+    });
+
+    expect(
+      res.findings.some(
+        (f) => f.checkId === "fs.state_dir.perms_readable" && f.severity === "warn",
+      ),
+    ).toBe(true);
   });
 
   it("warns when small models are paired with web/browser tools", async () => {
@@ -293,7 +370,30 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("warns when control UI device auth is disabled", async () => {
+    const cfg: ClawdbotConfig = {
+      gateway: {
+        controlUi: { dangerouslyDisableDeviceAuth: true },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.control_ui.device_auth_disabled",
+          severity: "critical",
         }),
       ]),
     );

@@ -181,7 +181,7 @@ describe("gateway e2e", () => {
     const port = await getFreeGatewayPort();
     const server = await startGatewayServer(port, {
       bind: "loopback",
-      auth: { mode: "none" },
+      auth: { mode: "token", token: wizardToken },
       controlUiEnabled: false,
       wizardRunner: async (_opts, _runtime, prompter) => {
         await prompter.intro("Wizard E2E");
@@ -197,6 +197,7 @@ describe("gateway e2e", () => {
 
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
+      token: wizardToken,
       clientDisplayName: "vitest-wizard",
     });
 

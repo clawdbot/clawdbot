@@ -51,12 +51,26 @@ async function requireRiskAcknowledgement(params: {
 
   await params.prompter.note(
     [
-      "Please read: https://docs.clawd.bot/security",
+      "Security warning — please read.",
       "",
-      "Clawdbot agents can run commands, read/write files, and act through any tools you enable. They can only send messages on channels you configure (for example, an account you log in on this machine, or a bot account like Slack/Discord).",
+      "Clawdbot is a hobby project and still in beta. Expect sharp edges.",
+      "This bot can read files and run actions if tools are enabled.",
+      "A bad prompt can trick it into doing unsafe things.",
       "",
-      "If you’re new to this, start with the sandbox and least privilege. It helps limit what an agent can do if it’s tricked or makes a mistake.",
-      "Learn more: https://docs.clawd.bot/sandboxing",
+      "If you’re not comfortable with basic security and access control, don’t run Clawdbot.",
+      "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      "",
+      "Recommended baseline:",
+      "- Pairing/allowlists + mention gating.",
+      "- Sandbox + least-privilege tools.",
+      "- Keep secrets out of the agent’s reachable filesystem.",
+      "- Use the strongest available model for any bot with tools or untrusted inboxes.",
+      "",
+      "Run regularly:",
+      "clawdbot security audit --deep",
+      "clawdbot security audit --fix",
+      "",
+      "Must read: https://docs.clawd.bot/gateway/security",
     ].join("\n"),
     "Security",
   );
@@ -230,7 +244,6 @@ export async function runOnboardingWizard(
       return "Auto";
     };
     const formatAuth = (value: GatewayAuthChoice) => {
-      if (value === "off") return "Off (loopback only)";
       if (value === "token") return "Token (default)";
       return "Password";
     };
@@ -347,7 +360,6 @@ export async function runOnboardingWizard(
       prompter,
       store: authStore,
       includeSkip: true,
-      includeClaudeCliIfMissing: true,
     }));
 
   const authResult = await applyAuthChoice({

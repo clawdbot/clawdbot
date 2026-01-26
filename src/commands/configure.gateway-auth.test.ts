@@ -3,26 +3,18 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayAuthConfig } from "./configure.js";
 
 describe("buildGatewayAuthConfig", () => {
-  it("clears token/password when auth is off", () => {
-    const result = buildGatewayAuthConfig({
-      existing: { mode: "token", token: "abc", password: "secret" },
-      mode: "off",
-    });
-
-    expect(result).toBeUndefined();
-  });
-
-  it("preserves allowTailscale when auth is off", () => {
+  it("preserves allowTailscale when switching to token", () => {
     const result = buildGatewayAuthConfig({
       existing: {
-        mode: "token",
-        token: "abc",
+        mode: "password",
+        password: "secret",
         allowTailscale: true,
       },
-      mode: "off",
+      mode: "token",
+      token: "abc",
     });
 
-    expect(result).toEqual({ allowTailscale: true });
+    expect(result).toEqual({ mode: "token", token: "abc", allowTailscale: true });
   });
 
   it("drops password when switching to token", () => {

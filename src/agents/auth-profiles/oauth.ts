@@ -4,8 +4,7 @@ import lockfile from "proper-lockfile";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
-import { writeClaudeCliCredentials } from "../cli-credentials.js";
-import { AUTH_STORE_LOCK_OPTIONS, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -71,12 +70,6 @@ async function refreshOAuthTokenWithLock(params: {
       type: "oauth",
     };
     saveAuthProfileStore(store, params.agentDir);
-
-    // Sync refreshed credentials back to Claude Code CLI if this is the claude-cli profile
-    // This ensures Claude Code continues to work after ClawdBot refreshes the token
-    if (params.profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
-      writeClaudeCliCredentials(result.newCredentials);
-    }
 
     return result;
   } finally {

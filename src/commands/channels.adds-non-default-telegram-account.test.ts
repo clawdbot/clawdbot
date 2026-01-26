@@ -244,7 +244,7 @@ describe("channels command", () => {
     authMocks.loadAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "anthropic:claude-cli": {
+        "anthropic:default": {
           type: "oauth",
           provider: "anthropic",
           access: "token",
@@ -252,7 +252,7 @@ describe("channels command", () => {
           expires: 0,
           created: 0,
         },
-        "openai-codex:codex-cli": {
+        "openai-codex:default": {
           type: "oauth",
           provider: "openai",
           access: "token",
@@ -268,8 +268,8 @@ describe("channels command", () => {
       auth?: Array<{ id: string }>;
     };
     const ids = payload.auth?.map((entry) => entry.id) ?? [];
-    expect(ids).toContain("anthropic:claude-cli");
-    expect(ids).toContain("openai-codex:codex-cli");
+    expect(ids).toContain("anthropic:default");
+    expect(ids).toContain("openai-codex:default");
   });
 
   it("stores default account names in accounts when multiple accounts exist", async () => {

@@ -210,7 +210,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
 
-  it("auto-enables token auth when binding LAN and persists the token", async () => {
+  it("auto-generates token auth when binding LAN and persists the token", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
       return;
@@ -242,7 +242,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         installDaemon: false,
         gatewayPort: port,
         gatewayBind: "lan",
-        gatewayAuth: "off",
       },
       runtime,
     );

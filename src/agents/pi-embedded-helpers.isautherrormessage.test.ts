@@ -12,7 +12,7 @@ const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstr
 describe("isAuthErrorMessage", () => {
   it("matches credential validation errors", () => {
     const samples = [
-      'No credentials found for profile "anthropic:claude-cli".',
+      'No credentials found for profile "anthropic:default".',
       "No API key found for profile openai.",
     ];
     for (const sample of samples) {

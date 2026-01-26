@@ -1,18 +1,17 @@
 ---
-summary: "OAuth in Clawdbot: token exchange, storage, CLI sync, and multi-account patterns"
+summary: "OAuth in Clawdbot: token exchange, storage, and multi-account patterns"
 read_when:
   - You want to understand Clawdbot OAuth end-to-end
   - You hit token invalidation / logout issues
-  - You want to reuse Claude Code / Codex CLI OAuth tokens
+  - You want setup-token or OAuth auth flows
   - You want multiple accounts or profile routing
 ---
 # OAuth
 
-Clawdbot supports “subscription auth” via OAuth for providers that offer it (notably **Anthropic (Claude Pro/Max)** and **OpenAI Codex (ChatGPT OAuth)**). This page explains:
+Clawdbot supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, use the **setup-token** flow. This page explains:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
-- how we **reuse external CLI tokens** (Claude Code / Codex CLI)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
 Clawdbot also supports **provider plugins** that ship their own OAuth or API‑key
@@ -31,7 +30,6 @@ Practical symptom:
 
 To reduce that, Clawdbot treats `auth-profiles.json` as a **token sink**:
 - the runtime reads credentials from **one place**
-- we can **sync in** credentials from external CLIs instead of doing a second login
 - we can keep multiple profiles and route them deterministically
 
 ## Storage (where tokens live)
@@ -46,47 +44,39 @@ Legacy import-only file (still supported, but not the main store):
 
 All of the above also respect `$CLAWDBOT_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
-## Reusing Claude Code / Codex CLI OAuth tokens (recommended)
+## Anthropic setup-token (subscription auth)
 
-If you already signed in with the external CLIs *on the gateway host*, Clawdbot can reuse those tokens without starting a separate OAuth flow:
+Run `claude setup-token` on any machine, then paste it into Clawdbot:
 
-- Claude Code: `anthropic:claude-cli`
-  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
-  - Linux/Windows: `~/.claude/.credentials.json`
-- Codex CLI: reads `~/.codex/auth.json` → profile `openai-codex:codex-cli`
+```bash
+clawdbot models auth setup-token --provider anthropic
+```
 
-Sync happens when Clawdbot loads the auth store (so it stays up-to-date when the CLIs refresh tokens).
-On macOS, the first read may trigger a Keychain prompt; run `clawdbot models status`
-in a terminal once if the Gateway runs headless and can’t access the entry.
+If you generated the token elsewhere, paste it manually:
 
-How to verify:
+```bash
+clawdbot models auth paste-token --provider anthropic
+```
+
+Verify:
 
 ```bash
 clawdbot models status
-clawdbot channels list
-```
-
-Or JSON:
-
-```bash
-clawdbot channels list --json
 ```
 
 ## OAuth exchange (how login works)
 
 Clawdbot’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
-### Anthropic (Claude Pro/Max)
+### Anthropic (Claude Pro/Max) setup-token
 
-Flow shape (PKCE):
+Flow shape:
 
-1) generate PKCE verifier/challenge
-2) open `https://claude.ai/oauth/authorize?...`
-3) user pastes `code#state`
-4) exchange at `https://console.anthropic.com/v1/oauth/token`
-5) store `{ access, refresh, expires }` under an auth profile
+1) run `claude setup-token`
+2) paste the token into Clawdbot
+3) store as a token auth profile (no refresh)
 
-The wizard path is `clawdbot onboard` → auth choice `oauth` (Anthropic).
+The wizard path is `clawdbot onboard` → auth choice `setup-token` (Anthropic).
 
 ### OpenAI Codex (ChatGPT OAuth)
 
@@ -99,7 +89,7 @@ Flow shape (PKCE):
 5) exchange at `https://auth.openai.com/oauth/token`
 6) extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
-Wizard path is `clawdbot onboard` → auth choice `openai-codex` (or `codex-cli` to reuse an existing Codex CLI login).
+Wizard path is `clawdbot onboard` → auth choice `openai-codex`.
 
 ## Refresh + expiry
 
@@ -110,23 +100,6 @@ At runtime:
 - if expired → refresh (under a file lock) and overwrite the stored credentials
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
-
-### Bidirectional sync with Claude Code
-
-When Clawdbot refreshes an Anthropic OAuth token (profile `anthropic:claude-cli`), it **writes the new credentials back** to Claude Code's storage:
-
-- **Linux/Windows**: updates `~/.claude/.credentials.json`
-- **macOS**: updates Keychain item "Claude Code-credentials"
-
-This ensures both tools stay in sync and neither gets "logged out" after the other refreshes.
-
-**Why this matters for long-running agents:**
-
-Anthropic OAuth tokens expire after a few hours. Without bidirectional sync:
-1. Clawdbot refreshes the token → gets new access token
-2. Claude Code still has the old token → gets logged out
-
-With bidirectional sync, both tools always have the latest valid token, enabling autonomous operation for days or weeks without manual intervention.
 
 ## Multiple accounts (profiles) + routing
 

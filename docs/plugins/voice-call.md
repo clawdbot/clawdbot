@@ -103,6 +103,8 @@ Notes:
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 - `skipSignatureVerification` is for local testing only.
+- If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
+- Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
 
 ## TTS for calls
 

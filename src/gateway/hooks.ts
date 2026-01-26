@@ -41,21 +41,26 @@ export function resolveHooksConfig(cfg: ClawdbotConfig): HooksConfigResolved | n
   };
 }
 
-export function extractHookToken(req: IncomingMessage, url: URL): string | undefined {
+export type HookTokenResult = {
+  token: string | undefined;
+  fromQuery: boolean;
+};
+
+export function extractHookToken(req: IncomingMessage, url: URL): HookTokenResult {
   const auth =
     typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
   if (auth.toLowerCase().startsWith("bearer ")) {
     const token = auth.slice(7).trim();
-    if (token) return token;
+    if (token) return { token, fromQuery: false };
   }
   const headerToken =
     typeof req.headers["x-clawdbot-token"] === "string"
       ? req.headers["x-clawdbot-token"].trim()
       : "";
-  if (headerToken) return headerToken;
+  if (headerToken) return { token: headerToken, fromQuery: false };
   const queryToken = url.searchParams.get("token");
-  if (queryToken) return queryToken.trim();
-  return undefined;
+  if (queryToken) return { token: queryToken.trim(), fromQuery: true };
+  return { token: undefined, fromQuery: false };
 }
 
 export async function readJsonBody(

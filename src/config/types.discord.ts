@@ -72,6 +72,13 @@ export type DiscordActionConfig = {
   channels?: boolean;
 };
 
+export type DiscordIntentsConfig = {
+  /** Enable Guild Presences privileged intent (requires Portal opt-in). Default: false. */
+  presence?: boolean;
+  /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
+  guildMembers?: boolean;
+};
+
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
@@ -139,6 +146,8 @@ export type DiscordAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
+  /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
+  intents?: DiscordIntentsConfig;
 };
 
 export type DiscordConfig = {
