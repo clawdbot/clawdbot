@@ -110,8 +110,9 @@ describe("isDeliveryContextExpired", () => {
     expect(isDeliveryContextExpired(undefined)).toBe(true);
   });
 
-  it("returns true for context without updatedAt", () => {
-    expect(isDeliveryContextExpired({ channel: "whatsapp", to: "+1555000001" })).toBe(true);
+  it("returns false for context without updatedAt (backwards compatible)", () => {
+    // Contexts without timestamps are considered valid (not expired) for backwards compatibility
+    expect(isDeliveryContextExpired({ channel: "whatsapp", to: "+1555000001" })).toBe(false);
   });
 
   it("returns false for fresh context within TTL", () => {
