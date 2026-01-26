@@ -231,6 +231,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     messageToolHints: () => [
       "Telegram user polls only work in groups/channels (DM polls return MEDIA_INVALID). Use the group id for polls.",
       "When ChatType is group, use currentChannelId as the target for message/poll actions.",
+      "To send files, use `message` action=send with `filePath` (local path) or `media` (URL); put any caption in `message`.",
     ],
   },
   outbound: {
