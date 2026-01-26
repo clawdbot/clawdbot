@@ -490,7 +490,7 @@ export function createWebSearchTool(options?: {
 
   const description =
     provider === "perplexity"
-      ? "Search the web using Perplexity Search API. Returns structured results (title, URL, snippet). Supports freshness filter, domain filtering, and language filtering."
+      ? "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports a wide range of web search configurations including domain and region-specific filtering."
       : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
