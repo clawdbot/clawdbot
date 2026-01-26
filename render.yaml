@@ -3,7 +3,7 @@ services:
     name: clawdbot
     runtime: docker
     plan: starter
-    dockerCommand: node dist/index.js gateway run --port 8080 --bind lan --auth token --allow-unconfigured
+    dockerCommand: node dist/index.js gateway --port 8080 --bind lan --auth token --allow-unconfigured
     envVars:
       - key: PORT
         value: "8080"
