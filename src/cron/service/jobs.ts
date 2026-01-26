@@ -61,7 +61,13 @@ export function recomputeNextRuns(state: CronServiceState) {
       );
       job.state.runningAtMs = undefined;
     }
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+    // For "every" jobs, anchor to lastRunAtMs to prevent schedule drift.
+    // For other job types (at, cron), use current time.
+    const baseTime =
+      job.schedule.kind === "every" && typeof job.state.lastRunAtMs === "number"
+        ? job.state.lastRunAtMs
+        : now;
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, baseTime);
   }
 }
 
