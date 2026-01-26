@@ -474,6 +474,8 @@ export const registerTelegramNativeCommands = ({
             // Originating context for sub-agent announce routing
             OriginatingChannel: "telegram" as const,
             OriginatingTo: `telegram:${chatId}`,
+            // Multi-account: preserve accountId for command confirmations (e.g., /reset)
+            AccountId: route.accountId,
           });
 
           const disableBlockStreaming =
