@@ -109,7 +109,7 @@ private enum ConnectChallengeError: Error {
 }
 
 public actor GatewayChannelActor {
-    private let logger = Logger(subsystem: "bot.molt", category: "gateway")
+    private let logger: Logger
     private var task: WebSocketTaskBox?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false
@@ -143,8 +143,10 @@ public actor GatewayChannelActor {
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
+        loggerCategory: String = "gateway",
         disconnectHandler: (@Sendable (String) async -> Void)? = nil)
     {
+        self.logger = Logger(subsystem: "bot.molt", category: loggerCategory)
         self.url = url
         self.token = token
         self.password = password

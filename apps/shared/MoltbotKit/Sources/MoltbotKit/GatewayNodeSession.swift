@@ -90,6 +90,7 @@ public actor GatewayNodeSession {
                     await self?.handlePush(push)
                 },
                 connectOptions: connectOptions,
+                loggerCategory: "gateway.node",
                 disconnectHandler: { [weak self] reason in
                     await self?.onDisconnected?(reason)
                 })
