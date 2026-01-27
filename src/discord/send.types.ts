@@ -66,10 +66,19 @@ export type DiscordMessageEdit = {
   content?: string;
 };
 
+export type DiscordForumMessage = {
+  content: string;
+  embeds?: unknown[];
+};
+
 export type DiscordThreadCreate = {
   messageId?: string;
   name: string;
   autoArchiveMinutes?: number;
+  /** Initial message content for forum posts (required for forum channels) */
+  message?: DiscordForumMessage;
+  /** Tag IDs to apply to forum posts */
+  appliedTags?: string[];
 };
 
 export type DiscordThreadList = {
