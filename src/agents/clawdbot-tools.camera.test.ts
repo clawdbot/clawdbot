@@ -11,7 +11,7 @@ vi.mock("../media/image-ops.js", () => ({
 }));
 
 import "./test-helpers/fast-core-tools.js";
-import { createClawdbotTools } from "./clawdbot-tools.js";
+import { createMoltbotTools } from "./moltbot-tools.js";
 
 describe("nodes camera_snap", () => {
   beforeEach(() => {
@@ -36,7 +36,7 @@ describe("nodes camera_snap", () => {
       throw new Error(`unexpected method: ${String(method)}`);
     });
 
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "nodes");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "nodes");
     if (!tool) throw new Error("missing nodes tool");
 
     const result = await tool.execute("call1", {
@@ -72,7 +72,7 @@ describe("nodes camera_snap", () => {
       throw new Error(`unexpected method: ${String(method)}`);
     });
 
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "nodes");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "nodes");
     if (!tool) throw new Error("missing nodes tool");
 
     await tool.execute("call1", {
@@ -113,7 +113,7 @@ describe("nodes run", () => {
       throw new Error(`unexpected method: ${String(method)}`);
     });
 
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "nodes");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "nodes");
     if (!tool) throw new Error("missing nodes tool");
 
     await tool.execute("call1", {

@@ -1,12 +1,12 @@
 ---
-summary: "Model providers (LLMs) supported by Clawdbot"
+summary: "Model providers (LLMs) supported by Moltbot"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
 ---
 # Model Providers
 
-Clawdbot can use many LLM providers. Pick a provider, authenticate, then set the
+Moltbot can use many LLM providers. Pick a provider, authenticate, then set the
 default model as `provider/model`.
 
 Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? See [Channels](/channels).
@@ -22,7 +22,7 @@ See [Venice AI](/providers/venice).
 
 ## Quick start
 
-1) Authenticate with the provider (usually via `clawdbot onboard`).
+1) Authenticate with the provider (usually via `moltbot onboard`).
 2) Set the default model:
 
 ```json5

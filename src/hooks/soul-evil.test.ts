@@ -116,7 +116,7 @@ describe("decideSoulEvil", () => {
 
 describe("applySoulEvilOverride", () => {
   it("replaces SOUL content when evil is active and file exists", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    const tempDir = await makeTempWorkspace("moltbot-soul-");
     await writeWorkspaceFile({
       dir: tempDir,
       name: DEFAULT_SOUL_EVIL_FILENAME,
@@ -140,7 +140,7 @@ describe("applySoulEvilOverride", () => {
   });
 
   it("leaves SOUL content when evil file is missing", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    const tempDir = await makeTempWorkspace("moltbot-soul-");
     const files = makeFiles({
       path: path.join(tempDir, DEFAULT_SOUL_FILENAME),
     });
@@ -158,7 +158,7 @@ describe("applySoulEvilOverride", () => {
   });
 
   it("uses custom evil filename when configured", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    const tempDir = await makeTempWorkspace("moltbot-soul-");
     await writeWorkspaceFile({
       dir: tempDir,
       name: "SOUL_EVIL_CUSTOM.md",
@@ -182,7 +182,7 @@ describe("applySoulEvilOverride", () => {
   });
 
   it("warns and skips when evil file is empty", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    const tempDir = await makeTempWorkspace("moltbot-soul-");
     await writeWorkspaceFile({
       dir: tempDir,
       name: DEFAULT_SOUL_EVIL_FILENAME,
@@ -209,7 +209,7 @@ describe("applySoulEvilOverride", () => {
   });
 
   it("leaves files untouched when SOUL.md is not in bootstrap files", async () => {
-    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    const tempDir = await makeTempWorkspace("moltbot-soul-");
     await writeWorkspaceFile({
       dir: tempDir,
       name: DEFAULT_SOUL_EVIL_FILENAME,

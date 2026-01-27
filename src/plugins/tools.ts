@@ -1,8 +1,8 @@
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadClawdbotPlugins } from "./loader.js";
-import type { ClawdbotPluginToolContext } from "./types.js";
+import { loadMoltbotPlugins } from "./loader.js";
+import type { MoltbotPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -35,11 +35,11 @@ function isOptionalToolAllowed(params: {
 }
 
 export function resolvePluginTools(params: {
-  context: ClawdbotPluginToolContext;
+  context: MoltbotPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
 }): AnyAgentTool[] {
-  const registry = loadClawdbotPlugins({
+  const registry = loadMoltbotPlugins({
     config: params.context.config,
     workspaceDir: params.context.workspaceDir,
     logger: {

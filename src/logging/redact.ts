@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
 const requireConfig = createRequire(import.meta.url);
 
@@ -97,10 +97,10 @@ function redactText(text: string, patterns: RegExp[]): string {
 }
 
 function resolveConfigRedaction(): RedactOptions {
-  let cfg: ClawdbotConfig["logging"] | undefined;
+  let cfg: MoltbotConfig["logging"] | undefined;
   try {
     const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => ClawdbotConfig;
+      loadConfig?: () => MoltbotConfig;
     };
     cfg = loaded.loadConfig?.().logging;
   } catch {

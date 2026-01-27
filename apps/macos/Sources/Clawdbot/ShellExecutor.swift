@@ -1,4 +1,4 @@
-import ClawdbotIPC
+import MoltbotIPC
 import Foundation
 
 enum ShellExecutor {

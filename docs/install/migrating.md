@@ -1,12 +1,12 @@
 ---
-summary: "Move (migrate) a Clawdbot install from one machine to another"
+summary: "Move (migrate) a Moltbot install from one machine to another"
 read_when:
-  - You are moving Clawdbot to a new laptop/server
+  - You are moving Moltbot to a new laptop/server
   - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
 ---
-# Migrating Clawdbot to a new machine
+# Migrating Moltbot to a new machine
 
-This guide migrates a Clawdbot Gateway from one machine to another **without redoing onboarding**.
+This guide migrates a Moltbot Gateway from one machine to another **without redoing onboarding**.
 
 The migration is simple conceptually:
 
@@ -31,7 +31,7 @@ But it may be different if you use:
 If you’re not sure, run on the **old** machine:
 
 ```bash
-clawdbot status
+moltbot status
 ```
 
 Look for mentions of `CLAWDBOT_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
@@ -49,7 +49,7 @@ Your workspace is where files like `MEMORY.md`, `USER.md`, and `memory/*.md` liv
 
 If you copy **both** the state dir and workspace, you keep:
 
-- Gateway configuration (`clawdbot.json`)
+- Gateway configuration (`moltbot.json`)
 - Auth profiles / API keys / OAuth tokens
 - Session history + agent state
 - Channel state (e.g. WhatsApp login/session)
@@ -70,7 +70,7 @@ Those live under `$CLAWDBOT_STATE_DIR`.
 On the **old** machine, stop the gateway first so files aren’t changing mid-copy:
 
 ```bash
-clawdbot gateway stop
+moltbot gateway stop
 ```
 
 (Optional but recommended) archive the state dir and workspace:
@@ -78,14 +78,14 @@ clawdbot gateway stop
 ```bash
 # Adjust paths if you use a profile or custom locations
 cd ~
-tar -czf clawdbot-state.tgz .clawdbot
+tar -czf moltbot-state.tgz .clawdbot
 
 tar -czf clawd-workspace.tgz clawd
 ```
 
 If you have multiple profiles/state dirs (e.g. `~/.clawdbot-main`, `~/.clawdbot-work`), archive each.
 
-### Step 1 — Install Clawdbot on the new machine
+### Step 1 — Install Moltbot on the new machine
 
 On the **new** machine, install the CLI (and Node if needed):
 
@@ -116,7 +116,7 @@ After copying, ensure:
 On the **new** machine:
 
 ```bash
-clawdbot doctor
+moltbot doctor
 ```
 
 Doctor is the “safe boring” command. It repairs services, applies config migrations, and warns about mismatches.
@@ -124,8 +124,8 @@ Doctor is the “safe boring” command. It repairs services, applies config mig
 Then:
 
 ```bash
-clawdbot gateway restart
-clawdbot status
+moltbot gateway restart
+moltbot status
 ```
 
 ## Common footguns (and how to avoid them)
@@ -141,12 +141,12 @@ If you ran the old gateway with a profile (or `CLAWDBOT_STATE_DIR`), and the new
 Fix: run the gateway/service using the **same** profile/state dir you migrated, then rerun:
 
 ```bash
-clawdbot doctor
+moltbot doctor
 ```
 
-### Footgun: copying only `clawdbot.json`
+### Footgun: copying only `moltbot.json`
 
-`clawdbot.json` is not enough. Many providers store state under:
+`moltbot.json` is not enough. Many providers store state under:
 
 - `$CLAWDBOT_STATE_DIR/credentials/`
 - `$CLAWDBOT_STATE_DIR/agents/<agentId>/...`
@@ -178,7 +178,7 @@ If you’re in remote mode, migrate the **gateway host**.
 
 On the new machine, confirm:
 
-- `clawdbot status` shows the gateway running
+- `moltbot status` shows the gateway running
 - Your channels are still connected (e.g. WhatsApp doesn’t require re-pair)
 - The dashboard opens and shows existing sessions
 - Your workspace files (memory, configs) are present
@@ -187,4 +187,4 @@ On the new machine, confirm:
 
 - [Doctor](/gateway/doctor)
 - [Gateway troubleshooting](/gateway/troubleshooting)
-- [Where does Clawdbot store its data?](/help/faq#where-does-clawdbot-store-its-data)
+- [Where does Moltbot store its data?](/help/faq#where-does-moltbot-store-its-data)

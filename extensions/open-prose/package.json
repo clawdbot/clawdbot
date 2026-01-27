@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/open-prose",
-  "version": "2026.1.25",
+  "name": "@moltbot/open-prose",
+  "version": "2026.1.26",
   "type": "module",
   "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
-  "clawdbot": {
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

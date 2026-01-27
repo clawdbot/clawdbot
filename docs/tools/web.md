@@ -8,7 +8,7 @@ read_when:
 
 # Web tools
 
-Clawdbot ships two lightweight web tools:
+Moltbot ships two lightweight web tools:
 
 - `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (direct or via OpenRouter).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
@@ -72,19 +72,19 @@ Example: switch to Perplexity Sonar (direct API):
 
 1) Create a Brave Search API account at https://brave.com/search/api/
 2) In the dashboard, choose the **Data for Search** plan (not “Data for AI”) and generate an API key.
-3) Run `clawdbot configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
+3) Run `moltbot configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
 Brave provides a free tier plus paid plans; check the Brave API portal for the
 current limits and pricing.
 
 ### Where to set the key (recommended)
 
-**Recommended:** run `clawdbot configure --section web`. It stores the key in
-`~/.clawdbot/clawdbot.json` under `tools.web.search.apiKey`.
+**Recommended:** run `moltbot configure --section web`. It stores the key in
+`~/.clawdbot/moltbot.json` under `tools.web.search.apiKey`.
 
 **Environment alternative:** set `BRAVE_API_KEY` in the Gateway process
 environment. For a gateway install, put it in `~/.clawdbot/.env` (or your
-service environment). See [Env vars](/help/faq#how-does-clawdbot-load-environment-variables).
+service environment). See [Env vars](/help/faq#how-does-moltbot-load-environment-variables).
 
 ## Using Perplexity (direct or via OpenRouter)
 
@@ -124,7 +124,7 @@ crypto/prepaid).
 **Environment alternative:** set `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` in the Gateway
 environment. For a gateway install, put it in `~/.clawdbot/.env`.
 
-If no base URL is set, Clawdbot chooses a default based on the API key source:
+If no base URL is set, Moltbot chooses a default based on the API key source:
 
 - `PERPLEXITY_API_KEY` or `pplx-...` → `https://api.perplexity.ai`
 - `OPENROUTER_API_KEY` or `sk-or-...` → `https://openrouter.ai/api/v1`

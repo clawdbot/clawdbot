@@ -239,7 +239,7 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-clawdbot-app {
+moltbot-app {
   display: block;
   position: relative;
   z-index: 1;

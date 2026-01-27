@@ -8,7 +8,7 @@ import Security
 import SwiftUI
 
 @main
-struct ClawdbotApp: App {
+struct MoltbotApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var state: AppState
     private static let logger = Logger(subsystem: "com.clawdbot", category: "app")
@@ -32,7 +32,7 @@ struct ClawdbotApp: App {
     }
 
     init() {
-        ClawdbotLogging.bootstrapIfNeeded()
+        MoltbotLogging.bootstrapIfNeeded()
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }

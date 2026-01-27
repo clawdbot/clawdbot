@@ -1,11 +1,11 @@
-import ClawdbotKit
+import MoltbotKit
 import Testing
 
 @Suite struct CanvasA2UITests {
     @Test func commandStringsAreStable() {
-        #expect(ClawdbotCanvasA2UICommand.push.rawValue == "canvas.a2ui.push")
-        #expect(ClawdbotCanvasA2UICommand.pushJSONL.rawValue == "canvas.a2ui.pushJSONL")
-        #expect(ClawdbotCanvasA2UICommand.reset.rawValue == "canvas.a2ui.reset")
+        #expect(MoltbotCanvasA2UICommand.push.rawValue == "canvas.a2ui.push")
+        #expect(MoltbotCanvasA2UICommand.pushJSONL.rawValue == "canvas.a2ui.pushJSONL")
+        #expect(MoltbotCanvasA2UICommand.reset.rawValue == "canvas.a2ui.reset")
     }
 
     @Test func jsonlDecodesAndValidatesV0_8() throws {
@@ -16,7 +16,7 @@ import Testing
         {"deleteSurface":{"surfaceId":"main"}}
         """
 
-        let messages = try ClawdbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
+        let messages = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
         #expect(messages.count == 4)
     }
 
@@ -26,7 +26,7 @@ import Testing
         """
 
         #expect(throws: Error.self) {
-            _ = try ClawdbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
+            _ = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
         }
     }
 
@@ -36,7 +36,7 @@ import Testing
         """
 
         #expect(throws: Error.self) {
-            _ = try ClawdbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
+            _ = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(jsonl)
         }
     }
 }

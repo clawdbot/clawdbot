@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -76,7 +76,7 @@ function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
   store: AuthProfileStore;
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   now: number;
   warnAfterMs: number;
 }): AuthProfileHealth {
@@ -138,7 +138,7 @@ function buildProfileHealth(params: {
 
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   warnAfterMs?: number;
   providers?: string[];
 }): AuthHealthSummary {

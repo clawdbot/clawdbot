@@ -6,7 +6,7 @@ read_when:
 # Audio / Voice Notes — 2026-01-17
 
 ## What works
-- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), Clawdbot:
+- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), Moltbot:
   1) Locates the first audio attachment (local path or URL) and downloads it if needed.
   2) Enforces `maxBytes` before sending to each model entry.
   3) Runs the first eligible model entry in order (provider or CLI).
@@ -17,7 +17,7 @@ read_when:
 
 ## Auto-detection (default)
 If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
-Clawdbot auto-detects in this order and stops at the first working option:
+Moltbot auto-detects in this order and stops at the first working option:
 
 1) **Local CLIs** (if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)

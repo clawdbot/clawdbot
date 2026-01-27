@@ -4,7 +4,7 @@
   <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
   <!-- Allow HTTP for tailnet/local dev endpoints (e.g. canvas/background web). -->
   <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="true">clawdbot.internal</domain>
+    <domain includeSubdomains="true">moltbot.internal</domain>
   </domain-config>
   <domain-config cleartextTrafficPermitted="true">
     <domain includeSubdomains="true">ts.net</domain>

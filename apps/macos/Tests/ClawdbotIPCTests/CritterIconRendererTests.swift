@@ -1,6 +1,6 @@
 import AppKit
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite
 @MainActor

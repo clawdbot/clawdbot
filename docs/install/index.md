@@ -1,7 +1,7 @@
 ---
-summary: "Install Clawdbot (recommended installer, global install, or from source)"
+summary: "Install Moltbot (recommended installer, global install, or from source)"
 read_when:
-  - Installing Clawdbot
+  - Installing Moltbot
   - You want to install from GitHub
 ---
 
@@ -12,19 +12,19 @@ Use the installer unless you have a reason not to. It sets up the CLI and runs o
 ## Quick install (recommended)
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://molt.bot/install.sh | bash
 ```
 
 Windows (PowerShell):
 
 ```powershell
-iwr -useb https://clawd.bot/install.ps1 | iex
+iwr -useb https://molt.bot/install.ps1 | iex
 ```
 
 Next step (if you skipped onboarding):
 
 ```bash
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 ## System requirements
@@ -37,16 +37,16 @@ clawdbot onboard --install-daemon
 
 ### 1) Installer script (recommended)
 
-Installs `clawdbot` globally via npm and runs onboarding.
+Installs `moltbot` globally via npm and runs onboarding.
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://molt.bot/install.sh | bash
 ```
 
 Installer flags:
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --help
+curl -fsSL https://molt.bot/install.sh | bash -s -- --help
 ```
 
 Details: [Installer internals](/install/installer).
@@ -54,7 +54,7 @@ Details: [Installer internals](/install/installer).
 Non-interactive (skip onboarding):
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --no-onboard
+curl -fsSL https://molt.bot/install.sh | bash -s -- --no-onboard
 ```
 
 ### 2) Global install (manual)
@@ -62,13 +62,13 @@ curl -fsSL https://clawd.bot/install.sh | bash -s -- --no-onboard
 If you already have Node:
 
 ```bash
-npm install -g clawdbot@latest
+npm install -g moltbot@latest
 ```
 
 If you have libvips installed globally (common on macOS via Homebrew) and `sharp` fails to install, force prebuilt binaries:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g clawdbot@latest
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g moltbot@latest
 ```
 
 If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the `SHARP_IGNORE_GLOBAL_LIBVIPS=1` workaround above to skip the native build.
@@ -76,27 +76,27 @@ If you see `sharp: Please add node-gyp to your dependencies`, either install bui
 Or:
 
 ```bash
-pnpm add -g clawdbot@latest
+pnpm add -g moltbot@latest
 ```
 
 Then:
 
 ```bash
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 ### 3) From source (contributors/dev)
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/moltbot/moltbot.git
+cd moltbot
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
-Tip: if you don’t have a global install yet, run repo commands via `pnpm clawdbot ...`.
+Tip: if you don’t have a global install yet, run repo commands via `pnpm moltbot ...`.
 
 ### 4) Other install options
 
@@ -107,32 +107,32 @@ Tip: if you don’t have a global install yet, run repo commands via `pnpm clawd
 
 ## After install
 
-- Run onboarding: `clawdbot onboard --install-daemon`
-- Quick check: `clawdbot doctor`
-- Check gateway health: `clawdbot status` + `clawdbot health`
-- Open the dashboard: `clawdbot dashboard`
+- Run onboarding: `moltbot onboard --install-daemon`
+- Quick check: `moltbot doctor`
+- Check gateway health: `moltbot status` + `moltbot health`
+- Open the dashboard: `moltbot dashboard`
 
 ## Install method: npm vs git (installer)
 
 The installer supports two methods:
 
-- `npm` (default): `npm install -g clawdbot@latest`
+- `npm` (default): `npm install -g moltbot@latest`
 - `git`: clone/build from GitHub and run from a source checkout
 
 ### CLI flags
 
 ```bash
 # Explicit npm
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method npm
+curl -fsSL https://molt.bot/install.sh | bash -s -- --install-method npm
 
 # Install from GitHub (source checkout)
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
+curl -fsSL https://molt.bot/install.sh | bash -s -- --install-method git
 ```
 
 Common flags:
 
 - `--install-method npm|git`
-- `--git-dir <path>` (default: `~/clawdbot`)
+- `--git-dir <path>` (default: `~/moltbot`)
 - `--no-git-update` (skip `git pull` when using an existing checkout)
 - `--no-prompt` (disable prompts; required in CI/automation)
 - `--dry-run` (print what would happen; make no changes)
@@ -150,7 +150,7 @@ Equivalent env vars (useful for automation):
 - `CLAWDBOT_NO_ONBOARD=1`
 - `SHARP_IGNORE_GLOBAL_LIBVIPS=0|1` (default: `1`; avoids `sharp` building against system libvips)
 
-## Troubleshooting: `clawdbot` not found (PATH)
+## Troubleshooting: `moltbot` not found (PATH)
 
 Quick diagnosis:
 
@@ -161,7 +161,7 @@ npm prefix -g
 echo "$PATH"
 ```
 
-If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `clawdbot`).
+If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `moltbot`).
 
 Fix: add it to your shell startup file (zsh: `~/.zshrc`, bash: `~/.bashrc`):
 

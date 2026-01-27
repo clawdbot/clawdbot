@@ -1,11 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
-  CONFIG_PATH_CLAWDBOT,
-  type HookMappingConfig,
-  type HooksConfig,
-} from "../config/config.js";
+import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
@@ -125,7 +121,7 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
   }
   if (mappings.length === 0) return [];
 
-  const configDir = path.dirname(CONFIG_PATH_CLAWDBOT);
+  const configDir = path.dirname(CONFIG_PATH);
   const transformsDir = hooks?.transformsDir
     ? resolvePath(configDir, hooks.transformsDir)
     : configDir;

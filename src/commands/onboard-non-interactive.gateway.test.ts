@@ -110,7 +110,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
 
-    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-"));
+    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-onboard-"));
     process.env.HOME = tempHome;
   });
 
@@ -217,7 +217,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     }
     const stateDir = await initStateDir("state-lan-");
     process.env.CLAWDBOT_STATE_DIR = stateDir;
-    process.env.CLAWDBOT_CONFIG_PATH = path.join(stateDir, "clawdbot.json");
+    process.env.CLAWDBOT_CONFIG_PATH = path.join(stateDir, "moltbot.json");
 
     const port = await getFreeGatewayPort();
     const workspace = path.join(stateDir, "clawd");

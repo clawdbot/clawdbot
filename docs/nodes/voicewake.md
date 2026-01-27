@@ -6,7 +6,7 @@ read_when:
 ---
 # Voice Wake (Global Wake Words)
 
-Clawdbot treats **wake words as a single global list** owned by the **Gateway**.
+Moltbot treats **wake words as a single global list** owned by the **Gateway**.
 
 - There are **no per-node custom wake words**.
 - **Any node/app UI may edit** the list; changes are persisted by the Gateway and broadcast to everyone.

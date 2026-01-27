@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const realOs = await vi.importActual<typeof import("node:os")>("node:os");
-const HOME = path.join(realOs.tmpdir(), "clawdbot-home-header-ext-test");
+const HOME = path.join(realOs.tmpdir(), "moltbot-home-header-ext-test");
 
 vi.mock("node:os", () => ({
   default: { homedir: () => HOME, tmpdir: () => realOs.tmpdir() },

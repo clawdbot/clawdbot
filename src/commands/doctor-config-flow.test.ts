@@ -12,7 +12,7 @@ describe("doctor config flow", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             gateway: { auth: { mode: "token", token: 123 } },
@@ -40,7 +40,7 @@ describe("doctor config flow", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             bridge: { bind: "auto" },

@@ -1,13 +1,13 @@
 import SwiftUI
 
 @MainActor
-public struct ClawdbotChatView: View {
+public struct MoltbotChatView: View {
     public enum Style {
         case standard
         case onboarding
     }
 
-    @State private var viewModel: ClawdbotChatViewModel
+    @State private var viewModel: MoltbotChatViewModel
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
     @State private var showSessions = false
@@ -42,7 +42,7 @@ public struct ClawdbotChatView: View {
     }
 
     public init(
-        viewModel: ClawdbotChatViewModel,
+        viewModel: MoltbotChatViewModel,
         showsSessionSwitcher: Bool = false,
         style: Style = .standard,
         markdownVariant: ChatMarkdownVariant = .standard,
@@ -58,14 +58,14 @@ public struct ClawdbotChatView: View {
     public var body: some View {
         ZStack {
             if self.style == .standard {
-                ClawdbotChatTheme.background
+                MoltbotChatTheme.background
                     .ignoresSafeArea()
             }
 
             VStack(spacing: Layout.stackSpacing) {
                 self.messageList
                     .padding(.horizontal, Layout.outerPaddingHorizontal)
-                ClawdbotChatComposer(
+                MoltbotChatComposer(
                     viewModel: self.viewModel,
                     style: self.style,
                     showsSessionSwitcher: self.showsSessionSwitcher)
@@ -206,8 +206,8 @@ public struct ClawdbotChatView: View {
         }
     }
 
-    private var visibleMessages: [ClawdbotChatMessage] {
-        let base: [ClawdbotChatMessage]
+    private var visibleMessages: [MoltbotChatMessage] {
+        let base: [MoltbotChatMessage]
         if self.style == .onboarding {
             guard let first = self.viewModel.messages.first else { return [] }
             base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
@@ -324,8 +324,8 @@ public struct ClawdbotChatView: View {
         return ("Error", "exclamationmark.triangle.fill", .orange)
     }
 
-    private func mergeToolResults(in messages: [ClawdbotChatMessage]) -> [ClawdbotChatMessage] {
-        var result: [ClawdbotChatMessage] = []
+    private func mergeToolResults(in messages: [MoltbotChatMessage]) -> [MoltbotChatMessage] {
+        var result: [MoltbotChatMessage] = []
         result.reserveCapacity(messages.count)
 
         for message in messages {
@@ -349,7 +349,7 @@ public struct ClawdbotChatView: View {
 
             var content = last.content
             content.append(
-                ClawdbotChatMessageContent(
+                MoltbotChatMessageContent(
                     type: "tool_result",
                     text: toolText,
                     thinking: nil,
@@ -361,7 +361,7 @@ public struct ClawdbotChatView: View {
                     name: message.toolName,
                     arguments: nil))
 
-            let merged = ClawdbotChatMessage(
+            let merged = MoltbotChatMessage(
                 id: last.id,
                 role: last.role,
                 content: content,
@@ -376,12 +376,12 @@ public struct ClawdbotChatView: View {
         return result
     }
 
-    private func isToolResultMessage(_ message: ClawdbotChatMessage) -> Bool {
+    private func isToolResultMessage(_ message: MoltbotChatMessage) -> Bool {
         let role = message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
     }
 
-    private func toolCallIds(in message: ClawdbotChatMessage) -> Set<String> {
+    private func toolCallIds(in message: MoltbotChatMessage) -> Set<String> {
         var ids = Set<String>()
         for content in message.content {
             let kind = (content.type ?? "").lowercased()
@@ -398,7 +398,7 @@ public struct ClawdbotChatView: View {
         return ids
     }
 
-    private func toolResultText(from message: ClawdbotChatMessage) -> String {
+    private func toolResultText(from message: MoltbotChatMessage) -> String {
         let parts = message.content.compactMap { content -> String? in
             let kind = (content.type ?? "text").lowercased()
             guard kind == "text" || kind.isEmpty else { return nil }
@@ -446,7 +446,7 @@ private struct ChatNoticeCard: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(ClawdbotChatTheme.subtleCard)
+                .fill(MoltbotChatTheme.subtleCard)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))
@@ -499,7 +499,7 @@ private struct ChatNoticeBanner: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(ClawdbotChatTheme.subtleCard)
+                .fill(MoltbotChatTheme.subtleCard)
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))

@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { expandToolGroups } from "../tool-policy.js";
@@ -13,10 +13,7 @@ function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessio
   return sessionKey.trim() !== mainSessionKey.trim();
 }
 
-function resolveMainSessionKeyForSandbox(params: {
-  cfg?: ClawdbotConfig;
-  agentId: string;
-}): string {
+function resolveMainSessionKeyForSandbox(params: { cfg?: MoltbotConfig; agentId: string }): string {
   if (params.cfg?.session?.scope === "global") return "global";
   return resolveAgentMainSessionKey({
     cfg: params.cfg,
@@ -25,7 +22,7 @@ function resolveMainSessionKeyForSandbox(params: {
 }
 
 function resolveComparableSessionKeyForSandbox(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   agentId: string;
   sessionKey: string;
 }): string {
@@ -36,10 +33,7 @@ function resolveComparableSessionKeyForSandbox(params: {
   });
 }
 
-export function resolveSandboxRuntimeStatus(params: {
-  cfg?: ClawdbotConfig;
-  sessionKey?: string;
-}): {
+export function resolveSandboxRuntimeStatus(params: { cfg?: MoltbotConfig; sessionKey?: string }): {
   agentId: string;
   sessionKey: string;
   mainSessionKey: string;
@@ -73,7 +67,7 @@ export function resolveSandboxRuntimeStatus(params: {
 }
 
 export function formatSandboxToolPolicyBlockedMessage(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   sessionKey?: string;
   toolName: string;
 }): string | undefined {
@@ -117,7 +111,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     lines.push(`- Use main session key (direct): ${runtime.mainSessionKey}`);
   }
   lines.push(
-    `- See: ${formatCliCommand(`clawdbot sandbox explain --session ${runtime.sessionKey}`)}`,
+    `- See: ${formatCliCommand(`moltbot sandbox explain --session ${runtime.sessionKey}`)}`,
   );
 
   return lines.join("\n");

@@ -1,5 +1,5 @@
 import type { loadConfig } from "../config/config.js";
-import { loadClawdbotPlugins } from "../plugins/loader.js";
+import { loadMoltbotPlugins } from "../plugins/loader.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 export function loadGatewayPlugins(params: {
@@ -14,7 +14,7 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
 }) {
-  const pluginRegistry = loadClawdbotPlugins({
+  const pluginRegistry = loadMoltbotPlugins({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     logger: {

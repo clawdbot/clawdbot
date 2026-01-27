@@ -1,7 +1,7 @@
 import AppKit
-import ClawdbotDiscovery
-import ClawdbotIPC
-import ClawdbotKit
+import MoltbotDiscovery
+import MoltbotIPC
+import MoltbotKit
 import Observation
 import SwiftUI
 
@@ -24,8 +24,8 @@ struct GeneralSettings: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 12) {
                     SettingsToggleRow(
-                        title: "Clawdbot active",
-                        subtitle: "Pause to stop the Clawdbot gateway; no messages will be processed.",
+                        title: "Moltbot active",
+                        subtitle: "Pause to stop the Moltbot gateway; no messages will be processed.",
                         binding: self.activeBinding)
 
                     self.connectionSection
@@ -34,12 +34,12 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Launch at login",
-                        subtitle: "Automatically start Clawdbot after you sign in.",
+                        subtitle: "Automatically start Moltbot after you sign in.",
                         binding: self.$state.launchAtLogin)
 
                     SettingsToggleRow(
                         title: "Show Dock icon",
-                        subtitle: "Keep Clawdbot visible in the Dock instead of menu-bar-only mode.",
+                        subtitle: "Keep Moltbot visible in the Dock instead of menu-bar-only mode.",
                         binding: self.$state.showDockIcon)
 
                     SettingsToggleRow(
@@ -71,7 +71,7 @@ struct GeneralSettings: View {
                 Spacer(minLength: 12)
                 HStack {
                     Spacer()
-                    Button("Quit Clawdbot") { NSApp.terminate(nil) }
+                    Button("Quit Moltbot") { NSApp.terminate(nil) }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -98,7 +98,7 @@ struct GeneralSettings: View {
 
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Clawdbot runs")
+            Text("Moltbot runs")
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -167,12 +167,12 @@ struct GeneralSettings: View {
                                 .frame(width: 280)
                         }
                         LabeledContent("Project root") {
-                            TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
+                            TextField("/home/you/Projects/moltbot", text: self.$state.remoteProjectRoot)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 280)
                         }
                         LabeledContent("CLI path") {
-                            TextField("/Applications/Clawdbot.app/.../clawdbot", text: self.$state.remoteCliPath)
+                            TextField("/Applications/Moltbot.app/.../moltbot", text: self.$state.remoteCliPath)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 280)
                         }
@@ -659,7 +659,7 @@ extension GeneralSettings {
         let alert = NSAlert()
         alert.messageText = "Log file not found"
         alert.informativeText = """
-        Looked for clawdbot logs in /tmp/clawdbot/.
+        Looked for moltbot logs in /tmp/moltbot/.
         Run a health check or send a message to generate activity, then try again.
         """
         alert.alertStyle = .informational
@@ -683,7 +683,7 @@ extension GeneralSettings {
                 host: host,
                 port: gateway.sshPort)
             self.state.remoteCliPath = gateway.cliPath ?? ""
-            ClawdbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
+            MoltbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
         }
     }
 }
@@ -711,8 +711,8 @@ extension GeneralSettings {
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteIdentity = "/tmp/id_ed25519"
-        state.remoteProjectRoot = "/tmp/clawdbot"
-        state.remoteCliPath = "/tmp/clawdbot"
+        state.remoteProjectRoot = "/tmp/moltbot"
+        state.remoteCliPath = "/tmp/moltbot"
 
         let view = GeneralSettings(state: state)
         view.gatewayStatus = GatewayEnvironmentStatus(

@@ -1,5 +1,5 @@
 import AppKit
-import ClawdbotIPC
+import MoltbotIPC
 
 extension CanvasWindowController {
     // MARK: - Window
@@ -12,7 +12,7 @@ extension CanvasWindowController {
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
-            window.title = "Clawdbot Canvas"
+            window.title = "Moltbot Canvas"
             window.isReleasedWhenClosed = false
             window.contentView = contentView
             window.center()

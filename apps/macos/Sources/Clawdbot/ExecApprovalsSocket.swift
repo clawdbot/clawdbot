@@ -1,5 +1,5 @@
 import AppKit
-import ClawdbotKit
+import MoltbotKit
 import CryptoKit
 import Darwin
 import Foundation

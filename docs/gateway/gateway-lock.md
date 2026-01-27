@@ -24,5 +24,5 @@ Last updated: 2025-12-11
 - Other bind failures surface as `GatewayLockError("failed to bind gateway socket on ws://127.0.0.1:<port>: …")`.
 
 ## Operational notes
-- If the port is occupied by *another* process, the error is the same; free the port or choose another with `clawdbot gateway --port <port>`.
+- If the port is occupied by *another* process, the error is the same; free the port or choose another with `moltbot gateway --port <port>`.
 - The macOS app still maintains its own lightweight PID guard before spawning the gateway; the runtime lock is enforced by the WebSocket bind.

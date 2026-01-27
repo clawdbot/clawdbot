@@ -47,7 +47,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
       runEmbeddedPiAgentMock.mockClear();
       return await fn(home);
     },
-    { prefix: "clawdbot-typing-" },
+    { prefix: "moltbot-typing-" },
   );
 }
 

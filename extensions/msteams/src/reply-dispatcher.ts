@@ -3,7 +3,7 @@ import {
   createTypingCallbacks,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
-  type ClawdbotConfig,
+  type MoltbotConfig,
   type MSTeamsReplyStyle,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
@@ -24,7 +24,7 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 export function createMSTeamsReplyDispatcher(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;

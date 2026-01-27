@@ -47,8 +47,8 @@ async function main() {
   const { loadDotEnv } = await import("../infra/dotenv.js");
   loadDotEnv({ quiet: true });
 
-  const { ensureClawdbotCliOnPath } = await import("../infra/path-env.js");
-  ensureClawdbotCliOnPath();
+  const { ensureMoltbotCliOnPath } = await import("../infra/path-env.js");
+  ensureMoltbotCliOnPath();
 
   const { enableConsoleCapture } = await import("../logging.js");
   enableConsoleCapture();
@@ -64,7 +64,7 @@ async function main() {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error("[clawdbot] Uncaught exception:", formatUncaughtError(error));
+    console.error("[moltbot] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
 
@@ -72,9 +72,6 @@ async function main() {
 }
 
 void main().catch((err) => {
-  console.error(
-    "[clawdbot] Relay failed:",
-    err instanceof Error ? (err.stack ?? err.message) : err,
-  );
+  console.error("[moltbot] Relay failed:", err instanceof Error ? (err.stack ?? err.message) : err);
   process.exit(1);
 });

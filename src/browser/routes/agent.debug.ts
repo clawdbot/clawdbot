@@ -112,7 +112,7 @@ export function registerBrowserAgentDebugRoutes(
       const pw = await requirePwAi(res, "trace stop");
       if (!pw) return;
       const id = crypto.randomUUID();
-      const dir = "/tmp/clawdbot";
+      const dir = "/tmp/moltbot";
       await fs.mkdir(dir, { recursive: true });
       const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
       await pw.traceStopViaPlaywright({

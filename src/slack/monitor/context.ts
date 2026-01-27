@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { ClawdbotConfig, SlackReactionNotificationMode } from "../../config/config.js";
+import type { MoltbotConfig, SlackReactionNotificationMode } from "../../config/config.js";
 import { resolveSessionKey, type SessionScope } from "../../config/sessions.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -42,7 +42,7 @@ export function normalizeSlackChannelType(
 }
 
 export type SlackMonitorContext = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId: string;
   botToken: string;
   app: App;
@@ -115,7 +115,7 @@ export type SlackMonitorContext = {
 };
 
 export function createSlackMonitorContext(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId: string;
   botToken: string;
   app: App;

@@ -155,7 +155,7 @@ class CameraCaptureManager(private val context: Context) {
       provider.unbindAll()
       provider.bindToLifecycle(owner, selector, videoCapture)
 
-      val file = File.createTempFile("clawdbot-clip-", ".mp4")
+      val file = File.createTempFile("moltbot-clip-", ".mp4")
       val outputOptions = FileOutputOptions.Builder(file).build()
 
       val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
@@ -285,7 +285,7 @@ private suspend fun Context.cameraProvider(): ProcessCameraProvider =
 /** Returns (jpegBytes, exifOrientation) so caller can rotate the decoded bitmap. */
 private suspend fun ImageCapture.takeJpegWithExif(executor: Executor): Pair<ByteArray, Int> =
   suspendCancellableCoroutine { cont ->
-    val file = File.createTempFile("clawdbot-snap-", ".jpg")
+    val file = File.createTempFile("moltbot-snap-", ".jpg")
     val options = ImageCapture.OutputFileOptions.Builder(file).build()
     takePicture(
       options,

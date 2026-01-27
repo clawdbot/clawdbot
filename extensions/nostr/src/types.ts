@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig } from "clawdbot/plugin-sdk";
 import { getPublicKeyFromPrivate } from "./nostr-bus.js";
 import { DEFAULT_RELAYS } from "./nostr-bus.js";
 import type { NostrProfile } from "./config-schema.js";
@@ -30,7 +30,7 @@ const DEFAULT_ACCOUNT_ID = "default";
 /**
  * List all configured Nostr account IDs
  */
-export function listNostrAccountIds(cfg: ClawdbotConfig): string[] {
+export function listNostrAccountIds(cfg: MoltbotConfig): string[] {
   const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;
@@ -46,7 +46,7 @@ export function listNostrAccountIds(cfg: ClawdbotConfig): string[] {
 /**
  * Get the default account ID
  */
-export function resolveDefaultNostrAccountId(cfg: ClawdbotConfig): string {
+export function resolveDefaultNostrAccountId(cfg: MoltbotConfig): string {
   const ids = listNostrAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
@@ -56,7 +56,7 @@ export function resolveDefaultNostrAccountId(cfg: ClawdbotConfig): string {
  * Resolve a Nostr account from config
  */
 export function resolveNostrAccount(opts: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId?: string | null;
 }): ResolvedNostrAccount {
   const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;

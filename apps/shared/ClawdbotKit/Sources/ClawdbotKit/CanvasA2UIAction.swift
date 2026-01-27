@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ClawdbotCanvasA2UIAction: Sendable {
+public enum MoltbotCanvasA2UIAction: Sendable {
     public struct AgentMessageContext: Sendable {
         public struct Session: Sendable {
             public var key: String
@@ -94,6 +94,6 @@ public enum ClawdbotCanvasA2UIAction: Sendable {
             }
             return "{\"id\":\"\(actionId)\",\"ok\":\(ok ? "true" : "false"),\"error\":\"\"}"
         }()
-        return "window.dispatchEvent(new CustomEvent('clawdbot:a2ui-action-status', { detail: \(json) }));"
+        return "window.dispatchEvent(new CustomEvent('moltbot:a2ui-action-status', { detail: \(json) }));"
     }
 }

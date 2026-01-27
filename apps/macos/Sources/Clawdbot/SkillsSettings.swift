@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Observation
 import SwiftUI
 
@@ -231,13 +231,13 @@ private struct SkillRow: View {
 
     private var sourceLabel: String {
         switch self.skill.source {
-        case "clawdbot-bundled":
+        case "moltbot-bundled":
             "Bundled"
-        case "clawdbot-managed":
+        case "moltbot-managed":
             "Managed"
-        case "clawdbot-workspace":
+        case "moltbot-workspace":
             "Workspace"
-        case "clawdbot-extra":
+        case "moltbot-extra":
             "Extra"
         default:
             self.skill.source
@@ -578,7 +578,7 @@ extension SkillsSettings {
         let skill = SkillStatus(
             name: "Test Skill",
             description: "Test description",
-            source: "clawdbot-bundled",
+            source: "moltbot-bundled",
             filePath: "/tmp/skills/test",
             baseDir: "/tmp/skills",
             skillKey: "test",

@@ -14,7 +14,7 @@ import { setNostrRuntime } from "./runtime.js";
 
 async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   const previous = process.env.CLAWDBOT_STATE_DIR;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-nostr-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-nostr-"));
   process.env.CLAWDBOT_STATE_DIR = dir;
   setNostrRuntime({
     state: {

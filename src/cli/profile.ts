@@ -102,7 +102,7 @@ export function applyCliProfileEnv(params: {
   if (!env.CLAWDBOT_STATE_DIR?.trim()) env.CLAWDBOT_STATE_DIR = stateDir;
 
   if (!env.CLAWDBOT_CONFIG_PATH?.trim()) {
-    env.CLAWDBOT_CONFIG_PATH = path.join(stateDir, "clawdbot.json");
+    env.CLAWDBOT_CONFIG_PATH = path.join(stateDir, "moltbot.json");
   }
 
   if (profile === "dev" && !env.CLAWDBOT_GATEWAY_PORT?.trim()) {

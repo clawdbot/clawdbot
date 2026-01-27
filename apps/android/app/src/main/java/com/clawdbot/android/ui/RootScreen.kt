@@ -333,7 +333,7 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
           disableForceDarkIfSupported(settings)
         }
         if (isDebuggable) {
-          Log.d("ClawdbotWebView", "userAgent: ${settings.userAgentString}")
+          Log.d("MoltbotWebView", "userAgent: ${settings.userAgentString}")
         }
         isScrollContainer = true
         overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
@@ -348,7 +348,7 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
             ) {
               if (!isDebuggable) return
               if (!request.isForMainFrame) return
-              Log.e("ClawdbotWebView", "onReceivedError: ${error.errorCode} ${error.description} ${request.url}")
+              Log.e("MoltbotWebView", "onReceivedError: ${error.errorCode} ${error.description} ${request.url}")
             }
 
             override fun onReceivedHttpError(
@@ -359,14 +359,14 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               if (!isDebuggable) return
               if (!request.isForMainFrame) return
               Log.e(
-                "ClawdbotWebView",
+                "MoltbotWebView",
                 "onReceivedHttpError: ${errorResponse.statusCode} ${errorResponse.reasonPhrase} ${request.url}",
               )
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
               if (isDebuggable) {
-                Log.d("ClawdbotWebView", "onPageFinished: $url")
+                Log.d("MoltbotWebView", "onPageFinished: $url")
               }
               viewModel.canvas.onPageFinished()
             }
@@ -377,7 +377,7 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
             ): Boolean {
               if (isDebuggable) {
                 Log.e(
-                  "ClawdbotWebView",
+                  "MoltbotWebView",
                   "onRenderProcessGone didCrash=${detail.didCrash()} priorityAtExit=${detail.rendererPriorityAtExit()}",
                 )
               }
@@ -390,7 +390,7 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               if (!isDebuggable) return false
               val msg = consoleMessage ?: return false
               Log.d(
-                "ClawdbotWebView",
+                "MoltbotWebView",
                 "console ${msg.messageLevel()} @ ${msg.sourceId()}:${msg.lineNumber()} ${msg.message()}",
               )
               return false
@@ -428,7 +428,7 @@ private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
   }
 
   companion object {
-    const val interfaceName: String = "clawdbotCanvasA2UIAction"
+    const val interfaceName: String = "moltbotCanvasA2UIAction"
   }
 }
 

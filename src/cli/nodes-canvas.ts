@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { resolveCliName } from "./cli-name.js";
+
 export type CanvasSnapshotPayload = {
   format: string;
   base64: string;
@@ -29,5 +31,6 @@ export function canvasSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?
   const tmpDir = opts.tmpDir ?? os.tmpdir();
   const id = opts.id ?? randomUUID();
   const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(tmpDir, `clawdbot-canvas-snapshot-${id}${ext}`);
+  const cliName = resolveCliName();
+  return path.join(tmpDir, `${cliName}-canvas-snapshot-${id}${ext}`);
 }

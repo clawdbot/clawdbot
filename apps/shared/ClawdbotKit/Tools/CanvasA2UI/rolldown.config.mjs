@@ -27,7 +27,7 @@ export default defineConfig({
     alias: {
       "@a2ui/lit": path.resolve(a2uiLitDist, "index.js"),
       "@a2ui/lit/ui": path.resolve(a2uiLitDist, "0.8/ui/ui.js"),
-      "@clawdbot/a2ui-theme-context": a2uiThemeContext,
+      "@moltbot/a2ui-theme-context": a2uiThemeContext,
       "@lit/context": path.resolve(repoRoot, "node_modules/@lit/context/index.js"),
       "@lit/context/": path.resolve(repoRoot, "node_modules/@lit/context/"),
       "@lit-labs/signals": path.resolve(repoRoot, "node_modules/@lit-labs/signals/index.js"),

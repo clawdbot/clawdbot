@@ -1,7 +1,7 @@
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  ClawdbotConfig,
+  MoltbotConfig,
 } from "clawdbot/plugin-sdk";
 import {
   createActionGate,
@@ -24,13 +24,13 @@ import { resolveGoogleChatOutboundSpace } from "./targets.js";
 
 const providerId = "googlechat";
 
-function listEnabledAccounts(cfg: ClawdbotConfig) {
+function listEnabledAccounts(cfg: MoltbotConfig) {
   return listEnabledGoogleChatAccounts(cfg).filter(
     (account) => account.enabled && account.credentialSource !== "none",
   );
 }
 
-function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: ClawdbotConfig) {
+function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: MoltbotConfig) {
   for (const account of accounts) {
     const gate = createActionGate(
       (account.config.actions ?? (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
@@ -49,11 +49,11 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg as ClawdbotConfig);
+    const accounts = listEnabledAccounts(cfg as MoltbotConfig);
     if (accounts.length === 0) return [];
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
-    if (isReactionsEnabled(accounts, cfg as ClawdbotConfig)) {
+    if (isReactionsEnabled(accounts, cfg as MoltbotConfig)) {
       actions.add("react");
       actions.add("reactions");
     }
@@ -69,7 +69,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     const account = resolveGoogleChatAccount({
-      cfg: cfg as ClawdbotConfig,
+      cfg: cfg as MoltbotConfig,
       accountId,
     });
     if (account.credentialSource === "none") {

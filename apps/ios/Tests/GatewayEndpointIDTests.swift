@@ -1,17 +1,17 @@
-import ClawdbotKit
+import MoltbotKit
 import Network
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite struct GatewayEndpointIDTests {
     @Test func stableIDForServiceDecodesAndNormalizesName() {
         let endpoint = NWEndpoint.service(
-            name: "Clawdbot\\032Gateway   \\032  Node\n",
-            type: "_clawdbot-gw._tcp",
+            name: "Moltbot\\032Gateway   \\032  Node\n",
+            type: "_moltbot-gw._tcp",
             domain: "local.",
             interface: nil)
 
-        #expect(GatewayEndpointID.stableID(endpoint) == "_clawdbot-gw._tcp|local.|Clawdbot Gateway Node")
+        #expect(GatewayEndpointID.stableID(endpoint) == "_moltbot-gw._tcp|local.|Moltbot Gateway Node")
     }
 
     @Test func stableIDForNonServiceUsesEndpointDescription() {
@@ -21,8 +21,8 @@ import Testing
 
     @Test func prettyDescriptionDecodesBonjourEscapes() {
         let endpoint = NWEndpoint.service(
-            name: "Clawdbot\\032Gateway",
-            type: "_clawdbot-gw._tcp",
+            name: "Moltbot\\032Gateway",
+            type: "_moltbot-gw._tcp",
             domain: "local.",
             interface: nil)
 

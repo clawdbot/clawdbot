@@ -1,4 +1,4 @@
-import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
+import { resolveMoltbotPackageRoot } from "../infra/moltbot-root.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
@@ -12,7 +12,7 @@ export async function getUpdateCheckResult(params: {
   fetchGit: boolean;
   includeRegistry: boolean;
 }): Promise<UpdateCheckResult> {
-  const root = await resolveClawdbotPackageRoot({
+  const root = await resolveMoltbotPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -64,7 +64,7 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
     details.push(`npm ${availability.latestVersion}`);
   }
   const suffix = details.length > 0 ? ` (${details.join(" · ")})` : "";
-  return `Update available${suffix}. Run: ${formatCliCommand("clawdbot update")}`;
+  return `Update available${suffix}. Run: ${formatCliCommand("moltbot update")}`;
 }
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {

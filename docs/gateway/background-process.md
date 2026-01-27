@@ -7,7 +7,7 @@ read_when:
 
 # Background Exec + Process Tool
 
-Clawdbot runs shell commands through the `exec` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
+Moltbot runs shell commands through the `exec` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
 
 ## exec tool
 

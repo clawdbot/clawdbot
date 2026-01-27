@@ -9,7 +9,7 @@ import {
   normalizeProviderId,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 
@@ -23,7 +23,7 @@ const PROVIDER_FILTER_THRESHOLD = 30;
 const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
 
 type PromptDefaultModelParams = {
-  config: ClawdbotConfig;
+  config: MoltbotConfig;
   prompter: WizardPrompter;
   allowKeep?: boolean;
   includeManual?: boolean;
@@ -38,7 +38,7 @@ type PromptModelAllowlistResult = { models?: string[] };
 
 function hasAuthForProvider(
   provider: string,
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
 ) {
   if (listProfilesForProvider(store, provider).length > 0) return true;
@@ -47,13 +47,13 @@ function hasAuthForProvider(
   return false;
 }
 
-function resolveConfiguredModelRaw(cfg: ClawdbotConfig): string {
+function resolveConfiguredModelRaw(cfg: MoltbotConfig): string {
   const raw = cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
   if (typeof raw === "string") return raw.trim();
   return raw?.primary?.trim() ?? "";
 }
 
-function resolveConfiguredModelKeys(cfg: ClawdbotConfig): string[] {
+function resolveConfiguredModelKeys(cfg: MoltbotConfig): string[] {
   const models = cfg.agents?.defaults?.models ?? {};
   return Object.keys(models)
     .map((key) => String(key ?? "").trim())
@@ -266,7 +266,7 @@ export async function promptDefaultModel(
 }
 
 export async function promptModelAllowlist(params: {
-  config: ClawdbotConfig;
+  config: MoltbotConfig;
   prompter: WizardPrompter;
   message?: string;
   agentDir?: string;
@@ -387,7 +387,7 @@ export async function promptModelAllowlist(params: {
   return { models: [] };
 }
 
-export function applyPrimaryModel(cfg: ClawdbotConfig, model: string): ClawdbotConfig {
+export function applyPrimaryModel(cfg: MoltbotConfig, model: string): MoltbotConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
@@ -414,7 +414,7 @@ export function applyPrimaryModel(cfg: ClawdbotConfig, model: string): ClawdbotC
   };
 }
 
-export function applyModelAllowlist(cfg: ClawdbotConfig, models: string[]): ClawdbotConfig {
+export function applyModelAllowlist(cfg: MoltbotConfig, models: string[]): MoltbotConfig {
   const defaults = cfg.agents?.defaults;
   const normalized = normalizeModelKeys(models);
   if (normalized.length === 0) {
@@ -448,9 +448,9 @@ export function applyModelAllowlist(cfg: ClawdbotConfig, models: string[]): Claw
 }
 
 export function applyModelFallbacksFromSelection(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   selection: string[],
-): ClawdbotConfig {
+): MoltbotConfig {
   const normalized = normalizeModelKeys(selection);
   if (normalized.length <= 1) return cfg;
 

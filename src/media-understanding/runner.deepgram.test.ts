@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   buildProviderRegistry,
@@ -15,7 +15,7 @@ import {
 
 describe("runCapability deepgram provider options", () => {
   it("merges provider options, headers, and baseUrl overrides", async () => {
-    const tmpPath = path.join(os.tmpdir(), `clawdbot-deepgram-${Date.now()}.wav`);
+    const tmpPath = path.join(os.tmpdir(), `moltbot-deepgram-${Date.now()}.wav`);
     await fs.writeFile(tmpPath, Buffer.from("RIFF"));
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
     const media = normalizeMediaAttachments(ctx);
@@ -80,7 +80,7 @@ describe("runCapability deepgram provider options", () => {
           },
         },
       },
-    } as unknown as ClawdbotConfig;
+    } as unknown as MoltbotConfig;
 
     try {
       const result = await runCapability({

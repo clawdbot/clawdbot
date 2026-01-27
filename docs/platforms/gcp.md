@@ -1,18 +1,18 @@
 ---
-summary: "Run Clawdbot Gateway 24/7 on a GCP Compute Engine VM (Docker) with durable state"
+summary: "Run Moltbot Gateway 24/7 on a GCP Compute Engine VM (Docker) with durable state"
 read_when:
-  - You want Clawdbot running 24/7 on GCP
+  - You want Moltbot running 24/7 on GCP
   - You want a production-grade, always-on Gateway on your own VM
   - You want full control over persistence, binaries, and restart behavior
 ---
 
-# Clawdbot on GCP Compute Engine (Docker, Production VPS Guide)
+# Moltbot on GCP Compute Engine (Docker, Production VPS Guide)
 
 ## Goal
 
-Run a persistent Clawdbot Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
+Run a persistent Moltbot Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
-If you want "Clawdbot 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
+If you want "Moltbot 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
 Pricing varies by machine type and region; pick the smallest VM that fits your workload and scale up if you hit OOMs.
 
 ## What are we doing (simple terms)?
@@ -20,7 +20,7 @@ Pricing varies by machine type and region; pick the smallest VM that fits your w
 - Create a GCP project and enable billing
 - Create a Compute Engine VM
 - Install Docker (isolated app runtime)
-- Start the Clawdbot Gateway in Docker
+- Start the Moltbot Gateway in Docker
 - Persist `~/.clawdbot` + `~/clawd` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
 
@@ -40,7 +40,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 2) Create Compute Engine VM (e2-small, Debian 12, 20GB)
 3) SSH into the VM
 4) Install Docker
-5) Clone Clawdbot repository
+5) Clone Moltbot repository
 6) Create persistent host directories
 7) Configure `.env` and `docker-compose.yml`
 8) Bake required binaries, build, and launch
@@ -87,8 +87,8 @@ All steps can be done via the web UI at https://console.cloud.google.com
 **CLI:**
 
 ```bash
-gcloud projects create my-clawdbot-project --name="Clawdbot Gateway"
-gcloud config set project my-clawdbot-project
+gcloud projects create my-moltbot-project --name="Moltbot Gateway"
+gcloud config set project my-moltbot-project
 ```
 
 Enable billing at https://console.cloud.google.com/billing (required for Compute Engine).
@@ -120,7 +120,7 @@ gcloud services enable compute.googleapis.com
 **CLI:**
 
 ```bash
-gcloud compute instances create clawdbot-gateway \
+gcloud compute instances create moltbot-gateway \
   --zone=us-central1-a \
   --machine-type=e2-small \
   --boot-disk-size=20GB \
@@ -131,7 +131,7 @@ gcloud compute instances create clawdbot-gateway \
 **Console:**
 
 1. Go to Compute Engine > VM instances > Create instance
-2. Name: `clawdbot-gateway`
+2. Name: `moltbot-gateway`
 3. Region: `us-central1`, Zone: `us-central1-a`
 4. Machine type: `e2-small`
 5. Boot disk: Debian 12, 20GB
@@ -144,7 +144,7 @@ gcloud compute instances create clawdbot-gateway \
 **CLI:**
 
 ```bash
-gcloud compute ssh clawdbot-gateway --zone=us-central1-a
+gcloud compute ssh moltbot-gateway --zone=us-central1-a
 ```
 
 **Console:**
@@ -173,7 +173,7 @@ exit
 Then SSH back in:
 
 ```bash
-gcloud compute ssh clawdbot-gateway --zone=us-central1-a
+gcloud compute ssh moltbot-gateway --zone=us-central1-a
 ```
 
 Verify:
@@ -185,11 +185,11 @@ docker compose version
 
 ---
 
-## 6) Clone the Clawdbot repository
+## 6) Clone the Moltbot repository
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/moltbot/moltbot.git
+cd moltbot
 ```
 
 This guide assumes you will build a custom image to guarantee binary persistence.
@@ -213,7 +213,7 @@ mkdir -p ~/clawd
 Create `.env` in the repository root.
 
 ```bash
-CLAWDBOT_IMAGE=clawdbot:latest
+CLAWDBOT_IMAGE=moltbot:latest
 CLAWDBOT_GATEWAY_TOKEN=change-me-now
 CLAWDBOT_GATEWAY_BIND=lan
 CLAWDBOT_GATEWAY_PORT=18789
@@ -241,7 +241,7 @@ Create or update `docker-compose.yml`.
 
 ```yaml
 services:
-  clawdbot-gateway:
+  moltbot-gateway:
     image: ${CLAWDBOT_IMAGE}
     build: .
     restart: unless-stopped
@@ -347,15 +347,15 @@ CMD ["node","dist/index.js"]
 
 ```bash
 docker compose build
-docker compose up -d clawdbot-gateway
+docker compose up -d moltbot-gateway
 ```
 
 Verify binaries:
 
 ```bash
-docker compose exec clawdbot-gateway which gog
-docker compose exec clawdbot-gateway which goplaces
-docker compose exec clawdbot-gateway which wacli
+docker compose exec moltbot-gateway which gog
+docker compose exec moltbot-gateway which goplaces
+docker compose exec moltbot-gateway which wacli
 ```
 
 Expected output:
@@ -371,7 +371,7 @@ Expected output:
 ## 12) Verify Gateway
 
 ```bash
-docker compose logs -f clawdbot-gateway
+docker compose logs -f moltbot-gateway
 ```
 
 Success:
@@ -387,7 +387,7 @@ Success:
 Create an SSH tunnel to forward the Gateway port:
 
 ```bash
-gcloud compute ssh clawdbot-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:18789
+gcloud compute ssh moltbot-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:18789
 ```
 
 Open in your browser:
@@ -400,12 +400,12 @@ Paste your gateway token.
 
 ## What persists where (source of truth)
 
-Clawdbot runs in Docker, but Docker is not the source of truth.
+Moltbot runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
 
 | Component | Location | Persistence mechanism | Notes |
 |---|---|---|---|
-| Gateway config | `/home/node/.clawdbot/` | Host volume mount | Includes `clawdbot.json`, tokens |
+| Gateway config | `/home/node/.clawdbot/` | Host volume mount | Includes `moltbot.json`, tokens |
 | Model auth profiles | `/home/node/.clawdbot/` | Host volume mount | OAuth tokens, API keys |
 | Skill configs | `/home/node/.clawdbot/skills/` | Host volume mount | Skill-level state |
 | Agent workspace | `/home/node/clawd/` | Host volume mount | Code and agent artifacts |
@@ -420,10 +420,10 @@ All long-lived state must survive restarts, rebuilds, and reboots.
 
 ## Updates
 
-To update Clawdbot on the VM:
+To update Moltbot on the VM:
 
 ```bash
-cd ~/clawdbot
+cd ~/moltbot
 git pull
 docker compose build
 docker compose up -d
@@ -453,15 +453,15 @@ If using e2-micro and hitting OOM, upgrade to e2-small or e2-medium:
 
 ```bash
 # Stop the VM first
-gcloud compute instances stop clawdbot-gateway --zone=us-central1-a
+gcloud compute instances stop moltbot-gateway --zone=us-central1-a
 
 # Change machine type
-gcloud compute instances set-machine-type clawdbot-gateway \
+gcloud compute instances set-machine-type moltbot-gateway \
   --zone=us-central1-a \
   --machine-type=e2-small
 
 # Start the VM
-gcloud compute instances start clawdbot-gateway --zone=us-central1-a
+gcloud compute instances start moltbot-gateway --zone=us-central1-a
 ```
 
 ---
@@ -474,14 +474,14 @@ For automation or CI/CD pipelines, create a dedicated service account with minim
 
 1. Create a service account:
    ```bash
-   gcloud iam service-accounts create clawdbot-deploy \
-     --display-name="Clawdbot Deployment"
+   gcloud iam service-accounts create moltbot-deploy \
+     --display-name="Moltbot Deployment"
    ```
 
 2. Grant Compute Instance Admin role (or narrower custom role):
    ```bash
-   gcloud projects add-iam-policy-binding my-clawdbot-project \
-     --member="serviceAccount:clawdbot-deploy@my-clawdbot-project.iam.gserviceaccount.com" \
+   gcloud projects add-iam-policy-binding my-moltbot-project \
+     --member="serviceAccount:moltbot-deploy@my-moltbot-project.iam.gserviceaccount.com" \
      --role="roles/compute.instanceAdmin.v1"
    ```
 

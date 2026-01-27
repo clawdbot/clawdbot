@@ -15,8 +15,8 @@ export const MEMORY_SYSTEM_PROMPT = [
   "Paste this into your agent:",
   "",
   "Install the memory system by applying:",
-  "https://github.com/clawdbot/clawdbot/commit/9ffea23f31ca1df5183b25668f8f814bee0fb34e",
-  "https://github.com/clawdbot/clawdbot/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
+  "https://github.com/moltbot/moltbot/commit/9ffea23f31ca1df5183b25668f8f814bee0fb34e",
+  "https://github.com/moltbot/moltbot/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
 ].join("\n");
 
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
@@ -66,7 +66,7 @@ export function detectLegacyWorkspaceDirs(params: {
   const exists = params.exists ?? fs.existsSync;
   const home = homedir();
   const activeWorkspace = path.resolve(params.workspaceDir);
-  const candidates = [path.join(home, "clawdbot")];
+  const candidates = [path.join(home, "moltbot")];
   const legacyDirs = candidates
     .filter((candidate) => {
       if (!exists(candidate)) return false;
@@ -83,6 +83,6 @@ export function formatLegacyWorkspaceWarning(detection: LegacyWorkspaceDetection
     "Extra workspace directories detected (may contain old agent files):",
     ...detection.legacyDirs.map((dir) => `- ${shortenHomePath(dir)}`),
     `Active workspace: ${shortenHomePath(detection.activeWorkspace)}`,
-    "If unused, archive or move to Trash (e.g. trash ~/clawdbot).",
+    "If unused, archive or move to Trash (e.g. trash ~/moltbot).",
   ].join("\n");
 }

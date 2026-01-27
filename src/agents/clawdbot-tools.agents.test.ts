@@ -17,7 +17,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { createClawdbotTools } from "./clawdbot-tools.js";
+import { createMoltbotTools } from "./moltbot-tools.js";
 
 describe("agents_list", () => {
   beforeEach(() => {
@@ -30,7 +30,7 @@ describe("agents_list", () => {
   });
 
   it("defaults to the requester agent only", async () => {
-    const tool = createClawdbotTools({
+    const tool = createMoltbotTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
     if (!tool) throw new Error("missing agents_list tool");
@@ -67,7 +67,7 @@ describe("agents_list", () => {
       },
     };
 
-    const tool = createClawdbotTools({
+    const tool = createMoltbotTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
     if (!tool) throw new Error("missing agents_list tool");
@@ -107,7 +107,7 @@ describe("agents_list", () => {
       },
     };
 
-    const tool = createClawdbotTools({
+    const tool = createMoltbotTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
     if (!tool) throw new Error("missing agents_list tool");
@@ -142,7 +142,7 @@ describe("agents_list", () => {
       },
     };
 
-    const tool = createClawdbotTools({
+    const tool = createMoltbotTools({
       agentSessionKey: "main",
     }).find((candidate) => candidate.name === "agents_list");
     if (!tool) throw new Error("missing agents_list tool");

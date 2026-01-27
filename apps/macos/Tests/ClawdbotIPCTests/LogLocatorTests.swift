@@ -1,13 +1,13 @@
 import Darwin
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite struct LogLocatorTests {
     @Test func launchdGatewayLogPathEnsuresTmpDirExists() throws {
         let fm = FileManager()
         let baseDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        let logDir = baseDir.appendingPathComponent("clawdbot-tests-\(UUID().uuidString)")
+        let logDir = baseDir.appendingPathComponent("moltbot-tests-\(UUID().uuidString)")
 
         setenv("CLAWDBOT_LOG_DIR", logDir.path, 1)
         defer {

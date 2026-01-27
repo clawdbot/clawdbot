@@ -7,14 +7,14 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 
 export function resolveProviderAuthOverview(params: {
   provider: string;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   store: AuthProfileStore;
   modelsPath: string;
 }): ProviderAuthOverview {

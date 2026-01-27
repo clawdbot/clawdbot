@@ -231,9 +231,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
       case "Browser.getVersion":
         return {
           protocolVersion: "1.3",
-          product: "Chrome/Clawdbot-Extension-Relay",
+          product: "Chrome/Moltbot-Extension-Relay",
           revision: "0",
-          userAgent: "Clawdbot-Extension-Relay",
+          userAgent: "Moltbot-Extension-Relay",
           jsVersion: "V8",
         };
       case "Browser.setDownloadBehavior":
@@ -318,7 +318,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       (req.method === "GET" || req.method === "PUT")
     ) {
       const payload: Record<string, unknown> = {
-        Browser: "Clawdbot/extension-relay",
+        Browser: "Moltbot/extension-relay",
         "Protocol-Version": "1.3",
       };
       // Only advertise the WS URL if a real extension is connected.

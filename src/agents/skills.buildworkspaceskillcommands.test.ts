@@ -28,7 +28,7 @@ ${frontmatterExtra ?? ""}
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
   it("sanitizes and de-duplicates command names", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "hello-world"),
       name: "hello-world",
@@ -63,7 +63,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
   });
 
   it("truncates descriptions longer than 100 characters for Discord compatibility", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     const longDescription =
       "This is a very long description that exceeds Discord's 100 character limit for slash command descriptions and should be truncated";
     await writeSkill({
@@ -91,7 +91,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
   });
 
   it("includes tool-dispatch metadata from frontmatter", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "tool-dispatch"),
       name: "tool-dispatch",

@@ -1,19 +1,19 @@
 ---
-summary: "CLI reference for `clawdbot status` (diagnostics, probes, usage snapshots)"
+summary: "CLI reference for `moltbot status` (diagnostics, probes, usage snapshots)"
 read_when:
   - You want a quick diagnosis of channel health + recent session recipients
   - You want a pasteable “all” status for debugging
 ---
 
-# `clawdbot status`
+# `moltbot status`
 
 Diagnostics for channels + sessions.
 
 ```bash
-clawdbot status
-clawdbot status --all
-clawdbot status --deep
-clawdbot status --usage
+moltbot status
+moltbot status --all
+moltbot status --deep
+moltbot status --usage
 ```
 
 Notes:
@@ -21,4 +21,4 @@ Notes:
 - Output includes per-agent session stores when multiple agents are configured.
 - Overview includes Gateway + node host service install/runtime status when available.
 - Overview includes update channel + git SHA (for source checkouts).
-- Update info surfaces in the Overview; if an update is available, status prints a hint to run `clawdbot update` (see [Updating](/install/updating)).
+- Update info surfaces in the Overview; if an update is available, status prints a hint to run `moltbot update` (see [Updating](/install/updating)).

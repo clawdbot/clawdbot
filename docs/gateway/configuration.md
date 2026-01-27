@@ -1,13 +1,13 @@
 ---
-summary: "All configuration options for ~/.clawdbot/clawdbot.json with examples"
+summary: "All configuration options for ~/.clawdbot/moltbot.json with examples"
 read_when:
   - Adding or modifying config fields
 ---
 # Configuration 🔧
 
-Clawdbot reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (comments + trailing commas allowed).
+Moltbot reads an optional **JSON5** config from `~/.clawdbot/moltbot.json` (comments + trailing commas allowed).
 
-If the file is missing, Clawdbot uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
+If the file is missing, Moltbot uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`channels.whatsapp.allowFrom`, `channels.telegram.allowFrom`, etc.)
 - control group allowlists + mention behavior (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.discord.guilds`, `agents.list[].groupChat`)
 - customize message prefixes (`messages`)
@@ -19,14 +19,14 @@ If the file is missing, Clawdbot uses safe-ish defaults (embedded Pi agent + per
 
 ## Strict config validation
 
-Clawdbot only accepts configurations that fully match the schema.
+Moltbot only accepts configurations that fully match the schema.
 Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start** for safety.
 
 When validation fails:
 - The Gateway does not boot.
-- Only diagnostic commands are allowed (for example: `clawdbot doctor`, `clawdbot logs`, `clawdbot health`, `clawdbot status`, `clawdbot service`, `clawdbot help`).
-- Run `clawdbot doctor` to see the exact issues.
-- Run `clawdbot doctor --fix` (or `--yes`) to apply migrations/repairs.
+- Only diagnostic commands are allowed (for example: `moltbot doctor`, `moltbot logs`, `moltbot health`, `moltbot status`, `moltbot service`, `moltbot help`).
+- Run `moltbot doctor` to see the exact issues.
+- Run `moltbot doctor --fix` (or `--yes`) to apply migrations/repairs.
 
 Doctor never writes changes unless you explicitly opt into `--fix`/`--yes`.
 
@@ -47,7 +47,7 @@ Use `config.apply` to validate + write the full config and restart the Gateway i
 It writes a restart sentinel and pings the last active session after the Gateway comes back.
 
 Warning: `config.apply` replaces the **entire config**. If you want to change only a few keys,
-use `config.patch` or `clawdbot config set`. Keep a backup of `~/.clawdbot/clawdbot.json`.
+use `config.patch` or `moltbot config set`. Keep a backup of `~/.clawdbot/moltbot.json`.
 
 Params:
 - `raw` (string) — JSON5 payload for the entire config
@@ -59,8 +59,8 @@ Params:
 Example (via `gateway call`):
 
 ```bash
-clawdbot gateway call config.get --params '{}' # capture payload.hash
-clawdbot gateway call config.apply --params '{
+moltbot gateway call config.get --params '{}' # capture payload.hash
+moltbot gateway call config.apply --params '{
   "raw": "{\\n  agents: { defaults: { workspace: \\"~/clawd\\" } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
@@ -88,8 +88,8 @@ Params:
 Example:
 
 ```bash
-clawdbot gateway call config.get --params '{}' # capture payload.hash
-clawdbot gateway call config.patch --params '{
+moltbot gateway call config.get --params '{}' # capture payload.hash
+moltbot gateway call config.patch --params '{
   "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
@@ -146,7 +146,7 @@ Split your config into multiple files using the `$include` directive. This is us
 ### Basic usage
 
 ```json5
-// ~/.clawdbot/clawdbot.json
+// ~/.clawdbot/moltbot.json
 {
   gateway: { port: 18789 },
   
@@ -208,7 +208,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 
 ```json5
 { "$include": "./sub/config.json5" }      // relative
-{ "$include": "/etc/clawdbot/base.json5" } // absolute
+{ "$include": "/etc/moltbot/base.json5" } // absolute
 { "$include": "../shared/common.json5" }   // parent dir
 ```
 
@@ -221,7 +221,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 ### Example: Multi-client legal setup
 
 ```json5
-// ~/.clawdbot/clawdbot.json
+// ~/.clawdbot/moltbot.json
 {
   gateway: { port: 18789, auth: { token: "secret" } },
   
@@ -266,7 +266,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
 
 ### Env vars + `.env`
 
-Clawdbot reads env vars from the parent process (shell, launchd/systemd, CI, etc.).
+Moltbot reads env vars from the parent process (shell, launchd/systemd, CI, etc.).
 
 Additionally, it loads:
 - `.env` from the current working directory (if present)
@@ -292,7 +292,7 @@ See [/environment](/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
-Opt-in convenience: if enabled and none of the expected keys are set yet, Clawdbot runs your login shell and imports only the missing expected keys (never overrides).
+Opt-in convenience: if enabled and none of the expected keys are set yet, Moltbot runs your login shell and imports only the missing expected keys (never overrides).
 This effectively sources your shell profile.
 
 ```json5
@@ -354,7 +354,7 @@ You can reference environment variables directly in any config string value usin
 
 ### Auth storage (OAuth + API keys)
 
-Clawdbot stores **per-agent** auth profiles (OAuth + API keys) in:
+Moltbot stores **per-agent** auth profiles (OAuth + API keys) in:
 - `<agentDir>/auth-profiles.json` (default: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`)
 
 See also: [/concepts/oauth](/concepts/oauth)
@@ -366,13 +366,13 @@ The embedded Pi agent maintains a runtime cache at:
 - `<agentDir>/auth.json` (managed automatically; don’t edit manually)
 
 Legacy agent dir (pre multi-agent):
-- `~/.clawdbot/agent/*` (migrated by `clawdbot doctor` into `~/.clawdbot/agents/<defaultAgentId>/agent/*`)
+- `~/.clawdbot/agent/*` (migrated by `moltbot doctor` into `~/.clawdbot/agents/<defaultAgentId>/agent/*`)
 
 Overrides:
 - OAuth dir (legacy import only): `CLAWDBOT_OAUTH_DIR`
 - Agent dir (default agent root override): `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
-On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
+On first use, Moltbot imports `oauth.json` entries into `auth-profiles.json`.
 
 ### `auth`
 
@@ -398,7 +398,7 @@ rotation order used for failover.
 
 Optional per-agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
 
-If set, Clawdbot derives defaults (only when you haven’t set them explicitly):
+If set, Moltbot derives defaults (only when you haven’t set them explicitly):
 - `messages.ackReaction` from the **active agent**’s `identity.emoji` (falls back to 👀)
 - `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp)
 - `identity.avatar` accepts a workspace-relative image path or a remote URL/data URL. Local files must live inside the agent workspace.
@@ -444,8 +444,8 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 
 ### `logging`
 
-- Default log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log`
-- If you want a stable path, set `logging.file` to `/tmp/clawdbot/clawdbot.log`.
+- Default log file: `/tmp/moltbot/moltbot-YYYY-MM-DD.log`
+- If you want a stable path, set `logging.file` to `/tmp/moltbot/moltbot.log`.
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
@@ -457,7 +457,7 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 {
   logging: {
     level: "info",
-    file: "/tmp/clawdbot/clawdbot.log",
+    file: "/tmp/moltbot/moltbot.log",
     consoleLevel: "info",
     consoleStyle: "pretty",
     redactSensitive: "tools",
@@ -481,8 +481,8 @@ Controls how WhatsApp direct chats (DMs) are handled:
 Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per channel** by default.
 
 Pairing approvals:
-- `clawdbot pairing list whatsapp`
-- `clawdbot pairing approve whatsapp <code>`
+- `moltbot pairing list whatsapp`
+- `moltbot pairing approve whatsapp <code>`
 
 ### `channels.whatsapp.allowFrom`
 
@@ -543,7 +543,7 @@ Run multiple WhatsApp accounts in one gateway:
 
 Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
-- The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
+- The legacy single-account Baileys auth dir is migrated by `moltbot doctor` into `whatsapp/default`.
 
 ### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.googlechat.accounts` / `channels.slack.accounts` / `channels.mattermost.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
@@ -590,7 +590,7 @@ Group messages default to **require mention** (either metadata mention or regex 
   },
   agents: {
     list: [
-      { id: "main", groupChat: { mentionPatterns: ["@clawd", "clawdbot", "clawd"] } }
+      { id: "main", groupChat: { mentionPatterns: ["@clawd", "moltbot", "clawd"] } }
     ]
   }
 }
@@ -949,7 +949,7 @@ Notes:
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries. Names are normalized; conflicts with native commands are ignored.
 - `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<channel>`.
 - `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
-- `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
+- `commands.config: true` enables `/config` (reads/writes `moltbot.json`).
 - `channels.<provider>.configWrites` gates config mutations initiated by that channel (default: true). This applies to `/config set|unset` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
@@ -980,7 +980,7 @@ Set `web.enabled: false` to keep it off by default.
 
 ### `channels.telegram` (bot transport)
 
-Clawdbot starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
+Moltbot starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
 Set `channels.telegram.enabled: false` to disable automatic startup.
 Multi-account support lives under `channels.telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 Set `channels.telegram.configWrites: false` to block Telegram-initiated config writes (including supergroup ID migrations and `/config set|unset`).
@@ -1118,7 +1118,7 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
 }
 ```
 
-Clawdbot starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
+Moltbot starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Bot-authored messages are ignored by default. Enable with `channels.discord.allowBots` (own messages are still filtered to prevent self-reply loops).
 Reaction notification modes:
@@ -1228,7 +1228,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 
 Multi-account support lives under `channels.slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
-Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+Moltbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
 Set `channels.slack.configWrites: false` to block Slack-initiated config writes (including channel ID migrations and `/config set|unset`).
 
 Bot-authored messages are ignored by default. Enable with `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
@@ -1255,7 +1255,7 @@ Slack action groups (gate `slack` tool actions):
 ### `channels.mattermost` (bot token)
 
 Mattermost ships as a plugin and is not bundled with the core install.
-Install it first: `clawdbot plugins install @clawdbot/mattermost` (or `./extensions/mattermost` from a git checkout).
+Install it first: `moltbot plugins install @moltbot/mattermost` (or `./extensions/mattermost` from a git checkout).
 
 Mattermost requires a bot token plus the base URL for your server:
 
@@ -1276,7 +1276,7 @@ Mattermost requires a bot token plus the base URL for your server:
 }
 ```
 
-Clawdbot starts Mattermost when the account is configured (bot token + base URL) and enabled. The token + base URL are resolved from `channels.mattermost.botToken` + `channels.mattermost.baseUrl` or `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` for the default account (unless `channels.mattermost.enabled` is `false`).
+Moltbot starts Mattermost when the account is configured (bot token + base URL) and enabled. The token + base URL are resolved from `channels.mattermost.botToken` + `channels.mattermost.baseUrl` or `MATTERMOST_BOT_TOKEN` + `MATTERMOST_URL` for the default account (unless `channels.mattermost.enabled` is `false`).
 
 Chat modes:
 - `oncall` (default): respond to channel messages only when @mentioned.
@@ -1315,7 +1315,7 @@ Reaction notification modes:
 
 ### `channels.imessage` (imsg CLI)
 
-Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+Moltbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
 ```json5
 {
@@ -1369,13 +1369,13 @@ own per-scope workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
 ### `agents.defaults.repoRoot`
 
-Optional repository root to show in the system prompt’s Runtime line. If unset, Clawdbot
+Optional repository root to show in the system prompt’s Runtime line. If unset, Moltbot
 tries to detect a `.git` directory by walking upward from the workspace (and current
 working directory). The path must exist to be used.
 
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/Projects/clawdbot" } }
+  agents: { defaults: { repoRoot: "~/Projects/moltbot" } }
 }
 ```
 
@@ -1396,7 +1396,7 @@ Use this for pre-seeded deployments where your workspace files come from a repo.
 Max characters of each workspace bootstrap file injected into the system prompt
 before truncation. Default: `20000`.
 
-When a file exceeds this limit, Clawdbot logs a warning and injects a truncated
+When a file exceeds this limit, Moltbot logs a warning and injects a truncated
 head/tail with a marker.
 
 ```json5
@@ -1408,7 +1408,7 @@ head/tail with a marker.
 ### `agents.defaults.userTimezone`
 
 Sets the user’s timezone for **system prompt context** (not for timestamps in
-message envelopes). If unset, Clawdbot uses the host timezone at runtime.
+message envelopes). If unset, Moltbot uses the host timezone at runtime.
 
 ```json5
 {
@@ -1448,7 +1448,7 @@ streaming, final replies) across channels unless already present.
 
 If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
 replies are the exception: they default to `[{identity.name}]` when set, otherwise
-`[clawdbot]`, so same-phone conversations stay legible.
+`[moltbot]`, so same-phone conversations stay legible.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
 
 #### Template variables
@@ -1477,9 +1477,9 @@ Unresolved variables remain as literal text.
 Example output: `[claude-opus-4-5 | think:high] Here's my response...`
 
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
-`messages.messagePrefix`). Default stays **unchanged**: `"[clawdbot]"` when
+`messages.messagePrefix`). Default stays **unchanged**: `"[moltbot]"` when
 `channels.whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using
-`"[clawdbot]"`, Clawdbot will instead use `[{identity.name}]` when the routed
+`"[moltbot]"`, Moltbot will instead use `[{identity.name}]` when the routed
 agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
@@ -1497,7 +1497,7 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 
 #### `messages.tts`
 
-Enable text-to-speech for outbound replies. When on, Clawdbot generates audio
+Enable text-to-speech for outbound replies. When on, Moltbot generates audio
 using ElevenLabs or OpenAI and attaches it to responses. Telegram uses Opus
 voice notes; other channels send MP3 audio.
 
@@ -1613,7 +1613,7 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you:
 - set `--thinking off`, or
 - define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
 
-Clawdbot also ships a few built-in alias shorthands. Defaults only apply when the model
+Moltbot also ships a few built-in alias shorthands. Defaults only apply when the model
 is already present in `agents.defaults.models`:
 
 - `opus` -> `anthropic/claude-opus-4-5`
@@ -1908,7 +1908,7 @@ See [/concepts/typing-indicators](/concepts/typing-indicators) for behavior deta
 
 `agents.defaults.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
 Aliases come from `agents.defaults.models.*.alias` (e.g. `Opus`).
-If you omit the provider, Clawdbot currently assumes `anthropic` as a temporary
+If you omit the provider, Moltbot currently assumes `anthropic` as a temporary
 deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
@@ -1943,7 +1943,7 @@ Note: `applyPatch` is only under `tools.exec`.
 
 `tools.web` configures web search + fetch tools:
 - `tools.web.search.enabled` (default: true when key is present)
-- `tools.web.search.apiKey` (recommended: set via `clawdbot configure --section web`, or use `BRAVE_API_KEY` env var)
+- `tools.web.search.apiKey` (recommended: set via `moltbot configure --section web`, or use `BRAVE_API_KEY` env var)
 - `tools.web.search.maxResults` (1–10, default 5)
 - `tools.web.search.timeoutSeconds` (default 30)
 - `tools.web.search.cacheTtlMinutes` (default 15)
@@ -2101,7 +2101,7 @@ Tool groups (shorthands) work in **global** and **per-agent** tool policies:
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:clawdbot`: all built-in Clawdbot tools (excludes provider plugins)
+- `group:moltbot`: all built-in Moltbot tools (excludes provider plugins)
 
 `tools.elevated` controls elevated (host) exec access:
 - `enabled`: allow elevated mode (default true)
@@ -2194,8 +2194,8 @@ For package installs, ensure network egress, a writable root FS, and a root user
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.clawdbot/sandboxes",
         docker: {
-          image: "clawdbot-sandbox:bookworm-slim",
-          containerPrefix: "clawdbot-sbx-",
+          image: "moltbot-sandbox:bookworm-slim",
+          containerPrefix: "moltbot-sbx-",
           workdir: "/workspace",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
@@ -2214,15 +2214,15 @@ For package installs, ensure network egress, a writable root FS, and a root user
             nproc: 256
           },
           seccompProfile: "/path/to/seccomp.json",
-          apparmorProfile: "clawdbot-sandbox",
+          apparmorProfile: "moltbot-sandbox",
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
           binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"]
         },
         browser: {
           enabled: false,
-          image: "clawdbot-sandbox-browser:bookworm-slim",
-          containerPrefix: "clawdbot-sbx-browser-",
+          image: "moltbot-sandbox-browser:bookworm-slim",
+          containerPrefix: "moltbot-sbx-browser-",
           cdpPort: 9222,
           vncPort: 5900,
           noVncPort: 6080,
@@ -2289,13 +2289,13 @@ Defaults: all allowlists are unset (no restriction). `allowHostControl` defaults
 
 ### `models` (custom providers + base URLs)
 
-Clawdbot uses the **pi-coding-agent** model catalog. You can add custom providers
+Moltbot uses the **pi-coding-agent** model catalog. You can add custom providers
 (LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
 `~/.clawdbot/agents/<agentId>/agent/models.json` or by defining the same schema inside your
-Clawdbot config under `models.providers`.
+Moltbot config under `models.providers`.
 Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
-When `models.providers` is present, Clawdbot writes/merges a `models.json` into
+When `models.providers` is present, Moltbot writes/merges a `models.json` into
 `~/.clawdbot/agents/<agentId>/agent/` on startup:
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
@@ -2338,14 +2338,14 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 
 ### OpenCode Zen (multi-model proxy)
 
-OpenCode Zen is a multi-model gateway with per-model endpoints. Clawdbot uses
+OpenCode Zen is a multi-model gateway with per-model endpoints. Moltbot uses
 the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
 `OPENCODE_ZEN_API_KEY`) from https://opencode.ai/auth.
 
 Notes:
 - Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-5`).
 - If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
-- Shortcut: `clawdbot onboard --auth-choice opencode-zen`.
+- Shortcut: `moltbot onboard --auth-choice opencode-zen`.
 
 ```json5
 {
@@ -2363,7 +2363,7 @@ Notes:
 Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
 in your environment and reference the model by provider/model.
 
-Shortcut: `clawdbot onboard --auth-choice zai-api-key`.
+Shortcut: `moltbot onboard --auth-choice zai-api-key`.
 
 ```json5
 {
@@ -2425,7 +2425,7 @@ Use Moonshot's OpenAI-compatible endpoint:
 ```
 
 Notes:
-- Set `MOONSHOT_API_KEY` in the environment or use `clawdbot onboard --auth-choice moonshot-api-key`.
+- Set `MOONSHOT_API_KEY` in the environment or use `moltbot onboard --auth-choice moonshot-api-key`.
 - Model ref: `moonshot/kimi-k2-0905-preview`.
 - Use `https://api.moonshot.cn/v1` if you need the China endpoint.
 
@@ -2469,7 +2469,7 @@ Use Kimi Code's dedicated OpenAI-compatible endpoint (separate from Moonshot):
 ```
 
 Notes:
-- Set `KIMICODE_API_KEY` in the environment or use `clawdbot onboard --auth-choice kimi-code-api-key`.
+- Set `KIMICODE_API_KEY` in the environment or use `moltbot onboard --auth-choice kimi-code-api-key`.
 - Model ref: `kimi-code/kimi-for-coding`.
 
 ### Synthetic (Anthropic-compatible)
@@ -2510,7 +2510,7 @@ Use Synthetic's Anthropic-compatible endpoint:
 ```
 
 Notes:
-- Set `SYNTHETIC_API_KEY` or use `clawdbot onboard --auth-choice synthetic-api-key`.
+- Set `SYNTHETIC_API_KEY` or use `moltbot onboard --auth-choice synthetic-api-key`.
 - Model ref: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`.
 - Base URL should omit `/v1` because the Anthropic client appends it.
 
@@ -2557,7 +2557,7 @@ Use MiniMax M2.1 directly without LM Studio:
 ```
 
 Notes:
-- Set `MINIMAX_API_KEY` environment variable or use `clawdbot onboard --auth-choice minimax-api`.
+- Set `MINIMAX_API_KEY` environment variable or use `moltbot onboard --auth-choice minimax-api`.
 - Available model: `MiniMax-M2.1` (default).
 - Update pricing in `models.json` if you need exact cost tracking.
 
@@ -2664,7 +2664,7 @@ Fields:
   - `atHour`: local hour (0-23) for the daily reset boundary.
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
 - `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
-  - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, Clawdbot stays in idle-only mode for backward compatibility.
+  - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, Moltbot stays in idle-only mode for backward compatibility.
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
@@ -2759,7 +2759,7 @@ Example:
 
 ### `browser` (clawd-managed browser)
 
-Clawdbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control service.
+Moltbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control service.
 Profiles can point at a **remote** Chromium-based browser via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
@@ -2772,7 +2772,7 @@ Defaults:
 - control service: loopback only (port derived from `gateway.port`, default `18791`)
 - CDP URL: `http://127.0.0.1:18792` (control service + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
-- Note: the control server is started by the running gateway (Clawdbot.app menubar, or `clawdbot gateway`).
+- Note: the control server is started by the running gateway (Moltbot.app menubar, or `moltbot gateway`).
 - Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 
 ```json5
@@ -2810,7 +2810,7 @@ If unset, clients fall back to a muted light-blue.
     // Optional: Control UI assistant identity override.
     // If unset, the Control UI uses the active agent identity (config or IDENTITY.md).
     assistant: {
-      name: "Clawdbot",
+      name: "Moltbot",
       avatar: "CB" // emoji, short text, or image URL/data URI
     }
   }
@@ -2832,7 +2832,7 @@ Defaults:
     mode: "local", // or "remote"
     port: 18789, // WS + HTTP multiplex
     bind: "loopback",
-    // controlUi: { enabled: true, basePath: "/clawdbot" }
+    // controlUi: { enabled: true, basePath: "/moltbot" }
     // auth: { mode: "token", token: "your-token" } // token gates WS + Control UI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
   }
@@ -2841,7 +2841,7 @@ Defaults:
 
 Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
-- Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
+- Examples: `"/ui"`, `"/moltbot"`, `"/apps/moltbot"`.
 - Default: root (`/`) (unchanged).
 - `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
   device identity is omitted (typically over HTTP). Default: `false`. Prefer HTTPS
@@ -2857,11 +2857,11 @@ Related docs:
 
 Trusted proxies:
 - `gateway.trustedProxies`: list of reverse proxy IPs that terminate TLS in front of the Gateway.
-- When a connection comes from one of these IPs, Clawdbot uses `x-forwarded-for` (or `x-real-ip`) to determine the client IP for local pairing checks and HTTP auth/local checks.
+- When a connection comes from one of these IPs, Moltbot uses `x-forwarded-for` (or `x-real-ip`) to determine the client IP for local pairing checks and HTTP auth/local checks.
 - Only list proxies you fully control, and ensure they **overwrite** incoming `x-forwarded-for`.
 
 Notes:
-- `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
+- `moltbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
@@ -2876,7 +2876,7 @@ Auth and Tailscale:
 - `gateway.auth.password` can be set here, or via `CLAWDBOT_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` allows Tailscale Serve identity headers
   (`tailscale-user-login`) to satisfy auth when the request arrives on loopback
-  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. Clawdbot
+  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. Moltbot
   verifies the identity by resolving the `x-forwarded-for` address via
   `tailscale whois` before accepting it. When `true`, Serve requests do not need
   a token/password; set `false` to require explicit credentials. Defaults to
@@ -2892,7 +2892,7 @@ Remote client defaults (CLI):
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
 
 macOS app behavior:
-- Clawdbot.app watches `~/.clawdbot/clawdbot.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
+- Moltbot.app watches `~/.clawdbot/moltbot.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
 - If `gateway.mode` is unset but `gateway.remote.url` is set, the macOS app treats it as remote mode.
 - When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` + `gateway.remote.transport` in remote mode) back to the config file.
 
@@ -2926,7 +2926,7 @@ Direct transport example (macOS app):
 
 ### `gateway.reload` (Config hot reload)
 
-The Gateway watches `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`) and applies changes automatically.
+The Gateway watches `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`) and applies changes automatically.
 
 Modes:
 - `hybrid` (default): hot-apply safe changes; restart the Gateway for critical changes.
@@ -2948,7 +2948,7 @@ Modes:
 #### Hot reload matrix (files + impact)
 
 Files watched:
-- `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`)
+- `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`)
 
 Hot-applied (no full gateway restart):
 - `hooks` (webhook auth/path/mappings) + `hooks.gmail` (Gmail watcher restarted)
@@ -2976,8 +2976,8 @@ To run multiple gateways on one host (for redundancy or a rescue bot), isolate p
 - `gateway.port` (unique per instance)
 
 Convenience flags (CLI):
-- `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
-- `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
+- `moltbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
+- `moltbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
 See [Gateway runbook](/gateway) for the derived port mapping (gateway/browser/canvas).
 See [Multiple gateways](/gateway/multiple-gateways) for browser/CDP port isolation details.
@@ -2986,7 +2986,7 @@ Example:
 ```bash
 CLAWDBOT_CONFIG_PATH=~/.clawdbot/a.json \
 CLAWDBOT_STATE_DIR=~/.clawdbot-a \
-clawdbot gateway --port 19001
+moltbot gateway --port 19001
 ```
 
 ### `hooks` (Gateway webhooks)
@@ -3026,7 +3026,7 @@ Defaults:
 
 Requests must include the hook token:
 - `Authorization: Bearer <token>` **or**
-- `x-clawdbot-token: <token>` **or**
+- `x-moltbot-token: <token>` **or**
 - `?token=<token>`
 
 Endpoints:
@@ -3045,13 +3045,13 @@ Mapping notes:
 - If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
 
-Gmail helper config (used by `clawdbot webhooks gmail setup` / `run`):
+Gmail helper config (used by `moltbot webhooks gmail setup` / `run`):
 
 ```json5
 {
   hooks: {
     gmail: {
-      account: "clawdbot@gmail.com",
+      account: "moltbot@gmail.com",
       topic: "projects/<project-id>/topics/gog-gmail-watch",
       subscription: "gog-gmail-watch-push",
       pushToken: "shared-push-token",
@@ -3087,7 +3087,7 @@ Gateway auto-start:
 - Avoid running a separate `gog gmail watch serve` alongside the Gateway; it will
   fail with `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
-Note: when `tailscale.mode` is on, Clawdbot defaults `serve.path` to `/` so
+Note: when `tailscale.mode` is on, Moltbot defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).
 If you need the backend to receive the prefixed path, set
 `hooks.gmail.tailscale.target` to a full URL (and align `serve.path`).
@@ -3103,9 +3103,9 @@ The server listens on the **gateway bind host** (LAN or Tailnet) so nodes can re
 The server:
 - serves files under `canvasHost.root`
 - injects a tiny live-reload client into served HTML
-- watches the directory and broadcasts reloads over a WebSocket endpoint at `/__clawdbot/ws`
+- watches the directory and broadcasts reloads over a WebSocket endpoint at `/__moltbot/ws`
 - auto-creates a starter `index.html` when the directory is empty (so you see something immediately)
-- also serves A2UI at `/__clawdbot__/a2ui/` and is advertised to nodes as `canvasHostUrl`
+- also serves A2UI at `/__moltbot__/a2ui/` and is advertised to nodes as `canvasHostUrl`
   (always used by nodes for Canvas/A2UI)
 
 Disable live reload (and file watching) if the directory is large or you hit `EMFILE`:
@@ -3175,7 +3175,7 @@ Auto-generated certs require `openssl` on PATH; if generation fails, the bridge 
 
 ### `discovery.mdns` (Bonjour / mDNS broadcast mode)
 
-Controls LAN mDNS discovery broadcasts (`_clawdbot-gw._tcp`).
+Controls LAN mDNS discovery broadcasts (`_moltbot-gw._tcp`).
 
 - `minimal` (default): omit `cliPath` + `sshPort` from TXT records
 - `full`: include `cliPath` + `sshPort` in TXT records
@@ -3189,16 +3189,16 @@ Controls LAN mDNS discovery broadcasts (`_clawdbot-gw._tcp`).
 
 ### `discovery.wideArea` (Wide-Area Bonjour / unicast DNS‑SD)
 
-When enabled, the Gateway writes a unicast DNS-SD zone for `_clawdbot-bridge._tcp` under `~/.clawdbot/dns/` using the standard discovery domain `clawdbot.internal.`
+When enabled, the Gateway writes a unicast DNS-SD zone for `_moltbot-bridge._tcp` under `~/.clawdbot/dns/` using the standard discovery domain `moltbot.internal.`
 
 To make iOS/Android discover across networks (Vienna ⇄ London), pair this with:
-- a DNS server on the gateway host serving `clawdbot.internal.` (CoreDNS is recommended)
-- Tailscale **split DNS** so clients resolve `clawdbot.internal` via that server
+- a DNS server on the gateway host serving `moltbot.internal.` (CoreDNS is recommended)
+- Tailscale **split DNS** so clients resolve `moltbot.internal` via that server
 
 One-time setup helper (gateway host):
 
 ```bash
-clawdbot dns setup --apply
+moltbot dns setup --apply
 ```
 
 ```json5

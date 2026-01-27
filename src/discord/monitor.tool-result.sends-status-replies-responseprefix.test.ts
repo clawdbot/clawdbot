@@ -35,7 +35,7 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
   return {
     ...actual,
-    resolveStorePath: vi.fn(() => "/tmp/clawdbot-sessions.json"),
+    resolveStorePath: vi.fn(() => "/tmp/moltbot-sessions.json"),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     resolveSessionKey: vi.fn(),
   };
@@ -63,7 +63,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       messages: { responsePrefix: "PFX" },
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
@@ -132,7 +132,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
@@ -211,7 +211,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
@@ -301,7 +301,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       channels: {
         discord: {
           dm: { enabled: true, policy: "open" },
@@ -392,7 +392,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       channels: {
         discord: {
           dm: { enabled: true, policy: "open" },
@@ -476,7 +476,7 @@ describe("discord tool result dispatch", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       channels: {
         discord: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
       },

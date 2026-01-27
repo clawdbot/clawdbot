@@ -3,11 +3,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { LEGACY_CANVAS_HANDLER_NAME } from "../compat/legacy-names.js";
 import { detectMime } from "../media/mime.js";
 
-export const A2UI_PATH = "/__clawdbot__/a2ui";
-export const CANVAS_HOST_PATH = "/__clawdbot__/canvas";
-export const CANVAS_WS_PATH = "/__clawdbot/ws";
+export const A2UI_PATH = "/__moltbot__/a2ui";
+export const CANVAS_HOST_PATH = "/__moltbot__/canvas";
+export const CANVAS_WS_PATH = "/__moltbot/ws";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
@@ -91,27 +92,30 @@ async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
 }
 
 export function injectCanvasLiveReload(html: string): string {
+  const legacyHandlerName = LEGACY_CANVAS_HANDLER_NAME;
   const snippet = `
 <script>
 (() => {
   // Cross-platform action bridge helper.
   // Works on:
-  // - iOS: window.webkit.messageHandlers.clawdbotCanvasA2UIAction.postMessage(...)
-  // - Android: window.clawdbotCanvasA2UIAction.postMessage(...)
-  const actionHandlerName = "clawdbotCanvasA2UIAction";
+  // - iOS: window.webkit.messageHandlers.(current|legacy)CanvasA2UIAction.postMessage(...)
+  // - Android: window.(current|legacy)CanvasA2UIAction.postMessage(...)
+  const handlerNames = ["moltbotCanvasA2UIAction", "${legacyHandlerName}"];
   function postToNode(payload) {
     try {
       const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
-      const iosHandler = globalThis.webkit?.messageHandlers?.[actionHandlerName];
-      if (iosHandler && typeof iosHandler.postMessage === "function") {
-        iosHandler.postMessage(raw);
-        return true;
-      }
-      const androidHandler = globalThis[actionHandlerName];
-      if (androidHandler && typeof androidHandler.postMessage === "function") {
-        // Important: call as a method on the interface object (binding matters on Android WebView).
-        androidHandler.postMessage(raw);
-        return true;
+      for (const name of handlerNames) {
+        const iosHandler = globalThis.webkit?.messageHandlers?.[name];
+        if (iosHandler && typeof iosHandler.postMessage === "function") {
+          iosHandler.postMessage(raw);
+          return true;
+        }
+        const androidHandler = globalThis[name];
+        if (androidHandler && typeof androidHandler.postMessage === "function") {
+          // Important: call as a method on the interface object (binding matters on Android WebView).
+          androidHandler.postMessage(raw);
+          return true;
+        }
       }
     } catch {}
     return false;
@@ -123,9 +127,11 @@ export function injectCanvasLiveReload(html: string): string {
     const action = { ...userAction, id };
     return postToNode({ userAction: action });
   }
-  globalThis.Clawdbot = globalThis.Clawdbot ?? {};
-  globalThis.Clawdbot.postMessage = postToNode;
-  globalThis.Clawdbot.sendUserAction = sendUserAction;
+  globalThis.Moltbot = globalThis.Moltbot ?? {};
+  globalThis.Moltbot.postMessage = postToNode;
+  globalThis.Moltbot.sendUserAction = sendUserAction;
+  globalThis.moltbotPostMessage = postToNode;
+  globalThis.moltbotSendUserAction = sendUserAction;
   globalThis.clawdbotPostMessage = postToNode;
   globalThis.clawdbotSendUserAction = sendUserAction;
 

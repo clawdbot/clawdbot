@@ -17,7 +17,7 @@
     <script>
       (() => {
         try {
-          const stored = localStorage.getItem("clawdbot:theme");
+          const stored = localStorage.getItem("moltbot:theme");
           if (stored === "light" || stored === "dark") document.documentElement.dataset.theme = stored;
         } catch {
           // ignore
@@ -35,7 +35,7 @@
     <header class="shell">
       <div class="shell__frame" role="banner">
         <div class="shell__titlebar">
-          <div class="brand" aria-label="Clawdbot docs terminal">
+          <div class="brand" aria-label="Moltbot docs terminal">
             <img
               class="brand__logo"
               src="{{ "/assets/pixel-lobster.svg" | relative_url }}"
@@ -45,17 +45,17 @@
               decoding="async"
             />
             <div class="brand__text">
-              <div class="brand__name">Clawdbot</div>
+              <div class="brand__name">Moltbot</div>
               <div class="brand__hint">docs // lobster terminal</div>
             </div>
           </div>
 
           <div class="titlebar__actions">
-            <a class="titlebar__cta" href="https://github.com/clawdbot/clawdbot">
+            <a class="titlebar__cta" href="https://github.com/moltbot/moltbot">
               <span class="titlebar__cta-label">GitHub</span>
               <span class="titlebar__cta-meta">repo</span>
             </a>
-            <a class="titlebar__cta titlebar__cta--accent" href="https://github.com/clawdbot/clawdbot/releases/latest">
+            <a class="titlebar__cta titlebar__cta--accent" href="https://github.com/moltbot/moltbot/releases/latest">
               <span class="titlebar__cta-label">Download</span>
               <span class="titlebar__cta-meta">latest</span>
             </a>
@@ -90,7 +90,7 @@
     <main id="content" class="content" role="main">
       <div class="terminal">
         <div class="terminal__prompt" aria-hidden="true">
-          <span class="prompt__user">clawd</span>@<span class="prompt__host">clawdbot</span>:<span class="prompt__path">~/docs</span>$<span class="prompt__cmd">
+          <span class="prompt__user">clawd</span>@<span class="prompt__host">moltbot</span>:<span class="prompt__path">~/docs</span>$<span class="prompt__cmd">
             {% if page.url == "/" %}cat index.md{% else %}less {{ page.path }}{% endif %}
           </span>
         </div>
@@ -116,11 +116,11 @@
 
         <footer class="terminal__footer" role="contentinfo">
           <div class="footer__line">
-            <span class="footer__sig">clawdbot.ai</span>
+            <span class="footer__sig">moltbot.ai</span>
             <span class="footer__sep">·</span>
-            <a href="https://github.com/clawdbot/clawdbot">source</a>
+            <a href="https://github.com/moltbot/moltbot">source</a>
             <span class="footer__sep">·</span>
-            <a href="https://github.com/clawdbot/clawdbot/releases">releases</a>
+            <a href="https://github.com/moltbot/moltbot/releases">releases</a>
           </div>
           <div class="footer__hint" aria-hidden="true">
             tip: press <kbd>F2</kbd> (Mac: <kbd>fn</kbd>+<kbd>F2</kbd>) to flip

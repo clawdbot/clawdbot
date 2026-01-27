@@ -19,7 +19,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.clawdbot.android.ui.RootScreen
-import com.clawdbot.android.ui.ClawdbotTheme
+import com.clawdbot.android.ui.MoltbotTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
     }
 
     setContent {
-      ClawdbotTheme {
+      MoltbotTheme {
         Surface(modifier = Modifier) {
           RootScreen(viewModel = viewModel)
         }

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
@@ -60,11 +60,11 @@ export type HookStatusReport = {
 };
 
 function resolveHookKey(entry: HookEntry): string {
-  return entry.clawdbot?.hookKey ?? entry.hook.name;
+  return entry.metadata?.hookKey ?? entry.hook.name;
 }
 
 function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
-  const install = entry.clawdbot?.install ?? [];
+  const install = entry.metadata?.install ?? [];
   if (install.length === 0) return [];
 
   // For hooks, we just list all install options
@@ -75,7 +75,7 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
     if (!label) {
       if (spec.kind === "bundled") {
-        label = "Bundled with Clawdbot";
+        label = "Bundled with Moltbot";
       } else if (spec.kind === "npm" && spec.package) {
         label = `Install ${spec.package} (npm)`;
       } else if (spec.kind === "git" && spec.repository) {
@@ -91,28 +91,28 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
 function buildHookStatus(
   entry: HookEntry,
-  config?: ClawdbotConfig,
+  config?: MoltbotConfig,
   eligibility?: HookEligibilityContext,
 ): HookStatusEntry {
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const managedByPlugin = entry.hook.source === "clawdbot-plugin";
+  const managedByPlugin = entry.hook.source === "moltbot-plugin";
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
-  const always = entry.clawdbot?.always === true;
-  const emoji = entry.clawdbot?.emoji ?? entry.frontmatter.emoji;
+  const always = entry.metadata?.always === true;
+  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
   const homepageRaw =
-    entry.clawdbot?.homepage ??
+    entry.metadata?.homepage ??
     entry.frontmatter.homepage ??
     entry.frontmatter.website ??
     entry.frontmatter.url;
   const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
-  const events = entry.clawdbot?.events ?? [];
+  const events = entry.metadata?.events ?? [];
 
-  const requiredBins = entry.clawdbot?.requires?.bins ?? [];
-  const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
-  const requiredEnv = entry.clawdbot?.requires?.env ?? [];
-  const requiredConfig = entry.clawdbot?.requires?.config ?? [];
-  const requiredOs = entry.clawdbot?.os ?? [];
+  const requiredBins = entry.metadata?.requires?.bins ?? [];
+  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
+  const requiredEnv = entry.metadata?.requires?.env ?? [];
+  const requiredConfig = entry.metadata?.requires?.config ?? [];
+  const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
     if (hasBinary(bin)) return false;
@@ -202,7 +202,7 @@ function buildHookStatus(
 export function buildWorkspaceHookStatus(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedHooksDir?: string;
     entries?: HookEntry[];
     eligibility?: HookEligibilityContext;

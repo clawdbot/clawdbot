@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { LEGACY_MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 import { CronPayloadSchema } from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
@@ -29,7 +30,7 @@ function extractCronChannels(schema: SchemaLike): string[] {
 
 const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
 
-const SWIFT_FILES = ["apps/macos/Sources/Clawdbot/GatewayConnection.swift"];
+const SWIFT_FILES = [`${LEGACY_MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
 
 describe("cron protocol conformance", () => {
   it("ui + swift include all cron providers from gateway schema", async () => {
@@ -60,10 +61,8 @@ describe("cron protocol conformance", () => {
     expect(uiTypes.includes("jobs:")).toBe(true);
     expect(uiTypes.includes("jobCount")).toBe(false);
 
-    const swift = await fs.readFile(
-      path.join(cwd, "apps/macos/Sources/Clawdbot/GatewayConnection.swift"),
-      "utf-8",
-    );
+    const swiftPath = path.join(cwd, SWIFT_FILES[0]);
+    const swift = await fs.readFile(swiftPath, "utf-8");
     expect(swift.includes("struct CronSchedulerStatus")).toBe(true);
     expect(swift.includes("let jobs:")).toBe(true);
   });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
@@ -22,7 +22,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from empty SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -45,7 +45,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from whitespace SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -68,7 +68,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back to From when SenderId and SenderE164 are whitespace", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+999"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -91,7 +91,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from un-normalizable SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -114,7 +114,7 @@ describe("resolveCommandAuthorization", () => {
   it("prefers SenderE164 when SenderId does not match allowFrom", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+41796666864"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -214,12 +214,12 @@ describe("control command parsing", () => {
   it("ignores telegram commands addressed to other bots", () => {
     expect(
       hasControlCommand("/help@otherbot", undefined, {
-        botUsername: "clawdbot",
+        botUsername: "moltbot",
       }),
     ).toBe(false);
     expect(
-      hasControlCommand("/help@clawdbot", undefined, {
-        botUsername: "clawdbot",
+      hasControlCommand("/help@moltbot", undefined, {
+        botUsername: "moltbot",
       }),
     ).toBe(true);
   });

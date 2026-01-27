@@ -51,9 +51,9 @@ class GatewayDiscovery(
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
   private val dns = DnsResolver.getInstance()
-  private val serviceType = "_clawdbot-gw._tcp."
-  private val wideAreaDomain = "clawdbot.internal."
-  private val logTag = "Clawdbot/GatewayDiscovery"
+  private val serviceType = "_moltbot-gw._tcp."
+  private val wideAreaDomain = "moltbot.internal."
+  private val logTag = "Moltbot/GatewayDiscovery"
 
   private val localById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val unicastById = ConcurrentHashMap<String, GatewayEndpoint>()

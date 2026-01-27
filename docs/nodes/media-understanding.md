@@ -6,7 +6,7 @@ read_when:
 ---
 # Media Understanding (Inbound) — 2026-01-17
 
-Clawdbot can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
+Moltbot can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 
 ## Goals
 - Optional: pre‑digest inbound media into short text for faster routing + better command parsing.
@@ -106,12 +106,12 @@ Rules:
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
-- If `<capability>.enabled: true` but no models are configured, Clawdbot tries the
+- If `<capability>.enabled: true` but no models are configured, Moltbot tries the
   **active reply model** when its provider supports the capability.
 
 ### Auto-detect media understanding (default)
 If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’t
-configured models, Clawdbot auto-detects in this order and **stops at the first
+configured models, Moltbot auto-detects in this order and **stops at the first
 working option**:
 
 1) **Local CLIs** (audio only; if installed)
@@ -140,7 +140,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 
 ## Capabilities (optional)
 If you set `capabilities`, the entry only runs for those media types. For shared
-lists, Clawdbot can infer defaults:
+lists, Moltbot can infer defaults:
 - `openai`, `anthropic`, `minimax`: **image**
 - `google` (Gemini API): **image + audio + video**
 - `groq`: **audio**
@@ -149,7 +149,7 @@ lists, Clawdbot can infer defaults:
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
 
-## Provider support matrix (Clawdbot integrations)
+## Provider support matrix (Moltbot integrations)
 | Capability | Provider integration | Notes |
 |------------|----------------------|-------|
 | Image | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works. |

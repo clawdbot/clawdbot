@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
@@ -27,7 +27,7 @@ export type EmbeddingProviderResult = {
 };
 
 export type EmbeddingProviderOptions = {
-  config: ClawdbotConfig;
+  config: MoltbotConfig;
   agentDir?: string;
   provider: "openai" | "local" | "gemini" | "auto";
   remote?: {
@@ -216,7 +216,7 @@ function formatLocalSetupError(err: unknown): string {
     "To enable local embeddings:",
     "1) Use Node 22 LTS (recommended for installs/updates)",
     missing
-      ? "2) Reinstall Clawdbot (this should install node-llama-cpp): npm i -g clawdbot@latest"
+      ? "2) Reinstall Moltbot (this should install node-llama-cpp): npm i -g moltbot@latest"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     'Or set agents.defaults.memorySearch.provider = "openai" (remote).',

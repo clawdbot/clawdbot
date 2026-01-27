@@ -7,7 +7,7 @@ import { setLastActiveSessionKey } from "./app-settings";
 import { normalizeBasePath } from "./navigation";
 import type { GatewayHelloOk } from "./gateway";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
-import type { ClawdbotApp } from "./app";
+import type { MoltbotApp } from "./app";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types";
 
 type ChatHost = {
@@ -44,7 +44,7 @@ export function isChatStopCommand(text: string) {
 export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) return;
   host.chatMessage = "";
-  await abortChatRun(host as unknown as ClawdbotApp);
+  await abortChatRun(host as unknown as MoltbotApp);
 }
 
 function enqueueChatMessage(host: ChatHost, text: string, attachments?: ChatAttachment[]) {
@@ -74,7 +74,7 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const ok = await sendChatMessage(host as unknown as ClawdbotApp, message, opts?.attachments);
+  const ok = await sendChatMessage(host as unknown as MoltbotApp, message, opts?.attachments);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
@@ -154,8 +154,8 @@ export async function handleSendChat(
 
 export async function refreshChat(host: ChatHost) {
   await Promise.all([
-    loadChatHistory(host as unknown as ClawdbotApp),
-    loadSessions(host as unknown as ClawdbotApp),
+    loadChatHistory(host as unknown as MoltbotApp),
+    loadSessions(host as unknown as MoltbotApp),
     refreshChatAvatar(host),
   ]);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);

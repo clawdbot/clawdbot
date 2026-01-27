@@ -1,9 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { LEGACY_MANIFEST_KEY, LEGACY_PLUGIN_MANIFEST_FILENAME } from "../compat/legacy-names.js";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
 
-export const PLUGIN_MANIFEST_FILENAME = "clawdbot.plugin.json";
+export const PLUGIN_MANIFEST_FILENAME = "moltbot.plugin.json";
+export const PLUGIN_MANIFEST_FILENAMES = [
+  PLUGIN_MANIFEST_FILENAME,
+  LEGACY_PLUGIN_MANIFEST_FILENAME,
+] as const;
 
 export type PluginManifest = {
   id: string;
@@ -32,6 +37,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function resolvePluginManifestPath(rootDir: string): string {
+  for (const filename of PLUGIN_MANIFEST_FILENAMES) {
+    const candidate = path.join(rootDir, filename);
+    if (fs.existsSync(candidate)) return candidate;
+  }
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
@@ -93,7 +102,7 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   };
 }
 
-// package.json "clawdbot" metadata (used for onboarding/catalog)
+// package.json "moltbot" metadata (used for onboarding/catalog)
 export type PluginPackageChannel = {
   id?: string;
   label?: string;
@@ -121,7 +130,7 @@ export type PluginPackageInstall = {
   defaultChoice?: "npm" | "local";
 };
 
-export type ClawdbotPackageManifest = {
+export type MoltbotPackageManifest = {
   extensions?: string[];
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
@@ -131,5 +140,13 @@ export type PackageManifest = {
   name?: string;
   version?: string;
   description?: string;
-  clawdbot?: ClawdbotPackageManifest;
+  moltbot?: MoltbotPackageManifest;
+  [LEGACY_MANIFEST_KEY]?: MoltbotPackageManifest;
 };
+
+export function getPackageManifestMetadata(
+  manifest: PackageManifest | undefined,
+): MoltbotPackageManifest | undefined {
+  if (!manifest) return undefined;
+  return manifest.moltbot ?? manifest[LEGACY_MANIFEST_KEY];
+}

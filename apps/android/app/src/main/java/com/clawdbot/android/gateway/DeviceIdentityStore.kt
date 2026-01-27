@@ -23,7 +23,7 @@ data class DeviceIdentity(
 
 class DeviceIdentityStore(context: Context) {
   private val json = Json { ignoreUnknownKeys = true }
-  private val identityFile = File(context.filesDir, "clawdbot/identity/device.json")
+  private val identityFile = File(context.filesDir, "moltbot/identity/device.json")
 
   fun resetIdentity() {
     try {

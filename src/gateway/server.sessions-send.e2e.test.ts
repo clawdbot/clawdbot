@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createClawdbotTools } from "../agents/clawdbot-tools.js";
+import { createMoltbotTools } from "../agents/moltbot-tools.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
@@ -86,7 +86,7 @@ describe("sessions_send gateway loopback", () => {
       });
     });
 
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 
     const result = await tool.execute("call-loopback", {
@@ -151,7 +151,7 @@ describe("sessions_send label lookup", () => {
       timeoutMs: 5000,
     });
 
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 
     // Send using label instead of sessionKey
@@ -171,7 +171,7 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when label not found", { timeout: 60_000 }, async () => {
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 
     const result = await tool.execute("call-missing-label", {
@@ -185,7 +185,7 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
-    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createMoltbotTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) throw new Error("missing sessions_send tool");
 
     const result = await tool.execute("call-no-key", {

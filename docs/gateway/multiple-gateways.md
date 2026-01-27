@@ -1,5 +1,5 @@
 ---
-summary: "Run multiple Clawdbot Gateways on one host (isolation, ports, and profiles)"
+summary: "Run multiple Moltbot Gateways on one host (isolation, ports, and profiles)"
 read_when:
   - Running more than one Gateway on the same machine
   - You need isolated config/state/ports per Gateway
@@ -23,18 +23,18 @@ Profiles auto-scope `CLAWDBOT_STATE_DIR` + `CLAWDBOT_CONFIG_PATH` and suffix ser
 
 ```bash
 # main
-clawdbot --profile main setup
-clawdbot --profile main gateway --port 18789
+moltbot --profile main setup
+moltbot --profile main gateway --port 18789
 
 # rescue
-clawdbot --profile rescue setup
-clawdbot --profile rescue gateway --port 19001
+moltbot --profile rescue setup
+moltbot --profile rescue gateway --port 19001
 ```
 
 Per-profile services:
 ```bash
-clawdbot --profile main gateway install
-clawdbot --profile rescue gateway install
+moltbot --profile main gateway install
+moltbot --profile rescue gateway install
 ```
 
 ## Rescue-bot guide
@@ -54,11 +54,11 @@ Port spacing: leave at least 20 ports between base ports so the derived browser/
 ```bash
 # Main bot (existing or fresh, without --profile param)
 # Runs on port 18789 + Chrome CDC/Canvas/... Ports 
-clawdbot onboard
-clawdbot gateway install
+moltbot onboard
+moltbot gateway install
 
 # Rescue bot (isolated profile + ports)
-clawdbot --profile rescue onboard
+moltbot --profile rescue onboard
 # Notes: 
 # - workspace name will be postfixed with -rescue per default
 # - Port should be at least 18789 + 20 Ports, 
@@ -66,7 +66,7 @@ clawdbot --profile rescue onboard
 # - rest of the onboarding is the same as normal
 
 # To install the service (if not happened automatically during onboarding)
-clawdbot --profile rescue gateway install
+moltbot --profile rescue gateway install
 ```
 
 ## Port mapping (derived)
@@ -91,17 +91,17 @@ If you override any of these in config or env, you must keep them unique per ins
 ```bash
 CLAWDBOT_CONFIG_PATH=~/.clawdbot/main.json \
 CLAWDBOT_STATE_DIR=~/.clawdbot-main \
-clawdbot gateway --port 18789
+moltbot gateway --port 18789
 
 CLAWDBOT_CONFIG_PATH=~/.clawdbot/rescue.json \
 CLAWDBOT_STATE_DIR=~/.clawdbot-rescue \
-clawdbot gateway --port 19001
+moltbot gateway --port 19001
 ```
 
 ## Quick checks
 
 ```bash
-clawdbot --profile main status
-clawdbot --profile rescue status
-clawdbot --profile rescue browser status
+moltbot --profile main status
+moltbot --profile rescue status
+moltbot --profile rescue browser status
 ```

@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Clawdbot Auth Widget for Termux
+# Moltbot Auth Widget for Termux
 # Place in ~/.shortcuts/ for Termux:Widget
 #
 # This widget checks auth status and helps with re-auth if needed.
@@ -9,15 +9,15 @@
 SERVER="${CLAWDBOT_SERVER:-l36}"
 
 # Check auth status
-termux-toast "Checking Clawdbot auth..."
+termux-toast "Checking Moltbot auth..."
 
-STATUS=$(ssh "$SERVER" '$HOME/clawdbot/scripts/claude-auth-status.sh simple' 2>&1)
+STATUS=$(ssh "$SERVER" '$HOME/moltbot/scripts/claude-auth-status.sh simple' 2>&1)
 EXIT_CODE=$?
 
 case "$STATUS" in
     OK)
         # Get remaining time
-        DETAILS=$(ssh "$SERVER" '$HOME/clawdbot/scripts/claude-auth-status.sh json' 2>&1)
+        DETAILS=$(ssh "$SERVER" '$HOME/moltbot/scripts/claude-auth-status.sh json' 2>&1)
         HOURS=$(echo "$DETAILS" | jq -r '.claude_code.status' | grep -oP '\d+(?=h)' || echo "?")
 
         termux-vibrate -d 50
@@ -43,7 +43,7 @@ case "$STATUS" in
 
                 # Open terminal to server
                 am start -n com.termux/com.termux.app.TermuxActivity -a android.intent.action.MAIN
-                termux-toast "Run: ssh $SERVER '$HOME/clawdbot/scripts/mobile-reauth.sh'"
+                termux-toast "Run: ssh $SERVER '$HOME/moltbot/scripts/mobile-reauth.sh'"
                 ;;
             *)
                 termux-toast "Reminder: Auth expires soon"
@@ -66,10 +66,10 @@ case "$STATUS" in
 2. Return here and tap OK to SSH"
 
                 am start -n com.termux/com.termux.app.TermuxActivity -a android.intent.action.MAIN
-                termux-toast "Run: ssh $SERVER '$HOME/clawdbot/scripts/mobile-reauth.sh'"
+                termux-toast "Run: ssh $SERVER '$HOME/moltbot/scripts/mobile-reauth.sh'"
                 ;;
             *)
-                termux-toast "Warning: Clawdbot won't work until re-auth"
+                termux-toast "Warning: Moltbot won't work until re-auth"
                 ;;
         esac
         ;;

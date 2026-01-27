@@ -84,7 +84,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
         defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("clawdbot gateway install --force")}`,
+          `Reinstall with: ${formatCliCommand("moltbot gateway install --force")}`,
         );
       }
       return;

@@ -1,11 +1,11 @@
 import type { CliDeps } from "../../../cli/deps.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 import { runBootOnce } from "../../../gateway/boot.js";
 import type { HookHandler } from "../../hooks.js";
 
 type BootHookContext = {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   workspaceDir?: string;
   deps?: CliDeps;
 };

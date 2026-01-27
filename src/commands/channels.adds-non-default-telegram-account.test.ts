@@ -50,7 +50,7 @@ const runtime: RuntimeEnv = {
 };
 
 const baseSnapshot = {
-  path: "/tmp/clawdbot.json",
+  path: "/tmp/moltbot.json",
   exists: true,
   raw: "{}",
   parsed: {},
@@ -370,7 +370,7 @@ describe("channels command", () => {
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/Message Content Intent is disabled/i);
-    expect(lines.join("\n")).toMatch(/Run: clawdbot( --profile isolated)? doctor/);
+    expect(lines.join("\n")).toMatch(/Run: (?:moltbot|moltbot)( --profile isolated)? doctor/);
   });
 
   it("surfaces Discord permission audit issues in channels status output", () => {
@@ -425,12 +425,12 @@ describe("channels command", () => {
             accountId: "default",
             enabled: true,
             configured: true,
-            probe: { ok: true, bot: { username: "clawdbot_bot" } },
+            probe: { ok: true, bot: { username: "moltbot_bot" } },
           },
         ],
       },
     });
-    expect(lines.join("\n")).toMatch(/bot:@clawdbot_bot/);
+    expect(lines.join("\n")).toMatch(/bot:@moltbot_bot/);
   });
 
   it("surfaces Telegram group membership audit issues in channels status output", () => {

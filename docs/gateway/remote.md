@@ -34,7 +34,7 @@ This is ideal when your laptop sleeps often but you want the agent always-on.
 
 The laptop does **not** run the agent. It connects remotely:
 
-- Use the macOS app’s **Remote over SSH** mode (Settings → General → “Clawdbot runs”).
+- Use the macOS app’s **Remote over SSH** mode (Settings → General → “Moltbot runs”).
 - The app opens and manages the tunnel, so WebChat + health checks “just work.”
 
 Runbook: [macOS remote access](/platforms/mac/remote).
@@ -71,8 +71,8 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 ```
 
 With the tunnel up:
-- `clawdbot health` and `clawdbot status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
-- `clawdbot gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
+- `moltbot health` and `moltbot status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
+- `moltbot gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
 
 Note: replace `18789` with your configured `gateway.port` (or `--port`/`CLAWDBOT_GATEWAY_PORT`).
 

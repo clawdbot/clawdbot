@@ -16,7 +16,7 @@ export function resolveBundledHooksDir(): string | undefined {
   }
 
   // npm: resolve `<packageRoot>/dist/hooks/bundled` relative to this module (compiled hooks).
-  // This path works when installed via npm: node_modules/clawdbot/dist/hooks/bundled-dir.js
+  // This path works when installed via npm: node_modules/moltbot/dist/hooks/bundled-dir.js
   try {
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const distBundled = path.join(moduleDir, "bundled");

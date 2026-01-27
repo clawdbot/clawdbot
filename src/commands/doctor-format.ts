@@ -70,10 +70,10 @@ export function buildGatewayRuntimeHints(
     hints.push(
       `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
     );
-    hints.push(`Then reinstall: ${formatCliCommand("clawdbot gateway install", env)}`);
+    hints.push(`Then reinstall: ${formatCliCommand("moltbot gateway install", env)}`);
   }
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("clawdbot gateway install", env)}`);
+    hints.push(`Service not installed. Run: ${formatCliCommand("moltbot gateway install", env)}`);
     if (fileLog) hints.push(`File logs: ${fileLog}`);
     return hints;
   }

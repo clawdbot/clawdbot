@@ -21,55 +21,56 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-[Website](https://clawdbot.com) · [Docs](https://docs.clawd.bot) · [Getting Started](https://docs.clawd.bot/start/getting-started) · [Updating](https://docs.clawd.bot/install/updating) · [Showcase](https://docs.clawd.bot/start/showcase) · [FAQ](https://docs.clawd.bot/start/faq) · [Wizard](https://docs.clawd.bot/start/wizard) · [Nix](https://github.com/clawdbot/nix-clawdbot) · [Docker](https://docs.clawd.bot/install/docker) · [Discord](https://discord.gg/clawd)
+[Website](https://molt.bot) · [Docs](https://docs.molt.bot) · [Getting Started](https://docs.molt.bot/start/getting-started) · [Updating](https://docs.molt.bot/install/updating) · [Showcase](https://docs.molt.bot/start/showcase) · [FAQ](https://docs.molt.bot/start/faq) · [Wizard](https://docs.molt.bot/start/wizard) · [Nix](https://github.com/clawdbot/nix-clawdbot) · [Docker](https://docs.molt.bot/install/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
-New install? Start here: [Getting started](https://docs.clawd.bot/start/getting-started)
+New install? Start here: [Getting started](https://docs.molt.bot/start/getting-started)
 
 **Subscriptions (OAuth):**
 - **[Anthropic](https://www.anthropic.com/)** (Claude Pro/Max)
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
-Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.clawd.bot/start/onboarding).
+Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.molt.bot/start/onboarding).
 
 ## Models (selection + auth)
 
-- Models config + CLI: [Models](https://docs.clawd.bot/concepts/models)
-- Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.clawd.bot/concepts/model-failover)
+- Models config + CLI: [Models](https://docs.molt.bot/concepts/models)
+- Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.molt.bot/concepts/model-failover)
 
 ## Install (recommended)
 
 Runtime: **Node ≥22**.
 
 ```bash
-npm install -g clawdbot@latest
-# or: pnpm add -g clawdbot@latest
+npm install -g moltbot@latest
+# or: pnpm add -g moltbot@latest
 
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+Legacy note: `clawdbot` remains available as a compatibility shim.
 
 ## Quick start (TL;DR)
 
 Runtime: **Node ≥22**.
 
-Full beginner guide (auth, pairing, channels): [Getting started](https://docs.clawd.bot/start/getting-started)
+Full beginner guide (auth, pairing, channels): [Getting started](https://docs.molt.bot/start/getting-started)
 
 ```bash
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 
-clawdbot gateway --port 18789 --verbose
+moltbot gateway --port 18789 --verbose
 
 # Send a message
-clawdbot message send --to +1234567890 --message "Hello from Clawdbot"
+moltbot message send --to +1234567890 --message "Hello from Moltbot"
 
 # Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/Microsoft Teams/Matrix/Zalo/Zalo Personal/WebChat)
-clawdbot agent --message "Ship checklist" --thinking high
+moltbot agent --message "Ship checklist" --thinking high
 ```
 
-Upgrading? [Updating guide](https://docs.clawd.bot/install/updating) (and run `clawdbot doctor`).
+Upgrading? [Updating guide](https://docs.molt.bot/install/updating) (and run `moltbot doctor`).
 
 ## Development channels
 
@@ -78,7 +79,7 @@ Upgrading? [Updating guide](https://docs.clawd.bot/install/updating) (and run `c
 - **dev**: moving head of `main`, npm dist-tag `dev` (when published).
 
 Switch channels (git + npm): `clawdbot update --channel stable|beta|dev`.
-Details: [Development channels](https://docs.clawd.bot/install/development-channels).
+Details: [Development channels](https://docs.molt.bot/install/development-channels).
 
 ## From source (development)
 
@@ -92,19 +93,19 @@ pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
 
-pnpm clawdbot onboard --install-daemon
+pnpm moltbot onboard --install-daemon
 
 # Dev loop (auto-reload on TS changes)
 pnpm gateway:watch
 ```
 
-Note: `pnpm clawdbot ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `clawdbot` binary.
+Note: `pnpm moltbot ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `moltbot` binary.
 
 ## Security defaults (DM access)
 
 Clawdbot connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
 
-Full security guide: [Security](https://docs.clawd.bot/gateway/security)
+Full security guide: [Security](https://docs.molt.bot/gateway/security)
 
 Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack:
 - **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dm.policy="pairing"` / `channels.slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
@@ -115,14 +116,14 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 
 ## Highlights
 
-- **[Local-first Gateway](https://docs.clawd.bot/gateway)** — single control plane for sessions, channels, tools, and events.
-- **[Multi-channel inbox](https://docs.clawd.bot/channels)** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, Microsoft Teams, Matrix, Zalo, Zalo Personal, WebChat, macOS, iOS/Android.
-- **[Multi-agent routing](https://docs.clawd.bot/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
-- **[Voice Wake](https://docs.clawd.bot/nodes/voicewake) + [Talk Mode](https://docs.clawd.bot/nodes/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
-- **[Live Canvas](https://docs.clawd.bot/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.clawd.bot/platforms/mac/canvas#canvas-a2ui).
-- **[First-class tools](https://docs.clawd.bot/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
-- **[Companion apps](https://docs.clawd.bot/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.clawd.bot/nodes).
-- **[Onboarding](https://docs.clawd.bot/start/wizard) + [skills](https://docs.clawd.bot/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+- **[Local-first Gateway](https://docs.molt.bot/gateway)** — single control plane for sessions, channels, tools, and events.
+- **[Multi-channel inbox](https://docs.molt.bot/channels)** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, Microsoft Teams, Matrix, Zalo, Zalo Personal, WebChat, macOS, iOS/Android.
+- **[Multi-agent routing](https://docs.molt.bot/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
+- **[Voice Wake](https://docs.molt.bot/nodes/voicewake) + [Talk Mode](https://docs.molt.bot/nodes/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
+- **[Live Canvas](https://docs.molt.bot/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.molt.bot/platforms/mac/canvas#canvas-a2ui).
+- **[First-class tools](https://docs.molt.bot/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
+- **[Companion apps](https://docs.molt.bot/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.molt.bot/nodes).
+- **[Onboarding](https://docs.molt.bot/start/wizard) + [skills](https://docs.molt.bot/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
 
 ## Star History
 
@@ -131,40 +132,40 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 ## Everything we built so far
 
 ### Core platform
-- [Gateway WS control plane](https://docs.clawd.bot/gateway) with sessions, presence, config, cron, webhooks, [Control UI](https://docs.clawd.bot/web), and [Canvas host](https://docs.clawd.bot/platforms/mac/canvas#canvas-a2ui).
-- [CLI surface](https://docs.clawd.bot/tools/agent-send): gateway, agent, send, [wizard](https://docs.clawd.bot/start/wizard), and [doctor](https://docs.clawd.bot/gateway/doctor).
-- [Pi agent runtime](https://docs.clawd.bot/concepts/agent) in RPC mode with tool streaming and block streaming.
-- [Session model](https://docs.clawd.bot/concepts/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.clawd.bot/concepts/groups).
-- [Media pipeline](https://docs.clawd.bot/nodes/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawd.bot/nodes/audio).
+- [Gateway WS control plane](https://docs.molt.bot/gateway) with sessions, presence, config, cron, webhooks, [Control UI](https://docs.molt.bot/web), and [Canvas host](https://docs.molt.bot/platforms/mac/canvas#canvas-a2ui).
+- [CLI surface](https://docs.molt.bot/tools/agent-send): gateway, agent, send, [wizard](https://docs.molt.bot/start/wizard), and [doctor](https://docs.molt.bot/gateway/doctor).
+- [Pi agent runtime](https://docs.molt.bot/concepts/agent) in RPC mode with tool streaming and block streaming.
+- [Session model](https://docs.molt.bot/concepts/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.molt.bot/concepts/groups).
+- [Media pipeline](https://docs.molt.bot/nodes/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.molt.bot/nodes/audio).
 
 ### Channels
-- [Channels](https://docs.clawd.bot/channels): [WhatsApp](https://docs.clawd.bot/channels/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/channels/telegram) (grammY), [Slack](https://docs.clawd.bot/channels/slack) (Bolt), [Discord](https://docs.clawd.bot/channels/discord) (discord.js), [Google Chat](https://docs.clawd.bot/channels/googlechat) (Chat API), [Signal](https://docs.clawd.bot/channels/signal) (signal-cli), [iMessage](https://docs.clawd.bot/channels/imessage) (imsg), [BlueBubbles](https://docs.clawd.bot/channels/bluebubbles) (extension), [Microsoft Teams](https://docs.clawd.bot/channels/msteams) (extension), [Matrix](https://docs.clawd.bot/channels/matrix) (extension), [Zalo](https://docs.clawd.bot/channels/zalo) (extension), [Zalo Personal](https://docs.clawd.bot/channels/zalouser) (extension), [WebChat](https://docs.clawd.bot/web/webchat).
-- [Group routing](https://docs.clawd.bot/concepts/group-messages): mention gating, reply tags, per-channel chunking and routing. Channel rules: [Channels](https://docs.clawd.bot/channels).
+- [Channels](https://docs.molt.bot/channels): [WhatsApp](https://docs.molt.bot/channels/whatsapp) (Baileys), [Telegram](https://docs.molt.bot/channels/telegram) (grammY), [Slack](https://docs.molt.bot/channels/slack) (Bolt), [Discord](https://docs.molt.bot/channels/discord) (discord.js), [Google Chat](https://docs.molt.bot/channels/googlechat) (Chat API), [Signal](https://docs.molt.bot/channels/signal) (signal-cli), [iMessage](https://docs.molt.bot/channels/imessage) (imsg), [BlueBubbles](https://docs.molt.bot/channels/bluebubbles) (extension), [Microsoft Teams](https://docs.molt.bot/channels/msteams) (extension), [Matrix](https://docs.molt.bot/channels/matrix) (extension), [Zalo](https://docs.molt.bot/channels/zalo) (extension), [Zalo Personal](https://docs.molt.bot/channels/zalouser) (extension), [WebChat](https://docs.molt.bot/web/webchat).
+- [Group routing](https://docs.molt.bot/concepts/group-messages): mention gating, reply tags, per-channel chunking and routing. Channel rules: [Channels](https://docs.molt.bot/channels).
 
 ### Apps + nodes
-- [macOS app](https://docs.clawd.bot/platforms/macos): menu bar control plane, [Voice Wake](https://docs.clawd.bot/nodes/voicewake)/PTT, [Talk Mode](https://docs.clawd.bot/nodes/talk) overlay, [WebChat](https://docs.clawd.bot/web/webchat), debug tools, [remote gateway](https://docs.clawd.bot/gateway/remote) control.
-- [iOS node](https://docs.clawd.bot/platforms/ios): [Canvas](https://docs.clawd.bot/platforms/mac/canvas), [Voice Wake](https://docs.clawd.bot/nodes/voicewake), [Talk Mode](https://docs.clawd.bot/nodes/talk), camera, screen recording, Bonjour pairing.
-- [Android node](https://docs.clawd.bot/platforms/android): [Canvas](https://docs.clawd.bot/platforms/mac/canvas), [Talk Mode](https://docs.clawd.bot/nodes/talk), camera, screen recording, optional SMS.
-- [macOS node mode](https://docs.clawd.bot/nodes): system.run/notify + canvas/camera exposure.
+- [macOS app](https://docs.molt.bot/platforms/macos): menu bar control plane, [Voice Wake](https://docs.molt.bot/nodes/voicewake)/PTT, [Talk Mode](https://docs.molt.bot/nodes/talk) overlay, [WebChat](https://docs.molt.bot/web/webchat), debug tools, [remote gateway](https://docs.molt.bot/gateway/remote) control.
+- [iOS node](https://docs.molt.bot/platforms/ios): [Canvas](https://docs.molt.bot/platforms/mac/canvas), [Voice Wake](https://docs.molt.bot/nodes/voicewake), [Talk Mode](https://docs.molt.bot/nodes/talk), camera, screen recording, Bonjour pairing.
+- [Android node](https://docs.molt.bot/platforms/android): [Canvas](https://docs.molt.bot/platforms/mac/canvas), [Talk Mode](https://docs.molt.bot/nodes/talk), camera, screen recording, optional SMS.
+- [macOS node mode](https://docs.molt.bot/nodes): system.run/notify + canvas/camera exposure.
 
 ### Tools + automation
-- [Browser control](https://docs.clawd.bot/tools/browser): dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
-- [Canvas](https://docs.clawd.bot/platforms/mac/canvas): [A2UI](https://docs.clawd.bot/platforms/mac/canvas#canvas-a2ui) push/reset, eval, snapshot.
-- [Nodes](https://docs.clawd.bot/nodes): camera snap/clip, screen record, [location.get](https://docs.clawd.bot/nodes/location-command), notifications.
-- [Cron + wakeups](https://docs.clawd.bot/automation/cron-jobs); [webhooks](https://docs.clawd.bot/automation/webhook); [Gmail Pub/Sub](https://docs.clawd.bot/automation/gmail-pubsub).
-- [Skills platform](https://docs.clawd.bot/tools/skills): bundled, managed, and workspace skills with install gating + UI.
+- [Browser control](https://docs.molt.bot/tools/browser): dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
+- [Canvas](https://docs.molt.bot/platforms/mac/canvas): [A2UI](https://docs.molt.bot/platforms/mac/canvas#canvas-a2ui) push/reset, eval, snapshot.
+- [Nodes](https://docs.molt.bot/nodes): camera snap/clip, screen record, [location.get](https://docs.molt.bot/nodes/location-command), notifications.
+- [Cron + wakeups](https://docs.molt.bot/automation/cron-jobs); [webhooks](https://docs.molt.bot/automation/webhook); [Gmail Pub/Sub](https://docs.molt.bot/automation/gmail-pubsub).
+- [Skills platform](https://docs.molt.bot/tools/skills): bundled, managed, and workspace skills with install gating + UI.
 
 ### Runtime + safety
-- [Channel routing](https://docs.clawd.bot/concepts/channel-routing), [retry policy](https://docs.clawd.bot/concepts/retry), and [streaming/chunking](https://docs.clawd.bot/concepts/streaming).
-- [Presence](https://docs.clawd.bot/concepts/presence), [typing indicators](https://docs.clawd.bot/concepts/typing-indicators), and [usage tracking](https://docs.clawd.bot/concepts/usage-tracking).
-- [Models](https://docs.clawd.bot/concepts/models), [model failover](https://docs.clawd.bot/concepts/model-failover), and [session pruning](https://docs.clawd.bot/concepts/session-pruning).
-- [Security](https://docs.clawd.bot/gateway/security) and [troubleshooting](https://docs.clawd.bot/channels/troubleshooting).
+- [Channel routing](https://docs.molt.bot/concepts/channel-routing), [retry policy](https://docs.molt.bot/concepts/retry), and [streaming/chunking](https://docs.molt.bot/concepts/streaming).
+- [Presence](https://docs.molt.bot/concepts/presence), [typing indicators](https://docs.molt.bot/concepts/typing-indicators), and [usage tracking](https://docs.molt.bot/concepts/usage-tracking).
+- [Models](https://docs.molt.bot/concepts/models), [model failover](https://docs.molt.bot/concepts/model-failover), and [session pruning](https://docs.molt.bot/concepts/session-pruning).
+- [Security](https://docs.molt.bot/gateway/security) and [troubleshooting](https://docs.molt.bot/channels/troubleshooting).
 
 ### Ops + packaging
-- [Control UI](https://docs.clawd.bot/web) + [WebChat](https://docs.clawd.bot/web/webchat) served directly from the Gateway.
-- [Tailscale Serve/Funnel](https://docs.clawd.bot/gateway/tailscale) or [SSH tunnels](https://docs.clawd.bot/gateway/remote) with token/password auth.
-- [Nix mode](https://docs.clawd.bot/install/nix) for declarative config; [Docker](https://docs.clawd.bot/install/docker)-based installs.
-- [Doctor](https://docs.clawd.bot/gateway/doctor) migrations, [logging](https://docs.clawd.bot/logging).
+- [Control UI](https://docs.molt.bot/web) + [WebChat](https://docs.molt.bot/web/webchat) served directly from the Gateway.
+- [Tailscale Serve/Funnel](https://docs.molt.bot/gateway/tailscale) or [SSH tunnels](https://docs.molt.bot/gateway/remote) with token/password auth.
+- [Nix mode](https://docs.molt.bot/install/nix) for declarative config; [Docker](https://docs.molt.bot/install/docker)-based installs.
+- [Doctor](https://docs.molt.bot/gateway/doctor) migrations, [logging](https://docs.molt.bot/logging).
 
 ## How it works (short)
 
@@ -187,12 +188,12 @@ WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBu
 
 ## Key subsystems
 
-- **[Gateway WebSocket network](https://docs.clawd.bot/concepts/architecture)** — single WS control plane for clients, tools, and events (plus ops: [Gateway runbook](https://docs.clawd.bot/gateway)).
-- **[Tailscale exposure](https://docs.clawd.bot/gateway/tailscale)** — Serve/Funnel for the Gateway dashboard + WS (remote access: [Remote](https://docs.clawd.bot/gateway/remote)).
-- **[Browser control](https://docs.clawd.bot/tools/browser)** — clawd‑managed Chrome/Chromium with CDP control.
-- **[Canvas + A2UI](https://docs.clawd.bot/platforms/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.clawd.bot/platforms/mac/canvas#canvas-a2ui)).
-- **[Voice Wake](https://docs.clawd.bot/nodes/voicewake) + [Talk Mode](https://docs.clawd.bot/nodes/talk)** — always‑on speech and continuous conversation.
-- **[Nodes](https://docs.clawd.bot/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
+- **[Gateway WebSocket network](https://docs.molt.bot/concepts/architecture)** — single WS control plane for clients, tools, and events (plus ops: [Gateway runbook](https://docs.molt.bot/gateway)).
+- **[Tailscale exposure](https://docs.molt.bot/gateway/tailscale)** — Serve/Funnel for the Gateway dashboard + WS (remote access: [Remote](https://docs.molt.bot/gateway/remote)).
+- **[Browser control](https://docs.molt.bot/tools/browser)** — clawd‑managed Chrome/Chromium with CDP control.
+- **[Canvas + A2UI](https://docs.molt.bot/platforms/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.molt.bot/platforms/mac/canvas#canvas-a2ui)).
+- **[Voice Wake](https://docs.molt.bot/nodes/voicewake) + [Talk Mode](https://docs.molt.bot/nodes/talk)** — always‑on speech and continuous conversation.
+- **[Nodes](https://docs.molt.bot/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
 
 ## Tailscale access (Gateway dashboard)
 
@@ -208,7 +209,7 @@ Notes:
 - Funnel refuses to start unless `gateway.auth.mode: "password"` is set.
 - Optional: `gateway.tailscale.resetOnExit` to undo Serve/Funnel on shutdown.
 
-Details: [Tailscale guide](https://docs.clawd.bot/gateway/tailscale) · [Web surfaces](https://docs.clawd.bot/web)
+Details: [Tailscale guide](https://docs.molt.bot/gateway/tailscale) · [Web surfaces](https://docs.molt.bot/web)
 
 ## Remote Gateway (Linux is great)
 
@@ -218,7 +219,7 @@ It’s perfectly fine to run the Gateway on a small Linux instance. Clients (mac
 - **Device nodes** run device‑local actions (`system.run`, camera, screen recording, notifications) via `node.invoke`.
 In short: exec runs where the Gateway lives; device actions run where the device lives.
 
-Details: [Remote access](https://docs.clawd.bot/gateway/remote) · [Nodes](https://docs.clawd.bot/nodes) · [Security](https://docs.clawd.bot/gateway/security)
+Details: [Remote access](https://docs.molt.bot/gateway/remote) · [Nodes](https://docs.molt.bot/nodes) · [Security](https://docs.molt.bot/gateway/security)
 
 ## macOS permissions via the Gateway protocol
 
@@ -233,7 +234,7 @@ Elevated bash (host permissions) is separate from macOS TCC:
 - Use `/elevated on|off` to toggle per‑session elevated access when enabled + allowlisted.
 - Gateway persists the per‑session toggle via `sessions.patch` (WS method) alongside `thinkingLevel`, `verboseLevel`, `model`, `sendPolicy`, and `groupActivation`.
 
-Details: [Nodes](https://docs.clawd.bot/nodes) · [macOS app](https://docs.clawd.bot/platforms/macos) · [Gateway protocol](https://docs.clawd.bot/concepts/architecture)
+Details: [Nodes](https://docs.molt.bot/nodes) · [macOS app](https://docs.molt.bot/platforms/macos) · [Gateway protocol](https://docs.molt.bot/concepts/architecture)
 
 ## Agent to Agent (sessions_* tools)
 
@@ -242,7 +243,7 @@ Details: [Nodes](https://docs.clawd.bot/nodes) · [macOS app](https://docs.clawd
 - `sessions_history` — fetch transcript logs for a session.
 - `sessions_send` — message another session; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
 
-Details: [Session tools](https://docs.clawd.bot/concepts/session-tool)
+Details: [Session tools](https://docs.molt.bot/concepts/session-tool)
 
 ## Skills registry (ClawdHub)
 
@@ -284,13 +285,13 @@ Note: signed builds required for macOS permissions to stick across rebuilds (see
 - Voice trigger forwarding + Canvas surface.
 - Controlled via `clawdbot nodes …`.
 
-Runbook: [iOS connect](https://docs.clawd.bot/platforms/ios).
+Runbook: [iOS connect](https://docs.molt.bot/platforms/ios).
 
 ### Android node (optional)
 
 - Pairs via the same Bridge + pairing flow as iOS.
 - Exposes Canvas, Camera, and Screen capture commands.
-- Runbook: [Android connect](https://docs.clawd.bot/platforms/android).
+- Runbook: [Android connect](https://docs.molt.bot/platforms/android).
 
 ## Agent workspace + skills
 
@@ -310,7 +311,7 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 }
 ```
 
-[Full configuration reference (all keys + examples).](https://docs.clawd.bot/gateway/configuration)
+[Full configuration reference (all keys + examples).](https://docs.molt.bot/gateway/configuration)
 
 ## Security model (important)
 
@@ -318,15 +319,15 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 - **Group/channel safety:** set `agents.defaults.sandbox.mode: "non-main"` to run **non‑main sessions** (groups/channels) inside per‑session Docker sandboxes; bash then runs in Docker for those sessions.
 - **Sandbox defaults:** allowlist `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`; denylist `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
 
-Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + sandboxing](https://docs.clawd.bot/install/docker) · [Sandbox config](https://docs.clawd.bot/gateway/configuration)
+Details: [Security guide](https://docs.molt.bot/gateway/security) · [Docker + sandboxing](https://docs.molt.bot/install/docker) · [Sandbox config](https://docs.molt.bot/gateway/configuration)
 
-### [WhatsApp](https://docs.clawd.bot/channels/whatsapp)
+### [WhatsApp](https://docs.molt.bot/channels/whatsapp)
 
 - Link the device: `pnpm clawdbot channels login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `channels.whatsapp.allowFrom`.
 - If `channels.whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
-### [Telegram](https://docs.clawd.bot/channels/telegram)
+### [Telegram](https://docs.molt.bot/channels/telegram)
 
 - Set `TELEGRAM_BOT_TOKEN` or `channels.telegram.botToken` (env wins).
 - Optional: set `channels.telegram.groups` (with `channels.telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `channels.telegram.allowFrom` or `channels.telegram.webhookUrl` as needed.
@@ -341,11 +342,11 @@ Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + 
 }
 ```
 
-### [Slack](https://docs.clawd.bot/channels/slack)
+### [Slack](https://docs.molt.bot/channels/slack)
 
 - Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `channels.slack.botToken` + `channels.slack.appToken`).
 
-### [Discord](https://docs.clawd.bot/channels/discord)
+### [Discord](https://docs.molt.bot/channels/discord)
 
 - Set `DISCORD_BOT_TOKEN` or `channels.discord.token` (env wins).
 - Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.dm.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
@@ -360,21 +361,21 @@ Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + 
 }
 ```
 
-### [Signal](https://docs.clawd.bot/channels/signal)
+### [Signal](https://docs.molt.bot/channels/signal)
 
 - Requires `signal-cli` and a `channels.signal` config section.
 
-### [iMessage](https://docs.clawd.bot/channels/imessage)
+### [iMessage](https://docs.molt.bot/channels/imessage)
 
 - macOS only; Messages must be signed in.
 - If `channels.imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
-### [Microsoft Teams](https://docs.clawd.bot/channels/msteams)
+### [Microsoft Teams](https://docs.molt.bot/channels/msteams)
 
 - Configure a Teams app + Bot Framework, then add a `msteams` config section.
 - Allowlist who can talk via `msteams.allowFrom`; group access via `msteams.groupAllowFrom` or `msteams.groupPolicy: "open"`.
 
-### [WebChat](https://docs.clawd.bot/web/webchat)
+### [WebChat](https://docs.molt.bot/web/webchat)
 
 - Uses the Gateway WebSocket; no separate WebChat port/config.
 
@@ -392,69 +393,69 @@ Browser control (optional):
 ## Docs
 
 Use these when you’re past the onboarding flow and want the deeper reference.
-- [Start with the docs index for navigation and “what’s where.”](https://docs.clawd.bot)
-- [Read the architecture overview for the gateway + protocol model.](https://docs.clawd.bot/concepts/architecture)
-- [Use the full configuration reference when you need every key and example.](https://docs.clawd.bot/gateway/configuration)
-- [Run the Gateway by the book with the operational runbook.](https://docs.clawd.bot/gateway)
-- [Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.clawd.bot/web)
-- [Understand remote access over SSH tunnels or tailnets.](https://docs.clawd.bot/gateway/remote)
-- [Follow the onboarding wizard flow for a guided setup.](https://docs.clawd.bot/start/wizard)
-- [Wire external triggers via the webhook surface.](https://docs.clawd.bot/automation/webhook)
-- [Set up Gmail Pub/Sub triggers.](https://docs.clawd.bot/automation/gmail-pubsub)
-- [Learn the macOS menu bar companion details.](https://docs.clawd.bot/platforms/mac/menu-bar)
-- [Platform guides: Windows (WSL2)](https://docs.clawd.bot/platforms/windows), [Linux](https://docs.clawd.bot/platforms/linux), [macOS](https://docs.clawd.bot/platforms/macos), [iOS](https://docs.clawd.bot/platforms/ios), [Android](https://docs.clawd.bot/platforms/android)
-- [Debug common failures with the troubleshooting guide.](https://docs.clawd.bot/channels/troubleshooting)
-- [Review security guidance before exposing anything.](https://docs.clawd.bot/gateway/security)
+- [Start with the docs index for navigation and “what’s where.”](https://docs.molt.bot)
+- [Read the architecture overview for the gateway + protocol model.](https://docs.molt.bot/concepts/architecture)
+- [Use the full configuration reference when you need every key and example.](https://docs.molt.bot/gateway/configuration)
+- [Run the Gateway by the book with the operational runbook.](https://docs.molt.bot/gateway)
+- [Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.molt.bot/web)
+- [Understand remote access over SSH tunnels or tailnets.](https://docs.molt.bot/gateway/remote)
+- [Follow the onboarding wizard flow for a guided setup.](https://docs.molt.bot/start/wizard)
+- [Wire external triggers via the webhook surface.](https://docs.molt.bot/automation/webhook)
+- [Set up Gmail Pub/Sub triggers.](https://docs.molt.bot/automation/gmail-pubsub)
+- [Learn the macOS menu bar companion details.](https://docs.molt.bot/platforms/mac/menu-bar)
+- [Platform guides: Windows (WSL2)](https://docs.molt.bot/platforms/windows), [Linux](https://docs.molt.bot/platforms/linux), [macOS](https://docs.molt.bot/platforms/macos), [iOS](https://docs.molt.bot/platforms/ios), [Android](https://docs.molt.bot/platforms/android)
+- [Debug common failures with the troubleshooting guide.](https://docs.molt.bot/channels/troubleshooting)
+- [Review security guidance before exposing anything.](https://docs.molt.bot/gateway/security)
 
 ## Advanced docs (discovery + control)
 
-- [Discovery + transports](https://docs.clawd.bot/gateway/discovery)
-- [Bonjour/mDNS](https://docs.clawd.bot/gateway/bonjour)
-- [Gateway pairing](https://docs.clawd.bot/gateway/pairing)
-- [Remote gateway README](https://docs.clawd.bot/gateway/remote-gateway-readme)
-- [Control UI](https://docs.clawd.bot/web/control-ui)
-- [Dashboard](https://docs.clawd.bot/web/dashboard)
+- [Discovery + transports](https://docs.molt.bot/gateway/discovery)
+- [Bonjour/mDNS](https://docs.molt.bot/gateway/bonjour)
+- [Gateway pairing](https://docs.molt.bot/gateway/pairing)
+- [Remote gateway README](https://docs.molt.bot/gateway/remote-gateway-readme)
+- [Control UI](https://docs.molt.bot/web/control-ui)
+- [Dashboard](https://docs.molt.bot/web/dashboard)
 
 ## Operations & troubleshooting
 
-- [Health checks](https://docs.clawd.bot/gateway/health)
-- [Gateway lock](https://docs.clawd.bot/gateway/gateway-lock)
-- [Background process](https://docs.clawd.bot/gateway/background-process)
-- [Browser troubleshooting (Linux)](https://docs.clawd.bot/tools/browser-linux-troubleshooting)
-- [Logging](https://docs.clawd.bot/logging)
+- [Health checks](https://docs.molt.bot/gateway/health)
+- [Gateway lock](https://docs.molt.bot/gateway/gateway-lock)
+- [Background process](https://docs.molt.bot/gateway/background-process)
+- [Browser troubleshooting (Linux)](https://docs.molt.bot/tools/browser-linux-troubleshooting)
+- [Logging](https://docs.molt.bot/logging)
 
 ## Deep dives
 
-- [Agent loop](https://docs.clawd.bot/concepts/agent-loop)
-- [Presence](https://docs.clawd.bot/concepts/presence)
-- [TypeBox schemas](https://docs.clawd.bot/concepts/typebox)
-- [RPC adapters](https://docs.clawd.bot/reference/rpc)
-- [Queue](https://docs.clawd.bot/concepts/queue)
+- [Agent loop](https://docs.molt.bot/concepts/agent-loop)
+- [Presence](https://docs.molt.bot/concepts/presence)
+- [TypeBox schemas](https://docs.molt.bot/concepts/typebox)
+- [RPC adapters](https://docs.molt.bot/reference/rpc)
+- [Queue](https://docs.molt.bot/concepts/queue)
 
 ## Workspace & skills
 
-- [Skills config](https://docs.clawd.bot/tools/skills-config)
-- [Default AGENTS](https://docs.clawd.bot/reference/AGENTS.default)
-- [Templates: AGENTS](https://docs.clawd.bot/reference/templates/AGENTS)
-- [Templates: BOOTSTRAP](https://docs.clawd.bot/reference/templates/BOOTSTRAP)
-- [Templates: IDENTITY](https://docs.clawd.bot/reference/templates/IDENTITY)
-- [Templates: SOUL](https://docs.clawd.bot/reference/templates/SOUL)
-- [Templates: TOOLS](https://docs.clawd.bot/reference/templates/TOOLS)
-- [Templates: USER](https://docs.clawd.bot/reference/templates/USER)
+- [Skills config](https://docs.molt.bot/tools/skills-config)
+- [Default AGENTS](https://docs.molt.bot/reference/AGENTS.default)
+- [Templates: AGENTS](https://docs.molt.bot/reference/templates/AGENTS)
+- [Templates: BOOTSTRAP](https://docs.molt.bot/reference/templates/BOOTSTRAP)
+- [Templates: IDENTITY](https://docs.molt.bot/reference/templates/IDENTITY)
+- [Templates: SOUL](https://docs.molt.bot/reference/templates/SOUL)
+- [Templates: TOOLS](https://docs.molt.bot/reference/templates/TOOLS)
+- [Templates: USER](https://docs.molt.bot/reference/templates/USER)
 
 ## Platform internals
 
-- [macOS dev setup](https://docs.clawd.bot/platforms/mac/dev-setup)
-- [macOS menu bar](https://docs.clawd.bot/platforms/mac/menu-bar)
-- [macOS voice wake](https://docs.clawd.bot/platforms/mac/voicewake)
-- [iOS node](https://docs.clawd.bot/platforms/ios)
-- [Android node](https://docs.clawd.bot/platforms/android)
-- [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
-- [Linux app](https://docs.clawd.bot/platforms/linux)
+- [macOS dev setup](https://docs.molt.bot/platforms/mac/dev-setup)
+- [macOS menu bar](https://docs.molt.bot/platforms/mac/menu-bar)
+- [macOS voice wake](https://docs.molt.bot/platforms/mac/voicewake)
+- [iOS node](https://docs.molt.bot/platforms/ios)
+- [Android node](https://docs.molt.bot/platforms/android)
+- [Windows (WSL2)](https://docs.molt.bot/platforms/windows)
+- [Linux app](https://docs.molt.bot/platforms/linux)
 
 ## Email hooks (Gmail)
 
-- [docs.clawd.bot/gmail-pubsub](https://docs.clawd.bot/automation/gmail-pubsub)
+- [docs.molt.bot/gmail-pubsub](https://docs.molt.bot/automation/gmail-pubsub)
 
 ## Clawd
 

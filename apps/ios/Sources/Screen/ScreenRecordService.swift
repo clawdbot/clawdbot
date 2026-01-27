@@ -105,7 +105,7 @@ final class ScreenRecordService: @unchecked Sendable {
             return URL(fileURLWithPath: outPath)
         }
         return FileManager().temporaryDirectory
-            .appendingPathComponent("clawdbot-screen-record-\(UUID().uuidString).mp4")
+            .appendingPathComponent("moltbot-screen-record-\(UUID().uuidString).mp4")
     }
 
     private func startCapture(

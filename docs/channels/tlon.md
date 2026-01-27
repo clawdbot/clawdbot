@@ -5,7 +5,7 @@ read_when:
 ---
 # Tlon (plugin)
 
-Tlon is a decentralized messenger built on Urbit. Clawdbot connects to your Urbit ship and can
+Tlon is a decentralized messenger built on Urbit. Moltbot connects to your Urbit ship and can
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.
 
@@ -19,13 +19,13 @@ Tlon ships as a plugin and is not bundled with the core install.
 Install via CLI (npm registry):
 
 ```bash
-clawdbot plugins install @clawdbot/tlon
+moltbot plugins install @moltbot/tlon
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-clawdbot plugins install ./extensions/tlon
+moltbot plugins install ./extensions/tlon
 ```
 
 Details: [Plugins](/plugin)
@@ -121,7 +121,7 @@ Group authorization (restricted by default):
 
 ## Delivery targets (CLI/cron)
 
-Use these with `clawdbot message send` or cron delivery:
+Use these with `moltbot message send` or cron delivery:
 
 - DM: `~sampel-palnet` or `dm/~sampel-palnet`
 - Group: `chat/~host-ship/channel` or `group:~host-ship/channel`
@@ -129,5 +129,5 @@ Use these with `clawdbot message send` or cron delivery:
 ## Notes
 
 - Group replies require a mention (e.g. `~your-bot-ship`) to respond.
-- Thread replies: if the inbound message is in a thread, Clawdbot replies in-thread.
+- Thread replies: if the inbound message is in a thread, Moltbot replies in-thread.
 - Media: `sendMedia` falls back to text + URL (no native upload).

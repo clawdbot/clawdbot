@@ -1,7 +1,7 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { resolveTalkApiKey } from "./talk.js";
-import type { ClawdbotConfig } from "./types.js";
+import type { MoltbotConfig } from "./types.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 
@@ -53,7 +53,7 @@ function resolveModelCost(
   };
 }
 
-function resolveAnthropicDefaultAuthMode(cfg: ClawdbotConfig): AnthropicAuthDefaultsMode | null {
+function resolveAnthropicDefaultAuthMode(cfg: MoltbotConfig): AnthropicAuthDefaultsMode | null {
   const profiles = cfg.auth?.profiles ?? {};
   const anthropicProfiles = Object.entries(profiles).filter(
     ([, profile]) => profile?.provider === "anthropic",
@@ -92,7 +92,7 @@ export type SessionDefaultsOptions = {
   warnState?: WarnState;
 };
 
-export function applyMessageDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyMessageDefaults(cfg: MoltbotConfig): MoltbotConfig {
   const messages = cfg.messages;
   const hasAckScope = messages?.ackReactionScope !== undefined;
   if (hasAckScope) return cfg;
@@ -106,9 +106,9 @@ export function applyMessageDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
 }
 
 export function applySessionDefaults(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   options: SessionDefaultsOptions = {},
-): ClawdbotConfig {
+): MoltbotConfig {
   const session = cfg.session;
   if (!session || session.mainKey === undefined) return cfg;
 
@@ -116,7 +116,7 @@ export function applySessionDefaults(
   const warn = options.warn ?? console.warn;
   const warnState = options.warnState ?? defaultWarnState;
 
-  const next: ClawdbotConfig = {
+  const next: MoltbotConfig = {
     ...cfg,
     session: { ...session, mainKey: "main" },
   };
@@ -129,7 +129,7 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
+export function applyTalkApiKey(config: MoltbotConfig): MoltbotConfig {
   const resolved = resolveTalkApiKey();
   if (!resolved) return config;
   const existing = config.talk?.apiKey?.trim();
@@ -143,7 +143,7 @@ export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
-export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyModelDefaults(cfg: MoltbotConfig): MoltbotConfig {
   let mutated = false;
   let nextCfg = cfg;
 
@@ -238,7 +238,7 @@ export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
-export function applyAgentDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyAgentDefaults(cfg: MoltbotConfig): MoltbotConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
   const hasMax =
@@ -275,7 +275,7 @@ export function applyAgentDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
-export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyLoggingDefaults(cfg: MoltbotConfig): MoltbotConfig {
   const logging = cfg.logging;
   if (!logging) return cfg;
   if (logging.redactSensitive) return cfg;
@@ -288,7 +288,7 @@ export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
-export function applyContextPruningDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyContextPruningDefaults(cfg: MoltbotConfig): MoltbotConfig {
   const defaults = cfg.agents?.defaults;
   if (!defaults) return cfg;
 
@@ -369,7 +369,7 @@ export function applyContextPruningDefaults(cfg: ClawdbotConfig): ClawdbotConfig
   };
 }
 
-export function applyCompactionDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyCompactionDefaults(cfg: MoltbotConfig): MoltbotConfig {
   const defaults = cfg.agents?.defaults;
   if (!defaults) return cfg;
   const compaction = defaults?.compaction;

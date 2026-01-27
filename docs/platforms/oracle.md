@@ -1,18 +1,18 @@
 ---
-summary: "Clawdbot on Oracle Cloud (Always Free ARM)"
+summary: "Moltbot on Oracle Cloud (Always Free ARM)"
 read_when:
-  - Setting up Clawdbot on Oracle Cloud
-  - Looking for low-cost VPS hosting for Clawdbot
-  - Want 24/7 Clawdbot on a small server
+  - Setting up Moltbot on Oracle Cloud
+  - Looking for low-cost VPS hosting for Moltbot
+  - Want 24/7 Moltbot on a small server
 ---
 
-# Clawdbot on Oracle Cloud (OCI)
+# Moltbot on Oracle Cloud (OCI)
 
 ## Goal
 
-Run a persistent Clawdbot Gateway on Oracle Cloud's **Always Free** ARM tier.
+Run a persistent Moltbot Gateway on Oracle Cloud's **Always Free** ARM tier.
 
-Oracle’s free tier can be a great fit for Clawdbot (especially if you already have an OCI account), but it comes with tradeoffs:
+Oracle’s free tier can be a great fit for Moltbot (especially if you already have an OCI account), but it comes with tradeoffs:
 
 - ARM architecture (most things work, but some binaries may be x86-only)
 - Capacity and signup can be finicky
@@ -40,7 +40,7 @@ Oracle’s free tier can be a great fit for Clawdbot (especially if you already 
 1. Log into [Oracle Cloud Console](https://cloud.oracle.com/)
 2. Navigate to **Compute → Instances → Create Instance**
 3. Configure:
-   - **Name:** `clawdbot`
+   - **Name:** `moltbot`
    - **Image:** Ubuntu 24.04 (aarch64)
    - **Shape:** `VM.Standard.A1.Flex` (Ampere ARM)
    - **OCPUs:** 2 (or up to 4)
@@ -69,7 +69,7 @@ sudo apt install -y build-essential
 
 ```bash
 # Set hostname
-sudo hostnamectl set-hostname clawdbot
+sudo hostnamectl set-hostname moltbot
 
 # Set password for ubuntu user
 sudo passwd ubuntu
@@ -82,22 +82,22 @@ sudo loginctl enable-linger ubuntu
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up --ssh --hostname=clawdbot
+sudo tailscale up --ssh --hostname=moltbot
 ```
 
-This enables Tailscale SSH, so you can connect via `ssh clawdbot` from any device on your tailnet — no public IP needed.
+This enables Tailscale SSH, so you can connect via `ssh moltbot` from any device on your tailnet — no public IP needed.
 
 Verify:
 ```bash
 tailscale status
 ```
 
-**From now on, connect via Tailscale:** `ssh ubuntu@clawdbot` (or use the Tailscale IP).
+**From now on, connect via Tailscale:** `ssh ubuntu@moltbot` (or use the Tailscale IP).
 
-## 5) Install Clawdbot
+## 5) Install Moltbot
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://molt.bot/install.sh | bash
 source ~/.bashrc
 ```
 
@@ -111,27 +111,27 @@ Use token auth as the default. It’s predictable and avoids needing any “inse
 
 ```bash
 # Keep the Gateway private on the VM
-clawdbot config set gateway.bind loopback
+moltbot config set gateway.bind loopback
 
 # Require auth for the Gateway + Control UI
-clawdbot config set gateway.auth.mode token
-clawdbot doctor --generate-gateway-token
+moltbot config set gateway.auth.mode token
+moltbot doctor --generate-gateway-token
 
 # Expose over Tailscale Serve (HTTPS + tailnet access)
-clawdbot config set gateway.tailscale.mode serve
-clawdbot config set gateway.trustedProxies '["127.0.0.1"]'
+moltbot config set gateway.tailscale.mode serve
+moltbot config set gateway.trustedProxies '["127.0.0.1"]'
 
-systemctl --user restart clawdbot-gateway
+systemctl --user restart moltbot-gateway
 ```
 
 ## 7) Verify
 
 ```bash
 # Check version
-clawdbot --version
+moltbot --version
 
 # Check daemon status
-systemctl --user status clawdbot-gateway
+systemctl --user status moltbot-gateway
 
 # Check Tailscale Serve
 tailscale serve status
@@ -159,7 +159,7 @@ This blocks SSH on port 22, HTTP, HTTPS, and everything else at the network edge
 From any device on your Tailscale network:
 
 ```
-https://clawdbot.<tailnet-name>.ts.net/
+https://moltbot.<tailnet-name>.ts.net/
 ```
 
 Replace `<tailnet-name>` with your tailnet name (visible in `tailscale status`).
@@ -175,7 +175,7 @@ No SSH tunnel needed. Tailscale provides:
 
 With the VCN locked down (only UDP 41641 open) and the Gateway bound to loopback, you get strong defense-in-depth: public traffic is blocked at the network edge, and admin access happens over your tailnet.
 
-This setup often removes the *need* for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `clawdbot security audit`, and verify you aren’t accidentally listening on public interfaces.
+This setup often removes the *need* for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `moltbot security audit`, and verify you aren’t accidentally listening on public interfaces.
 
 ### What's Already Protected
 
@@ -191,7 +191,7 @@ This setup often removes the *need* for extra host-based firewall rules purely t
 ### Still Recommended
 
 - **Credential permissions:** `chmod 700 ~/.clawdbot`
-- **Security audit:** `clawdbot security audit`
+- **Security audit:** `moltbot security audit`
 - **System updates:** `sudo apt update && sudo apt upgrade` regularly
 - **Monitor Tailscale:** Review devices in [Tailscale admin console](https://login.tailscale.com/admin)
 
@@ -216,7 +216,7 @@ If Tailscale Serve isn't working, use an SSH tunnel:
 
 ```bash
 # From your local machine (via Tailscale)
-ssh -L 18789:127.0.0.1:18789 ubuntu@clawdbot
+ssh -L 18789:127.0.0.1:18789 ubuntu@moltbot
 ```
 
 Then open `http://localhost:18789`.
@@ -237,14 +237,14 @@ Free tier ARM instances are popular. Try:
 sudo tailscale status
 
 # Re-authenticate
-sudo tailscale up --ssh --hostname=clawdbot --reset
+sudo tailscale up --ssh --hostname=moltbot --reset
 ```
 
 ### Gateway won't start
 ```bash
-clawdbot gateway status
-clawdbot doctor --non-interactive
-journalctl --user -u clawdbot-gateway -n 50
+moltbot gateway status
+moltbot doctor --non-interactive
+journalctl --user -u moltbot-gateway -n 50
 ```
 
 ### Can't reach Control UI
@@ -256,7 +256,7 @@ tailscale serve status
 curl http://localhost:18789
 
 # Restart if needed
-systemctl --user restart clawdbot-gateway
+systemctl --user restart moltbot-gateway
 ```
 
 ### ARM binary issues
@@ -277,7 +277,7 @@ All state lives in:
 
 Back up periodically:
 ```bash
-tar -czvf clawdbot-backup.tar.gz ~/.clawdbot ~/clawd
+tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
 ```
 
 ---

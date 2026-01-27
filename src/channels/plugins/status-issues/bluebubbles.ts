@@ -64,7 +64,7 @@ export function collectBlueBubblesStatusIssues(
         accountId,
         kind: "config",
         message: "Not configured (missing serverUrl or password).",
-        fix: "Run: clawdbot channels add bluebubbles --http-url <server-url> --password <password>",
+        fix: "Run: moltbot channels add bluebubbles --http-url <server-url> --password <password>",
       });
       continue;
     }

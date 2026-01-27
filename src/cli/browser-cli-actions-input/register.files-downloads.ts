@@ -57,7 +57,7 @@ export function registerBrowserFilesAndDownloadsCommands(
   browser
     .command("waitfordownload")
     .description("Wait for the next download (and save it)")
-    .argument("[path]", "Save path (default: /tmp/clawdbot/downloads/...)")
+    .argument("[path]", "Save path (default: /tmp/moltbot/downloads/...)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",

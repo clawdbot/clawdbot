@@ -8,7 +8,7 @@ read_when:
 
 # Testing
 
-Clawdbot has three Vitest suites (unit/integration, e2e, live) and a small set of Docker runners.
+Moltbot has three Vitest suites (unit/integration, e2e, live) and a small set of Docker runners.
 
 This doc is a “how we test” guide:
 - What each suite covers (and what it deliberately does *not* cover)
@@ -113,7 +113,7 @@ Live tests are split into two layers so we can isolate failures:
   - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
-### Layer 2: Gateway + dev agent smoke (what “@clawdbot” actually does)
+### Layer 2: Gateway + dev agent smoke (what “@moltbot” actually does)
 
 - Test: `src/gateway/gateway-models.profiles.live.test.ts`
 - Goal:
@@ -150,8 +150,8 @@ Live tests are split into two layers so we can isolate failures:
 Tip: to see what you can test on your machine (and the exact `provider/model` ids), run:
 
 ```bash
-clawdbot models list
-clawdbot models list --json
+moltbot models list
+moltbot models list --json
 ```
 
 ## Live: Anthropic setup-token smoke
@@ -170,7 +170,7 @@ clawdbot models list --json
 Setup example:
 
 ```bash
-clawdbot models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
+moltbot models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
 ```
 
@@ -227,8 +227,8 @@ Notes:
 - `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
 - `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
 - Gemini API vs Gemini CLI:
-  - API: Clawdbot calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
-  - CLI: Clawdbot shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
+  - API: Moltbot calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
+  - CLI: Moltbot shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
@@ -270,7 +270,7 @@ Include at least one image-capable model in `CLAWDBOT_LIVE_GATEWAY_MODELS` (Clau
 ### Aggregators / alternate gateways
 
 If you have keys enabled, we also support testing via:
-- OpenRouter: `openrouter/...` (hundreds of models; use `clawdbot models scan` to find tool+image capable candidates)
+- OpenRouter: `openrouter/...` (hundreds of models; use `moltbot models scan` to find tool+image capable candidates)
 - OpenCode Zen: `opencode/...` (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
 
 More providers you can include in the live matrix (if you have creds/config):
@@ -283,10 +283,10 @@ Tip: don’t try to hardcode “all models” in docs. The authoritative list is
 
 Live tests discover credentials the same way the CLI does. Practical implications:
 - If the CLI works, live tests should find the same keys.
-- If a live test says “no creds”, debug the same way you’d debug `clawdbot models list` / model selection.
+- If a live test says “no creds”, debug the same way you’d debug `moltbot models list` / model selection.
 
 - Profile store: `~/.clawdbot/credentials/` (preferred; what “profile keys” means in the tests)
-- Config: `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`)
+- Config: `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`)
 
 If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
 

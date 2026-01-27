@@ -17,7 +17,7 @@ describe("restart sentinel", () => {
 
   beforeEach(async () => {
     prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sentinel-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sentinel-"));
     process.env.CLAWDBOT_STATE_DIR = tempDir;
   });
 

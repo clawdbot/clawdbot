@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt";
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -14,7 +14,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createSlackMonitorContext({
       cfg: {
         channels: { slack: { enabled: true } },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       accountId: "default",
       botToken: "token",
       app: { client: {} } as App,
@@ -82,7 +82,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createSlackMonitorContext({
       cfg: {
         channels: { slack: { enabled: true, replyToMode: "all" } },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       accountId: "default",
       botToken: "token",
       app: { client: {} } as App,

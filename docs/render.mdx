@@ -2,7 +2,7 @@
 title: Deploy on Render
 ---
 
-Deploy Clawdbot on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
+Deploy Moltbot on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ Deploy Clawdbot on Render using Infrastructure as Code. The included `render.yam
 
 ## Deploy with a Render Blueprint
 
-<a href="https://render.com/deploy?repo=https://github.com/clawdbot/clawdbot" target="_blank" rel="noreferrer">Deploy to Render</a>
+<a href="https://render.com/deploy?repo=https://github.com/moltbot/moltbot" target="_blank" rel="noreferrer">Deploy to Render</a>
 
 Clicking this link will:
 
@@ -24,12 +24,12 @@ Once deployed, your service URL follows the pattern `https://<service-name>.onre
 ## Understanding the Blueprint
 
 Render Blueprints are YAML files that define your infrastructure. The `render.yaml` in this
-repository configures everything needed to run Clawdbot:
+repository configures everything needed to run Moltbot:
 
 ```yaml
 services:
   - type: web
-    name: clawdbot
+    name: moltbot
     runtime: docker
     plan: starter
     healthCheckPath: /health
@@ -45,7 +45,7 @@ services:
       - key: CLAWDBOT_GATEWAY_TOKEN
         generateValue: true  # auto-generates a secure token
     disk:
-      name: clawdbot-data
+      name: moltbot-data
       mountPath: /data
       sizeGB: 1
 ```
@@ -83,7 +83,7 @@ The Blueprint defaults to `starter`. To use free tier, change `plan: free` in yo
 
 ### Access the Control UI
 
-The web dashboard is available at `https://<your-service>.onrender.com/clawdbot`.
+The web dashboard is available at `https://<your-service>.onrender.com/moltbot`.
 
 ## Render Dashboard features
 
@@ -104,7 +104,7 @@ Modify variables in **Dashboard → your service → Environment**. Changes trig
 
 ### Auto-deploy
 
-If you use the original Clawdbot repository, Render will not auto-deploy your Clawdbot. To update it, run a manual Blueprint sync from the dashboard.
+If you use the original Moltbot repository, Render will not auto-deploy your Moltbot. To update it, run a manual Blueprint sync from the dashboard.
 
 ## Custom domain
 
@@ -120,7 +120,7 @@ Render supports horizontal and vertical scaling:
 - **Vertical**: Change the plan to get more CPU/RAM
 - **Horizontal**: Increase instance count (Standard plan and above)
 
-For Clawdbot, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
+For Moltbot, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
 
 ## Backups and migration
 
@@ -130,7 +130,7 @@ Export your configuration and workspace at any time:
 https://<your-service>.onrender.com/setup/export
 ```
 
-This downloads a portable backup you can restore on any Clawdbot host.
+This downloads a portable backup you can restore on any Moltbot host.
 
 ## Troubleshooting
 

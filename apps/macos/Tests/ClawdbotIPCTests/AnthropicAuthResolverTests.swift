@@ -1,13 +1,13 @@
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite
 struct AnthropicAuthResolverTests {
     @Test
     func prefersOAuthFileOverEnv() throws {
         let dir = FileManager().temporaryDirectory
-            .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("moltbot-oauth-\(UUID().uuidString)", isDirectory: true)
         try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         let oauthFile = dir.appendingPathComponent("oauth.json")
         let payload = [
@@ -21,7 +21,7 @@ struct AnthropicAuthResolverTests {
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: oauthFile, options: [.atomic])
 
-        let status = ClawdbotOAuthStore.anthropicOAuthStatus(at: oauthFile)
+        let status = MoltbotOAuthStore.anthropicOAuthStatus(at: oauthFile)
         let mode = AnthropicAuthResolver.resolve(environment: [
             "ANTHROPIC_API_KEY": "sk-ant-ignored",
         ], oauthStatus: status)

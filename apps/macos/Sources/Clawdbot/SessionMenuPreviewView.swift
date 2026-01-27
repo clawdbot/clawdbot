@@ -1,6 +1,6 @@
-import ClawdbotChatUI
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotChatUI
+import MoltbotKit
+import MoltbotProtocol
 import OSLog
 import SwiftUI
 
@@ -288,7 +288,7 @@ enum SessionMenuPreviewLoader {
 
     private static func requestPreview(
         keys: [String],
-        maxItems: Int) async throws -> ClawdbotSessionsPreviewPayload
+        maxItems: Int) async throws -> MoltbotSessionsPreviewPayload
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
         let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
@@ -331,7 +331,7 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func snapshot(
-        from entry: ClawdbotSessionPreviewEntry,
+        from entry: MoltbotSessionPreviewEntry,
         maxItems: Int) -> SessionMenuPreviewSnapshot
     {
         let items = self.previewItems(from: entry, maxItems: maxItems)
@@ -348,7 +348,7 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func cache(payload: ClawdbotSessionsPreviewPayload, maxItems: Int) async {
+    private static func cache(payload: MoltbotSessionsPreviewPayload, maxItems: Int) async {
         for entry in payload.previews {
             let snapshot = self.snapshot(from: entry, maxItems: maxItems)
             await SessionPreviewCache.shared.store(snapshot: snapshot, for: entry.key)
@@ -365,7 +365,7 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func previewItems(
-        from entry: ClawdbotSessionPreviewEntry,
+        from entry: MoltbotSessionPreviewEntry,
         maxItems: Int) -> [SessionPreviewItem]
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
@@ -381,11 +381,11 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func previewItems(
-        from payload: ClawdbotChatHistoryPayload,
+        from payload: MoltbotChatHistoryPayload,
         maxItems: Int) -> [SessionPreviewItem]
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
-        let raw: [ClawdbotKit.AnyCodable] = payload.messages ?? []
+        let raw: [MoltbotKit.AnyCodable] = payload.messages ?? []
         let messages = self.decodeMessages(raw)
         let built = messages.compactMap { message -> SessionPreviewItem? in
             guard let text = self.previewText(for: message) else { return nil }
@@ -399,10 +399,10 @@ enum SessionMenuPreviewLoader {
         return Array(trimmed.reversed())
     }
 
-    private static func decodeMessages(_ raw: [ClawdbotKit.AnyCodable]) -> [ClawdbotChatMessage] {
+    private static func decodeMessages(_ raw: [MoltbotKit.AnyCodable]) -> [MoltbotChatMessage] {
         raw.compactMap { item in
             guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(ClawdbotChatMessage.self, from: data)
+            return try? JSONDecoder().decode(MoltbotChatMessage.self, from: data)
         }
     }
 
@@ -421,7 +421,7 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func previewText(for message: ClawdbotChatMessage) -> String? {
+    private static func previewText(for message: MoltbotChatMessage) -> String? {
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text }
@@ -442,12 +442,12 @@ enum SessionMenuPreviewLoader {
         return nil
     }
 
-    private static func isToolCall(_ message: ClawdbotChatMessage) -> Bool {
+    private static func isToolCall(_ message: MoltbotChatMessage) -> Bool {
         if message.toolName?.nonEmpty != nil { return true }
         return message.content.contains { $0.name?.nonEmpty != nil || $0.type?.lowercased() == "toolcall" }
     }
 
-    private static func toolNames(for message: ClawdbotChatMessage) -> [String] {
+    private static func toolNames(for message: MoltbotChatMessage) -> [String] {
         var names: [String] = []
         for content in message.content {
             if let name = content.name?.nonEmpty {
@@ -460,7 +460,7 @@ enum SessionMenuPreviewLoader {
         return Self.dedupePreservingOrder(names)
     }
 
-    private static func mediaSummary(for message: ClawdbotChatMessage) -> String? {
+    private static func mediaSummary(for message: MoltbotChatMessage) -> String? {
         let types = message.content.compactMap { content -> String? in
             let raw = content.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard let raw, !raw.isEmpty else { return nil }
