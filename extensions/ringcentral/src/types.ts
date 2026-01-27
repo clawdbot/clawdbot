@@ -115,6 +115,7 @@ export type RingCentralAccountConfig = {
   allowBots?: boolean;
   botExtensionId?: string;
   replyToMode?: "off" | "all";
+  selfOnly?: boolean; // JWT mode: only accept messages from the JWT user (default: true)
 };
 
 export type RingCentralConfig = RingCentralAccountConfig & {

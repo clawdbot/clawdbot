@@ -162,10 +162,15 @@ async function processMessageWithPipeline(params: {
   const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
   if (!rawBody) return;
 
-  // Skip messages from self (bot)
-  if (ownerId && senderId === ownerId) {
-    logVerbose(core, runtime, "skip self-authored message");
-    return;
+  // In JWT mode (selfOnly), only accept messages from the JWT user themselves
+  // This is because the bot uses the JWT user's identity, so we're essentially
+  // having a conversation with ourselves (the AI assistant)
+  const selfOnly = account.config.selfOnly !== false; // default true
+  if (selfOnly && ownerId) {
+    if (senderId !== ownerId) {
+      logVerbose(core, runtime, `ignore message from non-owner: ${senderId} (selfOnly mode)`);
+      return;
+    }
   }
 
   // Fetch chat info to determine type
