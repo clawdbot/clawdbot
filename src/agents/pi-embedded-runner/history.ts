@@ -10,8 +10,46 @@ function stripThreadSuffix(value: string): string {
 }
 
 /**
+ * Check if an assistant message has tool calls that need results
+ */
+function hasToolCalls(msg: AgentMessage): boolean {
+  if (msg.role !== "assistant") return false;
+  const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+  if (!Array.isArray(assistant.content)) return false;
+
+  return assistant.content.some((block) => {
+    if (!block || typeof block !== "object") return false;
+    const rec = block as { type?: unknown; id?: unknown };
+    return (
+      (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") &&
+      typeof rec.id === "string" &&
+      rec.id
+    );
+  });
+}
+
+/**
+ * Count consecutive tool result messages following the given index
+ */
+function countFollowingToolResults(messages: AgentMessage[], startIndex: number): number {
+  let count = 0;
+  for (let i = startIndex + 1; i < messages.length; i++) {
+    if (messages[i].role === "toolResult") {
+      count++;
+    } else {
+      break;
+    }
+  }
+  return count;
+}
+
+/**
  * Limits conversation history to the last N user turns (and their associated
  * assistant responses). This reduces token usage for long-running DM sessions.
+ *
+ * IMPORTANT: This function is tool-call-aware. If slicing would separate an
+ * assistant message with tool calls from its tool results, it adjusts the
+ * slice boundary to include the complete assistant + tool results sequence.
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
@@ -26,7 +64,27 @@ export function limitHistoryTurns(
     if (messages[i].role === "user") {
       userCount++;
       if (userCount > limit) {
-        return messages.slice(lastUserIndex);
+        // Before slicing at lastUserIndex, check if the message immediately before
+        // the slice point is a toolResult. If so, we need to include its corresponding
+        // assistant to avoid breaking the tool call/result pairing.
+        let sliceIndex = lastUserIndex;
+
+        // Only adjust if there's actually a toolResult at the boundary
+        if (lastUserIndex > 0 && messages[lastUserIndex - 1].role === "toolResult") {
+          // Walk back through consecutive tool result messages to find the assistant
+          let j = lastUserIndex - 1;
+          while (j >= 0 && messages[j].role === "toolResult") {
+            j--;
+          }
+
+          // If we found an assistant with tool calls immediately before the tool results,
+          // we need to include it to avoid breaking the tool call/result pairing.
+          if (j >= 0 && hasToolCalls(messages[j])) {
+            sliceIndex = j;
+          }
+        }
+
+        return messages.slice(sliceIndex);
       }
       lastUserIndex = i;
     }
