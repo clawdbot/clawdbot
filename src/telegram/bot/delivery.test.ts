@@ -168,6 +168,37 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("uses reply_parameters when quote text is provided", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 4000,
+      replyQuoteText: "quoted text",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: "quoted text",
+        },
+      }),
+    );
+  });
+
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendVoice = vi
