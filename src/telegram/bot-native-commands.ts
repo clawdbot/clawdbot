@@ -465,6 +465,7 @@ export const registerTelegramNativeCommands = ({
             CommandAuthorized: commandAuthorized,
             CommandSource: "native" as const,
             SessionKey: `telegram:slash:${senderId || chatId}`,
+            AccountId: route.accountId,
             CommandTargetSessionKey: sessionKey,
             MessageThreadId: resolvedThreadId,
             IsForum: isForum,
