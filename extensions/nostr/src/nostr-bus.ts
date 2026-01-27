@@ -676,7 +676,10 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      await pool.publish([relay], reply);
+      const [publishResult] = await Promise.allSettled(pool.publish([relay], reply));
+      if (publishResult?.status === "rejected") {
+        throw publishResult.reason;
+      }
       const latency = Date.now() - startTime;
 
       // Record success
@@ -761,7 +764,10 @@ async function sendTypingIndicator(
 
     const startTime = Date.now();
     try {
-      await pool.publish([relay], event);
+      const [publishResult] = await Promise.allSettled(pool.publish([relay], event));
+      if (publishResult?.status === "rejected") {
+        throw publishResult.reason;
+      }
       const latency = Date.now() - startTime;
       cb?.recordSuccess();
       healthTracker.recordSuccess(relay, latency);
