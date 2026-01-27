@@ -32,8 +32,8 @@ jobs:
 
       - name: Run installer docker tests
         env:
-          CLAWDBOT_INSTALL_URL: https://clawd.bot/install.sh
-          CLAWDBOT_INSTALL_CLI_URL: https://clawd.bot/install-cli.sh
+          CLAWDBOT_INSTALL_URL: https://molt.bot/install.sh
+          CLAWDBOT_INSTALL_CLI_URL: https://molt.bot/install-cli.sh
           CLAWDBOT_NO_ONBOARD: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
