@@ -10,13 +10,14 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 
 ## Quick setup (beginner)
 1) Create a Discord bot and copy the bot token.
-2) Set the token for Clawdbot:
+2) In the Discord app settings, enable **Message Content Intent** (and **Server Members Intent** if you plan to use allowlists or name lookups).
+3) Set the token for Clawdbot:
    - Env: `DISCORD_BOT_TOKEN=...`
    - Or config: `channels.discord.token: "..."`.
    - If both are set, config takes precedence (env fallback is default-account only).
-3) Invite the bot to your server with message permissions.
-4) Start the gateway.
-5) DM access is pairing by default; approve the pairing code on first contact.
+4) Invite the bot to your server with message permissions (create a private server if you just want DMs).
+5) Start the gateway.
+6) DM access is pairing by default; approve the pairing code on first contact.
 
 Minimal config:
 ```json5
@@ -297,8 +298,12 @@ ack reaction after the bot replies.
 - `guilds."*"`: default per-guild settings applied when no explicit entry exists.
 - `guilds.<id>.slug`: optional friendly slug used for display names.
 - `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
+- `guilds.<id>.tools`: optional per-guild tool policy overrides (`allow`/`deny`/`alsoAllow`) used when the channel override is missing.
+- `guilds.<id>.toolsBySender`: optional per-sender tool policy overrides at the guild level (applies when the channel override is missing; `"*"` wildcard supported).
 - `guilds.<id>.channels.<channel>.allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `guilds.<id>.channels.<channel>.requireMention`: mention gating for the channel.
+- `guilds.<id>.channels.<channel>.tools`: optional per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `guilds.<id>.channels.<channel>.toolsBySender`: optional per-sender tool policy overrides within the channel (`"*"` wildcard supported).
 - `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
 - `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
 - `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel (combined with channel topic).

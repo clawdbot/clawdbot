@@ -59,6 +59,8 @@ Two layers matter:
 Rules of thumb:
 - `deny` always wins.
 - If `allow` is non-empty, everything else is treated as blocked.
+- Tool policy is the hard stop: `/exec` cannot override a denied `exec` tool.
+- `/exec` only changes session defaults for authorized senders; it does not grant tool access.
 Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
 
 ### Tool groups (shorthands)
@@ -95,6 +97,7 @@ Elevated does **not** grant extra tools; it only affects `exec`.
 - Use `/elevated full` to skip exec approvals for the session.
 - If you’re already running direct, elevated is effectively a no-op (still gated).
 - Elevated is **not** skill-scoped and does **not** override tool allow/deny.
+- `/exec` is separate from elevated. It only adjusts per-session exec defaults for authorized senders.
 
 Gates:
 - Enablement: `tools.elevated.enabled` (and optionally `agents.list[].tools.elevated.enabled`)

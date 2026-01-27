@@ -1,4 +1,4 @@
-import type { LocationMessageEventContent, MatrixClient } from "matrix-bot-sdk";
+import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 import {
   createReplyPrefixContext,
@@ -110,7 +110,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted messages are decrypted automatically by matrix-bot-sdk with crypto enabled
+        // Encrypted messages are decrypted automatically by @vector-im/matrix-bot-sdk with crypto enabled
         return;
       }
 
@@ -436,7 +436,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         threadReplies,
         messageId,
         threadRootId,
-        isThreadRoot: false, // matrix-bot-sdk doesn't have this info readily available
+        isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
 
       const route = core.channel.routing.resolveAgentRoute({

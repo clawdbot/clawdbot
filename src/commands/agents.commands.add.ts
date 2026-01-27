@@ -258,7 +258,6 @@ export async function agentsAddCommand(
         prompter,
         store: authStore,
         includeSkip: true,
-        includeClaudeCliIfMissing: true,
       });
 
       const authResult = await applyAuthChoice({

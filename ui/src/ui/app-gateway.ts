@@ -127,6 +127,12 @@ export function connectGateway(host: GatewayHost) {
       host.lastError = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      // Reset orphaned chat run state from before disconnect.
+      // Any in-flight run's final event was lost during the disconnect window.
+      host.chatRunId = null;
+      (host as unknown as { chatStream: string | null }).chatStream = null;
+      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as ClawdbotApp);
       void loadAgents(host as unknown as ClawdbotApp);
       void loadNodes(host as unknown as ClawdbotApp, { quiet: true });

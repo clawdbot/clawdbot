@@ -32,7 +32,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "skip";
-export type GatewayAuthChoice = "off" | "token" | "password";
+export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
 export type TailscaleMode = "off" | "serve" | "funnel";

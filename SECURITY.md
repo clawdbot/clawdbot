@@ -13,6 +13,10 @@ For threat model + hardening guidance (including `clawdbot security audit --deep
 
 - `https://docs.clawd.bot/gateway/security`
 
+### Web Interface Safety
+
+Clawdbot's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
+
 ## Runtime Requirements
 
 ### Node.js Version

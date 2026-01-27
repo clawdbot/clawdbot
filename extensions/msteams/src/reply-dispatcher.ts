@@ -42,7 +42,7 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
-    await params.context.sendActivities([{ type: "typing" }]);
+    await params.context.sendActivity({ type: "typing" });
   };
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
@@ -70,38 +70,38 @@ export function createMSTeamsReplyDispatcher(params: {
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg: params.cfg,
           channel: "msteams",
-      });
-      const messages = renderReplyPayloadsToMessages([payload], {
-        textChunkLimit: params.textLimit,
-        chunkText: true,
-        mediaMode: "split",
-        tableMode,
-        chunkMode,
-      });
-      const mediaMaxBytes = resolveChannelMediaMaxBytes({
-        cfg: params.cfg,
-        resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-      });
-      const ids = await sendMSTeamsMessages({
-        replyStyle: params.replyStyle,
-        adapter: params.adapter,
-        appId: params.appId,
-        conversationRef: params.conversationRef,
-        context: params.context,
-        messages,
-        // Enable default retry/backoff for throttling/transient failures.
-        retry: {},
-        onRetry: (event) => {
-          params.log.debug("retrying send", {
-            replyStyle: params.replyStyle,
-            ...event,
-          });
-        },
-        tokenProvider: params.tokenProvider,
-        sharePointSiteId: params.sharePointSiteId,
-        mediaMaxBytes,
-      });
-      if (ids.length > 0) params.onSentMessageIds?.(ids);
+        });
+        const messages = renderReplyPayloadsToMessages([payload], {
+          textChunkLimit: params.textLimit,
+          chunkText: true,
+          mediaMode: "split",
+          tableMode,
+          chunkMode,
+        });
+        const mediaMaxBytes = resolveChannelMediaMaxBytes({
+          cfg: params.cfg,
+          resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+        });
+        const ids = await sendMSTeamsMessages({
+          replyStyle: params.replyStyle,
+          adapter: params.adapter,
+          appId: params.appId,
+          conversationRef: params.conversationRef,
+          context: params.context,
+          messages,
+          // Enable default retry/backoff for throttling/transient failures.
+          retry: {},
+          onRetry: (event) => {
+            params.log.debug("retrying send", {
+              replyStyle: params.replyStyle,
+              ...event,
+            });
+          },
+          tokenProvider: params.tokenProvider,
+          sharePointSiteId: params.sharePointSiteId,
+          mediaMaxBytes,
+        });
+        if (ids.length > 0) params.onSentMessageIds?.(ids);
       },
       onError: (err, info) => {
         const errMsg = formatUnknownError(err);

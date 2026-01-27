@@ -185,7 +185,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
         `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
       ],
       selectionHint: !sdkReady
-        ? "install matrix-bot-sdk"
+        ? "install @vector-im/matrix-bot-sdk"
         : configured
           ? "configured"
           : "needs auth",

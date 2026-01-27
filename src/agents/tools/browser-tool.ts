@@ -55,9 +55,8 @@ function isBrowserNode(node: NodeListNode) {
 
 async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
-  target?: "sandbox" | "host" | "custom" | "node";
-  controlUrl?: string;
-  defaultControlUrl?: string;
+  target?: "sandbox" | "host" | "node";
+  sandboxBridgeUrl?: string;
 }): Promise<BrowserNodeTarget | null> {
   const cfg = loadConfig();
   const policy = cfg.gateway?.nodes?.browser;
@@ -68,10 +67,9 @@ async function resolveBrowserNodeTarget(params: {
     }
     return null;
   }
-  if (params.defaultControlUrl?.trim() && params.target !== "node" && !params.requestedNode) {
+  if (params.sandboxBridgeUrl?.trim() && params.target !== "node" && !params.requestedNode) {
     return null;
   }
-  if (params.controlUrl?.trim()) return null;
   if (params.target && params.target !== "node") return null;
   if (mode === "manual" && params.target !== "node" && !params.requestedNode) {
     return null;
@@ -187,70 +185,22 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
 }
 
 function resolveBrowserBaseUrl(params: {
-  target?: "sandbox" | "host" | "custom";
-  controlUrl?: string;
-  defaultControlUrl?: string;
+  target?: "sandbox" | "host";
+  sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
-}) {
+}): string | undefined {
   const cfg = loadConfig();
-  const resolved = resolveBrowserConfig(cfg.browser);
-  const normalizedControlUrl = params.controlUrl?.trim() ?? "";
-  const normalizedDefault = params.defaultControlUrl?.trim() ?? "";
-  const target =
-    params.target ?? (normalizedControlUrl ? "custom" : normalizedDefault ? "sandbox" : "host");
-
-  const assertAllowedControlUrl = (url: string) => {
-    const allowedUrls = params.allowedControlUrls?.map((entry) => entry.trim().replace(/\/$/, ""));
-    const allowedHosts = params.allowedControlHosts?.map((entry) => entry.trim().toLowerCase());
-    const allowedPorts = params.allowedControlPorts;
-    if (!allowedUrls?.length && !allowedHosts?.length && !allowedPorts?.length) {
-      return;
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new Error(`Invalid browser controlUrl: ${url}`);
-    }
-    const normalizedUrl = parsed.toString().replace(/\/$/, "");
-    if (allowedUrls?.length && !allowedUrls.includes(normalizedUrl)) {
-      throw new Error("Browser controlUrl is not in the allowed URL list.");
-    }
-    if (allowedHosts?.length && !allowedHosts.includes(parsed.hostname)) {
-      throw new Error("Browser controlUrl hostname is not in the allowed host list.");
-    }
-    if (allowedPorts?.length) {
-      const port =
-        parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-      if (!Number.isFinite(port) || !allowedPorts.includes(port)) {
-        throw new Error("Browser controlUrl port is not in the allowed port list.");
-      }
-    }
-  };
-
-  if (target !== "custom" && params.target && normalizedControlUrl) {
-    throw new Error('controlUrl is only supported with target="custom".');
-  }
-
-  if (target === "custom") {
-    if (!normalizedControlUrl) {
-      throw new Error("Custom browser target requires controlUrl.");
-    }
-    const normalized = normalizedControlUrl.replace(/\/$/, "");
-    assertAllowedControlUrl(normalized);
-    return normalized;
-  }
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
+  const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");
 
   if (target === "sandbox") {
-    if (!normalizedDefault) {
+    if (!normalizedSandbox) {
       throw new Error(
         'Sandbox browser is unavailable. Enable agents.defaults.sandbox.browser.enabled or use target="host" if allowed.',
       );
     }
-    return normalizedDefault.replace(/\/$/, "");
+    return normalizedSandbox.replace(/\/$/, "");
   }
 
   if (params.allowHostControl === false) {
@@ -261,27 +211,16 @@ function resolveBrowserBaseUrl(params: {
       "Browser control is disabled. Set browser.enabled=true in ~/.clawdbot/clawdbot.json.",
     );
   }
-  const normalized = resolved.controlUrl.replace(/\/$/, "");
-  assertAllowedControlUrl(normalized);
-  return normalized;
+  return undefined;
 }
 
 export function createBrowserTool(opts?: {
-  defaultControlUrl?: string;
+  sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
 }): AnyAgentTool {
-  const targetDefault = opts?.defaultControlUrl ? "sandbox" : "host";
+  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
-  const allowlistHint =
-    opts?.allowedControlUrls?.length ||
-    opts?.allowedControlHosts?.length ||
-    opts?.allowedControlPorts?.length
-      ? "Custom targets are restricted by sandbox allowlists."
-      : "Custom targets are unrestricted.";
   return {
     label: "Browser",
     name: "browser",
@@ -294,33 +233,22 @@ export function createBrowserTool(opts?: {
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-      `target selects browser location (sandbox|host|custom|node). Default: ${targetDefault}.`,
-      "controlUrl implies target=custom (remote control server).",
+      `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
-      allowlistHint,
     ].join(" "),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const controlUrl = readStringParam(params, "controlUrl");
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      let target = readStringParam(params, "target") as
-        | "sandbox"
-        | "host"
-        | "custom"
-        | "node"
-        | undefined;
+      let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
-      if (controlUrl?.trim() && (target === "node" || requestedNode)) {
-        throw new Error('controlUrl is not supported with target="node".');
-      }
-      if (target === "custom" && requestedNode) {
-        throw new Error('node is not supported with target="custom".');
+      if (requestedNode && target && target !== "node") {
+        throw new Error('node is only supported with target="node".');
       }
 
-      if (!target && !controlUrl?.trim() && !requestedNode && profile === "chrome") {
+      if (!target && !requestedNode && profile === "chrome") {
         // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
         target = "host";
       }
@@ -328,21 +256,16 @@ export function createBrowserTool(opts?: {
       const nodeTarget = await resolveBrowserNodeTarget({
         requestedNode: requestedNode ?? undefined,
         target,
-        controlUrl,
-        defaultControlUrl: opts?.defaultControlUrl,
+        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
       });
 
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
-        ? ""
+        ? undefined
         : resolveBrowserBaseUrl({
             target: resolvedTarget,
-            controlUrl,
-            defaultControlUrl: opts?.defaultControlUrl,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
             allowHostControl: opts?.allowHostControl,
-            allowedControlUrls: opts?.allowedControlUrls,
-            allowedControlHosts: opts?.allowedControlHosts,
-            allowedControlPorts: opts?.allowedControlPorts,
           });
 
       const proxyRequest = nodeTarget

@@ -1,12 +1,14 @@
-import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
+import type { BrowserConfig, BrowserProfileConfig, ClawdbotConfig } from "../config/config.js";
 import {
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
+  DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import {
   DEFAULT_CLAWD_BROWSER_COLOR,
-  DEFAULT_CLAWD_BROWSER_CONTROL_URL,
   DEFAULT_CLAWD_BROWSER_ENABLED,
+  DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
 } from "./constants.js";
@@ -14,10 +16,8 @@ import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
-  controlUrl: string;
-  controlHost: string;
+  evaluateEnabled: boolean;
   controlPort: number;
-  controlToken?: string;
   cdpProtocol: "http" | "https";
   cdpHost: string;
   cdpIsLoopback: boolean;
@@ -137,24 +137,14 @@ function ensureDefaultChromeExtensionProfile(
   };
   return result;
 }
-export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBrowserConfig {
+export function resolveBrowserConfig(
+  cfg: BrowserConfig | undefined,
+  rootConfig?: ClawdbotConfig,
+): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_CLAWD_BROWSER_ENABLED;
-  const envControlUrl = process.env.CLAWDBOT_BROWSER_CONTROL_URL?.trim();
-  const controlToken = cfg?.controlToken?.trim() || undefined;
-  const derivedControlPort = (() => {
-    const raw = process.env.CLAWDBOT_GATEWAY_PORT?.trim();
-    if (!raw) return null;
-    const gatewayPort = Number.parseInt(raw, 10);
-    if (!Number.isFinite(gatewayPort) || gatewayPort <= 0) return null;
-    return deriveDefaultBrowserControlPort(gatewayPort);
-  })();
-  const derivedControlUrl = derivedControlPort ? `http://127.0.0.1:${derivedControlPort}` : null;
-
-  const controlInfo = parseHttpUrl(
-    cfg?.controlUrl ?? envControlUrl ?? derivedControlUrl ?? DEFAULT_CLAWD_BROWSER_CONTROL_URL,
-    "browser.controlUrl",
-  );
-  const controlPort = controlInfo.port;
+  const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const gatewayPort = resolveGatewayPort(rootConfig);
+  const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const defaultColor = normalizeHexColor(cfg?.color);
   const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
   const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
@@ -178,11 +168,10 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
     const derivedPort = controlPort + 1;
     if (derivedPort > 65535) {
       throw new Error(
-        `browser.controlUrl port (${controlPort}) is too high; cannot derive CDP port (${derivedPort})`,
+        `Derived CDP port (${derivedPort}) is too high; check gateway port configuration.`,
       );
     }
-    const derived = new URL(controlInfo.normalized);
-    derived.port = String(derivedPort);
+    const derived = new URL(`http://127.0.0.1:${derivedPort}`);
     cdpInfo = {
       parsed: derived,
       port: derivedPort,
@@ -211,10 +200,8 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
 
   return {
     enabled,
-    controlUrl: controlInfo.normalized,
-    controlHost: controlInfo.parsed.hostname,
+    evaluateEnabled,
     controlPort,
-    ...(controlToken ? { controlToken } : {}),
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
@@ -269,6 +256,6 @@ export function resolveProfile(
   };
 }
 
-export function shouldStartLocalBrowserServer(resolved: ResolvedBrowserConfig) {
-  return isLoopbackHost(resolved.controlHost);
+export function shouldStartLocalBrowserServer(_resolved: ResolvedBrowserConfig) {
+  return true;
 }

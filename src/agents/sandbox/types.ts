@@ -37,9 +37,6 @@ export type SandboxBrowserConfig = {
   headless: boolean;
   enableNoVnc: boolean;
   allowHostControl: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
   autoStart: boolean;
   autoStartTimeoutMs: number;
 };
@@ -63,7 +60,7 @@ export type SandboxConfig = {
 };
 
 export type SandboxBrowserContext = {
-  controlUrl: string;
+  bridgeUrl: string;
   noVncUrl?: string;
   containerName: string;
 };
@@ -79,9 +76,6 @@ export type SandboxContext = {
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
-  browserAllowedControlUrls?: string[];
-  browserAllowedControlHosts?: string[];
-  browserAllowedControlPorts?: number[];
   browser?: SandboxBrowserContext;
 };
 

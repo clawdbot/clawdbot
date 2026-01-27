@@ -2,7 +2,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { resolveBrowserConfig } from "../browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -24,14 +24,11 @@ import {
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import {
-  formatOctal,
-  isGroupReadable,
-  isGroupWritable,
-  isWorldReadable,
-  isWorldWritable,
-  modeBits,
-  safeStat,
+  formatPermissionDetail,
+  formatPermissionRemediation,
+  inspectPathPermissions,
 } from "./audit-fs.js";
+import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -66,6 +63,8 @@ export type SecurityAuditReport = {
 
 export type SecurityAuditOptions = {
   config: ClawdbotConfig;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
   deep?: boolean;
   includeFilesystem?: boolean;
   includeChannelSecurity?: boolean;
@@ -79,6 +78,8 @@ export type SecurityAuditOptions = {
   plugins?: ReturnType<typeof listChannelPlugins>;
   /** Dependency injection for tests. */
   probeGatewayFn?: typeof probeGateway;
+  /** Dependency injection for tests (Windows ACL checks). */
+  execIcacls?: ExecFn;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -119,13 +120,19 @@ function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity 
 async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  execIcacls?: ExecFn;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
 
-  const stateDirStat = await safeStat(params.stateDir);
-  if (stateDirStat.ok) {
-    const bits = modeBits(stateDirStat.mode);
-    if (stateDirStat.isSymlink) {
+  const stateDirPerms = await inspectPathPermissions(params.stateDir, {
+    env: params.env,
+    platform: params.platform,
+    exec: params.execIcacls,
+  });
+  if (stateDirPerms.ok) {
+    if (stateDirPerms.isSymlink) {
       findings.push({
         checkId: "fs.state_dir.symlink",
         severity: "warn",
@@ -133,37 +140,58 @@ async function collectFilesystemFindings(params: {
         detail: `${params.stateDir} is a symlink; treat this as an extra trust boundary.`,
       });
     }
-    if (isWorldWritable(bits)) {
+    if (stateDirPerms.worldWritable) {
       findings.push({
         checkId: "fs.state_dir.perms_world_writable",
         severity: "critical",
         title: "State dir is world-writable",
-        detail: `${params.stateDir} mode=${formatOctal(bits)}; other users can write into your Clawdbot state.`,
-        remediation: `chmod 700 ${params.stateDir}`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; other users can write into your Clawdbot state.`,
+        remediation: formatPermissionRemediation({
+          targetPath: params.stateDir,
+          perms: stateDirPerms,
+          isDir: true,
+          posixMode: 0o700,
+          env: params.env,
+        }),
       });
-    } else if (isGroupWritable(bits)) {
+    } else if (stateDirPerms.groupWritable) {
       findings.push({
         checkId: "fs.state_dir.perms_group_writable",
         severity: "warn",
         title: "State dir is group-writable",
-        detail: `${params.stateDir} mode=${formatOctal(bits)}; group users can write into your Clawdbot state.`,
-        remediation: `chmod 700 ${params.stateDir}`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; group users can write into your Clawdbot state.`,
+        remediation: formatPermissionRemediation({
+          targetPath: params.stateDir,
+          perms: stateDirPerms,
+          isDir: true,
+          posixMode: 0o700,
+          env: params.env,
+        }),
       });
-    } else if (isGroupReadable(bits) || isWorldReadable(bits)) {
+    } else if (stateDirPerms.groupReadable || stateDirPerms.worldReadable) {
       findings.push({
         checkId: "fs.state_dir.perms_readable",
         severity: "warn",
         title: "State dir is readable by others",
-        detail: `${params.stateDir} mode=${formatOctal(bits)}; consider restricting to 700.`,
-        remediation: `chmod 700 ${params.stateDir}`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; consider restricting to 700.`,
+        remediation: formatPermissionRemediation({
+          targetPath: params.stateDir,
+          perms: stateDirPerms,
+          isDir: true,
+          posixMode: 0o700,
+          env: params.env,
+        }),
       });
     }
   }
 
-  const configStat = await safeStat(params.configPath);
-  if (configStat.ok) {
-    const bits = modeBits(configStat.mode);
-    if (configStat.isSymlink) {
+  const configPerms = await inspectPathPermissions(params.configPath, {
+    env: params.env,
+    platform: params.platform,
+    exec: params.execIcacls,
+  });
+  if (configPerms.ok) {
+    if (configPerms.isSymlink) {
       findings.push({
         checkId: "fs.config.symlink",
         severity: "warn",
@@ -171,29 +199,47 @@ async function collectFilesystemFindings(params: {
         detail: `${params.configPath} is a symlink; make sure you trust its target.`,
       });
     }
-    if (isWorldWritable(bits) || isGroupWritable(bits)) {
+    if (configPerms.worldWritable || configPerms.groupWritable) {
       findings.push({
         checkId: "fs.config.perms_writable",
         severity: "critical",
         title: "Config file is writable by others",
-        detail: `${params.configPath} mode=${formatOctal(bits)}; another user could change gateway/auth/tool policies.`,
-        remediation: `chmod 600 ${params.configPath}`,
+        detail: `${formatPermissionDetail(params.configPath, configPerms)}; another user could change gateway/auth/tool policies.`,
+        remediation: formatPermissionRemediation({
+          targetPath: params.configPath,
+          perms: configPerms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
       });
-    } else if (isWorldReadable(bits)) {
+    } else if (configPerms.worldReadable) {
       findings.push({
         checkId: "fs.config.perms_world_readable",
         severity: "critical",
         title: "Config file is world-readable",
-        detail: `${params.configPath} mode=${formatOctal(bits)}; config can contain tokens and private settings.`,
-        remediation: `chmod 600 ${params.configPath}`,
+        detail: `${formatPermissionDetail(params.configPath, configPerms)}; config can contain tokens and private settings.`,
+        remediation: formatPermissionRemediation({
+          targetPath: params.configPath,
+          perms: configPerms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
       });
-    } else if (isGroupReadable(bits)) {
+    } else if (configPerms.groupReadable) {
       findings.push({
         checkId: "fs.config.perms_group_readable",
         severity: "warn",
         title: "Config file is group-readable",
-        detail: `${params.configPath} mode=${formatOctal(bits)}; config can contain tokens and private settings.`,
-        remediation: `chmod 600 ${params.configPath}`,
+        detail: `${formatPermissionDetail(params.configPath, configPerms)}; config can contain tokens and private settings.`,
+        remediation: formatPermissionRemediation({
+          targetPath: params.configPath,
+          perms: configPerms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
       });
     }
   }
@@ -201,12 +247,15 @@ async function collectFilesystemFindings(params: {
   return findings;
 }
 
-function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+function collectGatewayConfigFindings(
+  cfg: ClawdbotConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
+  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
@@ -274,11 +323,22 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "warn",
+      severity: "critical",
       title: "Control UI allows insecure HTTP auth",
       detail:
         "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
+    });
+  }
+
+  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
+    findings.push({
+      checkId: "gateway.control_ui.device_auth_disabled",
+      severity: "critical",
+      title: "DANGEROUS: Control UI device auth disabled",
+      detail:
+        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
+      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
     });
   }
 
@@ -296,82 +356,41 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
   return findings;
 }
 
-function isLoopbackClientHost(hostname: string): boolean {
-  const h = hostname.trim().toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "::1";
-}
-
 function collectBrowserControlFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
   let resolved: ReturnType<typeof resolveBrowserConfig>;
   try {
-    resolved = resolveBrowserConfig(cfg.browser);
+    resolved = resolveBrowserConfig(cfg.browser, cfg);
   } catch (err) {
     findings.push({
       checkId: "browser.control_invalid_config",
       severity: "warn",
       title: "Browser control config looks invalid",
       detail: String(err),
-      remediation: `Fix browser.controlUrl/browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("clawdbot security audit --deep")}".`,
+      remediation: `Fix browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("clawdbot security audit --deep")}".`,
     });
     return findings;
   }
 
   if (!resolved.enabled) return findings;
 
-  const url = new URL(resolved.controlUrl);
-  const isLoopback = isLoopbackClientHost(url.hostname);
-  const envToken = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim();
-  const controlToken = (envToken || resolved.controlToken)?.trim() || null;
-
-  if (!isLoopback) {
-    if (!controlToken) {
-      findings.push({
-        checkId: "browser.control_remote_no_token",
-        severity: "critical",
-        title: "Remote browser control is missing an auth token",
-        detail: `browser.controlUrl is non-loopback (${resolved.controlUrl}) but no browser.controlToken (or CLAWDBOT_BROWSER_CONTROL_TOKEN) is configured.`,
-        remediation:
-          "Set browser.controlToken (or export CLAWDBOT_BROWSER_CONTROL_TOKEN) and prefer serving over Tailscale Serve or HTTPS reverse proxy.",
-      });
+  for (const name of Object.keys(resolved.profiles)) {
+    const profile = resolveProfile(resolved, name);
+    if (!profile || profile.cdpIsLoopback) continue;
+    let url: URL;
+    try {
+      url = new URL(profile.cdpUrl);
+    } catch {
+      continue;
     }
-
     if (url.protocol === "http:") {
       findings.push({
-        checkId: "browser.control_remote_http",
+        checkId: "browser.remote_cdp_http",
         severity: "warn",
-        title: "Remote browser control uses HTTP",
-        detail: `browser.controlUrl=${resolved.controlUrl} is http; this is OK only if it's tailnet-only (Tailscale) or behind another encrypted tunnel.`,
-        remediation: `Prefer HTTPS termination (Tailscale Serve) and keep the endpoint tailnet-only.`,
-      });
-    }
-
-    if (controlToken && controlToken.length < 24) {
-      findings.push({
-        checkId: "browser.control_token_too_short",
-        severity: "warn",
-        title: "Browser control token looks short",
-        detail: `browser control token is ${controlToken.length} chars; prefer a long random token.`,
-      });
-    }
-
-    const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-    const gatewayAuth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
-    const gatewayToken =
-      gatewayAuth.mode === "token" &&
-      typeof gatewayAuth.token === "string" &&
-      gatewayAuth.token.trim()
-        ? gatewayAuth.token.trim()
-        : null;
-
-    if (controlToken && gatewayToken && controlToken === gatewayToken) {
-      findings.push({
-        checkId: "browser.control_token_reuse_gateway_token",
-        severity: "warn",
-        title: "Browser control token reuses the Gateway token",
-        detail: `browser.controlToken matches gateway.auth token; compromise of browser control expands blast radius to the Gateway API.`,
-        remediation: `Use a separate browser.controlToken dedicated to browser control.`,
+        title: "Remote CDP uses HTTP",
+        detail: `browser profile "${name}" uses http CDP (${profile.cdpUrl}); this is OK only if it's tailnet-only or behind an encrypted tunnel.`,
+        remediation: `Prefer HTTPS/TLS or a tailnet-only endpoint for remote CDP.`,
       });
     }
   }
@@ -839,14 +858,16 @@ async function maybeProbeGateway(params: {
 export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const cfg = opts.config;
-  const env = process.env;
+  const env = opts.env ?? process.env;
+  const platform = opts.platform ?? process.platform;
+  const execIcacls = opts.execIcacls;
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
 
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg));
+  findings.push(...collectGatewayConfigFindings(cfg, env));
   findings.push(...collectBrowserControlFindings(cfg));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
@@ -862,11 +883,23 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       : null;
 
   if (opts.includeFilesystem !== false) {
-    findings.push(...(await collectFilesystemFindings({ stateDir, configPath })));
+    findings.push(
+      ...(await collectFilesystemFindings({
+        stateDir,
+        configPath,
+        env,
+        platform,
+        execIcacls,
+      })),
+    );
     if (configSnapshot) {
-      findings.push(...(await collectIncludeFilePermFindings({ configSnapshot })));
+      findings.push(
+        ...(await collectIncludeFilePermFindings({ configSnapshot, env, platform, execIcacls })),
+      );
     }
-    findings.push(...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir })));
+    findings.push(
+      ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
+    );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
   }
 

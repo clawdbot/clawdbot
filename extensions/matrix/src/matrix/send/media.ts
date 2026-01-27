@@ -5,7 +5,7 @@ import type {
   MatrixClient,
   TimedFileInfo,
   VideoFileInfo,
-} from "matrix-bot-sdk";
+} from "@vector-im/matrix-bot-sdk";
 import { parseBuffer, type IFileInfo } from "music-metadata";
 
 import { getMatrixRuntime } from "../../runtime.js";

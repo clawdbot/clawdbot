@@ -3,6 +3,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
   deleteMessageTelegram,
+  editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
 } from "../../telegram/send.js";
@@ -176,6 +177,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
+      silent: typeof params.silent === "boolean" ? params.silent : undefined,
     });
     return jsonResult({
       ok: true,
@@ -206,6 +208,51 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
     });
     return jsonResult({ ok: true, deleted: true });
+  }
+
+  if (action === "editMessage") {
+    if (!isActionEnabled("editMessage")) {
+      throw new Error("Telegram editMessage is disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageId = readNumberParam(params, "messageId", {
+      required: true,
+      integer: true,
+    });
+    const content = readStringParam(params, "content", {
+      required: true,
+      allowEmpty: false,
+    });
+    const buttons = readTelegramButtons(params);
+    if (buttons) {
+      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+        cfg,
+        accountId: accountId ?? undefined,
+      });
+      if (inlineButtonsScope === "off") {
+        throw new Error(
+          'Telegram inline buttons are disabled. Set channels.telegram.capabilities.inlineButtons to "dm", "group", "all", or "allowlist".',
+        );
+      }
+    }
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
+      token,
+      accountId: accountId ?? undefined,
+      buttons,
+    });
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+    });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

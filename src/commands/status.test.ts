@@ -1,4 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+let previousProfile: string | undefined;
+
+beforeAll(() => {
+  previousProfile = process.env.CLAWDBOT_PROFILE;
+  process.env.CLAWDBOT_PROFILE = "isolated";
+});
+
+afterAll(() => {
+  if (previousProfile === undefined) {
+    delete process.env.CLAWDBOT_PROFILE;
+  } else {
+    process.env.CLAWDBOT_PROFILE = previousProfile;
+  }
+});
 
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn().mockReturnValue({
@@ -312,7 +327,13 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
     expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
     expect(logs.some((l) => l.includes("Next steps:"))).toBe(true);
-    expect(logs.some((l) => l.includes("clawdbot status --all"))).toBe(true);
+    expect(
+      logs.some(
+        (l) =>
+          l.includes("clawdbot status --all") ||
+          l.includes("clawdbot --profile isolated status --all"),
+      ),
+    ).toBe(true);
   });
 
   it("shows gateway auth when reachable", async () => {

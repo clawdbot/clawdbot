@@ -529,6 +529,7 @@ Provider options:
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
+- `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `channels.telegram.webhookUrl`: enable webhook mode.
 - `channels.telegram.webhookSecret`: webhook secret (optional).

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
@@ -69,11 +70,14 @@ export async function resolveSandboxContext(params: {
     cfg,
   });
 
+  const evaluateEnabled =
+    params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const browser = await ensureSandboxBrowser({
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
     cfg,
+    evaluateEnabled,
   });
 
   return {
@@ -87,9 +91,6 @@ export async function resolveSandboxContext(params: {
     docker: cfg.docker,
     tools: cfg.tools,
     browserAllowHostControl: cfg.browser.allowHostControl,
-    browserAllowedControlUrls: cfg.browser.allowedControlUrls,
-    browserAllowedControlHosts: cfg.browser.allowedControlHosts,
-    browserAllowedControlPorts: cfg.browser.allowedControlPorts,
     browser: browser ?? undefined,
   };
 }

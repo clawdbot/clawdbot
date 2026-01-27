@@ -86,11 +86,6 @@ export function resolveSandboxBrowserConfig(params: {
 }): SandboxBrowserConfig {
   const agentBrowser = params.scope === "shared" ? undefined : params.agentBrowser;
   const globalBrowser = params.globalBrowser;
-  const allowedControlUrls = agentBrowser?.allowedControlUrls ?? globalBrowser?.allowedControlUrls;
-  const allowedControlHosts =
-    agentBrowser?.allowedControlHosts ?? globalBrowser?.allowedControlHosts;
-  const allowedControlPorts =
-    agentBrowser?.allowedControlPorts ?? globalBrowser?.allowedControlPorts;
   return {
     enabled: agentBrowser?.enabled ?? globalBrowser?.enabled ?? false,
     image: agentBrowser?.image ?? globalBrowser?.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE,
@@ -105,18 +100,6 @@ export function resolveSandboxBrowserConfig(params: {
     headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
     enableNoVnc: agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
     allowHostControl: agentBrowser?.allowHostControl ?? globalBrowser?.allowHostControl ?? false,
-    allowedControlUrls:
-      Array.isArray(allowedControlUrls) && allowedControlUrls.length > 0
-        ? allowedControlUrls
-        : undefined,
-    allowedControlHosts:
-      Array.isArray(allowedControlHosts) && allowedControlHosts.length > 0
-        ? allowedControlHosts
-        : undefined,
-    allowedControlPorts:
-      Array.isArray(allowedControlPorts) && allowedControlPorts.length > 0
-        ? allowedControlPorts
-        : undefined,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
     autoStartTimeoutMs:
       agentBrowser?.autoStartTimeoutMs ??

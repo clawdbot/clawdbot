@@ -127,4 +127,30 @@ describe("handleDiscordMessageAction", () => {
       }),
     );
   });
+
+  it("accepts threadId for thread replies (tool compatibility)", async () => {
+    sendMessageDiscord.mockClear();
+    const handleDiscordMessageAction = await loadHandleDiscordMessageAction();
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        // The `message` tool uses `threadId`.
+        threadId: "999",
+        // Include a conflicting channelId to ensure threadId takes precedence.
+        channelId: "123",
+        message: "hi",
+      },
+      cfg: {} as ClawdbotConfig,
+      accountId: "ops",
+    });
+
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:999",
+      "hi",
+      expect.objectContaining({
+        accountId: "ops",
+      }),
+    );
+  });
 });

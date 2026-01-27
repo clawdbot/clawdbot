@@ -142,6 +142,8 @@ Tool allow/deny policies still apply before sandbox rules. If a tool is denied
 globally or per-agent, sandboxing doesn’t bring it back.
 
 `tools.elevated` is an explicit escape hatch that runs `exec` on the host.
+`/exec` directives only apply for authorized senders and persist per session; to hard-disable
+`exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
 Debugging:
 - Use `clawdbot sandbox explain` to inspect effective sandbox mode, tool policy, and fix-it config keys.

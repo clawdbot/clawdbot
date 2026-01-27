@@ -20,8 +20,10 @@ describe("gateway tool", () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const previousProfile = process.env.CLAWDBOT_PROFILE;
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
+    process.env.CLAWDBOT_PROFILE = "isolated";
 
     try {
       const tool = createClawdbotTools({
@@ -47,7 +49,9 @@ describe("gateway tool", () => {
         payload?: { kind?: string; doctorHint?: string | null };
       };
       expect(parsed.payload?.kind).toBe("restart");
-      expect(parsed.payload?.doctorHint).toBe("Run: clawdbot doctor --non-interactive");
+      expect(parsed.payload?.doctorHint).toBe(
+        "Run: clawdbot --profile isolated doctor --non-interactive",
+      );
 
       expect(kill).not.toHaveBeenCalled();
       await vi.runAllTimersAsync();
@@ -59,6 +63,11 @@ describe("gateway tool", () => {
         delete process.env.CLAWDBOT_STATE_DIR;
       } else {
         process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+      }
+      if (previousProfile === undefined) {
+        delete process.env.CLAWDBOT_PROFILE;
+      } else {
+        process.env.CLAWDBOT_PROFILE = previousProfile;
       }
     }
   });

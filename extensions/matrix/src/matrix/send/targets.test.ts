@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { EventType } from "./types.js";
 
 let resolveMatrixRoomId: typeof import("./targets.js").resolveMatrixRoomId;

@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
-export type ResolvedGatewayAuthMode = "none" | "token" | "password";
+export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
@@ -14,7 +14,7 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token";
+  method?: "token" | "password" | "tailscale" | "device-token";
   user?: string;
   reason?: string;
 };
@@ -84,7 +84,7 @@ function resolveRequestClientIp(
   });
 }
 
-function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
   if (!req) return false;
   const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
   if (!isLoopbackAddress(clientIp)) return false;
@@ -219,13 +219,6 @@ export async function authorizeGatewayConnect(params: {
         user: tailscaleCheck.user.login,
       };
     }
-    if (auth.mode === "none") {
-      return { ok: false, reason: tailscaleCheck.reason };
-    }
-  }
-
-  if (auth.mode === "none") {
-    return { ok: true, method: "none" };
   }
 
   if (auth.mode === "token") {

@@ -123,16 +123,27 @@ import Testing
             configRoot: [:])
 
         #expect(cmd.first == "/usr/bin/ssh")
-        #expect(cmd.contains("clawd@example.com"))
+        if let marker = cmd.firstIndex(of: "--") {
+            #expect(cmd[marker + 1] == "clawd@example.com")
+        } else {
+            #expect(Bool(false))
+        }
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {
-            #expect(script.contains("cd '/srv/clawdbot'"))
+            #expect(script.contains("PRJ='/srv/clawdbot'"))
+            #expect(script.contains("cd \"$PRJ\""))
             #expect(script.contains("clawdbot"))
             #expect(script.contains("status"))
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
         }
+    }
+
+    @Test func rejectsUnsafeSSHTargets() async throws {
+        #expect(CommandResolver.parseSSHTarget("-oProxyCommand=calc") == nil)
+        #expect(CommandResolver.parseSSHTarget("host:-oProxyCommand=calc") == nil)
+        #expect(CommandResolver.parseSSHTarget("user@host:2222")?.port == 2222)
     }
 
     @Test func configRootLocalOverridesRemoteDefaults() async throws {

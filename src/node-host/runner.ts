@@ -33,7 +33,12 @@ import {
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadConfig } from "../config/config.js";
-import { resolveBrowserConfig, shouldStartLocalBrowserServer } from "../browser/config.js";
+import { resolveBrowserConfig } from "../browser/config.js";
+import {
+  createBrowserControlContext,
+  startBrowserControlServiceFromConfig,
+} from "../browser/control-service.js";
+import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import { detectMime } from "../media/mime.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
@@ -235,21 +240,37 @@ function resolveBrowserProxyConfig() {
 
 let browserControlReady: Promise<void> | null = null;
 
-async function ensureBrowserControlServer(): Promise<void> {
+async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) return browserControlReady;
   browserControlReady = (async () => {
     const cfg = loadConfig();
-    const resolved = resolveBrowserConfig(cfg.browser);
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
       throw new Error("browser control disabled");
     }
-    if (!shouldStartLocalBrowserServer(resolved)) {
-      throw new Error("browser control URL is non-loopback");
-    }
-    const mod = await import("../browser/server.js");
-    await mod.startBrowserControlServerFromConfig();
+    const started = await startBrowserControlServiceFromConfig();
+    if (!started) throw new Error("browser control disabled");
   })();
   return browserControlReady;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs?: number, label?: string): Promise<T> {
+  const resolved =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(1, Math.floor(timeoutMs))
+      : undefined;
+  if (!resolved) return await promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label ?? "request"} timed out`));
+    }, resolved);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
@@ -488,11 +509,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const cfg = loadConfig();
   const browserProxy = resolveBrowserProxyConfig();
-  const resolvedBrowser = resolveBrowserConfig(cfg.browser);
-  const browserProxyEnabled =
-    browserProxy.enabled &&
-    resolvedBrowser.enabled &&
-    shouldStartLocalBrowserServer(resolvedBrowser);
+  const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
+  const browserProxyEnabled = browserProxy.enabled && resolvedBrowser.enabled;
   const isRemoteMode = cfg.gateway?.mode === "remote";
   const token =
     process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
@@ -584,9 +602,11 @@ async function handleInvoke(
         payloadJSON: JSON.stringify(payload),
       });
     } catch (err) {
+      const message = String(err);
+      const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
       await sendInvokeResult(client, frame, {
         ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
+        error: { code, message },
       });
     }
     return;
@@ -667,8 +687,9 @@ async function handleInvoke(
       if (!proxyConfig.enabled) {
         throw new Error("UNAVAILABLE: node browser proxy disabled");
       }
-      await ensureBrowserControlServer();
-      const resolved = resolveBrowserConfig(loadConfig().browser);
+      await ensureBrowserControlService();
+      const cfg = loadConfig();
+      const resolved = resolveBrowserConfig(cfg.browser, cfg);
       const requestedProfile = typeof params.profile === "string" ? params.profile.trim() : "";
       const allowedProfiles = proxyConfig.allowProfiles;
       if (allowedProfiles.length > 0) {
@@ -684,54 +705,38 @@ async function handleInvoke(
         }
       }
 
-      const url = new URL(
-        pathValue.startsWith("/") ? pathValue : `/${pathValue}`,
-        resolved.controlUrl,
-      );
-      if (requestedProfile) {
-        url.searchParams.set("profile", requestedProfile);
-      }
-      const query = params.query ?? {};
-      for (const [key, value] of Object.entries(query)) {
-        if (value === undefined || value === null) continue;
-        url.searchParams.set(key, String(value));
-      }
       const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
+      const path = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
       const body = params.body;
-      const ctrl = new AbortController();
-      const timeoutMs =
-        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-          ? Math.max(1, Math.floor(params.timeoutMs))
-          : 20_000;
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      const headers = new Headers();
-      let bodyJson: string | undefined;
-      if (body !== undefined) {
-        headers.set("Content-Type", "application/json");
-        bodyJson = JSON.stringify(body);
+      const query: Record<string, unknown> = {};
+      if (requestedProfile) {
+        query.profile = requestedProfile;
       }
-      const token =
-        process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim() || resolved.controlToken?.trim();
-      if (token) {
-        headers.set("Authorization", `Bearer ${token}`);
+      const rawQuery = params.query ?? {};
+      for (const [key, value] of Object.entries(rawQuery)) {
+        if (value === undefined || value === null) continue;
+        query[key] = typeof value === "string" ? value : String(value);
       }
-      let res: Response;
-      try {
-        res = await fetch(url.toString(), {
-          method,
-          headers,
-          body: bodyJson,
-          signal: ctrl.signal,
-        });
-      } finally {
-        clearTimeout(timer);
+      const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+      const response = await withTimeout(
+        dispatcher.dispatch({
+          method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+          path,
+          query,
+          body,
+        }),
+        params.timeoutMs,
+        "browser proxy request",
+      );
+      if (response.status >= 400) {
+        const message =
+          response.body && typeof response.body === "object" && "error" in response.body
+            ? String((response.body as { error?: unknown }).error)
+            : `HTTP ${response.status}`;
+        throw new Error(message);
       }
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(text ? `${res.status}: ${text}` : `HTTP ${res.status}`);
-      }
-      const result = (await res.json()) as unknown;
-      if (allowedProfiles.length > 0 && url.pathname === "/profiles") {
+      const result = response.body as unknown;
+      if (allowedProfiles.length > 0 && path === "/profiles") {
         const obj =
           typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
         const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];

@@ -2,13 +2,15 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type express from "express";
-
 import type { BrowserRouteContext } from "../server-context.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 
-export function registerBrowserAgentDebugRoutes(app: express.Express, ctx: BrowserRouteContext) {
+export function registerBrowserAgentDebugRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   app.get("/console", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;

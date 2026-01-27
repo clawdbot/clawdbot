@@ -94,11 +94,6 @@ export async function configureGatewayForOnboarding(
           message: "Gateway auth",
           options: [
             {
-              value: "off",
-              label: "Off (loopback only)",
-              hint: "Not recommended unless you fully trust local processes",
-            },
-            {
               value: "token",
               label: "Token",
               hint: "Recommended default (local + remote)",
@@ -165,17 +160,11 @@ export async function configureGatewayForOnboarding(
 
   // Safety + constraints:
   // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
-  // - Auth off only allowed for bind=loopback.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
     await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
     customBindHost = undefined;
-  }
-
-  if (authMode === "off" && bind !== "loopback") {
-    await prompter.note("Non-loopback bind requires auth. Switching to token auth.", "Note");
-    authMode = "token";
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {

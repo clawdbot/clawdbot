@@ -206,6 +206,16 @@ extension OnboardingView {
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: fieldWidth)
                                     }
+                                    if let message = CommandResolver.sshTargetValidationMessage(self.state.remoteTarget) {
+                                        GridRow {
+                                            Text("")
+                                                .frame(width: labelWidth, alignment: .leading)
+                                            Text(message)
+                                                .font(.caption)
+                                                .foregroundStyle(.red)
+                                                .frame(width: fieldWidth, alignment: .leading)
+                                        }
+                                    }
                                     GridRow {
                                         Text("Identity file")
                                             .font(.callout.weight(.semibold))

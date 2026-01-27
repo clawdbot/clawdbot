@@ -82,7 +82,7 @@
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
-    "build": "tsc -p tsconfig.json && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts",
+    "build": "pnpm canvas:a2ui:bundle && tsc -p tsconfig.json && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "release:check": "node --import tsx scripts/release-check.ts",
     "ui:install": "node scripts/ui.js install",
@@ -236,6 +236,9 @@
     "typescript": "^5.9.3",
     "vitest": "^4.0.18",
     "wireit": "^0.14.12"
+  },
+  "overrides": {
+    "tar": "7.5.4"
   },
   "pnpm": {
     "minimumReleaseAge": 2880,

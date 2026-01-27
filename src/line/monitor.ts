@@ -1,10 +1,10 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import crypto from "node:crypto";
 import type { ClawdbotConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLineBot } from "./bot.js";
+import { validateLineSignature } from "./signature.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import {
@@ -83,11 +83,6 @@ function recordChannelRuntimeState(params: {
 
 export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
-}
-
-function validateLineSignature(body: string, signature: string, channelSecret: string): boolean {
-  const hash = crypto.createHmac("SHA256", channelSecret).update(body).digest("base64");
-  return hash === signature;
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {

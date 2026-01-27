@@ -374,12 +374,6 @@ Overrides:
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
-Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
-- Claude Code → `anthropic:claude-cli`
-  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
-  - Linux/Windows: `~/.claude/.credentials.json`
-- `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
-
 ### `auth`
 
 Optional metadata for auth profiles. This does **not** store secrets; it maps
@@ -399,10 +393,6 @@ rotation order used for failover.
   }
 }
 ```
-
-Note: `anthropic:claude-cli` should use `mode: "oauth"` even when the stored
-credential is a setup-token. Clawdbot auto-migrates older configs that used
-`mode: "token"`.
 
 ### `agents.list[].identity`
 
@@ -964,6 +954,8 @@ Notes:
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
+- Slash commands and directives are only honored for **authorized senders**. Authorization is derived from
+  channel allowlists/pairing plus `commands.useAccessGroups`.
 
 ### `web` (WhatsApp web channel runtime)
 
@@ -1036,6 +1028,9 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
         minDelayMs: 400,
         maxDelayMs: 30000,
         jitter: 0.1
+      },
+      network: {                           // transport overrides
+        autoSelectFamily: false
       },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
@@ -2764,7 +2759,7 @@ Example:
 
 ### `browser` (clawd-managed browser)
 
-Clawdbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control server.
+Clawdbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control service.
 Profiles can point at a **remote** Chromium-based browser via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
@@ -2773,8 +2768,9 @@ scheme/host for profiles that only set `cdpPort`.
 
 Defaults:
 - enabled: `true`
-- control URL: `http://127.0.0.1:18791` (CDP uses `18792`)
-- CDP URL: `http://127.0.0.1:18792` (control URL + 1, legacy single-profile)
+- evaluateEnabled: `true` (set `false` to disable `act:evaluate` and `wait --fn`)
+- control service: loopback only (port derived from `gateway.port`, default `18791`)
+- CDP URL: `http://127.0.0.1:18792` (control service + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
 - Note: the control server is started by the running gateway (Clawdbot.app menubar, or `clawdbot gateway`).
 - Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
@@ -2783,7 +2779,7 @@ Defaults:
 {
   browser: {
     enabled: true,
-    controlUrl: "http://127.0.0.1:18791",
+    evaluateEnabled: true,
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     defaultProfile: "chrome",
     profiles: {
@@ -2847,9 +2843,11 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
-- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI and skips
-  device identity + pairing (even on HTTPS). Default: `false`. Prefer HTTPS
+- `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
+  device identity is omitted (typically over HTTP). Default: `false`. Prefer HTTPS
   (Tailscale Serve) or `127.0.0.1`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth` disables device identity checks for the
+  Control UI (token/password only). Default: `false`. Break-glass only.
 
 Related docs:
 - [Control UI](/web/control-ui)

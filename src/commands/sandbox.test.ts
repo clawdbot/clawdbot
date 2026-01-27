@@ -130,7 +130,7 @@ describe("sandboxListCommand", () => {
 
       expectLogContains(runtime, "⚠️");
       expectLogContains(runtime, "image mismatch");
-      expectLogContains(runtime, "clawdbot sandbox recreate --all");
+      expectLogContains(runtime, "sandbox recreate --all");
     });
 
     it("should display message when no containers found", async () => {

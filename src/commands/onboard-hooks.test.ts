@@ -239,7 +239,7 @@ describe("onboard-hooks", () => {
 
       // Second note should confirm configuration
       expect(noteCalls[1][0]).toContain("Enabled 1 hook: session-memory");
-      expect(noteCalls[1][0]).toContain("clawdbot hooks list");
+      expect(noteCalls[1][0]).toMatch(/clawdbot( --profile isolated)? hooks list/);
     });
   });
 });

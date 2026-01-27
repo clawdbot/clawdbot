@@ -146,8 +146,14 @@ function createMockRuntime(): PluginRuntime {
         resolveRequireMention: mockResolveRequireMention as unknown as PluginRuntime["channel"]["groups"]["resolveRequireMention"],
       },
       debounce: {
-        createInboundDebouncer: vi.fn() as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
-        resolveInboundDebounceMs: vi.fn() as unknown as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"],
+        // Create a pass-through debouncer that immediately calls onFlush
+        createInboundDebouncer: vi.fn((params: { onFlush: (items: unknown[]) => Promise<void> }) => ({
+          enqueue: async (item: unknown) => {
+            await params.onFlush([item]);
+          },
+          flushKey: vi.fn(),
+        })) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
+        resolveInboundDebounceMs: vi.fn(() => 0) as unknown as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"],
       },
       commands: {
         resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers as unknown as PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"],

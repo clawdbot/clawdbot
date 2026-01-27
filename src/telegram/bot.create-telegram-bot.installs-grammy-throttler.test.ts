@@ -90,6 +90,7 @@ vi.mock("grammy", () => ({
     on = onSpy;
     stop = stopSpy;
     command = commandSpy;
+    catch = vi.fn();
     constructor(
       public token: string,
       public options?: {

@@ -165,12 +165,9 @@ export function buildAgentSystemPrompt(params: {
     workspaceDir?: string;
     workspaceAccess?: "none" | "ro" | "rw";
     agentWorkspaceMount?: string;
-    browserControlUrl?: string;
+    browserBridgeUrl?: string;
     browserNoVncUrl?: string;
     hostBrowserAllowed?: boolean;
-    allowedControlUrls?: string[];
-    allowedControlHosts?: string[];
-    allowedControlPorts?: number[];
     elevated?: {
       allowed: boolean;
       defaultLevel: "on" | "off" | "ask" | "full";
@@ -419,9 +416,7 @@ export function buildAgentSystemPrompt(params: {
                   : ""
               }`
             : "",
-          params.sandboxInfo.browserControlUrl
-            ? `Sandbox browser control URL: ${params.sandboxInfo.browserControlUrl}`
-            : "",
+          params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
           params.sandboxInfo.browserNoVncUrl
             ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
             : "",
@@ -430,15 +425,6 @@ export function buildAgentSystemPrompt(params: {
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "Host browser control: blocked."
               : "",
-          params.sandboxInfo.allowedControlUrls?.length
-            ? `Browser control URL allowlist: ${params.sandboxInfo.allowedControlUrls.join(", ")}`
-            : "",
-          params.sandboxInfo.allowedControlHosts?.length
-            ? `Browser control host allowlist: ${params.sandboxInfo.allowedControlHosts.join(", ")}`
-            : "",
-          params.sandboxInfo.allowedControlPorts?.length
-            ? `Browser control port allowlist: ${params.sandboxInfo.allowedControlPorts.join(", ")}`
-            : "",
           params.sandboxInfo.elevated?.allowed
             ? "Elevated exec is available for this session."
             : "",

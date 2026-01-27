@@ -83,7 +83,10 @@ enum CommandResolver {
             "/usr/bin",
             "/bin",
         ]
+        #if DEBUG
+        // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
         extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
+        #endif
         let clawdbotPaths = self.clawdbotManagedPaths(home: home)
         if !clawdbotPaths.isEmpty {
             extras.insert(contentsOf: clawdbotPaths, at: 1)
@@ -189,9 +192,13 @@ enum CommandResolver {
     }
 
     static func projectClawdbotExecutable(projectRoot: URL? = nil) -> String? {
+        #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
         return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        #else
+        return nil
+        #endif
     }
 
     static func nodeCliPath() -> String? {
@@ -282,22 +289,6 @@ enum CommandResolver {
         guard !settings.target.isEmpty else { return nil }
         guard let parsed = self.parseSSHTarget(settings.target) else { return nil }
 
-        var args: [String] = [
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
-        ]
-        if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
-        let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !identity.isEmpty {
-            // Only use IdentitiesOnly when an explicit identity file is provided.
-            // This allows 1Password SSH agent and other SSH agents to provide keys.
-            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
-            args.append(contentsOf: ["-i", identity])
-        }
-        let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
-        args.append(userHost)
-
         // Run the real clawdbot CLI on the remote host.
         let exportedPath = [
             "/opt/homebrew/bin",
@@ -324,7 +315,7 @@ enum CommandResolver {
         } else {
             """
             PRJ=\(self.shellQuote(userPRJ))
-            cd \(self.shellQuote(userPRJ)) || { echo "Project root not found: \(userPRJ)"; exit 127; }
+            cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
             """
         }
 
@@ -378,7 +369,16 @@ enum CommandResolver {
           echo "clawdbot CLI missing on remote host"; exit 127;
         fi
         """
-        args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
+        let options: [String] = [
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UpdateHostKeys=yes",
+        ]
+        let args = self.sshArguments(
+            target: parsed,
+            identity: settings.identity,
+            options: options,
+            remoteCommand: ["/bin/sh", "-c", scriptBody])
         return ["/usr/bin/ssh"] + args
     }
 
@@ -427,8 +427,11 @@ enum CommandResolver {
     }
 
     static func parseSSHTarget(_ target: String) -> SSHParsedTarget? {
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = self.normalizeSSHTargetInput(target)
         guard !trimmed.isEmpty else { return nil }
+        if trimmed.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
+            return nil
+        }
         let userHostPort: String
         let user: String?
         if let atRange = trimmed.range(of: "@") {
@@ -444,13 +447,31 @@ enum CommandResolver {
         if let colon = userHostPort.lastIndex(of: ":"), colon != userHostPort.startIndex {
             host = String(userHostPort[..<colon])
             let portStr = String(userHostPort[userHostPort.index(after: colon)...])
-            port = Int(portStr) ?? 22
+            guard let parsedPort = Int(portStr), parsedPort > 0, parsedPort <= 65535 else {
+                return nil
+            }
+            port = parsedPort
         } else {
             host = userHostPort
             port = 22
         }
 
-        return SSHParsedTarget(user: user, host: host, port: port)
+        return self.makeSSHTarget(user: user, host: host, port: port)
+    }
+
+    static func sshTargetValidationMessage(_ target: String) -> String? {
+        let trimmed = self.normalizeSSHTargetInput(target)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("-") {
+            return "SSH target cannot start with '-'"
+        }
+        if trimmed.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
+            return "SSH target cannot contain spaces"
+        }
+        if self.parseSSHTarget(trimmed) == nil {
+            return "SSH target must look like user@host[:port]"
+        }
+        return nil
     }
 
     private static func shellQuote(_ text: String) -> String {
@@ -466,6 +487,64 @@ enum CommandResolver {
             expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
         }
         return URL(fileURLWithPath: expanded)
+    }
+
+    private static func normalizeSSHTargetInput(_ target: String) -> String {
+        var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("ssh ") {
+            trimmed = trimmed.replacingOccurrences(of: "ssh ", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
+    private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {
+        if value.isEmpty { return false }
+        if !allowLeadingDash, value.hasPrefix("-") { return false }
+        let invalid = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        return value.rangeOfCharacter(from: invalid) == nil
+    }
+
+    static func makeSSHTarget(user: String?, host: String, port: Int) -> SSHParsedTarget? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.isValidSSHComponent(trimmedHost) else { return nil }
+        let trimmedUser = user?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUser: String?
+        if let trimmedUser {
+            guard self.isValidSSHComponent(trimmedUser) else { return nil }
+            normalizedUser = trimmedUser.isEmpty ? nil : trimmedUser
+        } else {
+            normalizedUser = nil
+        }
+        guard port > 0, port <= 65535 else { return nil }
+        return SSHParsedTarget(user: normalizedUser, host: trimmedHost, port: port)
+    }
+
+    private static func sshTargetString(_ target: SSHParsedTarget) -> String {
+        target.user.map { "\($0)@\(target.host)" } ?? target.host
+    }
+
+    static func sshArguments(
+        target: SSHParsedTarget,
+        identity: String,
+        options: [String],
+        remoteCommand: [String] = []) -> [String]
+    {
+        var args = options
+        if target.port > 0 {
+            args.append(contentsOf: ["-p", String(target.port)])
+        }
+        let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedIdentity.isEmpty {
+            // Only use IdentitiesOnly when an explicit identity file is provided.
+            // This allows 1Password SSH agent and other SSH agents to provide keys.
+            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
+            args.append(contentsOf: ["-i", trimmedIdentity])
+        }
+        args.append("--")
+        args.append(self.sshTargetString(target))
+        args.append(contentsOf: remoteCommand)
+        return args
     }
 
     #if SWIFT_PACKAGE

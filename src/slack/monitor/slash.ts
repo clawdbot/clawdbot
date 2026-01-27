@@ -103,7 +103,7 @@ function buildSlackCommandArgMenuBlocks(params: {
   title: string;
   command: string;
   arg: string;
-  choices: string[];
+  choices: Array<{ value: string; label: string }>;
   userId: string;
 }) {
   const rows = chunkItems(params.choices, 5).map((choices) => ({
@@ -111,11 +111,11 @@ function buildSlackCommandArgMenuBlocks(params: {
     elements: choices.map((choice) => ({
       type: "button",
       action_id: SLACK_COMMAND_ARG_ACTION_ID,
-      text: { type: "plain_text", text: choice },
+      text: { type: "plain_text", text: choice.label },
       value: encodeSlackCommandArgValue({
         command: params.command,
         arg: params.arg,
-        value: choice,
+        value: choice.value,
         userId: params.userId,
       }),
     })),

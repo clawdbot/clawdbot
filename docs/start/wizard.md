@@ -18,6 +18,9 @@ Primary entrypoint:
 clawdbot onboard
 ```
 
+Fastest first chat: open the Control UI (no channel setup needed). Run
+`clawdbot dashboard` and chat in the browser. Docs: [Dashboard](/web/dashboard).
+
 Follow‑up reconfiguration:
 
 ```bash

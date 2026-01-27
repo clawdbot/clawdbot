@@ -19,6 +19,7 @@ vi.mock("../web/media.js", () => ({
 vi.mock("grammy", () => ({
   Bot: class {
     api = botApi;
+    catch = vi.fn();
     constructor(
       public token: string,
       public options?: {
@@ -473,6 +474,28 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
       parse_mode: "HTML",
       message_thread_id: 271,
+    });
+  });
+
+  it("sets disable_notification when silent is true", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      silent: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hi", {
+      parse_mode: "HTML",
+      disable_notification: true,
     });
   });
 

@@ -11,6 +11,9 @@ Generate images using Google's Nano Banana Pro (Gemini 3 Pro Image) API.
 
 Usage:
     uv run generate_image.py --prompt "your image description" --filename "output.png" [--resolution 1K|2K|4K] [--api-key KEY]
+
+Multi-image editing (up to 14 images):
+    uv run generate_image.py --prompt "combine these images" --filename "output.png" -i img1.png -i img2.png -i img3.png
 """
 
 import argparse
@@ -42,7 +45,10 @@ def main():
     )
     parser.add_argument(
         "--input-image", "-i",
-        help="Optional input image path for editing/modification"
+        action="append",
+        dest="input_images",
+        metavar="IMAGE",
+        help="Input image path(s) for editing/composition. Can be specified multiple times (up to 14 images)."
     )
     parser.add_argument(
         "--resolution", "-r",
@@ -78,34 +84,43 @@ def main():
     output_path = Path(args.filename)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load input image if provided
-    input_image = None
+    # Load input images if provided (up to 14 supported by Nano Banana Pro)
+    input_images = []
     output_resolution = args.resolution
-    if args.input_image:
-        try:
-            input_image = PILImage.open(args.input_image)
-            print(f"Loaded input image: {args.input_image}")
-
-            # Auto-detect resolution if not explicitly set by user
-            if args.resolution == "1K":  # Default value
-                # Map input image size to resolution
-                width, height = input_image.size
-                max_dim = max(width, height)
-                if max_dim >= 3000:
-                    output_resolution = "4K"
-                elif max_dim >= 1500:
-                    output_resolution = "2K"
-                else:
-                    output_resolution = "1K"
-                print(f"Auto-detected resolution: {output_resolution} (from input {width}x{height})")
-        except Exception as e:
-            print(f"Error loading input image: {e}", file=sys.stderr)
+    if args.input_images:
+        if len(args.input_images) > 14:
+            print(f"Error: Too many input images ({len(args.input_images)}). Maximum is 14.", file=sys.stderr)
             sys.exit(1)
 
-    # Build contents (image first if editing, prompt only if generating)
-    if input_image:
-        contents = [input_image, args.prompt]
-        print(f"Editing image with resolution {output_resolution}...")
+        max_input_dim = 0
+        for img_path in args.input_images:
+            try:
+                img = PILImage.open(img_path)
+                input_images.append(img)
+                print(f"Loaded input image: {img_path}")
+
+                # Track largest dimension for auto-resolution
+                width, height = img.size
+                max_input_dim = max(max_input_dim, width, height)
+            except Exception as e:
+                print(f"Error loading input image '{img_path}': {e}", file=sys.stderr)
+                sys.exit(1)
+
+        # Auto-detect resolution from largest input if not explicitly set
+        if args.resolution == "1K" and max_input_dim > 0:  # Default value
+            if max_input_dim >= 3000:
+                output_resolution = "4K"
+            elif max_input_dim >= 1500:
+                output_resolution = "2K"
+            else:
+                output_resolution = "1K"
+            print(f"Auto-detected resolution: {output_resolution} (from max input dimension {max_input_dim})")
+
+    # Build contents (images first if editing, prompt only if generating)
+    if input_images:
+        contents = [*input_images, args.prompt]
+        img_count = len(input_images)
+        print(f"Processing {img_count} image{'s' if img_count > 1 else ''} with resolution {output_resolution}...")
     else:
         contents = args.prompt
         print(f"Generating image with resolution {output_resolution}...")

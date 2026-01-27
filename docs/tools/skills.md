@@ -64,6 +64,14 @@ By default, `clawdhub` installs into `./skills` under your current working
 directory (or falls back to the configured Clawdbot workspace). Clawdbot picks
 that up as `<workspace>/skills` on the next session.
 
+## Security notes
+
+- Treat third-party skills as **trusted code**. Read them before enabling.
+- Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
+- `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
+  for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
+- For a broader threat model and checklists, see [Security](/gateway/security).
+
 ## Format (AgentSkills + Pi-compatible)
 
 `SKILL.md` must include at least:

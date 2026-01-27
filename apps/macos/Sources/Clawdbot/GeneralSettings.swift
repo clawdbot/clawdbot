@@ -243,25 +243,36 @@ struct GeneralSettings: View {
     }
 
     private var remoteSshRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text("SSH target")
-                .font(.callout.weight(.semibold))
-                .frame(width: self.remoteLabelWidth, alignment: .leading)
-            TextField("user@host[:22]", text: self.$state.remoteTarget)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: .infinity)
-            Button {
-                Task { await self.testRemote() }
-            } label: {
-                if self.remoteStatus == .checking {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Test remote")
+        let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let validationMessage = CommandResolver.sshTargetValidationMessage(trimmedTarget)
+        let canTest = !trimmedTarget.isEmpty && validationMessage == nil
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("SSH target")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                TextField("user@host[:22]", text: self.$state.remoteTarget)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Button {
+                    Task { await self.testRemote() }
+                } label: {
+                    if self.remoteStatus == .checking {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Test remote")
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.remoteStatus == .checking || !canTest)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(self.remoteStatus == .checking || self.state.remoteTarget
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            }
         }
     }
 
@@ -540,8 +551,15 @@ extension GeneralSettings {
             }
 
             // Step 1: basic SSH reachability check
+            guard let sshCommand = Self.sshCheckCommand(
+                target: settings.target,
+                identity: settings.identity)
+            else {
+                self.remoteStatus = .failed("SSH target is invalid")
+                return
+            }
             let sshResult = await ShellExecutor.run(
-                command: Self.sshCheckCommand(target: settings.target, identity: settings.identity),
+                command: sshCommand,
                 cwd: nil,
                 env: nil,
                 timeout: 8)
@@ -587,20 +605,20 @@ extension GeneralSettings {
         return !host.isEmpty
     }
 
-    private static func sshCheckCommand(target: String, identity: String) -> [String] {
-        var args: [String] = [
-            "/usr/bin/ssh",
+    private static func sshCheckCommand(target: String, identity: String) -> [String]? {
+        guard let parsed = CommandResolver.parseSSHTarget(target) else { return nil }
+        let options = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "UpdateHostKeys=yes",
         ]
-        if !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            args.append(contentsOf: ["-i", identity])
-        }
-        args.append(target)
-        args.append("echo ok")
-        return args
+        let args = CommandResolver.sshArguments(
+            target: parsed,
+            identity: identity,
+            options: options,
+            remoteCommand: ["echo", "ok"])
+        return ["/usr/bin/ssh"] + args
     }
 
     private func formatSSHFailure(_ response: Response, target: String) -> String {

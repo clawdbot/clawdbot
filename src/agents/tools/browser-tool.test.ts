@@ -28,23 +28,7 @@ vi.mock("../../browser/client.js", () => browserClientMocks);
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
-    controlUrl: "http://127.0.0.1:18791",
-    controlHost: "127.0.0.1",
     controlPort: 18791,
-    cdpProtocol: "http",
-    cdpHost: "127.0.0.1",
-    cdpIsLoopback: true,
-    color: "#FF0000",
-    headless: true,
-    noSandbox: false,
-    attachOnly: false,
-    defaultProfile: "clawd",
-    profiles: {
-      clawd: {
-        cdpPort: 18792,
-        color: "#FF0000",
-      },
-    },
   })),
 }));
 vi.mock("../../browser/config.js", () => browserConfigMocks);
@@ -99,7 +83,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.(null, { action: "snapshot", snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
+      undefined,
       expect.objectContaining({
         format: "ai",
         maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -117,7 +101,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
+      undefined,
       expect.objectContaining({
         maxChars: override,
       }),
@@ -141,7 +125,7 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.(null, { action: "profiles" });
 
-    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith("http://127.0.0.1:18791");
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
   });
 
   it("passes refs mode through to browser snapshot", async () => {
@@ -149,7 +133,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.(null, { action: "snapshot", snapshotFormat: "ai", refs: "aria" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
+      undefined,
       expect.objectContaining({
         format: "ai",
         refs: "aria",
@@ -165,7 +149,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.(null, { action: "snapshot", snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
+      undefined,
       expect.objectContaining({
         mode: "efficient",
       }),
@@ -185,11 +169,11 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("defaults to host when using profile=chrome (even in sandboxed sessions)", async () => {
-    const tool = createBrowserTool({ defaultControlUrl: "http://127.0.0.1:9999" });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.(null, { action: "snapshot", profile: "chrome", snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
+      undefined,
       expect.objectContaining({
         profile: "chrome",
       }),
@@ -220,7 +204,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
-  it("keeps sandbox control url when node proxy is available", async () => {
+  it("keeps sandbox bridge url when node proxy is available", async () => {
     nodesUtilsMocks.listNodes.mockResolvedValue([
       {
         nodeId: "node-1",
@@ -230,7 +214,7 @@ describe("browser tool snapshot maxChars", () => {
         commands: ["browser.proxy"],
       },
     ]);
-    const tool = createBrowserTool({ defaultControlUrl: "http://127.0.0.1:9999" });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.(null, { action: "status" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
@@ -254,7 +238,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.(null, { action: "status", profile: "chrome" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
-      "http://127.0.0.1:18791",
+      undefined,
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();

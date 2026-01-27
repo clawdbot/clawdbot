@@ -247,4 +247,58 @@ describe("resolveHeartbeatVisibility", () => {
       useIndicator: true,
     });
   });
+
+  it("webchat uses channel defaults only (no per-channel config)", () => {
+    const cfg = {
+      channels: {
+        defaults: {
+          heartbeat: {
+            showOk: true,
+            showAlerts: false,
+            useIndicator: false,
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
+
+    expect(result).toEqual({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
+  });
+
+  it("webchat returns defaults when no channel defaults configured", () => {
+    const cfg = {} as ClawdbotConfig;
+
+    const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
+
+    expect(result).toEqual({
+      showOk: false,
+      showAlerts: true,
+      useIndicator: true,
+    });
+  });
+
+  it("webchat ignores accountId (only uses defaults)", () => {
+    const cfg = {
+      channels: {
+        defaults: {
+          heartbeat: {
+            showOk: true,
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const result = resolveHeartbeatVisibility({
+      cfg,
+      channel: "webchat",
+      accountId: "some-account",
+    });
+
+    expect(result.showOk).toBe(true);
+  });
 });

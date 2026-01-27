@@ -7,9 +7,7 @@ read_when:
 # OpenAI
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
-access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in, while
-the Codex CLI supports either sign-in method. The Codex CLI caches login details in
-`~/.codex/auth.json` (or your OS credential store), which Clawdbot can reuse.
+access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 
@@ -38,16 +36,14 @@ clawdbot onboard --openai-api-key "$OPENAI_API_KEY"
 **Best for:** using ChatGPT/Codex subscription access instead of an API key.
 Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or API key sign-in.
 
-Clawdbot can reuse your **Codex CLI** login (`~/.codex/auth.json`) or run the OAuth flow.
-
 ### CLI setup
 
 ```bash
-# Reuse existing Codex CLI login
-clawdbot onboard --auth-choice codex-cli
-
-# Or run Codex OAuth in the wizard
+# Run Codex OAuth in the wizard
 clawdbot onboard --auth-choice openai-codex
+
+# Or run OAuth directly
+clawdbot models auth login --provider openai-codex
 ```
 
 ### Config snippet

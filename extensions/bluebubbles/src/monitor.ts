@@ -250,7 +250,177 @@ type WebhookTarget = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
+/**
+ * Entry type for debouncing inbound messages.
+ * Captures the normalized message and its target for later combined processing.
+ */
+type BlueBubblesDebounceEntry = {
+  message: NormalizedWebhookMessage;
+  target: WebhookTarget;
+};
+
+/**
+ * Default debounce window for inbound message coalescing (ms).
+ * This helps combine URL text + link preview balloon messages that BlueBubbles
+ * sends as separate webhook events when no explicit inbound debounce config exists.
+ */
+const DEFAULT_INBOUND_DEBOUNCE_MS = 350;
+
+/**
+ * Combines multiple debounced messages into a single message for processing.
+ * Used when multiple webhook events arrive within the debounce window.
+ */
+function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): NormalizedWebhookMessage {
+  if (entries.length === 0) {
+    throw new Error("Cannot combine empty entries");
+  }
+  if (entries.length === 1) {
+    return entries[0].message;
+  }
+
+  // Use the first message as the base (typically the text message)
+  const first = entries[0].message;
+
+  // Combine text from all entries, filtering out duplicates and empty strings
+  const seenTexts = new Set<string>();
+  const textParts: string[] = [];
+  
+  for (const entry of entries) {
+    const text = entry.message.text.trim();
+    if (!text) continue;
+    // Skip duplicate text (URL might be in both text message and balloon)
+    const normalizedText = text.toLowerCase();
+    if (seenTexts.has(normalizedText)) continue;
+    seenTexts.add(normalizedText);
+    textParts.push(text);
+  }
+
+  // Merge attachments from all entries
+  const allAttachments = entries.flatMap((e) => e.message.attachments ?? []);
+
+  // Use the latest timestamp
+  const timestamps = entries
+    .map((e) => e.message.timestamp)
+    .filter((t): t is number => typeof t === "number");
+  const latestTimestamp = timestamps.length > 0 ? Math.max(...timestamps) : first.timestamp;
+
+  // Collect all message IDs for reference
+  const messageIds = entries
+    .map((e) => e.message.messageId)
+    .filter((id): id is string => Boolean(id));
+
+  // Prefer reply context from any entry that has it
+  const entryWithReply = entries.find((e) => e.message.replyToId);
+
+  return {
+    ...first,
+    text: textParts.join(" "),
+    attachments: allAttachments.length > 0 ? allAttachments : first.attachments,
+    timestamp: latestTimestamp,
+    // Use first message's ID as primary (for reply reference), but we've coalesced others
+    messageId: messageIds[0] ?? first.messageId,
+    // Preserve reply context if present
+    replyToId: entryWithReply?.message.replyToId ?? first.replyToId,
+    replyToBody: entryWithReply?.message.replyToBody ?? first.replyToBody,
+    replyToSender: entryWithReply?.message.replyToSender ?? first.replyToSender,
+    // Clear balloonBundleId since we've combined (the combined message is no longer just a balloon)
+    balloonBundleId: undefined,
+  };
+}
+
 const webhookTargets = new Map<string, WebhookTarget[]>();
+
+/**
+ * Maps webhook targets to their inbound debouncers.
+ * Each target gets its own debouncer keyed by a unique identifier.
+ */
+const targetDebouncers = new Map<
+  WebhookTarget,
+  ReturnType<BlueBubblesCoreRuntime["channel"]["debounce"]["createInboundDebouncer"]>
+>();
+
+function resolveBlueBubblesDebounceMs(
+  config: ClawdbotConfig,
+  core: BlueBubblesCoreRuntime,
+): number {
+  const inbound = config.messages?.inbound;
+  const hasExplicitDebounce =
+    typeof inbound?.debounceMs === "number" || typeof inbound?.byChannel?.bluebubbles === "number";
+  if (!hasExplicitDebounce) return DEFAULT_INBOUND_DEBOUNCE_MS;
+  return core.channel.debounce.resolveInboundDebounceMs({ cfg: config, channel: "bluebubbles" });
+}
+
+/**
+ * Creates or retrieves a debouncer for a webhook target.
+ */
+function getOrCreateDebouncer(target: WebhookTarget) {
+  const existing = targetDebouncers.get(target);
+  if (existing) return existing;
+
+  const { account, config, runtime, core } = target;
+
+  const debouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
+    debounceMs: resolveBlueBubblesDebounceMs(config, core),
+    buildKey: (entry) => {
+      const msg = entry.message;
+      // Build key from account + chat + sender to coalesce messages from same source
+      const chatKey =
+        msg.chatGuid?.trim() ??
+        msg.chatIdentifier?.trim() ??
+        (msg.chatId ? String(msg.chatId) : "dm");
+      return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
+    },
+    shouldDebounce: (entry) => {
+      const msg = entry.message;
+      // Skip debouncing for messages with attachments - process immediately
+      if (msg.attachments && msg.attachments.length > 0) return false;
+      // Skip debouncing for from-me messages (they're just cached, not processed)
+      if (msg.fromMe) return false;
+      // Skip debouncing for control commands - process immediately
+      if (core.channel.text.hasControlCommand(msg.text, config)) return false;
+      // Debounce normal text messages and URL balloon messages
+      return true;
+    },
+    onFlush: async (entries) => {
+      if (entries.length === 0) return;
+      
+      // Use target from first entry (all entries have same target due to key structure)
+      const flushTarget = entries[0].target;
+      
+      if (entries.length === 1) {
+        // Single message - process normally
+        await processMessage(entries[0].message, flushTarget);
+        return;
+      }
+
+      // Multiple messages - combine and process
+      const combined = combineDebounceEntries(entries);
+      
+      if (core.logging.shouldLogVerbose()) {
+        const count = entries.length;
+        const preview = combined.text.slice(0, 50);
+        runtime.log?.(
+          `[bluebubbles] coalesced ${count} messages: "${preview}${combined.text.length > 50 ? "..." : ""}"`,
+        );
+      }
+      
+      await processMessage(combined, flushTarget);
+    },
+    onError: (err) => {
+      runtime.error?.(`[${account.accountId}] [bluebubbles] debounce flush failed: ${String(err)}`);
+    },
+  });
+
+  targetDebouncers.set(target, debouncer);
+  return debouncer;
+}
+
+/**
+ * Removes a debouncer for a target (called during unregistration).
+ */
+function removeDebouncer(target: WebhookTarget): void {
+  targetDebouncers.delete(target);
+}
 
 function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
@@ -275,6 +445,8 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
     } else {
       webhookTargets.delete(key);
     }
+    // Clean up debouncer when target is unregistered
+    removeDebouncer(normalizedTarget);
   };
 }
 
@@ -1205,7 +1377,10 @@ export async function handleBlueBubblesWebhookRequest(
         );
       });
     } else if (message) {
-      processMessage(message, target).catch((err) => {
+      // Route messages through debouncer to coalesce rapid-fire events
+      // (e.g., text message + URL balloon arriving as separate webhooks)
+      const debouncer = getOrCreateDebouncer(target);
+      debouncer.enqueue({ message, target }).catch((err) => {
         target.runtime.error?.(
           `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
         );

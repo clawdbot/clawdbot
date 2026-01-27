@@ -63,6 +63,11 @@ export type {
   ClawdbotPluginService,
   ClawdbotPluginServiceContext,
 } from "../plugins/types.js";
+export type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "../gateway/server-methods/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -76,6 +81,7 @@ export type {
   DmConfig,
   GroupPolicy,
   GroupToolPolicyConfig,
+  GroupToolPolicyBySenderConfig,
   MarkdownConfig,
   MarkdownTableMode,
   GoogleChatAccountConfig,
@@ -116,6 +122,7 @@ export { resolveAckReaction } from "../agents/identity.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
+export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,

@@ -32,6 +32,7 @@ vi.mock("grammy", () => ({
     on = onSpy;
     command = vi.fn();
     stop = stopSpy;
+    catch = vi.fn();
     constructor(public token: string) {}
   },
   InputFile: class {},

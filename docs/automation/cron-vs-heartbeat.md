@@ -201,7 +201,7 @@ For ad-hoc workflows, call Lobster directly.
 
 - Lobster runs as a **local subprocess** (`lobster` CLI) in tool mode and returns a **JSON envelope**.
 - If the tool returns `needs_approval`, you resume with a `resumeToken` and `approve` flag.
-- The tool is an **optional plugin**; you must allowlist `lobster` in `tools.allow`.
+- The tool is an **optional plugin**; enable it additively via `tools.alsoAllow: ["lobster"]` (recommended).
 - If you pass `lobsterPath`, it must be an **absolute path**.
 
 See [Lobster](/tools/lobster) for full usage and examples.

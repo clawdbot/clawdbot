@@ -559,22 +559,21 @@ final class NodePairingApprovalPrompter {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
 
-            var args = [
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=5",
-                "-o",
-                "NumberOfPasswordPrompts=0",
-                "-o",
-                "PreferredAuthentications=publickey",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
+            let options = [
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=5",
+                "-o", "NumberOfPasswordPrompts=0",
+                "-o", "PreferredAuthentications=publickey",
+                "-o", "StrictHostKeyChecking=accept-new",
             ]
-            if port > 0, port != 22 {
-                args.append(contentsOf: ["-p", String(port)])
+            guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
+                return false
             }
-            args.append(contentsOf: ["-l", user, host, "/usr/bin/true"])
+            let args = CommandResolver.sshArguments(
+                target: target,
+                identity: "",
+                options: options,
+                remoteCommand: ["/usr/bin/true"])
             process.arguments = args
             let pipe = Pipe()
             process.standardOutput = pipe

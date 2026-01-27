@@ -232,6 +232,42 @@ Notes:
 - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
 - Group history context is wrapped uniformly across channels and is **pending-only** (messages skipped due to mention gating); use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 
+## Group/channel tool restrictions (optional)
+Some channel configs support restricting which tools are available **inside a specific group/room/channel**.
+
+- `tools`: allow/deny tools for the whole group.
+- `toolsBySender`: per-sender overrides within the group (keys are sender IDs/usernames/emails/phone numbers depending on the channel). Use `"*"` as a wildcard.
+
+Resolution order (most specific wins):
+1) group/channel `toolsBySender` match
+2) group/channel `tools`
+3) default (`"*"`) `toolsBySender` match
+4) default (`"*"`) `tools`
+
+Example (Telegram):
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "*": { tools: { deny: ["exec"] } },
+        "-1001234567890": {
+          tools: { deny: ["exec", "read", "write"] },
+          toolsBySender: {
+            "123456789": { alsoAllow: ["exec"] }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Group/channel tool restrictions are applied in addition to global/agent tool policy (deny still wins).
+- Some channels use different nesting for rooms/channels (e.g., Discord `guilds.*.channels.*`, Slack `channels.*`, MS Teams `teams.*.channels.*`).
+
 ## Group allowlists
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 

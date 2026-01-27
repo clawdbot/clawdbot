@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ChannelHeartbeatVisibilityConfig } from "../config/types.channels.js";
-import type { DeliverableMessageChannel } from "../utils/message-channel.js";
+import type { GatewayMessageChannel } from "../utils/message-channel.js";
 
 export type ResolvedHeartbeatVisibility = {
   showOk: boolean;
@@ -14,12 +14,27 @@ const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
   useIndicator: true, // Emit indicator events
 };
 
+/**
+ * Resolve heartbeat visibility settings for a channel.
+ * Supports both deliverable channels (telegram, signal, etc.) and webchat.
+ * For webchat, uses channels.defaults.heartbeat since webchat doesn't have per-channel config.
+ */
 export function resolveHeartbeatVisibility(params: {
   cfg: ClawdbotConfig;
-  channel: DeliverableMessageChannel;
+  channel: GatewayMessageChannel;
   accountId?: string;
 }): ResolvedHeartbeatVisibility {
   const { cfg, channel, accountId } = params;
+
+  // Webchat uses channel defaults only (no per-channel or per-account config)
+  if (channel === "webchat") {
+    const channelDefaults = cfg.channels?.defaults?.heartbeat;
+    return {
+      showOk: channelDefaults?.showOk ?? DEFAULT_VISIBILITY.showOk,
+      showAlerts: channelDefaults?.showAlerts ?? DEFAULT_VISIBILITY.showAlerts,
+      useIndicator: channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
+    };
+  }
 
   // Layer 1: Global channel defaults
   const channelDefaults = cfg.channels?.defaults?.heartbeat;

@@ -1,0 +1,53 @@
+---
+title: Deploy on Northflank
+---
+
+Deploy Clawdbot on Northflank with a one-click template and finish setup in your browser.
+This is the easiest “no terminal on the server” path: Northflank runs the Gateway for you,
+and you configure everything via the `/setup` web wizard.
+
+## How to get started
+
+1. Click [Deploy Clawdbot](https://northflank.com/stacks/deploy-clawdbot) to open the template.  
+2. Create an [account on Northflank](https://app.northflank.com/signup) if you don’t already have one.  
+3. Click **Deploy Clawdbot now**.  
+4. Set the required environment variable: `SETUP_PASSWORD`.
+5. Click **Deploy stack** to build and run the Clawdbot template.
+6. Wait for the deployment to complete, then click **View resources**.
+7. Open the Clawdbot service.
+8. Open the public Clawdbot URL and complete setup at `/setup`.
+9. Open the Control UI at `/clawdbot`.
+
+## What you get
+
+- Hosted Clawdbot Gateway + Control UI
+- Web setup wizard at `/setup` (no terminal commands)
+- Persistent storage via Northflank Volume (`/data`) so config/credentials/workspace survive redeploys
+
+## Setup flow
+
+1) Visit `https://<your-northflank-domain>/setup` and enter your `SETUP_PASSWORD`.
+2) Choose a model/auth provider and paste your key.
+3) (Optional) Add Telegram/Discord/Slack tokens.
+4) Click **Run setup**.
+5) Open the Control UI at `https://<your-northflank-domain>/clawdbot`
+
+If Telegram DMs are set to pairing, the setup wizard can approve the pairing code.
+
+## Getting chat tokens
+
+### Telegram bot token
+
+1) Message `@BotFather` in Telegram
+2) Run `/newbot`
+3) Copy the token (looks like `123456789:AA...`)
+4) Paste it into `/setup`
+
+### Discord bot token
+
+1) Go to https://discord.com/developers/applications
+2) **New Application** → choose a name
+3) **Bot** → **Add Bot**
+4) **Enable MESSAGE CONTENT INTENT** under Bot → Privileged Gateway Intents (required or the bot will crash on startup)
+5) Copy the **Bot Token** and paste into `/setup`
+6) Invite the bot to your server (OAuth2 URL Generator; scopes: `bot`, `applications.commands`)

@@ -8,6 +8,7 @@ import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -22,6 +23,7 @@ import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { splitTelegramCaption } from "./caption.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
@@ -40,6 +42,8 @@ type TelegramSendOpts = {
   plainText?: string;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   asVoice?: boolean;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -82,7 +86,9 @@ function resolveTelegramClientOptions(
 ): ApiClientOptions | undefined {
   const proxyUrl = account.config.proxy?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch);
+  const fetchImpl = resolveTelegramFetch(proxyFetch, {
+    network: account.config.network,
+  });
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
     Number.isFinite(account.config.timeoutSeconds)
@@ -201,10 +207,14 @@ export async function sendMessageTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -245,6 +255,7 @@ export async function sendMessageTelegram(
     const sendParams = {
       parse_mode: "HTML" as const,
       ...baseParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
     };
     const res = await requestWithDiag(
       () => api.sendMessage(chatId, htmlText, sendParams),
@@ -298,6 +309,7 @@ export async function sendMessageTelegram(
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
     };
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>
@@ -430,10 +442,14 @@ export async function reactMessageTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -479,16 +495,116 @@ export async function deleteMessageTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
   await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
   logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
   return { ok: true };
+}
+
+type TelegramEditOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  textMode?: "markdown" | "html";
+  /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  /** Optional config injection to avoid global loadConfig() (improves testability). */
+  cfg?: ReturnType<typeof loadConfig>;
+};
+
+export async function editMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  text: string,
+  opts: TelegramEditOpts = {},
+): Promise<{ ok: true; messageId: string; chatId: string }> {
+  const cfg = opts.cfg ?? loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const messageId = normalizeMessageId(messageIdInput);
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const textMode = opts.textMode ?? "markdown";
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+  });
+  const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+
+  // Reply markup semantics:
+  // - buttons === undefined → don't send reply_markup (keep existing)
+  // - buttons is [] (or filters to empty) → send { inline_keyboard: [] } (remove)
+  // - otherwise → send built inline keyboard
+  const shouldTouchButtons = opts.buttons !== undefined;
+  const builtKeyboard = shouldTouchButtons ? buildInlineKeyboard(opts.buttons) : undefined;
+  const replyMarkup = shouldTouchButtons ? (builtKeyboard ?? { inline_keyboard: [] }) : undefined;
+
+  const editParams: Record<string, unknown> = {
+    parse_mode: "HTML",
+  };
+  if (replyMarkup !== undefined) {
+    editParams.reply_markup = replyMarkup;
+  }
+
+  await requestWithDiag(
+    () => api.editMessageText(chatId, messageId, htmlText, editParams),
+    "editMessage",
+  ).catch(async (err) => {
+    // Telegram rejects malformed HTML. Fall back to plain text.
+    const errText = formatErrorMessage(err);
+    if (PARSE_ERR_RE.test(errText)) {
+      if (opts.verbose) {
+        console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+      }
+      const plainParams: Record<string, unknown> = {};
+      if (replyMarkup !== undefined) {
+        plainParams.reply_markup = replyMarkup;
+      }
+      return await requestWithDiag(
+        () =>
+          Object.keys(plainParams).length > 0
+            ? api.editMessageText(chatId, messageId, text, plainParams)
+            : api.editMessageText(chatId, messageId, text),
+        "editMessage-plain",
+      );
+    }
+    throw err;
+  });
+
+  logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
+  return { ok: true, messageId: String(messageId), chatId };
 }
 
 function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {

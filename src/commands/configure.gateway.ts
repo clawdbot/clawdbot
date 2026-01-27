@@ -7,7 +7,7 @@ import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
 import { guardCancel, randomToken } from "./onboard-helpers.js";
 
-type GatewayAuthChoice = "off" | "token" | "password";
+type GatewayAuthChoice = "token" | "password";
 
 export async function promptGatewayConfig(
   cfg: ClawdbotConfig,
@@ -91,11 +91,6 @@ export async function promptGatewayConfig(
     await select({
       message: "Gateway auth",
       options: [
-        {
-          value: "off",
-          label: "Off (loopback only)",
-          hint: "Not recommended unless you fully trust local processes",
-        },
         { value: "token", label: "Token", hint: "Recommended default" },
         { value: "password", label: "Password" },
       ],
@@ -163,11 +158,6 @@ export async function promptGatewayConfig(
   if (tailscaleMode !== "off" && bind !== "loopback") {
     note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
-  }
-
-  if (authMode === "off" && bind !== "loopback") {
-    note("Non-loopback bind requires auth. Switching to token auth.", "Note");
-    authMode = "token";
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {

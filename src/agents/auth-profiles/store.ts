@@ -3,13 +3,8 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import {
-  AUTH_STORE_LOCK_OPTIONS,
-  AUTH_STORE_VERSION,
-  CODEX_CLI_PROFILE_ID,
-  log,
-} from "./constants.js";
-import { findDuplicateCodexProfile, syncExternalCliCredentials } from "./external-cli-sync.js";
+import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
+import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -229,14 +224,14 @@ export function loadAuthProfileStore(): AuthProfileStore {
 
 function loadAuthProfileStoreForAgent(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  _options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
   if (asStore) {
     // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore, options);
+    const synced = syncExternalCliCredentials(asStore);
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -297,7 +292,7 @@ function loadAuthProfileStoreForAgent(
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store, options);
+  const syncedCli = syncExternalCliCredentials(store);
   const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
   if (shouldWrite) {
     saveJsonFile(authPath, store);
@@ -336,15 +331,6 @@ export function ensureAuthProfileStore(
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   const merged = mergeAuthProfileStores(mainStore, store);
-
-  // Keep per-agent view clean even if the main store has codex-cli.
-  const codexProfile = merged.profiles[CODEX_CLI_PROFILE_ID];
-  if (codexProfile?.type === "oauth") {
-    const duplicateId = findDuplicateCodexProfile(merged, codexProfile);
-    if (duplicateId) {
-      delete merged.profiles[CODEX_CLI_PROFILE_ID];
-    }
-  }
 
   return merged;
 }

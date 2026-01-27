@@ -7,7 +7,9 @@ let testPort = 0;
 let cdpBaseUrl = "";
 let reachable = false;
 let cfgAttachOnly = false;
+let cfgEvaluateEnabled = true;
 let createTargetId: string | null = null;
+let prevGatewayPort: string | undefined;
 
 const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn(async () => {
@@ -88,7 +90,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: () => ({
       browser: {
         enabled: true,
-        controlUrl: `http://127.0.0.1:${testPort}`,
+        evaluateEnabled: cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: cfgAttachOnly,
         headless: true,
@@ -185,6 +187,7 @@ describe("browser control server", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
+    cfgEvaluateEnabled = true;
     createTargetId = null;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
@@ -197,6 +200,8 @@ describe("browser control server", () => {
 
     testPort = await getFreePort();
     cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
+    prevGatewayPort = process.env.CLAWDBOT_GATEWAY_PORT;
+    process.env.CLAWDBOT_GATEWAY_PORT = String(testPort - 2);
 
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
@@ -248,6 +253,11 @@ describe("browser control server", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    if (prevGatewayPort === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_PORT;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_PORT = prevGatewayPort;
+    }
     const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
@@ -338,6 +348,30 @@ describe("browser control server", () => {
         fn: "() => 1",
         ref: undefined,
       });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "blocks act:evaluate when browser.evaluateEnabled=false",
+    async () => {
+      cfgEvaluateEnabled = false;
+      const base = await startServerAndBase();
+
+      const waitRes = (await postJson(`${base}/act`, {
+        kind: "wait",
+        fn: "() => window.ready === true",
+      })) as { error?: string };
+      expect(waitRes.error).toContain("browser.evaluateEnabled=false");
+      expect(pwMocks.waitForViaPlaywright).not.toHaveBeenCalled();
+
+      const res = (await postJson(`${base}/act`, {
+        kind: "evaluate",
+        fn: "() => 1",
+      })) as { error?: string };
+
+      expect(res.error).toContain("browser.evaluateEnabled=false");
+      expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );

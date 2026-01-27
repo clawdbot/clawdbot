@@ -13,15 +13,14 @@ import { browserActionExamples, browserCoreExamples } from "./browser-cli-exampl
 import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
-import { registerBrowserServeCommands } from "./browser-cli-serve.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
 
 export function registerBrowserCli(program: Command) {
   const browser = program
     .command("browser")
     .description("Manage clawd's dedicated browser (Chrome/Chromium)")
-    .option("--url <url>", "Override browser control URL (default from ~/.clawdbot/clawdbot.json)")
     .option("--browser-profile <name>", "Browser profile name (default from config)")
     .option("--json", "Output machine-readable JSON", false)
     .addHelpText(
@@ -43,11 +42,12 @@ export function registerBrowserCli(program: Command) {
       defaultRuntime.exit(1);
     });
 
+  addGatewayClientOptions(browser);
+
   const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
 
   registerBrowserManageCommands(browser, parentOpts);
   registerBrowserExtensionCommands(browser, parentOpts);
-  registerBrowserServeCommands(browser, parentOpts);
   registerBrowserInspectCommands(browser, parentOpts);
   registerBrowserActionInputCommands(browser, parentOpts);
   registerBrowserActionObserveCommands(browser, parentOpts);

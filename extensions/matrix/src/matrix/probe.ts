@@ -49,7 +49,7 @@ export async function probeMatrix(params: {
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
     });
-    // matrix-bot-sdk uses getUserId() which calls whoami internally
+    // @vector-im/matrix-bot-sdk uses getUserId() which calls whoami internally
     const userId = await client.getUserId();
     result.ok = true;
     result.userId = userId ?? null;

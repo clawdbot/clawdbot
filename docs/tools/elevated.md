@@ -23,6 +23,7 @@ read_when:
 - **Approvals**: `full` skips exec approvals; `on`/`ask` honor them when allowlist/ask rules require.
 - **Unsandboxed agents**: no-op for location; only affects gating, logging, and status.
 - **Tool policy still applies**: if `exec` is denied by tool policy, elevated cannot be used.
+- **Separate from `/exec`**: `/exec` adjusts per-session defaults for authorized senders and does not require elevated.
 
 ## Resolution order
 1. Inline directive on the message (applies only to that message).

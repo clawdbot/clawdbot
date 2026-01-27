@@ -1,13 +1,14 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type GroupPolicyChannel = ChannelId;
 
 export type ChannelGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
 export type ChannelGroupPolicy = {
@@ -18,6 +19,65 @@ export type ChannelGroupPolicy = {
 };
 
 type ChannelGroups = Record<string, ChannelGroupConfig>;
+
+export type GroupToolPolicySender = {
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+};
+
+function normalizeSenderKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  return withoutAt.toLowerCase();
+}
+
+export function resolveToolsBySender(
+  params: {
+    toolsBySender?: GroupToolPolicyBySenderConfig;
+  } & GroupToolPolicySender,
+): GroupToolPolicyConfig | undefined {
+  const toolsBySender = params.toolsBySender;
+  if (!toolsBySender) return undefined;
+  const entries = Object.entries(toolsBySender);
+  if (entries.length === 0) return undefined;
+
+  const normalized = new Map<string, GroupToolPolicyConfig>();
+  let wildcard: GroupToolPolicyConfig | undefined;
+  for (const [rawKey, policy] of entries) {
+    if (!policy) continue;
+    const key = normalizeSenderKey(rawKey);
+    if (!key) continue;
+    if (key === "*") {
+      wildcard = policy;
+      continue;
+    }
+    if (!normalized.has(key)) {
+      normalized.set(key, policy);
+    }
+  }
+
+  const candidates: string[] = [];
+  const pushCandidate = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (!trimmed) return;
+    candidates.push(trimmed);
+  };
+  pushCandidate(params.senderId);
+  pushCandidate(params.senderE164);
+  pushCandidate(params.senderUsername);
+  pushCandidate(params.senderName);
+
+  for (const candidate of candidates) {
+    const key = normalizeSenderKey(candidate);
+    if (!key) continue;
+    const match = normalized.get(key);
+    if (match) return match;
+  }
+  return wildcard;
+}
 
 function resolveChannelGroups(
   cfg: ClawdbotConfig,
@@ -94,14 +154,32 @@ export function resolveChannelGroupRequireMention(params: {
   return true;
 }
 
-export function resolveChannelGroupToolsPolicy(params: {
-  cfg: ClawdbotConfig;
-  channel: GroupPolicyChannel;
-  groupId?: string | null;
-  accountId?: string | null;
-}): GroupToolPolicyConfig | undefined {
+export function resolveChannelGroupToolsPolicy(
+  params: {
+    cfg: ClawdbotConfig;
+    channel: GroupPolicyChannel;
+    groupId?: string | null;
+    accountId?: string | null;
+  } & GroupToolPolicySender,
+): GroupToolPolicyConfig | undefined {
   const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  const groupSenderPolicy = resolveToolsBySender({
+    toolsBySender: groupConfig?.toolsBySender,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (groupSenderPolicy) return groupSenderPolicy;
   if (groupConfig?.tools) return groupConfig.tools;
+  const defaultSenderPolicy = resolveToolsBySender({
+    toolsBySender: defaultConfig?.toolsBySender,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (defaultSenderPolicy) return defaultSenderPolicy;
   if (defaultConfig?.tools) return defaultConfig.tools;
   return undefined;
 }

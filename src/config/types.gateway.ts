@@ -66,6 +66,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Allow token-only auth over insecure HTTP (default: false). */
   allowInsecureAuth?: boolean;
+  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
+  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password";

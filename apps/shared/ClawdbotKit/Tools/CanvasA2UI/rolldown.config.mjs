@@ -39,7 +39,7 @@ export default defineConfig({
   output: {
     file: outputFile,
     format: "esm",
-    inlineDynamicImports: true,
+    codeSplitting: false,
     sourcemap: false,
   },
 });

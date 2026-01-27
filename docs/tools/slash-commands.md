@@ -16,6 +16,8 @@ There are two related systems:
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
+  - Directives are only applied for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+    Unauthorized senders see directives treated as plain text.
 
 There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
@@ -132,7 +134,7 @@ Examples:
 /model list
 /model 3
 /model openai/gpt-5.2
-/model opus@anthropic:claude-cli
+/model opus@anthropic:default
 /model status
 ```
 

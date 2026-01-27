@@ -73,7 +73,7 @@ clawdbot --profile rescue gateway install
 
 Base port = `gateway.port` (or `CLAWDBOT_GATEWAY_PORT` / `--port`).
 
-- `browser.controlUrl port = base + 2`
+- browser control service port = base + 2 (loopback only)
 - `canvasHost.port = base + 4`
 - Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108`
 
@@ -81,8 +81,8 @@ If you override any of these in config or env, you must keep them unique per ins
 
 ## Browser/CDP notes (common footgun)
 
-- Do **not** pin `browser.controlUrl` or `browser.cdpUrl` to the same values on multiple instances.
-- Each instance needs its own browser control port and CDP range.
+- Do **not** pin `browser.cdpUrl` to the same values on multiple instances.
+- Each instance needs its own browser control port and CDP range (derived from its gateway port).
 - If you need explicit CDP ports, set `browser.profiles.<name>.cdpPort` per instance.
 - Remote Chrome: use `browser.profiles.<name>.cdpUrl` (per profile, per instance).
 

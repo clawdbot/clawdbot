@@ -104,6 +104,19 @@ clawdbot health
   - Sessions: `~/.clawdbot/agents/<agentId>/sessions/`
   - Logs: `/tmp/clawdbot/`
 
+## Credential storage map
+
+Use this when debugging auth or deciding what to back up:
+
+- **WhatsApp**: `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Discord bot token**: config/env (token file not yet supported)
+- **Slack tokens**: config/env (`channels.slack.*`)
+- **Pairing allowlists**: `~/.clawdbot/credentials/<channel>-allowFrom.json`
+- **Model auth profiles**: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
+- **Legacy OAuth import**: `~/.clawdbot/credentials/oauth.json`
+More detail: [Security](/gateway/security#credential-storage-map).
+
 ## Updating (without wrecking your setup)
 
 - Keep `~/clawd` and `~/.clawdbot/` as “your stuff”; don’t put personal prompts/config into the `clawdbot` repo.

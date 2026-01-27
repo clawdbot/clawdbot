@@ -1,8 +1,4 @@
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
-  loadAuthProfileStore,
-} from "../../agents/auth-profiles.js";
+import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -115,7 +111,7 @@ export async function channelsListCommand(
     id: profileId,
     provider: profile.provider,
     type: profile.type,
-    isExternal: profileId === CLAUDE_CLI_PROFILE_ID || profileId === CODEX_CLI_PROFILE_ID,
+    isExternal: false,
   }));
   if (opts.json) {
     const usage = includeUsage ? await loadProviderUsageSummary() : undefined;

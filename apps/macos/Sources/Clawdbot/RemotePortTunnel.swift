@@ -70,7 +70,7 @@ final class RemotePortTunnel {
                 "ssh tunnel using default remote port " +
                     "host=\(sshHost, privacy: .public) port=\(remotePort, privacy: .public)")
         }
-        var args: [String] = [
+        let options: [String] = [
             "-o", "BatchMode=yes",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "StrictHostKeyChecking=accept-new",
@@ -81,16 +81,11 @@ final class RemotePortTunnel {
             "-N",
             "-L", "\(localPort):127.0.0.1:\(resolvedRemotePort)",
         ]
-        if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !identity.isEmpty {
-            // Only use IdentitiesOnly when an explicit identity file is provided.
-            // This allows 1Password SSH agent and other SSH agents to provide keys.
-            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
-            args.append(contentsOf: ["-i", identity])
-        }
-        let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
-        args.append(userHost)
+        let args = CommandResolver.sshArguments(
+            target: parsed,
+            identity: identity,
+            options: options)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")

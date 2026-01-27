@@ -216,6 +216,9 @@ Approval-gated execs reuse the approval id as the `runId` in these messages for 
 - **full** is powerful; prefer allowlists when possible.
 - **ask** keeps you in the loop while still allowing fast approvals.
 - Per-agent allowlists prevent one agent’s approvals from leaking into others.
+- Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
+- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design.
+  To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
 
 Related:
 - [Exec tool](/tools/exec)

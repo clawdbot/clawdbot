@@ -154,13 +154,13 @@ describe("applyAuthProfileConfig", () => {
         },
       },
       {
-        profileId: "anthropic:claude-cli",
+        profileId: "anthropic:work",
         provider: "anthropic",
         mode: "oauth",
       },
     );
 
-    expect(next.auth?.order?.anthropic).toEqual(["anthropic:claude-cli", "anthropic:default"]);
+    expect(next.auth?.order?.anthropic).toEqual(["anthropic:work", "anthropic:default"]);
   });
 });
 

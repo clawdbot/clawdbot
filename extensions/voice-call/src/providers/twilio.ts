@@ -31,8 +31,8 @@ import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
  * @see https://www.twilio.com/docs/voice/media-streams
  */
 export interface TwilioProviderOptions {
-  /** Allow ngrok free tier compatibility mode (less secure) */
-  allowNgrokFreeTier?: boolean;
+  /** Allow ngrok free tier compatibility mode (loopback only, less secure) */
+  allowNgrokFreeTierLoopbackBypass?: boolean;
   /** Override public URL for signature verification */
   publicUrl?: string;
   /** Path for media stream WebSocket (e.g., /voice/stream) */

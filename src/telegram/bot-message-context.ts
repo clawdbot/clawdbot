@@ -25,6 +25,7 @@ import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reac
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { logInboundDrop } from "../channels/logging.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -165,16 +166,19 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
-    await bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId));
+    await withTelegramApiErrorLogging({
+      operation: "sendChatAction",
+      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId)),
+    });
   };
 
   const sendRecordVoice = async () => {
     try {
-      await bot.api.sendChatAction(
-        chatId,
-        "record_voice",
-        buildTypingThreadParams(resolvedThreadId),
-      );
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: () =>
+          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(resolvedThreadId)),
+      });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
@@ -227,19 +231,23 @@ export const buildTelegramMessageContext = async ({
                 },
                 "telegram pairing request",
               );
-              await bot.api.sendMessage(
-                chatId,
-                [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Your Telegram user id: ${telegramUserId}`,
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  formatCliCommand("clawdbot pairing approve telegram <code>"),
-                ].join("\n"),
-              );
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    [
+                      "Clawdbot: access not configured.",
+                      "",
+                      `Your Telegram user id: ${telegramUserId}`,
+                      "",
+                      `Pairing code: ${code}`,
+                      "",
+                      "Ask the bot owner to approve with:",
+                      formatCliCommand("clawdbot pairing approve telegram <code>"),
+                    ].join("\n"),
+                  ),
+              });
             }
           } catch (err) {
             logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
@@ -408,7 +416,10 @@ export const buildTelegramMessageContext = async ({
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
   const ackReactionPromise =
     shouldAckReaction() && msg.message_id && reactionApi
-      ? reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]).then(
+      ? withTelegramApiErrorLogging({
+          operation: "setMessageReaction",
+          fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
+        }).then(
           () => true,
           (err) => {
             logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);

@@ -297,7 +297,7 @@ Options:
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
-- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|codex-cli|gemini-api-key|zai-api-key|apiKey|minimax-api|opencode-zen|skip>`
+- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip>`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
@@ -314,7 +314,7 @@ Options:
 - `--opencode-zen-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto|custom>`
-- `--gateway-auth <off|token|password>`
+- `--gateway-auth <token|password>`
 - `--gateway-token <token>`
 - `--gateway-password <password>`
 - `--remote-url <url>`
@@ -358,7 +358,7 @@ Options:
 Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
 
 Subcommands:
-- `channels list`: show configured channels and auth profiles (Claude Code + Codex CLI OAuth sync included).
+- `channels list`: show configured channels and auth profiles.
 - `channels status`: check gateway reachability and channel health (`--probe` runs extra checks; use `clawdbot health` or `clawdbot status --deep` for gateway health probes).
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `clawdbot doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
@@ -389,12 +389,6 @@ Common options:
 - `--channel <name|all>` (default `all`)
 - `--lines <n>` (default `200`)
 - `--json`
-
-OAuth sync sources:
-- Claude Code → `anthropic:claude-cli`
-  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
-  - Linux/Windows: `~/.claude/.credentials.json`
-- `~/.codex/auth.json` → `openai-codex:codex-cli`
 
 More detail: [/concepts/oauth](/concepts/oauth)
 
@@ -676,10 +670,11 @@ Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `bas
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Preferred Anthropic auth (CLI token, not API key):
+Preferred Anthropic auth (setup-token):
 
 ```bash
 claude setup-token
+clawdbot models auth setup-token --provider anthropic
 clawdbot models status
 ```
 
@@ -864,9 +859,8 @@ Location:
 Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`clawdbot browser`](/cli/browser) and the [Browser tool](/tools/browser).
 
 Common options:
-- `--url <controlUrl>`
+- `--url`, `--token`, `--timeout`, `--json`
 - `--browser-profile <name>`
-- `--json`
 
 Manage:
 - `browser status`

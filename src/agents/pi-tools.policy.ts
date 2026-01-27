@@ -96,13 +96,28 @@ export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolP
 
 type ToolPolicyConfig = {
   allow?: string[];
+  alsoAllow?: string[];
   deny?: string[];
   profile?: string;
 };
 
+function unionAllow(base?: string[], extra?: string[]) {
+  if (!Array.isArray(extra) || extra.length === 0) return base;
+  // If the user is using alsoAllow without an allowlist, treat it as additive on top of
+  // an implicit allow-all policy.
+  if (!Array.isArray(base) || base.length === 0) {
+    return Array.from(new Set(["*", ...extra]));
+  }
+  return Array.from(new Set([...base, ...extra]));
+}
+
 function pickToolPolicy(config?: ToolPolicyConfig): SandboxToolPolicy | undefined {
   if (!config) return undefined;
-  const allow = Array.isArray(config.allow) ? config.allow : undefined;
+  const allow = Array.isArray(config.allow)
+    ? unionAllow(config.allow, config.alsoAllow)
+    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
+      ? unionAllow(undefined, config.alsoAllow)
+      : undefined;
   const deny = Array.isArray(config.deny) ? config.deny : undefined;
   if (!allow && !deny) return undefined;
   return { allow, deny };
@@ -195,6 +210,17 @@ export function resolveEffectiveToolPolicy(params: {
     agentProviderPolicy: pickToolPolicy(agentProviderPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+    // alsoAllow is applied at the profile stage (to avoid being filtered out early).
+    profileAlsoAllow: Array.isArray(agentTools?.alsoAllow)
+      ? agentTools?.alsoAllow
+      : Array.isArray(globalTools?.alsoAllow)
+        ? globalTools?.alsoAllow
+        : undefined,
+    providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
+      ? agentProviderPolicy?.alsoAllow
+      : Array.isArray(providerPolicy?.alsoAllow)
+        ? providerPolicy?.alsoAllow
+        : undefined,
   };
 }
 
@@ -207,6 +233,10 @@ export function resolveGroupToolPolicy(params: {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 }): SandboxToolPolicy | undefined {
   if (!params.config) return undefined;
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
@@ -229,12 +259,20 @@ export function resolveGroupToolPolicy(params: {
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       accountId: params.accountId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
     }) ??
     resolveChannelGroupToolsPolicy({
       cfg: params.config,
       channel,
       groupId,
       accountId: params.accountId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
     });
   return pickToolPolicy(toolsConfig);
 }

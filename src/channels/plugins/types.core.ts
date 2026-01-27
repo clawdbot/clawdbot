@@ -155,6 +155,10 @@ export type ChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 };
 
 export type ChannelCapabilities = {

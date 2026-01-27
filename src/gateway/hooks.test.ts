@@ -47,15 +47,21 @@ describe("gateway hooks helpers", () => {
       },
     } as unknown as IncomingMessage;
     const url = new URL("http://localhost/hooks/wake?token=query");
-    expect(extractHookToken(req, url)).toBe("top");
+    const result1 = extractHookToken(req, url);
+    expect(result1.token).toBe("top");
+    expect(result1.fromQuery).toBe(false);
 
     const req2 = {
       headers: { "x-clawdbot-token": "header" },
     } as unknown as IncomingMessage;
-    expect(extractHookToken(req2, url)).toBe("header");
+    const result2 = extractHookToken(req2, url);
+    expect(result2.token).toBe("header");
+    expect(result2.fromQuery).toBe(false);
 
     const req3 = { headers: {} } as unknown as IncomingMessage;
-    expect(extractHookToken(req3, url)).toBe("query");
+    const result3 = extractHookToken(req3, url);
+    expect(result3.token).toBe("query");
+    expect(result3.fromQuery).toBe(true);
   });
 
   test("normalizeWakePayload trims + validates", () => {

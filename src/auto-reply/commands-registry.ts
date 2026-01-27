@@ -255,33 +255,41 @@ function resolveDefaultCommandContext(cfg?: ClawdbotConfig): {
   };
 }
 
+export type ResolvedCommandArgChoice = { value: string; label: string };
+
 export function resolveCommandArgChoices(params: {
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
   cfg?: ClawdbotConfig;
   provider?: string;
   model?: string;
-}): string[] {
+}): ResolvedCommandArgChoice[] {
   const { command, arg, cfg } = params;
   if (!arg.choices) return [];
   const provided = arg.choices;
-  if (Array.isArray(provided)) return provided;
-  const defaults = resolveDefaultCommandContext(cfg);
-  const context: CommandArgChoiceContext = {
-    cfg,
-    provider: params.provider ?? defaults.provider,
-    model: params.model ?? defaults.model,
-    command,
-    arg,
-  };
-  return provided(context);
+  const raw = Array.isArray(provided)
+    ? provided
+    : (() => {
+        const defaults = resolveDefaultCommandContext(cfg);
+        const context: CommandArgChoiceContext = {
+          cfg,
+          provider: params.provider ?? defaults.provider,
+          model: params.model ?? defaults.model,
+          command,
+          arg,
+        };
+        return provided(context);
+      })();
+  return raw.map((choice) =>
+    typeof choice === "string" ? { value: choice, label: choice } : choice,
+  );
 }
 
 export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
   cfg?: ClawdbotConfig;
-}): { arg: CommandArgDefinition; choices: string[]; title?: string } | null {
+}): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
   const { command, args, cfg } = params;
   if (!command.args || !command.argsMenu) return null;
   if (command.argsParsing === "none") return null;

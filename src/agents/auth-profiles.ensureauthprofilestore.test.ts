@@ -3,8 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { AUTH_STORE_VERSION, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
-import { withTempHome } from "../../test/helpers/temp-home.js";
+import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
@@ -122,81 +121,5 @@ describe("ensureAuthProfileStore", () => {
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("drops codex-cli from merged store when a custom openai-codex profile matches", async () => {
-    await withTempHome(async (tempHome) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-dedup-merge-"));
-      const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
-      const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-      try {
-        const mainDir = path.join(root, "main-agent");
-        const agentDir = path.join(root, "agent-x");
-        fs.mkdirSync(mainDir, { recursive: true });
-        fs.mkdirSync(agentDir, { recursive: true });
-
-        process.env.CLAWDBOT_AGENT_DIR = mainDir;
-        process.env.PI_CODING_AGENT_DIR = mainDir;
-        process.env.HOME = tempHome;
-
-        fs.writeFileSync(
-          path.join(mainDir, "auth-profiles.json"),
-          `${JSON.stringify(
-            {
-              version: AUTH_STORE_VERSION,
-              profiles: {
-                [CODEX_CLI_PROFILE_ID]: {
-                  type: "oauth",
-                  provider: "openai-codex",
-                  access: "shared-access-token",
-                  refresh: "shared-refresh-token",
-                  expires: Date.now() + 3600000,
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
-
-        fs.writeFileSync(
-          path.join(agentDir, "auth-profiles.json"),
-          `${JSON.stringify(
-            {
-              version: AUTH_STORE_VERSION,
-              profiles: {
-                "openai-codex:my-custom-profile": {
-                  type: "oauth",
-                  provider: "openai-codex",
-                  access: "shared-access-token",
-                  refresh: "shared-refresh-token",
-                  expires: Date.now() + 3600000,
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
-
-        const store = ensureAuthProfileStore(agentDir);
-        expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeUndefined();
-        expect(store.profiles["openai-codex:my-custom-profile"]).toBeDefined();
-      } finally {
-        if (previousAgentDir === undefined) {
-          delete process.env.CLAWDBOT_AGENT_DIR;
-        } else {
-          process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
-        }
-        if (previousPiAgentDir === undefined) {
-          delete process.env.PI_CODING_AGENT_DIR;
-        } else {
-          process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-        }
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    });
   });
 });

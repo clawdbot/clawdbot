@@ -31,6 +31,10 @@ export type EmbeddedRunAttemptParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";

@@ -11,7 +11,12 @@ struct MasterDiscoveryMenuSmokeTests {
         discovery.statusText = "Searching…"
         discovery.gateways = []
 
-        let view = GatewayDiscoveryInlineList(discovery: discovery, currentTarget: nil, onSelect: { _ in })
+        let view = GatewayDiscoveryInlineList(
+            discovery: discovery,
+            currentTarget: nil,
+            currentUrl: nil,
+            transport: .ssh,
+            onSelect: { _ in })
         _ = view.body
     }
 
@@ -32,7 +37,12 @@ struct MasterDiscoveryMenuSmokeTests {
         ]
 
         let currentTarget = "\(NSUserName())@office.tailnet-123.ts.net:2222"
-        let view = GatewayDiscoveryInlineList(discovery: discovery, currentTarget: currentTarget, onSelect: { _ in })
+        let view = GatewayDiscoveryInlineList(
+            discovery: discovery,
+            currentTarget: currentTarget,
+            currentUrl: nil,
+            transport: .ssh,
+            onSelect: { _ in })
         _ = view.body
     }
 

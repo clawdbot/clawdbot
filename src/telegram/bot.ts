@@ -21,8 +21,10 @@ import {
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -118,7 +120,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
   const telegramCfg = account.config;
 
-  const fetchImpl = resolveTelegramFetch(opts.proxyFetch);
+  const fetchImpl = resolveTelegramFetch(opts.proxyFetch, {
+    network: telegramCfg.network,
+  });
   const shouldProvideFetch = Boolean(fetchImpl);
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
@@ -137,6 +141,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
+  bot.catch((err) => {
+    runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
+  });
+
+  // Catch all errors from bot middleware to prevent unhandled rejections
+  bot.catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    runtime.error?.(danger(`telegram bot error: ${message}`));
+  });
 
   const recentUpdates = createTelegramUpdateDedupe();
   let lastUpdateId =
@@ -249,7 +262,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     if (typeof botHasTopicsEnabled === "boolean") return botHasTopicsEnabled;
     try {
-      const me = (await bot.api.getMe()) as { has_topics_enabled?: boolean };
+      const me = (await withTelegramApiErrorLogging({
+        operation: "getMe",
+        runtime,
+        fn: () => bot.api.getMe(),
+      })) as { has_topics_enabled?: boolean };
       botHasTopicsEnabled = Boolean(me?.has_topics_enabled);
     } catch (err) {
       logVerbose(`telegram getMe failed: ${String(err)}`);

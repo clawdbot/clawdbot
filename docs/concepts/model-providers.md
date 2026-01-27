@@ -49,9 +49,9 @@ Clawdbot ships with the pi‑ai catalog. These providers require **no**
 ### OpenAI Code (Codex)
 
 - Provider: `openai-codex`
-- Auth: OAuth or Codex CLI (`~/.codex/auth.json`)
+- Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.2`
-- CLI: `clawdbot onboard --auth-choice openai-codex` or `codex-cli`
+- CLI: `clawdbot onboard --auth-choice openai-codex` or `clawdbot models auth login --provider openai-codex`
 
 ```json5
 {

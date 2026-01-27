@@ -260,6 +260,9 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
 export async function startServerWithClient(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const prev = process.env.CLAWDBOT_GATEWAY_TOKEN;
+  if (typeof token === "string") {
+    testState.gatewayAuth = { mode: "token", token };
+  }
   const fallbackToken =
     token ??
     (typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"

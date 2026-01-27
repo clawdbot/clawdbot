@@ -1,5 +1,4 @@
 import { loginOpenAICodex } from "@mariozechner/pi-ai";
-import { CODEX_CLI_PROFILE_ID, ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
@@ -142,46 +141,6 @@ export async function applyAuthChoiceOpenAI(
         "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
         "OAuth help",
       );
-    }
-    return { config: nextConfig, agentModelOverride };
-  }
-
-  if (params.authChoice === "codex-cli") {
-    let nextConfig = params.config;
-    let agentModelOverride: string | undefined;
-    const noteAgentModel = async (model: string) => {
-      if (!params.agentId) return;
-      await params.prompter.note(
-        `Default model set to ${model} for agent "${params.agentId}".`,
-        "Model configured",
-      );
-    };
-
-    const store = ensureAuthProfileStore(params.agentDir);
-    if (!store.profiles[CODEX_CLI_PROFILE_ID]) {
-      await params.prompter.note(
-        "No Codex CLI credentials found at ~/.codex/auth.json.",
-        "Codex CLI OAuth",
-      );
-      return { config: nextConfig, agentModelOverride };
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: CODEX_CLI_PROFILE_ID,
-      provider: "openai-codex",
-      mode: "oauth",
-    });
-    if (params.setDefaultModel) {
-      const applied = applyOpenAICodexModelDefault(nextConfig);
-      nextConfig = applied.next;
-      if (applied.changed) {
-        await params.prompter.note(
-          `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-          "Model configured",
-        );
-      }
-    } else {
-      agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
-      await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
     }
     return { config: nextConfig, agentModelOverride };
   }

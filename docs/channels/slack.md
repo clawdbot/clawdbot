@@ -464,6 +464,8 @@ For fine-grained control, use these tags in agent responses:
 Channel options (`channels.slack.channels.<id>` or `channels.slack.channels.<name>`):
 - `allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `requireMention`: mention gating for the channel.
+- `tools`: optional per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `toolsBySender`: optional per-sender tool policy overrides within the channel (keys are sender ids/@handles/emails; `"*"` wildcard supported).
 - `allowBots`: allow bot-authored messages in this channel (default: false).
 - `users`: optional per-channel user allowlist.
 - `skills`: skill filter (omit = all skills, empty = none).

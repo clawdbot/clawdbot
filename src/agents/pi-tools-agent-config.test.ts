@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
@@ -268,6 +269,75 @@ describe("Agent-specific tool filtering", () => {
     const defaultNames = defaultTools.map((t) => t.name);
     expect(defaultNames).toContain("read");
     expect(defaultNames).not.toContain("exec");
+  });
+
+  it("should apply per-sender tool policies for group tools", () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                alice: { allow: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const aliceTools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:family",
+      senderId: "alice",
+      workspaceDir: "/tmp/test-group-sender",
+      agentDir: "/tmp/agent-group-sender",
+    });
+    const aliceNames = aliceTools.map((t) => t.name);
+    expect(aliceNames).toContain("read");
+    expect(aliceNames).toContain("exec");
+
+    const bobTools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:family",
+      senderId: "bob",
+      workspaceDir: "/tmp/test-group-sender-bob",
+      agentDir: "/tmp/agent-group-sender",
+    });
+    const bobNames = bobTools.map((t) => t.name);
+    expect(bobNames).toContain("read");
+    expect(bobNames).not.toContain("exec");
+  });
+
+  it("should not let default sender policy override group tools", () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "*": {
+              toolsBySender: {
+                admin: { allow: ["read", "exec"] },
+              },
+            },
+            locked: {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const adminTools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:locked",
+      senderId: "admin",
+      workspaceDir: "/tmp/test-group-default-override",
+      agentDir: "/tmp/agent-group-default-override",
+    });
+    const adminNames = adminTools.map((t) => t.name);
+    expect(adminNames).toContain("read");
+    expect(adminNames).not.toContain("exec");
   });
 
   it("should resolve telegram group tool policy for topic session keys", () => {

@@ -39,7 +39,9 @@ fly volumes create clawdbot_data --size 1 --region iad
 
 ## 2) Configure fly.toml
 
-Edit `fly.toml` to match your app name and requirements:
+Edit `fly.toml` to match your app name and requirements.
+
+**Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
 
 ```toml
 app = "my-clawdbot"  # Your app name
@@ -104,6 +106,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 **Notes:**
 - Non-loopback binds (`--bind lan`) require `CLAWDBOT_GATEWAY_TOKEN` for security.
 - Treat these tokens like passwords.
+- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `clawdbot.json` where they could be accidentally exposed or logged.
 
 ## 4) Deploy
 
@@ -336,6 +339,114 @@ fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js g
 ```
 
 **Note:** After `fly deploy`, the machine command may reset to what's in `fly.toml`. If you made manual changes, re-apply them after deploy.
+
+## Private Deployment (Hardened)
+
+By default, Fly allocates public IPs, making your gateway accessible at `https://your-app.fly.dev`. This is convenient but means your deployment is discoverable by internet scanners (Shodan, Censys, etc.).
+
+For a hardened deployment with **no public exposure**, use the private template.
+
+### When to use private deployment
+
+- You only make **outbound** calls/messages (no inbound webhooks)
+- You use **ngrok or Tailscale** tunnels for any webhook callbacks
+- You access the gateway via **SSH, proxy, or WireGuard** instead of browser
+- You want the deployment **hidden from internet scanners**
+
+### Setup
+
+Use `fly.private.toml` instead of the standard config:
+
+```bash
+# Deploy with private config
+fly deploy -c fly.private.toml
+```
+
+Or convert an existing deployment:
+
+```bash
+# List current IPs
+fly ips list -a my-clawdbot
+
+# Release public IPs
+fly ips release <public-ipv4> -a my-clawdbot
+fly ips release <public-ipv6> -a my-clawdbot
+
+# Switch to private config so future deploys don't re-allocate public IPs
+# (remove [http_service] or deploy with the private template)
+fly deploy -c fly.private.toml
+
+# Allocate private-only IPv6
+fly ips allocate-v6 --private -a my-clawdbot
+```
+
+After this, `fly ips list` should show only a `private` type IP:
+```
+VERSION  IP                   TYPE             REGION
+v6       fdaa:x:x:x:x::x      private          global
+```
+
+### Accessing a private deployment
+
+Since there's no public URL, use one of these methods:
+
+**Option 1: Local proxy (simplest)**
+```bash
+# Forward local port 3000 to the app
+fly proxy 3000:3000 -a my-clawdbot
+
+# Then open http://localhost:3000 in browser
+```
+
+**Option 2: WireGuard VPN**
+```bash
+# Create WireGuard config (one-time)
+fly wireguard create
+
+# Import to WireGuard client, then access via internal IPv6
+# Example: http://[fdaa:x:x:x:x::x]:3000
+```
+
+**Option 3: SSH only**
+```bash
+fly ssh console -a my-clawdbot
+```
+
+### Webhooks with private deployment
+
+If you need webhook callbacks (Twilio, Telnyx, etc.) without public exposure:
+
+1. **ngrok tunnel** - Run ngrok inside the container or as a sidecar
+2. **Tailscale Funnel** - Expose specific paths via Tailscale
+3. **Outbound-only** - Some providers (Twilio) work fine for outbound calls without webhooks
+
+Example voice-call config with ngrok:
+```json
+{
+  "plugins": {
+    "entries": {
+      "voice-call": {
+        "enabled": true,
+        "config": {
+          "provider": "twilio",
+          "tunnel": { "provider": "ngrok" }
+        }
+      }
+    }
+  }
+}
+```
+
+The ngrok tunnel runs inside the container and provides a public webhook URL without exposing the Fly app itself.
+
+### Security benefits
+
+| Aspect | Public | Private |
+|--------|--------|---------|
+| Internet scanners | Discoverable | Hidden |
+| Direct attacks | Possible | Blocked |
+| Control UI access | Browser | Proxy/VPN |
+| Webhook delivery | Direct | Via tunnel |
 
 ## Notes
 
