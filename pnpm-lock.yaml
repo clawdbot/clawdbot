@@ -429,12 +429,16 @@ importers:
       '@mtcute/node':
         specifier: ^0.27.6
         version: 0.27.6(ws@8.19.0)
-      clawdbot:
-        specifier: workspace:*
-        version: link:../..
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tlon:
     dependencies:
