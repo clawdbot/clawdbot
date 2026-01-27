@@ -43,7 +43,7 @@ describe("memory index", () => {
   beforeEach(async () => {
     embedBatchCalls = 0;
     failEmbeddings = false;
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-mem-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(

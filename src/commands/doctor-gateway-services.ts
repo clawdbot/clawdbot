@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { findLegacyGatewayServices, uninstallLegacyGatewayServices } from "../daemon/legacy.js";
@@ -43,7 +43,7 @@ function normalizeExecutablePath(value: string): string {
 }
 
 export async function maybeMigrateLegacyGatewayService(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -57,7 +57,7 @@ export async function maybeMigrateLegacyGatewayService(
   );
 
   const migrate = await prompter.confirmSkipInNonInteractive({
-    message: "Migrate legacy gateway services to Clawdbot now?",
+    message: "Migrate legacy gateway services to Moltbot now?",
     initialValue: true,
   });
   if (!migrate) return;
@@ -85,12 +85,12 @@ export async function maybeMigrateLegacyGatewayService(
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({ env: process.env });
   if (loaded) {
-    note(`Clawdbot ${service.label} already ${service.loadedText}.`, "Gateway");
+    note(`Moltbot ${service.label} already ${service.loadedText}.`, "Gateway");
     return;
   }
 
   const install = await prompter.confirmSkipInNonInteractive({
-    message: "Install Clawdbot gateway service now?",
+    message: "Install Moltbot gateway service now?",
     initialValue: true,
   });
   if (!install) return;
@@ -127,7 +127,7 @@ export async function maybeMigrateLegacyGatewayService(
 }
 
 export async function maybeRepairGatewayServiceConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,

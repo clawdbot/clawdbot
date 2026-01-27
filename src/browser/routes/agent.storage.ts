@@ -1,10 +1,12 @@
-import type express from "express";
-
 import type { BrowserRouteContext } from "../server-context.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 
-export function registerBrowserAgentStorageRoutes(app: express.Express, ctx: BrowserRouteContext) {
+export function registerBrowserAgentStorageRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   app.get("/cookies", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;

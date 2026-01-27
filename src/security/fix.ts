@@ -3,7 +3,7 @@ import path from "node:path";
 
 import JSON5 from "json5";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -187,13 +187,13 @@ async function safeAclReset(params: {
 }
 
 function setGroupPolicyAllowlist(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: string;
   changes: string[];
   policyFlips: Set<string>;
 }): void {
   if (!params.cfg.channels) return;
-  const section = params.cfg.channels[params.channel as keyof ClawdbotConfig["channels"]] as
+  const section = params.cfg.channels[params.channel as keyof MoltbotConfig["channels"]] as
     | Record<string, unknown>
     | undefined;
   if (!section || typeof section !== "object") return;
@@ -222,7 +222,7 @@ function setGroupPolicyAllowlist(params: {
 }
 
 function setWhatsAppGroupAllowFromFromStore(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   storeAllowFrom: string[];
   changes: string[];
   policyFlips: Set<string>;
@@ -252,8 +252,8 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   }
 }
 
-function applyConfigFixes(params: { cfg: ClawdbotConfig; env: NodeJS.ProcessEnv }): {
-  cfg: ClawdbotConfig;
+function applyConfigFixes(params: { cfg: MoltbotConfig; env: NodeJS.ProcessEnv }): {
+  cfg: MoltbotConfig;
   changes: string[];
   policyFlips: Set<string>;
 } {
@@ -349,7 +349,7 @@ async function collectIncludePathsRecursive(params: {
 async function chmodCredentialsAndAgentState(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   actions: SecurityFixAction[];
   applyPerms: (params: {
     path: string;

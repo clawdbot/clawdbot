@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Reset Clawdbot like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
+# Reset Moltbot like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_BUNDLE="${CLAWDBOT_APP_BUNDLE:-}"
-APP_PROCESS_PATTERN="Clawdbot.app/Contents/MacOS/Clawdbot"
-DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Clawdbot"
-LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Clawdbot"
-RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Clawdbot"
+APP_PROCESS_PATTERN="Moltbot.app/Contents/MacOS/Moltbot"
+DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Moltbot"
+LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Moltbot"
+RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Moltbot"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.clawdbot.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
-LOCK_DIR="${TMPDIR:-/tmp}/clawdbot-restart-${LOCK_KEY}"
+LOCK_DIR="${TMPDIR:-/tmp}/moltbot-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
 WAIT_FOR_LOCK=0
-LOG_PATH="${CLAWDBOT_RESTART_LOG:-/tmp/clawdbot-restart.log}"
+LOG_PATH="${CLAWDBOT_RESTART_LOG:-/tmp/moltbot-restart.log}"
 NO_SIGN=0
 SIGN=0
 AUTO_DETECT_SIGNING=1
@@ -126,18 +126,18 @@ fi
 
 acquire_lock
 
-kill_all_clawdbot() {
+kill_all_moltbot() {
   for _ in {1..10}; do
     pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -x "Clawdbot" 2>/dev/null || true
+    pkill -x "Moltbot" 2>/dev/null || true
     if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -x "Clawdbot" >/dev/null 2>&1; then
+       && ! pgrep -x "Moltbot" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.3
@@ -149,8 +149,8 @@ stop_launch_agent() {
 }
 
 # 1) Kill all running instances first.
-log "==> Killing existing Clawdbot instances"
-kill_all_clawdbot
+log "==> Killing existing Moltbot instances"
+kill_all_moltbot
 stop_launch_agent
 
 # Bundle Gateway-hosted Canvas A2UI assets.
@@ -158,7 +158,7 @@ run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bun
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Clawdbot"
+run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Moltbot"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then
@@ -191,20 +191,20 @@ choose_app_bundle() {
     return 0
   fi
 
-  if [[ -d "/Applications/Clawdbot.app" ]]; then
-    APP_BUNDLE="/Applications/Clawdbot.app"
+  if [[ -d "/Applications/Moltbot.app" ]]; then
+    APP_BUNDLE="/Applications/Moltbot.app"
     return 0
   fi
 
-  if [[ -d "${ROOT_DIR}/dist/Clawdbot.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/Clawdbot.app"
+  if [[ -d "${ROOT_DIR}/dist/Moltbot.app" ]]; then
+    APP_BUNDLE="${ROOT_DIR}/dist/Moltbot.app"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
-      fail "dist/Clawdbot.app missing Sparkle after packaging"
+      fail "dist/Moltbot.app missing Sparkle after packaging"
     fi
     return 0
   fi
 
-  fail "App bundle not found. Set CLAWDBOT_APP_BUNDLE to your installed Clawdbot.app"
+  fail "App bundle not found. Set CLAWDBOT_APP_BUNDLE to your installed Moltbot.app"
 }
 
 choose_app_bundle
@@ -227,7 +227,7 @@ if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
       const fs = require("node:fs");
       const path = require("node:path");
       try {
-        const raw = fs.readFileSync(path.join(process.env.HOME, ".clawdbot", "clawdbot.json"), "utf8");
+        const raw = fs.readFileSync(path.join(process.env.HOME, ".clawdbot", "moltbot.json"), "utf8");
         const cfg = JSON.parse(raw);
         const port = cfg && cfg.gateway && typeof cfg.gateway.port === "number" ? cfg.gateway.port : 18789;
         process.stdout.write(String(port));
@@ -259,7 +259,7 @@ run_step "launch app" env -i \
 # 5) Verify the app is alive.
 sleep 1.5
 if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
-  log "OK: Clawdbot is running."
+  log "OK: Moltbot is running."
 else
   fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."
 fi

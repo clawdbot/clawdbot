@@ -4,7 +4,7 @@ set -euo pipefail
 # Notarize a macOS artifact (zip/dmg/pkg) and optionally staple the app bundle.
 #
 # Usage:
-#   STAPLE_APP_PATH=dist/Clawdbot.app scripts/notarize-mac-artifact.sh <artifact>
+#   STAPLE_APP_PATH=dist/Moltbot.app scripts/notarize-mac-artifact.sh <artifact>
 #
 # Auth (pick one):
 #   NOTARYTOOL_PROFILE   keychain profile created via `xcrun notarytool store-credentials`

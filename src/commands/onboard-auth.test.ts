@@ -59,7 +59,7 @@ describe("writeOAuthCredentials", () => {
   });
 
   it("writes auth-profiles.json under CLAWDBOT_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-oauth-"));
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-oauth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
@@ -118,7 +118,7 @@ describe("setMinimaxApiKey", () => {
   });
 
   it("writes to CLAWDBOT_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-minimax-"));
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-minimax-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "custom-agent");
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { handleWhatsAppAction } from "./whatsapp-actions.js";
 
 const sendReactionWhatsApp = vi.fn(async () => undefined);
@@ -13,7 +13,7 @@ vi.mock("../../web/outbound.js", () => ({
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
-} as ClawdbotConfig;
+} as MoltbotConfig;
 
 describe("handleWhatsAppAction", () => {
   it("adds reactions", async () => {
@@ -95,7 +95,7 @@ describe("handleWhatsAppAction", () => {
   it("respects reaction gating", async () => {
     const cfg = {
       channels: { whatsapp: { actions: { reactions: false } } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleWhatsAppAction(
         {

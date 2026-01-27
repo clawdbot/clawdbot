@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "clawdbot/plugin-sdk";
 import { sendMessageMatrix } from "../send.js";

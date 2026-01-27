@@ -6,20 +6,18 @@ import {
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
+  isTtsEnabled,
   isTtsProviderConfigured,
-  normalizeTtsAutoMode,
-  resolveTtsAutoMode,
   resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
-  resolveTtsProviderOrder,
   setLastTtsAttempt,
   setSummarizationEnabled,
+  setTtsEnabled,
   setTtsMaxLength,
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
-import { updateSessionStore } from "../../config/sessions.js";
 
 type ParsedTtsCommand = {
   action: string;
@@ -40,14 +38,27 @@ function ttsUsage(): ReplyPayload {
   // Keep usage in one place so help/validation stays consistent.
   return {
     text:
-      "⚙️ Usage: /tts <off|always|inbound|tagged|status|provider|limit|summary|audio> [value]" +
-      "\nExamples:\n" +
-      "/tts always\n" +
-      "/tts provider openai\n" +
-      "/tts provider edge\n" +
-      "/tts limit 2000\n" +
-      "/tts summary off\n" +
-      "/tts audio Hello from Clawdbot",
+      `🔊 **TTS (Text-to-Speech) Help**\n\n` +
+      `**Commands:**\n` +
+      `• /tts on — Enable automatic TTS for replies\n` +
+      `• /tts off — Disable TTS\n` +
+      `• /tts status — Show current settings\n` +
+      `• /tts provider [name] — View/change provider\n` +
+      `• /tts limit [number] — View/change text limit\n` +
+      `• /tts summary [on|off] — View/change auto-summary\n` +
+      `• /tts audio <text> — Generate audio from text\n\n` +
+      `**Providers:**\n` +
+      `• edge — Free, fast (default)\n` +
+      `• openai — High quality (requires API key)\n` +
+      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `**Text Limit (default: 1500, max: 4096):**\n` +
+      `When text exceeds the limit:\n` +
+      `• Summary ON: AI summarizes, then generates audio\n` +
+      `• Summary OFF: Truncates text, then generates audio\n\n` +
+      `**Examples:**\n` +
+      `/tts provider edge\n` +
+      `/tts limit 2000\n` +
+      `/tts audio Hello, this is a test!`,
   };
 }
 
@@ -72,35 +83,27 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false, reply: ttsUsage() };
   }
 
-  const requestedAuto = normalizeTtsAutoMode(
-    action === "on" ? "always" : action === "off" ? "off" : action,
-  );
-  if (requestedAuto) {
-    const entry = params.sessionEntry;
-    const sessionKey = params.sessionKey;
-    const store = params.sessionStore;
-    if (entry && store && sessionKey) {
-      entry.ttsAuto = requestedAuto;
-      entry.updatedAt = Date.now();
-      store[sessionKey] = entry;
-      if (params.storePath) {
-        await updateSessionStore(params.storePath, (store) => {
-          store[sessionKey] = entry;
-        });
-      }
-    }
-    const label = requestedAuto === "always" ? "enabled (always)" : requestedAuto;
-    return {
-      shouldContinue: false,
-      reply: {
-        text: requestedAuto === "off" ? "🔇 TTS disabled." : `🔊 TTS ${label}.`,
-      },
-    };
+  if (action === "on") {
+    setTtsEnabled(prefsPath, true);
+    return { shouldContinue: false, reply: { text: "🔊 TTS enabled." } };
+  }
+
+  if (action === "off") {
+    setTtsEnabled(prefsPath, false);
+    return { shouldContinue: false, reply: { text: "🔇 TTS disabled." } };
   }
 
   if (action === "audio") {
     if (!args.trim()) {
-      return { shouldContinue: false, reply: ttsUsage() };
+      return {
+        shouldContinue: false,
+        reply: {
+          text:
+            `🎤 Generate audio from text.\n\n` +
+            `Usage: /tts audio <text>\n` +
+            `Example: /tts audio Hello, this is a test!`,
+        },
+      };
     }
 
     const start = Date.now();
@@ -146,9 +149,6 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const fallback = resolveTtsProviderOrder(currentProvider)
-        .slice(1)
-        .filter((provider) => isTtsProviderConfigured(config, provider));
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
       const hasEdge = isTtsProviderConfigured(config, "edge");
@@ -158,7 +158,6 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `Fallbacks: ${fallback.join(", ") || "none"}\n` +
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
             `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
@@ -173,18 +172,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     setTtsProvider(prefsPath, requested);
-    const fallback = resolveTtsProviderOrder(requested)
-      .slice(1)
-      .filter((provider) => isTtsProviderConfigured(config, provider));
     return {
       shouldContinue: false,
-      reply: {
-        text:
-          `✅ TTS provider set to ${requested} (fallbacks: ${fallback.join(", ") || "none"}).` +
-          (requested === "edge"
-            ? "\nEnable Edge TTS in config: messages.tts.edge.enabled = true."
-            : ""),
-      },
+      reply: { text: `✅ TTS provider set to ${requested}.` },
     };
   }
 
@@ -193,12 +183,22 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const currentLimit = getTtsMaxLength(prefsPath);
       return {
         shouldContinue: false,
-        reply: { text: `📏 TTS limit: ${currentLimit} characters.` },
+        reply: {
+          text:
+            `📏 TTS limit: ${currentLimit} characters.\n\n` +
+            `Text longer than this triggers summary (if enabled).\n` +
+            `Range: 100-4096 chars (Telegram max).\n\n` +
+            `To change: /tts limit <number>\n` +
+            `Example: /tts limit 2000`,
+        },
       };
     }
     const next = Number.parseInt(args.trim(), 10);
-    if (!Number.isFinite(next) || next < 100 || next > 10_000) {
-      return { shouldContinue: false, reply: ttsUsage() };
+    if (!Number.isFinite(next) || next < 100 || next > 4096) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ Limit must be between 100 and 4096 characters." },
+      };
     }
     setTtsMaxLength(prefsPath, next);
     return {
@@ -210,9 +210,17 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "summary") {
     if (!args.trim()) {
       const enabled = isSummarizationEnabled(prefsPath);
+      const maxLen = getTtsMaxLength(prefsPath);
       return {
         shouldContinue: false,
-        reply: { text: `📝 TTS auto-summary: ${enabled ? "on" : "off"}.` },
+        reply: {
+          text:
+            `📝 TTS auto-summary: ${enabled ? "on" : "off"}.\n\n` +
+            `When text exceeds ${maxLen} chars:\n` +
+            `• ON: summarizes text, then generates audio\n` +
+            `• OFF: truncates text, then generates audio\n\n` +
+            `To change: /tts summary on | off`,
+        },
       };
     }
     const requested = args.trim().toLowerCase();
@@ -229,27 +237,16 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "status") {
-    const sessionAuto = params.sessionEntry?.ttsAuto;
-    const autoMode = resolveTtsAutoMode({ config, prefsPath, sessionAuto });
-    const enabled = autoMode !== "off";
+    const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
     const hasKey = isTtsProviderConfigured(config, provider);
-    const providerStatus =
-      provider === "edge"
-        ? hasKey
-          ? "✅ enabled"
-          : "❌ disabled"
-        : hasKey
-          ? "✅ key"
-          : "❌ no key";
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();
-    const autoLabel = sessionAuto ? `${autoMode} (session)` : autoMode;
     const lines = [
       "📊 TTS status",
-      `Auto: ${enabled ? autoLabel : "off"}`,
-      `Provider: ${provider} (${providerStatus})`,
+      `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
+      `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
       `Text limit: ${maxLength} chars`,
       `Auto-summary: ${summarize ? "on" : "off"}`,
     ];

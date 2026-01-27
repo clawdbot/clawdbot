@@ -17,7 +17,7 @@ Broadcast Groups enable multiple agents to process and respond to the same messa
 
 Current scope: **WhatsApp only** (web channel).
 
-Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when Clawdbot would normally reply (for example: on mention, depending on your group settings).
+Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when Moltbot would normally reply (for example: on mention, depending on your group settings).
 
 ## Use Cases
 
@@ -76,7 +76,7 @@ Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer
 }
 ```
 
-**Result:** When Clawdbot would reply in this chat, it will run all three agents.
+**Result:** When Moltbot would reply in this chat, it will run all three agents.
 
 ### Processing Strategy
 
@@ -368,7 +368,7 @@ tail -f ~/.clawdbot/logs/gateway.log | grep broadcast
 ### Config Schema
 
 ```typescript
-interface ClawdbotConfig {
+interface MoltbotConfig {
   broadcast?: {
     strategy?: "parallel" | "sequential";
     [peerId: string]: string[];

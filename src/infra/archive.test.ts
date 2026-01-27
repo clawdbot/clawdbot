@@ -9,7 +9,7 @@ import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./arch
 const tempDirs: string[] = [];
 
 async function makeTempDir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-archive-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-archive-"));
   tempDirs.push(dir);
   return dir;
 }

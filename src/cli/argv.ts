@@ -91,18 +91,30 @@ export function buildParseArgv(params: {
   const normalizedArgv =
     programName && baseArgv[0] === programName
       ? baseArgv.slice(1)
-      : baseArgv[0]?.endsWith("clawdbot")
+      : baseArgv[0]?.endsWith("moltbot")
         ? baseArgv.slice(1)
         : baseArgv;
   const executable = (normalizedArgv[0]?.split(/[/\\]/).pop() ?? "").toLowerCase();
   const looksLikeNode =
-    normalizedArgv.length >= 2 &&
-    (executable === "node" ||
-      executable === "node.exe" ||
-      executable === "bun" ||
-      executable === "bun.exe");
+    normalizedArgv.length >= 2 && (isNodeExecutable(executable) || isBunExecutable(executable));
   if (looksLikeNode) return normalizedArgv;
-  return ["node", programName || "clawdbot", ...normalizedArgv];
+  return ["node", programName || "moltbot", ...normalizedArgv];
+}
+
+const nodeExecutablePattern = /^node-\d+(?:\.\d+)*(?:\.exe)?$/;
+
+function isNodeExecutable(executable: string): boolean {
+  return (
+    executable === "node" ||
+    executable === "node.exe" ||
+    executable === "nodejs" ||
+    executable === "nodejs.exe" ||
+    nodeExecutablePattern.test(executable)
+  );
+}
+
+function isBunExecutable(executable: string): boolean {
+  return executable === "bun" || executable === "bun.exe";
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {

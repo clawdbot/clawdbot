@@ -77,7 +77,7 @@ vi.mock("../infra/provider-usage.js", () => ({
 }));
 
 import "./test-helpers/fast-core-tools.js";
-import { createClawdbotTools } from "./clawdbot-tools.js";
+import { createMoltbotTools } from "./moltbot-tools.js";
 
 describe("session_status tool", () => {
   it("returns a status card for the current session", async () => {
@@ -90,7 +90,7 @@ describe("session_status tool", () => {
       },
     });
 
-    const tool = createClawdbotTools({ agentSessionKey: "main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();
@@ -99,7 +99,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call1", {});
     const details = result.details as { ok?: boolean; statusText?: string };
     expect(details.ok).toBe(true);
-    expect(details.statusText).toContain("Clawdbot");
+    expect(details.statusText).toContain("Moltbot");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
   });
@@ -111,7 +111,7 @@ describe("session_status tool", () => {
       main: { sessionId: "s1", updatedAt: 10 },
     });
 
-    const tool = createClawdbotTools({ agentSessionKey: "main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();
@@ -134,7 +134,7 @@ describe("session_status tool", () => {
       },
     });
 
-    const tool = createClawdbotTools({ agentSessionKey: "main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();
@@ -156,7 +156,7 @@ describe("session_status tool", () => {
       },
     });
 
-    const tool = createClawdbotTools({ agentSessionKey: "main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();
@@ -178,7 +178,7 @@ describe("session_status tool", () => {
       },
     });
 
-    const tool = createClawdbotTools({ agentSessionKey: "agent:main:main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "agent:main:main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();
@@ -218,7 +218,7 @@ describe("session_status tool", () => {
       },
     );
 
-    const tool = createClawdbotTools({ agentSessionKey: "agent:support:main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "agent:support:main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();
@@ -243,7 +243,7 @@ describe("session_status tool", () => {
       },
     });
 
-    const tool = createClawdbotTools({ agentSessionKey: "main" }).find(
+    const tool = createMoltbotTools({ agentSessionKey: "main" }).find(
       (candidate) => candidate.name === "session_status",
     );
     expect(tool).toBeDefined();

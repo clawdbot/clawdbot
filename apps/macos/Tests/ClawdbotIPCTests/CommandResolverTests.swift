@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized) struct CommandResolverTests {
     private func makeDefaults() -> UserDefaults {
@@ -24,18 +24,18 @@ import Testing
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
     }
 
-    @Test func prefersClawdbotBinary() async throws {
+    @Test func prefersMoltbotBinary() async throws {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
 
         let tmp = try makeTempDir()
         CommandResolver.setProjectRoot(tmp.path)
 
-        let clawdbotPath = tmp.appendingPathComponent("node_modules/.bin/clawdbot")
-        try self.makeExec(at: clawdbotPath)
+        let moltbotPath = tmp.appendingPathComponent("node_modules/.bin/moltbot")
+        try self.makeExec(at: moltbotPath)
 
         let cmd = CommandResolver.clawdbotCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
-        #expect(cmd.prefix(2).elementsEqual([clawdbotPath.path, "gateway"]))
+        #expect(cmd.prefix(2).elementsEqual([moltbotPath.path, "gateway"]))
     }
 
     @Test func fallsBackToNodeAndScript() async throws {
@@ -46,7 +46,7 @@ import Testing
         CommandResolver.setProjectRoot(tmp.path)
 
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
-        let scriptPath = tmp.appendingPathComponent("bin/clawdbot.js")
+        let scriptPath = tmp.appendingPathComponent("bin/moltbot.js")
         try self.makeExec(at: nodePath)
         try "#!/bin/sh\necho v22.0.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
@@ -78,7 +78,7 @@ import Testing
 
         let cmd = CommandResolver.clawdbotCommand(subcommand: "rpc", defaults: defaults, configRoot: [:])
 
-        #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "clawdbot", "rpc"]))
+        #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "moltbot", "rpc"]))
     }
 
     @Test func pnpmKeepsExtraArgsAfterSubcommand() async throws {
@@ -97,7 +97,7 @@ import Testing
             defaults: defaults,
             configRoot: [:])
 
-        #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "clawdbot", "health", "--json"]))
+        #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "moltbot", "health", "--json"]))
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
     }
 
@@ -114,7 +114,7 @@ import Testing
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("clawd@example.com:2222", forKey: remoteTargetKey)
         defaults.set("/tmp/id_ed25519", forKey: remoteIdentityKey)
-        defaults.set("/srv/clawdbot", forKey: remoteProjectRootKey)
+        defaults.set("/srv/moltbot", forKey: remoteProjectRootKey)
 
         let cmd = CommandResolver.clawdbotCommand(
             subcommand: "status",
@@ -131,9 +131,9 @@ import Testing
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {
-            #expect(script.contains("PRJ='/srv/clawdbot'"))
+            #expect(script.contains("PRJ='/srv/moltbot'"))
             #expect(script.contains("cd \"$PRJ\""))
-            #expect(script.contains("clawdbot"))
+            #expect(script.contains("moltbot"))
             #expect(script.contains("status"))
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
@@ -154,15 +154,15 @@ import Testing
         let tmp = try makeTempDir()
         CommandResolver.setProjectRoot(tmp.path)
 
-        let clawdbotPath = tmp.appendingPathComponent("node_modules/.bin/clawdbot")
-        try self.makeExec(at: clawdbotPath)
+        let moltbotPath = tmp.appendingPathComponent("node_modules/.bin/moltbot")
+        try self.makeExec(at: moltbotPath)
 
         let cmd = CommandResolver.clawdbotCommand(
             subcommand: "daemon",
             defaults: defaults,
             configRoot: ["gateway": ["mode": "local"]])
 
-        #expect(cmd.first == clawdbotPath.path)
+        #expect(cmd.first == moltbotPath.path)
         #expect(cmd.count >= 2)
         if cmd.count >= 2 {
             #expect(cmd[1] == "daemon")

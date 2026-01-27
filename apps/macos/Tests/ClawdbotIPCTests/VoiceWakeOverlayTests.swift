@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite struct VoiceWakeOverlayTests {
     @Test func guardTokenDropsWhenNoActive() {

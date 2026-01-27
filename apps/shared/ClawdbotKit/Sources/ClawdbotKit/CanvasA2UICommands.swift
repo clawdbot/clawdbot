@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ClawdbotCanvasA2UICommand: String, Codable, Sendable {
+public enum MoltbotCanvasA2UICommand: String, Codable, Sendable {
     /// Render A2UI content on the device canvas.
     case push = "canvas.a2ui.push"
     /// Legacy alias for `push` when sending JSONL.
@@ -9,7 +9,7 @@ public enum ClawdbotCanvasA2UICommand: String, Codable, Sendable {
     case reset = "canvas.a2ui.reset"
 }
 
-public struct ClawdbotCanvasA2UIPushParams: Codable, Sendable, Equatable {
+public struct MoltbotCanvasA2UIPushParams: Codable, Sendable, Equatable {
     public var messages: [AnyCodable]
 
     public init(messages: [AnyCodable]) {
@@ -17,7 +17,7 @@ public struct ClawdbotCanvasA2UIPushParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct ClawdbotCanvasA2UIPushJSONLParams: Codable, Sendable, Equatable {
+public struct MoltbotCanvasA2UIPushJSONLParams: Codable, Sendable, Equatable {
     public var jsonl: String
 
     public init(jsonl: String) {

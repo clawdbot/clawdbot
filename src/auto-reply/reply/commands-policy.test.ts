@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
@@ -56,7 +56,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
   ]),
 }));
 
-function buildParams(commandBody: string, cfg: ClawdbotConfig, ctxOverrides?: Partial<MsgContext>) {
+function buildParams(commandBody: string, cfg: MoltbotConfig, ctxOverrides?: Partial<MsgContext>) {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -101,7 +101,7 @@ describe("handleCommands /allowlist", () => {
     const cfg = {
       commands: { text: true },
       channels: { telegram: { allowFrom: ["123", "@Alice"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     const params = buildParams("/allowlist list dm", cfg);
     const result = await handleCommands(params);
 
@@ -130,7 +130,7 @@ describe("handleCommands /allowlist", () => {
     const cfg = {
       commands: { text: true, config: true },
       channels: { telegram: { allowFrom: ["123"] } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     const params = buildParams("/allowlist add dm 789", cfg);
     const result = await handleCommands(params);
 
@@ -152,7 +152,7 @@ describe("/models command", () => {
   const cfg = {
     commands: { text: true },
     agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-  } as unknown as ClawdbotConfig;
+  } as unknown as MoltbotConfig;
 
   it.each(["telegram", "discord", "whatsapp"])("lists providers on %s", async (surface) => {
     const params = buildParams("/models", cfg, { Provider: surface, Surface: surface });
@@ -212,7 +212,7 @@ describe("/models command", () => {
           imageModel: "visionpro/studio-v1",
         },
       },
-    } as unknown as ClawdbotConfig;
+    } as unknown as MoltbotConfig;
 
     const providerList = await handleCommands(buildParams("/models", customCfg));
     expect(providerList.reply?.text).toContain("localai");

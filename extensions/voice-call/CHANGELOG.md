@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.25
+## 2026.1.26
 
 ### Changes
 - Breaking: voice-call TTS now uses core `messages.tts` (plugin TTS config deep‑merges with core).
@@ -11,52 +11,52 @@
 ## 2026.1.23
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.22
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.21
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.20
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.17-1
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.17
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.16
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.15
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 2026.1.14
 
 ### Changes
-- Version alignment with core Clawdbot release numbers.
+- Version alignment with core Moltbot release numbers.
 
 ## 0.1.0
 
 ### Highlights
-- First public release of the @clawdbot/voice-call plugin.
+- First public release of the @moltbot/voice-call plugin.
 
 ### Features
 - Providers: Twilio (Programmable Voice + Media Streams), Telnyx (Call Control v2), and mock provider for local dev.
@@ -68,6 +68,6 @@
 - Speech: OpenAI TTS (model/voice/instructions) with Twilio `<Say>` fallback.
 - Tooling: `voice_call` tool actions for initiate/continue/speak/end/status.
 - Gateway RPC: `voicecall.initiate|continue|speak|end|status` (+ legacy `voicecall.start`).
-- CLI: `clawdbot voicecall` commands (call/start/continue/speak/end/status/tail/expose).
+- CLI: `moltbot voicecall` commands (call/start/continue/speak/end/status/tail/expose).
 - Observability: JSONL call logs and `voicecall tail` for live inspection.
 - Response controls: `responseModel`, `responseSystemPrompt`, and `responseTimeoutMs` for auto‑responses.

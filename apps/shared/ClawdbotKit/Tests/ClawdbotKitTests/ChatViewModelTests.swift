@@ -1,7 +1,7 @@
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 import Testing
-@testable import ClawdbotChatUI
+@testable import MoltbotChatUI
 
 private struct TimeoutError: Error, CustomStringConvertible {
     let label: String
@@ -31,40 +31,40 @@ private actor TestChatTransportState {
     var abortedRunIds: [String] = []
 }
 
-private final class TestChatTransport: @unchecked Sendable, ClawdbotChatTransport {
+private final class TestChatTransport: @unchecked Sendable, MoltbotChatTransport {
     private let state = TestChatTransportState()
-    private let historyResponses: [ClawdbotChatHistoryPayload]
-    private let sessionsResponses: [ClawdbotChatSessionsListResponse]
+    private let historyResponses: [MoltbotChatHistoryPayload]
+    private let sessionsResponses: [MoltbotChatSessionsListResponse]
 
-    private let stream: AsyncStream<ClawdbotChatTransportEvent>
-    private let continuation: AsyncStream<ClawdbotChatTransportEvent>.Continuation
+    private let stream: AsyncStream<MoltbotChatTransportEvent>
+    private let continuation: AsyncStream<MoltbotChatTransportEvent>.Continuation
 
     init(
-        historyResponses: [ClawdbotChatHistoryPayload],
-        sessionsResponses: [ClawdbotChatSessionsListResponse] = [])
+        historyResponses: [MoltbotChatHistoryPayload],
+        sessionsResponses: [MoltbotChatSessionsListResponse] = [])
     {
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
-        var cont: AsyncStream<ClawdbotChatTransportEvent>.Continuation!
+        var cont: AsyncStream<MoltbotChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
             cont = c
         }
         self.continuation = cont
     }
 
-    func events() -> AsyncStream<ClawdbotChatTransportEvent> {
+    func events() -> AsyncStream<MoltbotChatTransportEvent> {
         self.stream
     }
 
     func setActiveSessionKey(_: String) async throws {}
 
-    func requestHistory(sessionKey: String) async throws -> ClawdbotChatHistoryPayload {
+    func requestHistory(sessionKey: String) async throws -> MoltbotChatHistoryPayload {
         let idx = await self.state.historyCallCount
         await self.state.setHistoryCallCount(idx + 1)
         if idx < self.historyResponses.count {
             return self.historyResponses[idx]
         }
-        return self.historyResponses.last ?? ClawdbotChatHistoryPayload(
+        return self.historyResponses.last ?? MoltbotChatHistoryPayload(
             sessionKey: sessionKey,
             sessionId: nil,
             messages: [],
@@ -76,23 +76,23 @@ private final class TestChatTransport: @unchecked Sendable, ClawdbotChatTranspor
         message _: String,
         thinking _: String,
         idempotencyKey: String,
-        attachments _: [ClawdbotChatAttachmentPayload]) async throws -> ClawdbotChatSendResponse
+        attachments _: [MoltbotChatAttachmentPayload]) async throws -> MoltbotChatSendResponse
     {
         await self.state.sentRunIdsAppend(idempotencyKey)
-        return ClawdbotChatSendResponse(runId: idempotencyKey, status: "ok")
+        return MoltbotChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
     func abortRun(sessionKey _: String, runId: String) async throws {
         await self.state.abortedRunIdsAppend(runId)
     }
 
-    func listSessions(limit _: Int?) async throws -> ClawdbotChatSessionsListResponse {
+    func listSessions(limit _: Int?) async throws -> MoltbotChatSessionsListResponse {
         let idx = await self.state.sessionsCallCount
         await self.state.setSessionsCallCount(idx + 1)
         if idx < self.sessionsResponses.count {
             return self.sessionsResponses[idx]
         }
-        return self.sessionsResponses.last ?? ClawdbotChatSessionsListResponse(
+        return self.sessionsResponses.last ?? MoltbotChatSessionsListResponse(
             ts: nil,
             path: nil,
             count: 0,
@@ -104,7 +104,7 @@ private final class TestChatTransport: @unchecked Sendable, ClawdbotChatTranspor
         true
     }
 
-    func emit(_ evt: ClawdbotChatTransportEvent) {
+    func emit(_ evt: MoltbotChatTransportEvent) {
         self.continuation.yield(evt)
     }
 
@@ -139,12 +139,12 @@ extension TestChatTransportState {
 @Suite struct ChatViewModelTests {
     @Test func streamsAssistantAndClearsOnFinal() async throws {
         let sessionId = "sess-main"
-        let history1 = ClawdbotChatHistoryPayload(
+        let history1 = MoltbotChatHistoryPayload(
             sessionKey: "main",
             sessionId: sessionId,
             messages: [],
             thinkingLevel: "off")
-        let history2 = ClawdbotChatHistoryPayload(
+        let history2 = MoltbotChatHistoryPayload(
             sessionKey: "main",
             sessionId: sessionId,
             messages: [
@@ -157,7 +157,7 @@ extension TestChatTransportState {
             thinkingLevel: "off")
 
         let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { ClawdbotChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run { MoltbotChatViewModel(sessionKey: "main", transport: transport) }
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
@@ -170,7 +170,7 @@ extension TestChatTransportState {
 
         transport.emit(
             .agent(
-                ClawdbotAgentEventPayload(
+                MoltbotAgentEventPayload(
                     runId: sessionId,
                     seq: 1,
                     stream: "assistant",
@@ -183,7 +183,7 @@ extension TestChatTransportState {
 
         transport.emit(
             .agent(
-                ClawdbotAgentEventPayload(
+                MoltbotAgentEventPayload(
                     runId: sessionId,
                     seq: 2,
                     stream: "tool",
@@ -200,7 +200,7 @@ extension TestChatTransportState {
         let runId = try #require(await transport.lastSentRunId())
         transport.emit(
             .chat(
-                ClawdbotChatEventPayload(
+                MoltbotChatEventPayload(
                     runId: runId,
                     sessionKey: "main",
                     state: "final",
@@ -217,20 +217,20 @@ extension TestChatTransportState {
 
     @Test func clearsStreamingOnExternalFinalEvent() async throws {
         let sessionId = "sess-main"
-        let history = ClawdbotChatHistoryPayload(
+        let history = MoltbotChatHistoryPayload(
             sessionKey: "main",
             sessionId: sessionId,
             messages: [],
             thinkingLevel: "off")
         let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { ClawdbotChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run { MoltbotChatViewModel(sessionKey: "main", transport: transport) }
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
 
         transport.emit(
             .agent(
-                ClawdbotAgentEventPayload(
+                MoltbotAgentEventPayload(
                     runId: sessionId,
                     seq: 1,
                     stream: "assistant",
@@ -239,7 +239,7 @@ extension TestChatTransportState {
 
         transport.emit(
             .agent(
-                ClawdbotAgentEventPayload(
+                MoltbotAgentEventPayload(
                     runId: sessionId,
                     seq: 2,
                     stream: "tool",
@@ -258,7 +258,7 @@ extension TestChatTransportState {
 
         transport.emit(
             .chat(
-                ClawdbotChatEventPayload(
+                MoltbotChatEventPayload(
                     runId: "other-run",
                     sessionKey: "main",
                     state: "final",
@@ -274,18 +274,18 @@ extension TestChatTransportState {
         let recent = now - (2 * 60 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 60 * 1000)
         let stale = now - (26 * 60 * 60 * 1000)
-        let history = ClawdbotChatHistoryPayload(
+        let history = MoltbotChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [],
             thinkingLevel: "off")
-        let sessions = ClawdbotChatSessionsListResponse(
+        let sessions = MoltbotChatSessionsListResponse(
             ts: now,
             path: nil,
             count: 4,
             defaults: nil,
             sessions: [
-                ClawdbotChatSessionEntry(
+                MoltbotChatSessionEntry(
                     key: "recent-1",
                     kind: nil,
                     displayName: nil,
@@ -304,7 +304,7 @@ extension TestChatTransportState {
                     totalTokens: nil,
                     model: nil,
                     contextTokens: nil),
-                ClawdbotChatSessionEntry(
+                MoltbotChatSessionEntry(
                     key: "main",
                     kind: nil,
                     displayName: nil,
@@ -323,7 +323,7 @@ extension TestChatTransportState {
                     totalTokens: nil,
                     model: nil,
                     contextTokens: nil),
-                ClawdbotChatSessionEntry(
+                MoltbotChatSessionEntry(
                     key: "recent-2",
                     kind: nil,
                     displayName: nil,
@@ -342,7 +342,7 @@ extension TestChatTransportState {
                     totalTokens: nil,
                     model: nil,
                     contextTokens: nil),
-                ClawdbotChatSessionEntry(
+                MoltbotChatSessionEntry(
                     key: "old-1",
                     kind: nil,
                     displayName: nil,
@@ -366,7 +366,7 @@ extension TestChatTransportState {
         let transport = TestChatTransport(
             historyResponses: [history],
             sessionsResponses: [sessions])
-        let vm = await MainActor.run { ClawdbotChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run { MoltbotChatViewModel(sessionKey: "main", transport: transport) }
         await MainActor.run { vm.load() }
         try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
 
@@ -377,18 +377,18 @@ extension TestChatTransportState {
     @Test func sessionChoicesIncludeCurrentWhenMissing() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
-        let history = ClawdbotChatHistoryPayload(
+        let history = MoltbotChatHistoryPayload(
             sessionKey: "custom",
             sessionId: "sess-custom",
             messages: [],
             thinkingLevel: "off")
-        let sessions = ClawdbotChatSessionsListResponse(
+        let sessions = MoltbotChatSessionsListResponse(
             ts: now,
             path: nil,
             count: 1,
             defaults: nil,
             sessions: [
-                ClawdbotChatSessionEntry(
+                MoltbotChatSessionEntry(
                     key: "main",
                     kind: nil,
                     displayName: nil,
@@ -412,7 +412,7 @@ extension TestChatTransportState {
         let transport = TestChatTransport(
             historyResponses: [history],
             sessionsResponses: [sessions])
-        let vm = await MainActor.run { ClawdbotChatViewModel(sessionKey: "custom", transport: transport) }
+        let vm = await MainActor.run { MoltbotChatViewModel(sessionKey: "custom", transport: transport) }
         await MainActor.run { vm.load() }
         try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
 
@@ -422,20 +422,20 @@ extension TestChatTransportState {
 
     @Test func clearsStreamingOnExternalErrorEvent() async throws {
         let sessionId = "sess-main"
-        let history = ClawdbotChatHistoryPayload(
+        let history = MoltbotChatHistoryPayload(
             sessionKey: "main",
             sessionId: sessionId,
             messages: [],
             thinkingLevel: "off")
         let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { ClawdbotChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run { MoltbotChatViewModel(sessionKey: "main", transport: transport) }
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
 
         transport.emit(
             .agent(
-                ClawdbotAgentEventPayload(
+                MoltbotAgentEventPayload(
                     runId: sessionId,
                     seq: 1,
                     stream: "assistant",
@@ -448,7 +448,7 @@ extension TestChatTransportState {
 
         transport.emit(
             .chat(
-                ClawdbotChatEventPayload(
+                MoltbotChatEventPayload(
                     runId: "other-run",
                     sessionKey: "main",
                     state: "error",
@@ -460,13 +460,13 @@ extension TestChatTransportState {
 
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
         let sessionId = "sess-main"
-        let history = ClawdbotChatHistoryPayload(
+        let history = MoltbotChatHistoryPayload(
             sessionKey: "main",
             sessionId: sessionId,
             messages: [],
             thinkingLevel: "off")
         let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { ClawdbotChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run { MoltbotChatViewModel(sessionKey: "main", transport: transport) }
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
@@ -490,7 +490,7 @@ extension TestChatTransportState {
 
         transport.emit(
             .chat(
-                ClawdbotChatEventPayload(
+                MoltbotChatEventPayload(
                     runId: runId,
                     sessionKey: "main",
                     state: "aborted",

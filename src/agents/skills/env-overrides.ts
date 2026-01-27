@@ -1,9 +1,9 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: ClawdbotConfig }) {
+export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: MoltbotConfig }) {
   const { skills, config } = params;
   const updates: Array<{ key: string; prev: string | undefined }> = [];
 
@@ -20,7 +20,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       }
     }
 
-    const primaryEnv = entry.clawdbot?.primaryEnv;
+    const primaryEnv = entry.metadata?.primaryEnv;
     if (primaryEnv && skillConfig.apiKey && !process.env[primaryEnv]) {
       updates.push({ key: primaryEnv, prev: process.env[primaryEnv] });
       process.env[primaryEnv] = skillConfig.apiKey;
@@ -37,7 +37,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
 
 export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
 }) {
   const { snapshot, config } = params;
   if (!snapshot) return () => {};

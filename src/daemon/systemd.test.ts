@@ -24,21 +24,21 @@ describe("resolveSystemdUserUnitPath", () => {
   it("uses default service name when CLAWDBOT_PROFILE is default", () => {
     const env = { HOME: "/home/test", CLAWDBOT_PROFILE: "default" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/clawdbot-gateway.service",
+      "/home/test/.config/systemd/user/moltbot-gateway.service",
     );
   });
 
   it("uses default service name when CLAWDBOT_PROFILE is unset", () => {
     const env = { HOME: "/home/test" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/clawdbot-gateway.service",
+      "/home/test/.config/systemd/user/moltbot-gateway.service",
     );
   });
 
   it("uses profile-specific service name when CLAWDBOT_PROFILE is set to a custom value", () => {
     const env = { HOME: "/home/test", CLAWDBOT_PROFILE: "jbphoenix" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/clawdbot-gateway-jbphoenix.service",
+      "/home/test/.config/systemd/user/moltbot-gateway-jbphoenix.service",
     );
   });
 
@@ -76,21 +76,21 @@ describe("resolveSystemdUserUnitPath", () => {
   it("handles case-insensitive 'Default' profile", () => {
     const env = { HOME: "/home/test", CLAWDBOT_PROFILE: "Default" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/clawdbot-gateway.service",
+      "/home/test/.config/systemd/user/moltbot-gateway.service",
     );
   });
 
   it("handles case-insensitive 'DEFAULT' profile", () => {
     const env = { HOME: "/home/test", CLAWDBOT_PROFILE: "DEFAULT" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/clawdbot-gateway.service",
+      "/home/test/.config/systemd/user/moltbot-gateway.service",
     );
   });
 
   it("trims whitespace from CLAWDBOT_PROFILE", () => {
     const env = { HOME: "/home/test", CLAWDBOT_PROFILE: "  myprofile  " };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/clawdbot-gateway-myprofile.service",
+      "/home/test/.config/systemd/user/moltbot-gateway-myprofile.service",
     );
   });
 });

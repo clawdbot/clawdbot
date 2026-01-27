@@ -87,7 +87,7 @@ export function createHooksRequestHandler(
       logHooks.warn(
         "Hook token provided via query parameter is deprecated for security reasons. " +
           "Tokens in URLs appear in logs, browser history, and referrer headers. " +
-          "Use Authorization: Bearer <token> or X-Clawdbot-Token header instead.",
+          "Use Authorization: Bearer <token> or X-Moltbot-Token header instead.",
       );
     }
 

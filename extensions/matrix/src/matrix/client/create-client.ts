@@ -5,8 +5,8 @@ import {
   MatrixClient,
   SimpleFsStorageProvider,
   RustSdkCryptoStorageProvider,
-} from "matrix-bot-sdk";
-import type { IStorageProvider, ICryptoStorageProvider } from "matrix-bot-sdk";
+} from "@vector-im/matrix-bot-sdk";
+import type { IStorageProvider, ICryptoStorageProvider } from "@vector-im/matrix-bot-sdk";
 
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {

@@ -10,7 +10,7 @@ struct AboutSettings: View {
         VStack(spacing: 8) {
             let appIcon = NSApplication.shared.applicationIconImage ?? CritterIconRenderer.makeIcon(blink: 0)
             Button {
-                if let url = URL(string: "https://github.com/clawdbot/clawdbot") {
+                if let url = URL(string: "https://github.com/moltbot/moltbot") {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
@@ -29,7 +29,7 @@ struct AboutSettings: View {
             }
 
             VStack(spacing: 3) {
-                Text("Clawdbot")
+                Text("Moltbot")
                     .font(.title3.bold())
                 Text("Version \(self.versionString)")
                     .foregroundStyle(.secondary)
@@ -49,7 +49,7 @@ struct AboutSettings: View {
                 AboutLinkRow(
                     icon: "chevron.left.slash.chevron.right",
                     title: "GitHub",
-                    url: "https://github.com/clawdbot/clawdbot")
+                    url: "https://github.com/moltbot/moltbot")
                 AboutLinkRow(icon: "globe", title: "Website", url: "https://steipete.me")
                 AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
                 AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:peter@steipete.me")
@@ -108,7 +108,7 @@ struct AboutSettings: View {
     }
 
     private var buildTimestamp: String? {
-        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ClawdbotBuildTimestamp") as? String
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "MoltbotBuildTimestamp") as? String
         else { return nil }
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime]
@@ -122,7 +122,7 @@ struct AboutSettings: View {
     }
 
     private var gitCommit: String {
-        Bundle.main.object(forInfoDictionaryKey: "ClawdbotGitCommit") as? String ?? "unknown"
+        Bundle.main.object(forInfoDictionaryKey: "MoltbotGitCommit") as? String ?? "unknown"
     }
 
     private var bundleID: String {

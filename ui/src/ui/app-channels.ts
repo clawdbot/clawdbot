@@ -5,32 +5,32 @@ import {
   waitWhatsAppLogin,
 } from "./controllers/channels";
 import { loadConfig, saveConfig } from "./controllers/config";
-import type { ClawdbotApp } from "./app";
+import type { MoltbotApp } from "./app";
 import type { NostrProfile } from "./types";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form";
 
-export async function handleWhatsAppStart(host: ClawdbotApp, force: boolean) {
+export async function handleWhatsAppStart(host: MoltbotApp, force: boolean) {
   await startWhatsAppLogin(host, force);
   await loadChannels(host, true);
 }
 
-export async function handleWhatsAppWait(host: ClawdbotApp) {
+export async function handleWhatsAppWait(host: MoltbotApp) {
   await waitWhatsAppLogin(host);
   await loadChannels(host, true);
 }
 
-export async function handleWhatsAppLogout(host: ClawdbotApp) {
+export async function handleWhatsAppLogout(host: MoltbotApp) {
   await logoutWhatsApp(host);
   await loadChannels(host, true);
 }
 
-export async function handleChannelConfigSave(host: ClawdbotApp) {
+export async function handleChannelConfigSave(host: MoltbotApp) {
   await saveConfig(host);
   await loadConfig(host);
   await loadChannels(host, true);
 }
 
-export async function handleChannelConfigReload(host: ClawdbotApp) {
+export async function handleChannelConfigReload(host: MoltbotApp) {
   await loadConfig(host);
   await loadChannels(host, true);
 }
@@ -49,7 +49,7 @@ function parseValidationErrors(details: unknown): Record<string, string> {
   return errors;
 }
 
-function resolveNostrAccountId(host: ClawdbotApp): string {
+function resolveNostrAccountId(host: MoltbotApp): string {
   const accounts = host.channelsSnapshot?.channelAccounts?.nostr ?? [];
   return accounts[0]?.accountId ?? host.nostrProfileAccountId ?? "default";
 }
@@ -59,7 +59,7 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
 }
 
 export function handleNostrProfileEdit(
-  host: ClawdbotApp,
+  host: MoltbotApp,
   accountId: string,
   profile: NostrProfile | null,
 ) {
@@ -67,13 +67,13 @@ export function handleNostrProfileEdit(
   host.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
 }
 
-export function handleNostrProfileCancel(host: ClawdbotApp) {
+export function handleNostrProfileCancel(host: MoltbotApp) {
   host.nostrProfileFormState = null;
   host.nostrProfileAccountId = null;
 }
 
 export function handleNostrProfileFieldChange(
-  host: ClawdbotApp,
+  host: MoltbotApp,
   field: keyof NostrProfile,
   value: string,
 ) {
@@ -92,7 +92,7 @@ export function handleNostrProfileFieldChange(
   };
 }
 
-export function handleNostrProfileToggleAdvanced(host: ClawdbotApp) {
+export function handleNostrProfileToggleAdvanced(host: MoltbotApp) {
   const state = host.nostrProfileFormState;
   if (!state) return;
   host.nostrProfileFormState = {
@@ -101,7 +101,7 @@ export function handleNostrProfileToggleAdvanced(host: ClawdbotApp) {
   };
 }
 
-export async function handleNostrProfileSave(host: ClawdbotApp) {
+export async function handleNostrProfileSave(host: MoltbotApp) {
   const state = host.nostrProfileFormState;
   if (!state || state.saving) return;
   const accountId = resolveNostrAccountId(host);
@@ -167,7 +167,7 @@ export async function handleNostrProfileSave(host: ClawdbotApp) {
   }
 }
 
-export async function handleNostrProfileImport(host: ClawdbotApp) {
+export async function handleNostrProfileImport(host: MoltbotApp) {
   const state = host.nostrProfileFormState;
   if (!state || state.importing) return;
   const accountId = resolveNostrAccountId(host);

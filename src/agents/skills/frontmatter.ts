@@ -1,10 +1,11 @@
 import JSON5 from "json5";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
+import { LEGACY_MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import { parseBooleanValue } from "../../utils/boolean.js";
 import type {
-  ClawdbotSkillMetadata,
+  MoltbotSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEntry,
   SkillInstallSpec,
@@ -71,32 +72,34 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
   return parsed === undefined ? fallback : parsed;
 }
 
-export function resolveClawdbotMetadata(
+export function resolveMoltbotMetadata(
   frontmatter: ParsedSkillFrontmatter,
-): ClawdbotSkillMetadata | undefined {
+): MoltbotSkillMetadata | undefined {
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) return undefined;
   try {
-    const parsed = JSON5.parse(raw) as { clawdbot?: unknown };
+    const parsed = JSON5.parse(raw) as { moltbot?: unknown } & Partial<
+      Record<typeof LEGACY_MANIFEST_KEY, unknown>
+    >;
     if (!parsed || typeof parsed !== "object") return undefined;
-    const clawdbot = (parsed as { clawdbot?: unknown }).clawdbot;
-    if (!clawdbot || typeof clawdbot !== "object") return undefined;
-    const clawdbotObj = clawdbot as Record<string, unknown>;
+    const metadataRaw = parsed.moltbot ?? parsed[LEGACY_MANIFEST_KEY];
+    if (!metadataRaw || typeof metadataRaw !== "object") return undefined;
+    const metadataObj = metadataRaw as Record<string, unknown>;
     const requiresRaw =
-      typeof clawdbotObj.requires === "object" && clawdbotObj.requires !== null
-        ? (clawdbotObj.requires as Record<string, unknown>)
+      typeof metadataObj.requires === "object" && metadataObj.requires !== null
+        ? (metadataObj.requires as Record<string, unknown>)
         : undefined;
-    const installRaw = Array.isArray(clawdbotObj.install) ? (clawdbotObj.install as unknown[]) : [];
+    const installRaw = Array.isArray(metadataObj.install) ? (metadataObj.install as unknown[]) : [];
     const install = installRaw
       .map((entry) => parseInstallSpec(entry))
       .filter((entry): entry is SkillInstallSpec => Boolean(entry));
-    const osRaw = normalizeStringList(clawdbotObj.os);
+    const osRaw = normalizeStringList(metadataObj.os);
     return {
-      always: typeof clawdbotObj.always === "boolean" ? clawdbotObj.always : undefined,
-      emoji: typeof clawdbotObj.emoji === "string" ? clawdbotObj.emoji : undefined,
-      homepage: typeof clawdbotObj.homepage === "string" ? clawdbotObj.homepage : undefined,
-      skillKey: typeof clawdbotObj.skillKey === "string" ? clawdbotObj.skillKey : undefined,
-      primaryEnv: typeof clawdbotObj.primaryEnv === "string" ? clawdbotObj.primaryEnv : undefined,
+      always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+      emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
+      homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
+      skillKey: typeof metadataObj.skillKey === "string" ? metadataObj.skillKey : undefined,
+      primaryEnv: typeof metadataObj.primaryEnv === "string" ? metadataObj.primaryEnv : undefined,
       os: osRaw.length > 0 ? osRaw : undefined,
       requires: requiresRaw
         ? {
@@ -126,5 +129,5 @@ export function resolveSkillInvocationPolicy(
 }
 
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
-  return entry?.clawdbot?.skillKey ?? skill.name;
+  return entry?.metadata?.skillKey ?? skill.name;
 }

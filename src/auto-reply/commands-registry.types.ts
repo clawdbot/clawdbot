@@ -1,25 +1,36 @@
-import type { ClawdbotConfig } from "../config/types.js";
+import type { MoltbotConfig } from "../config/types.js";
 
 export type CommandScope = "text" | "native" | "both";
+
+export type CommandCategory =
+  | "session"
+  | "options"
+  | "status"
+  | "management"
+  | "media"
+  | "tools"
+  | "docks";
 
 export type CommandArgType = "string" | "number" | "boolean";
 
 export type CommandArgChoiceContext = {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   provider?: string;
   model?: string;
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
 };
 
-export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => string[];
+export type CommandArgChoice = string | { value: string; label: string };
+
+export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
 
 export type CommandArgDefinition = {
   name: string;
   description: string;
   type: CommandArgType;
   required?: boolean;
-  choices?: string[] | CommandArgChoicesProvider;
+  choices?: CommandArgChoice[] | CommandArgChoicesProvider;
   captureRemaining?: boolean;
 };
 
@@ -49,6 +60,7 @@ export type ChatCommandDefinition = {
   formatArgs?: (values: CommandArgValues) => string | undefined;
   argsMenu?: CommandArgMenuSpec | "auto";
   scope: CommandScope;
+  category?: CommandCategory;
 };
 
 export type NativeCommandSpec = {
@@ -68,7 +80,7 @@ export type CommandDetection = {
 };
 
 export type ShouldHandleTextCommandsParams = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   surface: string;
   commandSource?: "text" | "native";
 };

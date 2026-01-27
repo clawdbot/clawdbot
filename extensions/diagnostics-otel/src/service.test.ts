@@ -191,20 +191,20 @@ describe("diagnostics-otel service", () => {
       attempt: 2,
     });
 
-    expect(telemetryState.counters.get("clawdbot.webhook.received")?.add).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("clawdbot.webhook.duration_ms")?.record).toHaveBeenCalled();
-    expect(telemetryState.counters.get("clawdbot.message.queued")?.add).toHaveBeenCalled();
-    expect(telemetryState.counters.get("clawdbot.message.processed")?.add).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("clawdbot.message.duration_ms")?.record).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("clawdbot.queue.wait_ms")?.record).toHaveBeenCalled();
-    expect(telemetryState.counters.get("clawdbot.session.stuck")?.add).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("clawdbot.session.stuck_age_ms")?.record).toHaveBeenCalled();
-    expect(telemetryState.counters.get("clawdbot.run.attempt")?.add).toHaveBeenCalled();
+    expect(telemetryState.counters.get("moltbot.webhook.received")?.add).toHaveBeenCalled();
+    expect(telemetryState.histograms.get("moltbot.webhook.duration_ms")?.record).toHaveBeenCalled();
+    expect(telemetryState.counters.get("moltbot.message.queued")?.add).toHaveBeenCalled();
+    expect(telemetryState.counters.get("moltbot.message.processed")?.add).toHaveBeenCalled();
+    expect(telemetryState.histograms.get("moltbot.message.duration_ms")?.record).toHaveBeenCalled();
+    expect(telemetryState.histograms.get("moltbot.queue.wait_ms")?.record).toHaveBeenCalled();
+    expect(telemetryState.counters.get("moltbot.session.stuck")?.add).toHaveBeenCalled();
+    expect(telemetryState.histograms.get("moltbot.session.stuck_age_ms")?.record).toHaveBeenCalled();
+    expect(telemetryState.counters.get("moltbot.run.attempt")?.add).toHaveBeenCalled();
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
-    expect(spanNames).toContain("clawdbot.webhook.processed");
-    expect(spanNames).toContain("clawdbot.message.processed");
-    expect(spanNames).toContain("clawdbot.session.stuck");
+    expect(spanNames).toContain("moltbot.webhook.processed");
+    expect(spanNames).toContain("moltbot.message.processed");
+    expect(spanNames).toContain("moltbot.session.stuck");
 
     expect(registerLogTransportMock).toHaveBeenCalledTimes(1);
     expect(registeredTransports).toHaveLength(1);

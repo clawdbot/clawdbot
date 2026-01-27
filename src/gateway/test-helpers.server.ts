@@ -83,7 +83,7 @@ async function setupGatewayTestHome() {
   previousSkipBrowserControl = process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER;
   previousSkipGmailWatcher = process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
   previousSkipCanvasHost = process.env.CLAWDBOT_SKIP_CANVAS_HOST;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gateway-home-"));
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
   process.env.CLAWDBOT_STATE_DIR = path.join(tempHome, ".clawdbot");
@@ -105,7 +105,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   tempConfigRoot = options.uniqueConfigRoot
-    ? await fs.mkdtemp(path.join(tempHome, "clawdbot-test-"))
+    ? await fs.mkdtemp(path.join(tempHome, "moltbot-test-"))
     : path.join(tempHome, ".clawdbot-test");
   setTestConfigRoot(tempConfigRoot);
   sessionStoreSaveDelayMs.value = 0;

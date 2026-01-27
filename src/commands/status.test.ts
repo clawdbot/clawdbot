@@ -1,4 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+let previousProfile: string | undefined;
+
+beforeAll(() => {
+  previousProfile = process.env.CLAWDBOT_PROFILE;
+  process.env.CLAWDBOT_PROFILE = "isolated";
+});
+
+afterAll(() => {
+  if (previousProfile === undefined) {
+    delete process.env.CLAWDBOT_PROFILE;
+  } else {
+    process.env.CLAWDBOT_PROFILE = previousProfile;
+  }
+});
 
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn().mockReturnValue({
@@ -189,8 +204,8 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
 vi.mock("../gateway/session-utils.js", () => ({
   listAgentsForGateway: mocks.listAgentsForGateway,
 }));
-vi.mock("../infra/clawdbot-root.js", () => ({
-  resolveClawdbotPackageRoot: vi.fn().mockResolvedValue("/tmp/clawdbot"),
+vi.mock("../infra/moltbot-root.js", () => ({
+  resolveMoltbotPackageRoot: vi.fn().mockResolvedValue("/tmp/moltbot"),
 }));
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: () => ({
@@ -202,11 +217,11 @@ vi.mock("../infra/os-summary.js", () => ({
 }));
 vi.mock("../infra/update-check.js", () => ({
   checkUpdateStatus: vi.fn().mockResolvedValue({
-    root: "/tmp/clawdbot",
+    root: "/tmp/moltbot",
     installKind: "git",
     packageManager: "pnpm",
     git: {
-      root: "/tmp/clawdbot",
+      root: "/tmp/moltbot",
       branch: "main",
       upstream: "origin/main",
       dirty: false,
@@ -217,8 +232,8 @@ vi.mock("../infra/update-check.js", () => ({
     deps: {
       manager: "pnpm",
       status: "ok",
-      lockfilePath: "/tmp/clawdbot/pnpm-lock.yaml",
-      markerPath: "/tmp/clawdbot/node_modules/.modules.yaml",
+      lockfilePath: "/tmp/moltbot/pnpm-lock.yaml",
+      markerPath: "/tmp/moltbot/node_modules/.modules.yaml",
     },
     registry: { latestVersion: "0.0.0" },
   }),
@@ -295,7 +310,7 @@ describe("statusCommand", () => {
     (runtime.log as vi.Mock).mockClear();
     await statusCommand({}, runtime as never);
     const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
-    expect(logs.some((l) => l.includes("Clawdbot status"))).toBe(true);
+    expect(logs.some((l) => l.includes("Moltbot status"))).toBe(true);
     expect(logs.some((l) => l.includes("Overview"))).toBe(true);
     expect(logs.some((l) => l.includes("Security audit"))).toBe(true);
     expect(logs.some((l) => l.includes("Summary:"))).toBe(true);
@@ -312,7 +327,15 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
     expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
     expect(logs.some((l) => l.includes("Next steps:"))).toBe(true);
-    expect(logs.some((l) => l.includes("clawdbot status --all"))).toBe(true);
+    expect(
+      logs.some(
+        (l) =>
+          l.includes("moltbot status --all") ||
+          l.includes("moltbot --profile isolated status --all") ||
+          l.includes("moltbot status --all") ||
+          l.includes("moltbot --profile isolated status --all"),
+      ),
+    ).toBe(true);
   });
 
   it("shows gateway auth when reachable", async () => {

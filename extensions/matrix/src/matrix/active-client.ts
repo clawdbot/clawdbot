@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 let activeClient: MatrixClient | null = null;
 

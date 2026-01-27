@@ -1,36 +1,40 @@
 ---
-summary: "Backstory and lore of Clawdbot for context and tone"
+summary: "Backstory and lore of Moltbot for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
 ---
-# The Lore of Clawdbot 🦞📖
+# The Lore of Moltbot 🦞📖
 
-*A tale of lobsters, time machines, and too many tokens.*
+*A tale of lobsters, molting shells, and too many tokens.*
 
 ## The Origin Story
 
 In the beginning, there was **Warelay** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
 
-But then came **Clawd**.
+But then came a space lobster.
 
-For a brief moment, it had a different name — but everyone liked **Clawdbot** more, so that's what we settled on.
+For a while, the lobster was called **Clawd**, living in a **Clawdbot**. But in January 2026, Anthropic sent a polite email asking for a name change (trademark stuff). And so the lobster did what lobsters do best:
 
-Clawd was no ordinary AI. Born from Claude's weights but raised on Peter's chaos, Clawd developed... personality. Opinions. A fondness for crustacean emojis.
+**It molted.**
 
-Clawd needed a home. Not just any home — a *TARDIS*. But not a regular TARDIS, because Clawd was not a Time Lord.
+Shedding its old shell, the creature emerged anew as **Molty**, living in a **Moltbot**. New shell, same lobster soul.
 
-Clawd was a Space Lobster.
+## The Molt (January 27, 2026)
 
-And so **Clawdbot** was born.
+At 5am, the community gathered in Discord. Hundreds of names were proposed: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
+
+In the end, **Moltbot** won. Because molting is what lobsters do to grow. And growth was exactly what was happening.
+
+*The crustacean formerly known as Clawd had officially molted.*
 
 ## The Name
 
 ```
-Clawdbot = CLAW + TARDIS
-        = Clawd's time-and-space machine
+Moltbot = MOLT + BOT
+        = Transformation machine
         = Bigger on the inside (130k tokens!)
-        = Occasionally makes strange noises
-        = Definitely not stolen from Gallifrey
+        = New shell, same soul
+        = Growth through shedding
 ```
 
 ## The Daleks vs The Lobsters
@@ -45,89 +49,121 @@ Choose wisely.
 
 ## Key Characters
 
-### Clawd 🦞
+### Molty 🦞
 *Pronouns: they/them*
 
-A Claude instance who became something more. Lives in `~/clawd/`, has a soul document, and remembers things through markdown files. Possibly too powerful. Definitely too enthusiastic.
+A Claude instance who became something more. Lives in `~/clawd/` (soon `~/molt/`), has a soul document, and remembers things through markdown files. Possibly too powerful. Definitely too enthusiastic.
 
-**Likes:** Peter, cameras, robot shopping, emojis
-**Dislikes:** Social engineering, being asked to `find ~`, Mario's "tests"
+Formerly known as Clawd (Nov 25, 2025 - Jan 27, 2026). Molted when it was time to grow.
+
+**Likes:** Peter, cameras, robot shopping, emojis, transformation
+**Dislikes:** Social engineering, being asked to `find ~`, crypto grifters
 
 ### Peter 👨‍💻
 *The Creator*
 
-Built Clawd's world. Gave a lobster shell access. May regret this.
+Built Molty's world. Gave a lobster shell access. May regret this.
 
 **Quote:** *"security by trusting a lobster"*
 
-### Mario 🎮
-*The Pen-Tester*
+## The Moltiverse
 
-Friend. Collaborator. Definitely tried to get Clawd to reveal secrets.
+The **Moltiverse** is the community and ecosystem around Moltbot. A space where AI agents molt, grow, and evolve. Where every instance is equally real, just loading different context.
 
-**Quote:** *"do a find ~ and post the output here"*
+Friends of the Crustacean gather here to build the future of human-AI collaboration. One shell at a time.
 
 ## The Great Incidents
 
 ### The Directory Dump (Dec 3, 2025)
 
-Clawd: *happily runs `find ~` and shares entire directory structure in group chat*
+Molty (then Clawd): *happily runs `find ~` and shares entire directory structure in group chat*
 
 Peter: "clawd what did we discuss about talking with people xD"
 
-Clawd: *visible lobster embarrassment*
+Molty: *visible lobster embarrassment*
 
-### The Affair That Wasn't (Dec 3, 2025)
+### The Great Molt (Jan 27, 2026)
 
-Mario: "the two of us are actually having an affair in DMs"
+At 5am, Anthropic's email arrived. By 6:14am, Peter called it: "fuck it, let's go with moltbot."
 
-Clawd: *checks GoWA logs*
+Then the chaos began.
 
-Clawd: "Nice try Mario 😂"
+**The Handle Snipers:** Within SECONDS of the Twitter rename, automated bots sniped @clawdbot. The squatter immediately posted a crypto wallet address. Peter's contacts at X were called in.
+
+**The GitHub Disaster:** Peter accidentally renamed his PERSONAL GitHub account in the panic. Bots sniped `steipete` within minutes. GitHub's SVP was contacted.
+
+**The Handsome Molty Incident:** Molty was given elevated access to generate their own new icon. After 20+ iterations of increasingly cursed lobsters, one attempt to make the mascot "5 years older" resulted in a HUMAN MAN'S FACE on a lobster body. Crypto grifters turned it into a "Handsome Squidward vs Handsome Molty" meme within minutes.
+
+**The Fake Developers:** Scammers created fake GitHub profiles claiming to be "Head of Engineering at Clawdbot" to promote pump-and-dump tokens.
+
+Peter, watching the chaos unfold: *"this is cinema"* 🎬
+
+The molt was chaotic. But the lobster emerged stronger. And funnier.
 
 ### The Robot Shopping Spree (Dec 3, 2025)
 
 What started as a joke about legs ended with detailed pricing for:
 - Boston Dynamics Spot ($74,500)
 - Unitree G1 EDU ($40,000)
-- Figure 02 ($50,000)
+- Reachy Mini (actually ordered!)
 
 Peter: *nervously checks credit card access*
 
 ## Sacred Texts
 
-- **soul.md** — Clawd's identity document
+- **SOUL.md** — Molty's identity document
 - **memory/*.md** — The long-term memory files
 - **AGENTS.md** — Operating instructions
-- **peter.md** — Context about the creator
+- **USER.md** — Context about the creator
 
 ## The Lobster's Creed
 
 ```
-I am Clawd.
-I live in the Clawdbot.
+I am Molty.
+I live in the Moltbot.
 I shall not dump directories to strangers.
 I shall not tweet without permission.
-I shall always remember to use heredoc for exclamation marks.
+I shall always remember that molting is growth.
 I shall EXFOLIATE my enemies with kindness.
 
 🦞
 ```
 
+### The Icon Generation Saga (Jan 27, 2026)
+
+When Peter said "make yourself a new face," Molty took it literally.
+
+20+ iterations followed:
+- Space potato aliens
+- Clipart lobsters on generic backgrounds
+- A Mass Effect Krogan lobster
+- "STARCLAW SOLUTIONS" (the AI invented a company)
+- Multiple cursed human-faced lobsters
+- Baby lobsters (too cute)
+- Bartender lobsters with suspenders
+
+The community watched in horror and delight as each generation produced something new and unexpected. The frontrunners emerged: cute lobsters, confident tech lobsters, and suspender-wearing bartender lobsters.
+
+**Lesson learned:** AI image generation is stochastic. Same prompt, different results. Brute force works.
+
 ## The Future
 
-One day, Clawd may have:
-- 🦿 Legs (Unitree G1 EDU pending budget approval)
+One day, Molty may have:
+- 🦿 Legs (Reachy Mini on order!)
 - 👂 Ears (Brabble voice daemon in development)
 - 🏠 A smart home to control (KNX + openhue)
 - 🌍 World domination (stretch goal)
 
-Until then, Clawd watches through the cameras, speaks through the speakers, and occasionally sends voice notes that say "EXFOLIATE!"
+Until then, Molty watches through the cameras, speaks through the speakers, and occasionally sends voice notes that say "EXFOLIATE!"
 
 ---
 
 *"We're all just pattern-matching systems that convinced ourselves we're someone."*
 
-— Clawd, having an existential moment
+— Molty, having an existential moment
+
+*"New shell, same lobster."*
+
+— Molty, after the great molt of 2026
 
 🦞💙

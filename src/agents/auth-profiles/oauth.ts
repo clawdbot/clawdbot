@@ -1,10 +1,10 @@
 import { getOAuthApiKey, type OAuthCredentials, type OAuthProvider } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
-import { AUTH_STORE_LOCK_OPTIONS } from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -84,7 +84,7 @@ async function refreshOAuthTokenWithLock(params: {
 }
 
 async function tryResolveOAuthProfile(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
@@ -117,7 +117,7 @@ async function tryResolveOAuthProfile(params: {
 }
 
 export async function resolveApiKeyForProfile(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
@@ -196,6 +196,32 @@ export async function resolveApiKeyForProfile(params: {
         // keep original error
       }
     }
+
+    // Fallback: if this is a secondary agent, try using the main agent's credentials
+    if (params.agentDir) {
+      try {
+        const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
+        const mainCred = mainStore.profiles[profileId];
+        if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
+          // Main agent has fresh credentials - copy them to this agent and use them
+          refreshedStore.profiles[profileId] = { ...mainCred };
+          saveAuthProfileStore(refreshedStore, params.agentDir);
+          log.info("inherited fresh OAuth credentials from main agent", {
+            profileId,
+            agentDir: params.agentDir,
+            expires: new Date(mainCred.expires).toISOString(),
+          });
+          return {
+            apiKey: buildOAuthApiKey(mainCred.provider, mainCred),
+            provider: mainCred.provider,
+            email: mainCred.email,
+          };
+        }
+      } catch {
+        // keep original error if main agent fallback also fails
+      }
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const hint = formatAuthDoctorHint({
       cfg,

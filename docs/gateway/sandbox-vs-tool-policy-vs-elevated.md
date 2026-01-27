@@ -7,7 +7,7 @@ status: active
 
 # Sandbox vs Tool Policy vs Elevated
 
-Clawdbot has three related (but different) controls:
+Moltbot has three related (but different) controls:
 
 1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (Docker vs host).
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) decides **which tools are available/allowed**.
@@ -15,13 +15,13 @@ Clawdbot has three related (but different) controls:
 
 ## Quick debug
 
-Use the inspector to see what Clawdbot is *actually* doing:
+Use the inspector to see what Moltbot is *actually* doing:
 
 ```bash
-clawdbot sandbox explain
-clawdbot sandbox explain --session agent:main:main
-clawdbot sandbox explain --agent work
-clawdbot sandbox explain --json
+moltbot sandbox explain
+moltbot sandbox explain --session agent:main:main
+moltbot sandbox explain --agent work
+moltbot sandbox explain --json
 ```
 
 It prints:
@@ -88,7 +88,7 @@ Available groups:
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:clawdbot`: all built-in Clawdbot tools (excludes provider plugins)
+- `group:moltbot`: all built-in Moltbot tools (excludes provider plugins)
 
 ## Elevated: exec-only “run on host”
 

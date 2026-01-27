@@ -9,7 +9,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun ClawdbotTheme(content: @Composable () -> Unit) {
+fun MoltbotTheme(content: @Composable () -> Unit) {
   val context = LocalContext.current
   val isDark = isSystemInDarkTheme()
   val colorScheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

@@ -1,5 +1,5 @@
 ---
-summary: "Clawdbot Gateway CLI (`clawdbot gateway`) — run, query, and discover gateways"
+summary: "Moltbot Gateway CLI (`moltbot gateway`) — run, query, and discover gateways"
 read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
@@ -8,9 +8,9 @@ read_when:
 
 # Gateway CLI
 
-The Gateway is Clawdbot’s WebSocket server (channels, nodes, sessions, hooks).
+The Gateway is Moltbot’s WebSocket server (channels, nodes, sessions, hooks).
 
-Subcommands in this page live under `clawdbot gateway …`.
+Subcommands in this page live under `moltbot gateway …`.
 
 Related docs:
 - [/gateway/bonjour](/gateway/bonjour)
@@ -22,17 +22,17 @@ Related docs:
 Run a local Gateway process:
 
 ```bash
-clawdbot gateway
+moltbot gateway
 ```
 
 Foreground alias:
 
 ```bash
-clawdbot gateway run
+moltbot gateway run
 ```
 
 Notes:
-- By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.clawdbot/clawdbot.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
+- By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.clawdbot/moltbot.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
 - Binding beyond loopback without auth is blocked (safety guardrail).
 - `SIGUSR1` triggers an in-process restart when authorized (enable `commands.restart` or use the gateway tool/config apply/update).
 - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don’t restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
@@ -76,7 +76,7 @@ Shared options (where supported):
 ### `gateway health`
 
 ```bash
-clawdbot gateway health --url ws://127.0.0.1:18789
+moltbot gateway health --url ws://127.0.0.1:18789
 ```
 
 ### `gateway status`
@@ -84,8 +84,8 @@ clawdbot gateway health --url ws://127.0.0.1:18789
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.
 
 ```bash
-clawdbot gateway status
-clawdbot gateway status --json
+moltbot gateway status
+moltbot gateway status --json
 ```
 
 Options:
@@ -105,8 +105,8 @@ Options:
 If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 
 ```bash
-clawdbot gateway probe
-clawdbot gateway probe --json
+moltbot gateway probe
+moltbot gateway probe --json
 ```
 
 #### Remote over SSH (Mac app parity)
@@ -116,7 +116,7 @@ The macOS app “Remote over SSH” mode uses a local port-forward so the remote
 CLI equivalent:
 
 ```bash
-clawdbot gateway probe --ssh user@gateway-host
+moltbot gateway probe --ssh user@gateway-host
 ```
 
 Options:
@@ -133,18 +133,18 @@ Config (optional, used as defaults):
 Low-level RPC helper.
 
 ```bash
-clawdbot gateway call status
-clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
+moltbot gateway call status
+moltbot gateway call logs.tail --params '{"sinceMs": 60000}'
 ```
 
 ## Manage the Gateway service
 
 ```bash
-clawdbot gateway install
-clawdbot gateway start
-clawdbot gateway stop
-clawdbot gateway restart
-clawdbot gateway uninstall
+moltbot gateway install
+moltbot gateway start
+moltbot gateway stop
+moltbot gateway restart
+moltbot gateway uninstall
 ```
 
 Notes:
@@ -153,10 +153,10 @@ Notes:
 
 ## Discover gateways (Bonjour)
 
-`gateway discover` scans for Gateway beacons (`_clawdbot-gw._tcp`).
+`gateway discover` scans for Gateway beacons (`_moltbot-gw._tcp`).
 
 - Multicast DNS-SD: `local.`
-- Unicast DNS-SD (Wide-Area Bonjour): `clawdbot.internal.` (requires split DNS + DNS server; see [/gateway/bonjour](/gateway/bonjour))
+- Unicast DNS-SD (Wide-Area Bonjour): `moltbot.internal.` (requires split DNS + DNS server; see [/gateway/bonjour](/gateway/bonjour))
 
 Only gateways with Bonjour discovery enabled (default) advertise the beacon.
 
@@ -172,7 +172,7 @@ Wide-Area discovery records include (TXT):
 ### `gateway discover`
 
 ```bash
-clawdbot gateway discover
+moltbot gateway discover
 ```
 
 Options:
@@ -182,6 +182,6 @@ Options:
 Examples:
 
 ```bash
-clawdbot gateway discover --timeout 4000
-clawdbot gateway discover --json | jq '.beacons[].wsUrl'
+moltbot gateway discover --timeout 4000
+moltbot gateway discover --json | jq '.beacons[].wsUrl'
 ```

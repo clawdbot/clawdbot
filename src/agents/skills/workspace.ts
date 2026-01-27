@@ -7,14 +7,14 @@ import {
   type Skill,
 } from "@mariozechner/pi-coding-agent";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import {
   parseFrontmatter,
-  resolveClawdbotMetadata,
+  resolveMoltbotMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -43,7 +43,7 @@ function debugSkillCommandOnce(
 
 function filterSkillEntries(
   entries: SkillEntry[],
-  config?: ClawdbotConfig,
+  config?: MoltbotConfig,
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
@@ -95,7 +95,7 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
@@ -130,23 +130,23 @@ function loadSkillEntries(
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
         dir: bundledSkillsDir,
-        source: "clawdbot-bundled",
+        source: "moltbot-bundled",
       })
     : [];
   const extraSkills = mergedExtraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadSkills({
       dir: resolved,
-      source: "clawdbot-extra",
+      source: "moltbot-extra",
     });
   });
   const managedSkills = loadSkills({
     dir: managedSkillsDir,
-    source: "clawdbot-managed",
+    source: "moltbot-managed",
   });
   const workspaceSkills = loadSkills({
     dir: workspaceSkillsDir,
-    source: "clawdbot-workspace",
+    source: "moltbot-workspace",
   });
 
   const merged = new Map<string, Skill>();
@@ -167,7 +167,7 @@ function loadSkillEntries(
     return {
       skill,
       frontmatter,
-      clawdbot: resolveClawdbotMetadata(frontmatter),
+      metadata: resolveMoltbotMetadata(frontmatter),
       invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
@@ -177,7 +177,7 @@ function loadSkillEntries(
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
@@ -204,7 +204,7 @@ export function buildWorkspaceSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
-      primaryEnv: entry.clawdbot?.primaryEnv,
+      primaryEnv: entry.metadata?.primaryEnv,
     })),
     resolvedSkills,
     version: opts?.snapshotVersion,
@@ -214,7 +214,7 @@ export function buildWorkspaceSkillSnapshot(
 export function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
@@ -242,7 +242,7 @@ export function buildWorkspaceSkillsPrompt(
 export function resolveSkillsPromptForRun(params: {
   skillsSnapshot?: SkillSnapshot;
   entries?: SkillEntry[];
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   workspaceDir: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
@@ -260,7 +260,7 @@ export function resolveSkillsPromptForRun(params: {
 export function loadWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
@@ -271,7 +271,7 @@ export function loadWorkspaceSkillEntries(
 export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
 }) {
@@ -308,7 +308,7 @@ export async function syncSkillsToWorkspace(params: {
 
 export function filterWorkspaceSkillEntries(
   entries: SkillEntry[],
-  config?: ClawdbotConfig,
+  config?: MoltbotConfig,
 ): SkillEntry[] {
   return filterSkillEntries(entries, config);
 }
@@ -316,7 +316,7 @@ export function filterWorkspaceSkillEntries(
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];

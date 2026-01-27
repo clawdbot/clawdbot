@@ -1,14 +1,14 @@
 {
-  "name": "@clawdbot/voice-call",
-  "version": "2026.1.25",
+  "name": "@moltbot/voice-call",
+  "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot voice-call plugin",
+  "description": "Moltbot voice-call plugin",
   "dependencies": {
     "@sinclair/typebox": "0.34.47",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
   },
-  "clawdbot": {
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

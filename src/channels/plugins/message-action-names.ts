@@ -25,6 +25,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "thread-reply",
   "search",
   "sticker",
+  "sticker-search",
   "member-info",
   "role-info",
   "emoji-list",

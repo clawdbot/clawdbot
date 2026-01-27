@@ -1,12 +1,12 @@
 ---
-summary: "Messaging platforms Clawdbot can connect to"
+summary: "Messaging platforms Moltbot can connect to"
 read_when:
-  - You want to choose a chat channel for Clawdbot
+  - You want to choose a chat channel for Moltbot
   - You need a quick overview of supported messaging platforms
 ---
 # Chat Channels
 
-Clawdbot can talk to you on any chat app you already use. Each channel connects via the Gateway.
+Moltbot can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
@@ -33,7 +33,7 @@ Text is supported everywhere; media and reactions vary by channel.
 
 ## Notes
 
-- Channels can run simultaneously; configure multiple and Clawdbot will route per chat.
+- Channels can run simultaneously; configure multiple and Moltbot will route per chat.
 - Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
   stores more state on disk.
 - Group behavior varies by channel; see [Groups](/concepts/groups).

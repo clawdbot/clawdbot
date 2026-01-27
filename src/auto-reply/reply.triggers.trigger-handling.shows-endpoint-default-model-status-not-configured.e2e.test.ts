@@ -68,7 +68,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
       vi.mocked(abortEmbeddedPiRun).mockClear();
       return await fn(home);
     },
-    { prefix: "clawdbot-triggers-" },
+    { prefix: "moltbot-triggers-" },
   );
 }
 
@@ -199,7 +199,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Clawdbot");
+      expect(text).toContain("Moltbot");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

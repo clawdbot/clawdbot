@@ -7,7 +7,7 @@
 
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig } from "clawdbot/plugin-sdk";
 import { resolveTwitchToken } from "./token.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
@@ -27,12 +27,12 @@ export interface SendMessageResult {
 /**
  * Internal send function used by the outbound adapter.
  *
- * This function has access to the full Clawdbot config and handles
+ * This function has access to the full Moltbot config and handles
  * account resolution, markdown stripping, and actual message sending.
  *
  * @param channel - The channel name
  * @param text - The message text
- * @param cfg - Full Clawdbot configuration
+ * @param cfg - Full Moltbot configuration
  * @param accountId - Account ID to use
  * @param stripMarkdown - Whether to strip markdown (default: true)
  * @param logger - Logger instance
@@ -42,7 +42,7 @@ export interface SendMessageResult {
  * const result = await sendMessageTwitchInternal(
  *   "#mychannel",
  *   "Hello Twitch!",
- *   clawdbotConfig,
+ *   moltbotConfig,
  *   "default",
  *   true,
  *   console,
@@ -51,7 +51,7 @@ export interface SendMessageResult {
 export async function sendMessageTwitchInternal(
   channel: string,
   text: string,
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   accountId: string = DEFAULT_ACCOUNT_ID,
   stripMarkdown: boolean = true,
   logger: Console = console,

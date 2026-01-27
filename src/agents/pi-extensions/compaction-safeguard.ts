@@ -11,6 +11,7 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
+import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
@@ -174,21 +175,28 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
 
+      const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+      const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
+
       const tokensBefore =
         typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
           ? preparation.tokensBefore
           : undefined;
+
+      let droppedSummary: string | undefined;
+
       if (tokensBefore !== undefined) {
         const summarizableTokens =
           estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
         const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
-        const maxHistoryTokens = Math.floor(contextWindowTokens * 0.5);
+        // Apply SAFETY_MARGIN so token underestimates don't trigger unnecessary pruning
+        const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
 
         if (newContentTokens > maxHistoryTokens) {
           const pruned = pruneHistoryForContextShare({
             messages: messagesToSummarize,
             maxContextTokens: contextWindowTokens,
-            maxHistoryShare: 0.5,
+            maxHistoryShare,
             parts: 2,
           });
           if (pruned.droppedChunks > 0) {
@@ -200,6 +208,37 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
             messagesToSummarize = pruned.messages;
+
+            // Summarize dropped messages so context isn't lost
+            if (pruned.droppedMessagesList.length > 0) {
+              try {
+                const droppedChunkRatio = computeAdaptiveChunkRatio(
+                  pruned.droppedMessagesList,
+                  contextWindowTokens,
+                );
+                const droppedMaxChunkTokens = Math.max(
+                  1,
+                  Math.floor(contextWindowTokens * droppedChunkRatio),
+                );
+                droppedSummary = await summarizeInStages({
+                  messages: pruned.droppedMessagesList,
+                  model,
+                  apiKey,
+                  signal,
+                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+                  maxChunkTokens: droppedMaxChunkTokens,
+                  contextWindow: contextWindowTokens,
+                  customInstructions,
+                  previousSummary: preparation.previousSummary,
+                });
+              } catch (droppedError) {
+                console.warn(
+                  `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
+                    droppedError instanceof Error ? droppedError.message : String(droppedError)
+                  }`,
+                );
+              }
+            }
           }
         }
       }
@@ -210,6 +249,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
+      // Feed dropped-messages summary as previousSummary so the main summarization
+      // incorporates context from pruned messages instead of losing it entirely.
+      const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
+
       const historySummary = await summarizeInStages({
         messages: messagesToSummarize,
         model,
@@ -219,7 +262,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         maxChunkTokens,
         contextWindow: contextWindowTokens,
         customInstructions,
-        previousSummary: preparation.previousSummary,
+        previousSummary: effectivePreviousSummary,
       });
 
       let summary = historySummary;

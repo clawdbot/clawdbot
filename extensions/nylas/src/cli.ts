@@ -46,7 +46,7 @@ export function registerNylasCli(ctx: NylasCliContext): void {
       if (!config.apiKey) {
         logger.error("Cannot connect to API - apiKey not configured");
         logger.info("");
-        logger.info("Add your API key to clawdbot.yaml:");
+        logger.info("Add your API key to moltbot.yaml:");
         logger.info("  plugins:");
         logger.info("    entries:");
         logger.info("      nylas:");
@@ -93,7 +93,7 @@ export function registerNylasCli(ctx: NylasCliContext): void {
 
         // Show recommended configuration
         if (!config.defaultGrantId && grants.length > 0) {
-          logger.info("Recommended configuration for clawdbot.yaml:");
+          logger.info("Recommended configuration for moltbot.yaml:");
           logger.info("");
           logger.info("  plugins:");
           logger.info("    entries:");
@@ -182,7 +182,7 @@ export function registerNylasCli(ctx: NylasCliContext): void {
         }
 
         // Generate config snippet
-        logger.info("Add to clawdbot.yaml:");
+        logger.info("Add to moltbot.yaml:");
         logger.info("");
         logger.info("plugins:");
         logger.info("  entries:");

@@ -15,7 +15,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -54,7 +54,7 @@ export type MessageActionRunnerGateway = {
 };
 
 export type RunMessageActionParams = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
@@ -168,7 +168,7 @@ function applyCrossContextMessageDecoration({
 }
 
 async function maybeApplyCrossContextMarker(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: ChannelId;
   action: ChannelMessageActionName;
   target: string;
@@ -224,7 +224,7 @@ function resolveSlackAutoThreadId(params: {
 }
 
 function resolveAttachmentMaxBytes(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
@@ -298,7 +298,7 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
 }
 
 async function hydrateSetGroupIconParams(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: ChannelId;
   accountId?: string | null;
   args: Record<string, unknown>;
@@ -355,7 +355,7 @@ async function hydrateSetGroupIconParams(params: {
 }
 
 async function hydrateSendAttachmentParams(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: ChannelId;
   accountId?: string | null;
   args: Record<string, unknown>;
@@ -444,7 +444,7 @@ function parseCardParam(params: Record<string, unknown>): void {
   }
 }
 
-async function resolveChannel(cfg: ClawdbotConfig, params: Record<string, unknown>) {
+async function resolveChannel(cfg: MoltbotConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
     cfg,
@@ -454,7 +454,7 @@ async function resolveChannel(cfg: ClawdbotConfig, params: Record<string, unknow
 }
 
 async function resolveActionTarget(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   channel: ChannelId;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -499,7 +499,7 @@ async function resolveActionTarget(params: {
 }
 
 type ResolvedActionContext = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   params: Record<string, unknown>;
   channel: ChannelId;
   accountId?: string | null;

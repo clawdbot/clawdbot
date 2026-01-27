@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 
 describe("resolveHeartbeatVisibility", () => {
   it("returns default values when no config is provided", () => {
-    const cfg = {} as ClawdbotConfig;
+    const cfg = {} as MoltbotConfig;
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
     expect(result).toEqual({
@@ -25,7 +25,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
@@ -52,7 +52,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
@@ -88,7 +88,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,
@@ -120,7 +120,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,
@@ -151,7 +151,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
@@ -174,7 +174,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,
@@ -195,7 +195,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "whatsapp" });
 
@@ -215,7 +215,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "discord" });
 
@@ -237,7 +237,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "slack" });
 
@@ -259,7 +259,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
 
@@ -271,7 +271,7 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("webchat returns defaults when no channel defaults configured", () => {
-    const cfg = {} as ClawdbotConfig;
+    const cfg = {} as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
 
@@ -291,7 +291,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,

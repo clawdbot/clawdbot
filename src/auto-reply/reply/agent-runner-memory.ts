@@ -4,7 +4,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   type SessionEntry,
@@ -25,7 +25,7 @@ import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export async function runMemoryFlushIfNeeded(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
@@ -92,6 +92,7 @@ export async function runMemoryFlushIfNeeded(params: {
       cfg: params.followupRun.run.config,
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
+      agentDir: params.followupRun.run.agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(
         params.followupRun.run.config,
         resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
@@ -114,6 +115,10 @@ export async function runMemoryFlushIfNeeded(params: {
             config: params.followupRun.run.config,
             hasRepliedRef: params.opts?.hasRepliedRef,
           }),
+          senderId: params.sessionCtx.SenderId?.trim() || undefined,
+          senderName: params.sessionCtx.SenderName?.trim() || undefined,
+          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
           sessionFile: params.followupRun.run.sessionFile,
           workspaceDir: params.followupRun.run.workspaceDir,
           agentDir: params.followupRun.run.agentDir,

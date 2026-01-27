@@ -1,14 +1,14 @@
 {
-  "name": "@clawdbot/memory-lancedb",
-  "version": "2026.1.25",
+  "name": "@moltbot/memory-lancedb",
+  "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot LanceDB-backed long-term memory plugin with auto-recall/capture",
+  "description": "Moltbot LanceDB-backed long-term memory plugin with auto-recall/capture",
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",
     "@sinclair/typebox": "0.34.47",
     "openai": "^6.16.0"
   },
-  "clawdbot": {
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

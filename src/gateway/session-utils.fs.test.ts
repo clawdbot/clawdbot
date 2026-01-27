@@ -13,7 +13,7 @@ describe("readFirstUserMessageFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -159,7 +159,7 @@ describe("readLastMessagePreviewFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -348,7 +348,7 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-session-preview-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-session-preview-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 

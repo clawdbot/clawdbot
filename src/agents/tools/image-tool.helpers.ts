@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type ImageModelConfig = { primary?: string; fallbacks?: string[] };
@@ -47,7 +47,7 @@ export function coerceImageAssistantText(params: {
   throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }
 
-export function coerceImageModelConfig(cfg?: ClawdbotConfig): ImageModelConfig {
+export function coerceImageModelConfig(cfg?: MoltbotConfig): ImageModelConfig {
   const imageModel = cfg?.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | string
@@ -61,7 +61,7 @@ export function coerceImageModelConfig(cfg?: ClawdbotConfig): ImageModelConfig {
 }
 
 export function resolveProviderVisionModelFromConfig(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   provider: string;
 }): string | null {
   const providerCfg = params.cfg?.models?.providers?.[params.provider] as unknown as

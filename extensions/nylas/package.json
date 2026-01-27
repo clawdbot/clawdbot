@@ -1,14 +1,14 @@
 {
-  "name": "@clawdbot/nylas",
+  "name": "@moltbot/nylas",
   "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot Nylas API v3 plugin for email, calendar, and contacts",
+  "description": "Moltbot Nylas API v3 plugin for email, calendar, and contacts",
   "dependencies": {
     "@sinclair/typebox": "0.34.47",
     "nylas": "^7.5.2",
     "zod": "^4.3.6"
   },
-  "clawdbot": {
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `clawdbot models` (status/list/set/scan, aliases, fallbacks, auth)"
+summary: "CLI reference for `moltbot models` (status/list/set/scan, aliases, fallbacks, auth)"
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
 ---
 
-# `clawdbot models`
+# `moltbot models`
 
 Model discovery, scanning, and configuration (default model, fallbacks, auth profiles).
 
@@ -16,13 +16,13 @@ Related:
 ## Common commands
 
 ```bash
-clawdbot models status
-clawdbot models list
-clawdbot models set <model-or-alias>
-clawdbot models scan
+moltbot models status
+moltbot models list
+moltbot models set <model-or-alias>
+moltbot models scan
 ```
 
-`clawdbot models status` shows the resolved default/fallbacks plus an auth overview.
+`moltbot models status` shows the resolved default/fallbacks plus an auth overview.
 When provider usage snapshots are available, the OAuth/token status section includes
 provider usage headers.
 Add `--probe` to run live auth probes against each configured provider profile.
@@ -31,7 +31,7 @@ Probes are real requests (may consume tokens and trigger rate limits).
 Notes:
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, Clawdbot treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, Moltbot treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 ### `models status`
 Options:
@@ -48,20 +48,20 @@ Options:
 ## Aliases + fallbacks
 
 ```bash
-clawdbot models aliases list
-clawdbot models fallbacks list
+moltbot models aliases list
+moltbot models fallbacks list
 ```
 
 ## Auth profiles
 
 ```bash
-clawdbot models auth add
-clawdbot models auth login --provider <id>
-clawdbot models auth setup-token
-clawdbot models auth paste-token
+moltbot models auth add
+moltbot models auth login --provider <id>
+moltbot models auth setup-token
+moltbot models auth paste-token
 ```
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
-`clawdbot plugins list` to see which providers are installed.
+`moltbot plugins list` to see which providers are installed.
 
 Notes:
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).

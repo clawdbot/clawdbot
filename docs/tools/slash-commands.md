@@ -51,7 +51,7 @@ They run immediately, are stripped before the model sees the message, and the re
   - Set `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, or `channels.slack.commands.nativeSkills` to override per provider (bool or `"auto"`).
 - `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
-- `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
+- `commands.config` (default `false`) enables `/config` (reads/writes `moltbot.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
 
@@ -98,9 +98,9 @@ Text-only:
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
 - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
-- For full provider usage breakdown, use `clawdbot status --usage`.
+- For full provider usage breakdown, use `moltbot status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
-- `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from Clawdbot session logs.
+- `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from Moltbot session logs.
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
@@ -151,19 +151,19 @@ Examples:
 
 ```
 /debug show
-/debug set messages.responsePrefix="[clawdbot]"
+/debug set messages.responsePrefix="[moltbot]"
 /debug set channels.whatsapp.allowFrom=["+1555","+4477"]
 /debug unset messages.responsePrefix
 /debug reset
 ```
 
 Notes:
-- Overrides apply immediately to new config reads, but do **not** write to `clawdbot.json`.
+- Overrides apply immediately to new config reads, but do **not** write to `moltbot.json`.
 - Use `/debug reset` to clear all overrides and return to the on-disk config.
 
 ## Config updates
 
-`/config` writes to your on-disk config (`clawdbot.json`). Owner-only. Disabled by default; enable with `commands.config: true`.
+`/config` writes to your on-disk config (`moltbot.json`). Owner-only. Disabled by default; enable with `commands.config: true`.
 
 Examples:
 
@@ -171,7 +171,7 @@ Examples:
 /config show
 /config show messages.responsePrefix
 /config get messages.responsePrefix
-/config set messages.responsePrefix="[clawdbot]"
+/config set messages.responsePrefix="[moltbot]"
 /config unset messages.responsePrefix
 ```
 

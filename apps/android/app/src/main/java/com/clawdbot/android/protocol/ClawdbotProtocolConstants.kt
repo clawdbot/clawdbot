@@ -1,6 +1,6 @@
 package com.clawdbot.android.protocol
 
-enum class ClawdbotCapability(val rawValue: String) {
+enum class MoltbotCapability(val rawValue: String) {
   Canvas("canvas"),
   Camera("camera"),
   Screen("screen"),
@@ -9,7 +9,7 @@ enum class ClawdbotCapability(val rawValue: String) {
   Location("location"),
 }
 
-enum class ClawdbotCanvasCommand(val rawValue: String) {
+enum class MoltbotCanvasCommand(val rawValue: String) {
   Present("canvas.present"),
   Hide("canvas.hide"),
   Navigate("canvas.navigate"),
@@ -22,7 +22,7 @@ enum class ClawdbotCanvasCommand(val rawValue: String) {
   }
 }
 
-enum class ClawdbotCanvasA2UICommand(val rawValue: String) {
+enum class MoltbotCanvasA2UICommand(val rawValue: String) {
   Push("canvas.a2ui.push"),
   PushJSONL("canvas.a2ui.pushJSONL"),
   Reset("canvas.a2ui.reset"),
@@ -33,7 +33,7 @@ enum class ClawdbotCanvasA2UICommand(val rawValue: String) {
   }
 }
 
-enum class ClawdbotCameraCommand(val rawValue: String) {
+enum class MoltbotCameraCommand(val rawValue: String) {
   Snap("camera.snap"),
   Clip("camera.clip"),
   ;
@@ -43,7 +43,7 @@ enum class ClawdbotCameraCommand(val rawValue: String) {
   }
 }
 
-enum class ClawdbotScreenCommand(val rawValue: String) {
+enum class MoltbotScreenCommand(val rawValue: String) {
   Record("screen.record"),
   ;
 
@@ -52,7 +52,7 @@ enum class ClawdbotScreenCommand(val rawValue: String) {
   }
 }
 
-enum class ClawdbotSmsCommand(val rawValue: String) {
+enum class MoltbotSmsCommand(val rawValue: String) {
   Send("sms.send"),
   ;
 
@@ -61,7 +61,7 @@ enum class ClawdbotSmsCommand(val rawValue: String) {
   }
 }
 
-enum class ClawdbotLocationCommand(val rawValue: String) {
+enum class MoltbotLocationCommand(val rawValue: String) {
   Get("location.get"),
   ;
 

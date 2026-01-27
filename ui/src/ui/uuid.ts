@@ -3,6 +3,8 @@ export type CryptoLike = {
   getRandomValues?: ((array: Uint8Array) => Uint8Array) | undefined;
 };
 
+let warnedWeakCrypto = false;
+
 function uuidFromBytes(bytes: Uint8Array): string {
   bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
   bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
@@ -29,6 +31,12 @@ function weakRandomBytes(): Uint8Array {
   return bytes;
 }
 
+function warnWeakCryptoOnce() {
+  if (warnedWeakCrypto) return;
+  warnedWeakCrypto = true;
+  console.warn("[uuid] crypto API missing; falling back to weak randomness");
+}
+
 export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto): string {
   if (cryptoLike && typeof cryptoLike.randomUUID === "function") return cryptoLike.randomUUID();
 
@@ -38,5 +46,6 @@ export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto):
     return uuidFromBytes(bytes);
   }
 
+  warnWeakCryptoOnce();
   return uuidFromBytes(weakRandomBytes());
 }

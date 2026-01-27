@@ -11,29 +11,29 @@ Manage Docker-based sandbox containers for isolated agent execution.
 
 ## Overview
 
-Clawdbot can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
+Moltbot can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
 
 ## Commands
 
-### `clawdbot sandbox explain`
+### `moltbot sandbox explain`
 
 Inspect the **effective** sandbox mode/scope/workspace access, sandbox tool policy, and elevated gates (with fix-it config key paths).
 
 ```bash
-clawdbot sandbox explain
-clawdbot sandbox explain --session agent:main:main
-clawdbot sandbox explain --agent work
-clawdbot sandbox explain --json
+moltbot sandbox explain
+moltbot sandbox explain --session agent:main:main
+moltbot sandbox explain --agent work
+moltbot sandbox explain --json
 ```
 
-### `clawdbot sandbox list`
+### `moltbot sandbox list`
 
 List all sandbox containers with their status and configuration.
 
 ```bash
-clawdbot sandbox list
-clawdbot sandbox list --browser  # List only browser containers
-clawdbot sandbox list --json     # JSON output
+moltbot sandbox list
+moltbot sandbox list --browser  # List only browser containers
+moltbot sandbox list --json     # JSON output
 ```
 
 **Output includes:**
@@ -43,16 +43,16 @@ clawdbot sandbox list --json     # JSON output
 - Idle time (time since last use)
 - Associated session/agent
 
-### `clawdbot sandbox recreate`
+### `moltbot sandbox recreate`
 
 Remove sandbox containers to force recreation with updated images/config.
 
 ```bash
-clawdbot sandbox recreate --all                # Recreate all containers
-clawdbot sandbox recreate --session main       # Specific session
-clawdbot sandbox recreate --agent mybot        # Specific agent
-clawdbot sandbox recreate --browser            # Only browser containers
-clawdbot sandbox recreate --all --force        # Skip confirmation
+moltbot sandbox recreate --all                # Recreate all containers
+moltbot sandbox recreate --session main       # Specific session
+moltbot sandbox recreate --agent mybot        # Specific agent
+moltbot sandbox recreate --browser            # Only browser containers
+moltbot sandbox recreate --all --force        # Skip confirmation
 ```
 
 **Options:**
@@ -70,14 +70,14 @@ clawdbot sandbox recreate --all --force        # Skip confirmation
 
 ```bash
 # Pull new image
-docker pull clawdbot-sandbox:latest
-docker tag clawdbot-sandbox:latest clawdbot-sandbox:bookworm-slim
+docker pull moltbot-sandbox:latest
+docker tag moltbot-sandbox:latest moltbot-sandbox:bookworm-slim
 
 # Update config to use new image
 # Edit config: agents.defaults.sandbox.docker.image (or agents.list[].sandbox.docker.image)
 
 # Recreate containers
-clawdbot sandbox recreate --all
+moltbot sandbox recreate --all
 ```
 
 ### After changing sandbox configuration
@@ -86,15 +86,15 @@ clawdbot sandbox recreate --all
 # Edit config: agents.defaults.sandbox.* (or agents.list[].sandbox.*)
 
 # Recreate to apply new config
-clawdbot sandbox recreate --all
+moltbot sandbox recreate --all
 ```
 
 ### After changing setupCommand
 
 ```bash
-clawdbot sandbox recreate --all
+moltbot sandbox recreate --all
 # or just one agent:
-clawdbot sandbox recreate --agent family
+moltbot sandbox recreate --agent family
 ```
 
 
@@ -102,7 +102,7 @@ clawdbot sandbox recreate --agent family
 
 ```bash
 # Update only one agent's containers
-clawdbot sandbox recreate --agent alfred
+moltbot sandbox recreate --agent alfred
 ```
 
 ## Why is this needed?
@@ -112,14 +112,14 @@ clawdbot sandbox recreate --agent alfred
 - Containers are only pruned after 24h of inactivity
 - Regularly-used agents keep old containers running indefinitely
 
-**Solution:** Use `clawdbot sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
+**Solution:** Use `moltbot sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
 
-Tip: prefer `clawdbot sandbox recreate` over manual `docker rm`. It uses the
+Tip: prefer `moltbot sandbox recreate` over manual `docker rm`. It uses the
 Gateway’s container naming and avoids mismatches when scope/session keys change.
 
 ## Configuration
 
-Sandbox settings live in `~/.clawdbot/clawdbot.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
+Sandbox settings live in `~/.clawdbot/moltbot.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
 
 ```jsonc
 {
@@ -129,8 +129,8 @@ Sandbox settings live in `~/.clawdbot/clawdbot.json` under `agents.defaults.sand
         "mode": "all",                    // off, non-main, all
         "scope": "agent",                 // session, agent, shared
         "docker": {
-          "image": "clawdbot-sandbox:bookworm-slim",
-          "containerPrefix": "clawdbot-sbx-"
+          "image": "moltbot-sandbox:bookworm-slim",
+          "containerPrefix": "moltbot-sbx-"
           // ... more Docker options
         },
         "prune": {

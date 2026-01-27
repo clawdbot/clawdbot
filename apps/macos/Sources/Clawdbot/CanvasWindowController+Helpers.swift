@@ -23,7 +23,7 @@ extension CanvasWindowController {
     }
 
     static func storedFrameDefaultsKey(sessionKey: String) -> String {
-        "clawdbot.canvas.frame.\(self.sanitizeSessionKey(sessionKey))"
+        "moltbot.canvas.frame.\(self.sanitizeSessionKey(sessionKey))"
     }
 
     static func loadRestoredFrame(sessionKey: String) -> NSRect? {

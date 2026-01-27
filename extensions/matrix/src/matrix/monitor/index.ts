@@ -244,7 +244,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   });
   logVerboseMessage("matrix: client started");
 
-  // matrix-bot-sdk client is already started via resolveSharedMatrixClient
+  // @vector-im/matrix-bot-sdk client is already started via resolveSharedMatrixClient
   logger.info(`matrix: logged in as ${auth.userId}`);
 
   // If E2EE is enabled, trigger device verification

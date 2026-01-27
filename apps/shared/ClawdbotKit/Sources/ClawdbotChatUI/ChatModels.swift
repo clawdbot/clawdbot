@@ -1,4 +1,4 @@
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 
 // NOTE: keep this file lightweight; decode must be resilient to varying transcript formats.
@@ -6,14 +6,14 @@ import Foundation
 #if canImport(AppKit)
 import AppKit
 
-public typealias ClawdbotPlatformImage = NSImage
+public typealias MoltbotPlatformImage = NSImage
 #elseif canImport(UIKit)
 import UIKit
 
-public typealias ClawdbotPlatformImage = UIImage
+public typealias MoltbotPlatformImage = UIImage
 #endif
 
-public struct ClawdbotChatUsageCost: Codable, Hashable, Sendable {
+public struct MoltbotChatUsageCost: Codable, Hashable, Sendable {
     public let input: Double?
     public let output: Double?
     public let cacheRead: Double?
@@ -21,12 +21,12 @@ public struct ClawdbotChatUsageCost: Codable, Hashable, Sendable {
     public let total: Double?
 }
 
-public struct ClawdbotChatUsage: Codable, Hashable, Sendable {
+public struct MoltbotChatUsage: Codable, Hashable, Sendable {
     public let input: Int?
     public let output: Int?
     public let cacheRead: Int?
     public let cacheWrite: Int?
-    public let cost: ClawdbotChatUsageCost?
+    public let cost: MoltbotChatUsageCost?
     public let total: Int?
 
     enum CodingKeys: String, CodingKey {
@@ -45,7 +45,7 @@ public struct ClawdbotChatUsage: Codable, Hashable, Sendable {
         self.output = try container.decodeIfPresent(Int.self, forKey: .output)
         self.cacheRead = try container.decodeIfPresent(Int.self, forKey: .cacheRead)
         self.cacheWrite = try container.decodeIfPresent(Int.self, forKey: .cacheWrite)
-        self.cost = try container.decodeIfPresent(ClawdbotChatUsageCost.self, forKey: .cost)
+        self.cost = try container.decodeIfPresent(MoltbotChatUsageCost.self, forKey: .cost)
         self.total =
             try container.decodeIfPresent(Int.self, forKey: .total) ??
             container.decodeIfPresent(Int.self, forKey: .totalTokens)
@@ -62,7 +62,7 @@ public struct ClawdbotChatUsage: Codable, Hashable, Sendable {
     }
 }
 
-public struct ClawdbotChatMessageContent: Codable, Hashable, Sendable {
+public struct MoltbotChatMessageContent: Codable, Hashable, Sendable {
     public let type: String?
     public let text: String?
     public let thinking: String?
@@ -135,14 +135,14 @@ public struct ClawdbotChatMessageContent: Codable, Hashable, Sendable {
     }
 }
 
-public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
+public struct MoltbotChatMessage: Codable, Identifiable, Sendable {
     public var id: UUID = .init()
     public let role: String
-    public let content: [ClawdbotChatMessageContent]
+    public let content: [MoltbotChatMessageContent]
     public let timestamp: Double?
     public let toolCallId: String?
     public let toolName: String?
-    public let usage: ClawdbotChatUsage?
+    public let usage: MoltbotChatUsage?
     public let stopReason: String?
 
     enum CodingKeys: String, CodingKey {
@@ -160,11 +160,11 @@ public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
     public init(
         id: UUID = .init(),
         role: String,
-        content: [ClawdbotChatMessageContent],
+        content: [MoltbotChatMessageContent],
         timestamp: Double?,
         toolCallId: String? = nil,
         toolName: String? = nil,
-        usage: ClawdbotChatUsage? = nil,
+        usage: MoltbotChatUsage? = nil,
         stopReason: String? = nil)
     {
         self.id = id
@@ -187,10 +187,10 @@ public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
         self.toolName =
             try container.decodeIfPresent(String.self, forKey: .toolName) ??
             container.decodeIfPresent(String.self, forKey: .tool_name)
-        self.usage = try container.decodeIfPresent(ClawdbotChatUsage.self, forKey: .usage)
+        self.usage = try container.decodeIfPresent(MoltbotChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
 
-        if let decoded = try? container.decode([ClawdbotChatMessageContent].self, forKey: .content) {
+        if let decoded = try? container.decode([MoltbotChatMessageContent].self, forKey: .content) {
             self.content = decoded
             return
         }
@@ -198,7 +198,7 @@ public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
         // Some session log formats store `content` as a plain string.
         if let text = try? container.decode(String.self, forKey: .content) {
             self.content = [
-                ClawdbotChatMessageContent(
+                MoltbotChatMessageContent(
                     type: "text",
                     text: text,
                     thinking: nil,
@@ -228,40 +228,40 @@ public struct ClawdbotChatMessage: Codable, Identifiable, Sendable {
     }
 }
 
-public struct ClawdbotChatHistoryPayload: Codable, Sendable {
+public struct MoltbotChatHistoryPayload: Codable, Sendable {
     public let sessionKey: String
     public let sessionId: String?
     public let messages: [AnyCodable]?
     public let thinkingLevel: String?
 }
 
-public struct ClawdbotSessionPreviewItem: Codable, Hashable, Sendable {
+public struct MoltbotSessionPreviewItem: Codable, Hashable, Sendable {
     public let role: String
     public let text: String
 }
 
-public struct ClawdbotSessionPreviewEntry: Codable, Sendable {
+public struct MoltbotSessionPreviewEntry: Codable, Sendable {
     public let key: String
     public let status: String
-    public let items: [ClawdbotSessionPreviewItem]
+    public let items: [MoltbotSessionPreviewItem]
 }
 
-public struct ClawdbotSessionsPreviewPayload: Codable, Sendable {
+public struct MoltbotSessionsPreviewPayload: Codable, Sendable {
     public let ts: Int
-    public let previews: [ClawdbotSessionPreviewEntry]
+    public let previews: [MoltbotSessionPreviewEntry]
 
-    public init(ts: Int, previews: [ClawdbotSessionPreviewEntry]) {
+    public init(ts: Int, previews: [MoltbotSessionPreviewEntry]) {
         self.ts = ts
         self.previews = previews
     }
 }
 
-public struct ClawdbotChatSendResponse: Codable, Sendable {
+public struct MoltbotChatSendResponse: Codable, Sendable {
     public let runId: String
     public let status: String
 }
 
-public struct ClawdbotChatEventPayload: Codable, Sendable {
+public struct MoltbotChatEventPayload: Codable, Sendable {
     public let runId: String?
     public let sessionKey: String?
     public let state: String?
@@ -269,7 +269,7 @@ public struct ClawdbotChatEventPayload: Codable, Sendable {
     public let errorMessage: String?
 }
 
-public struct ClawdbotAgentEventPayload: Codable, Sendable, Identifiable {
+public struct MoltbotAgentEventPayload: Codable, Sendable, Identifiable {
     public var id: String { "\(self.runId)-\(self.seq ?? -1)" }
     public let runId: String
     public let seq: Int?
@@ -278,7 +278,7 @@ public struct ClawdbotAgentEventPayload: Codable, Sendable, Identifiable {
     public let data: [String: AnyCodable]
 }
 
-public struct ClawdbotChatPendingToolCall: Identifiable, Hashable, Sendable {
+public struct MoltbotChatPendingToolCall: Identifiable, Hashable, Sendable {
     public var id: String { self.toolCallId }
     public let toolCallId: String
     public let name: String
@@ -287,18 +287,18 @@ public struct ClawdbotChatPendingToolCall: Identifiable, Hashable, Sendable {
     public let isError: Bool?
 }
 
-public struct ClawdbotGatewayHealthOK: Codable, Sendable {
+public struct MoltbotGatewayHealthOK: Codable, Sendable {
     public let ok: Bool?
 }
 
-public struct ClawdbotPendingAttachment: Identifiable {
+public struct MoltbotPendingAttachment: Identifiable {
     public let id = UUID()
     public let url: URL?
     public let data: Data
     public let fileName: String
     public let mimeType: String
     public let type: String
-    public let preview: ClawdbotPlatformImage?
+    public let preview: MoltbotPlatformImage?
 
     public init(
         url: URL?,
@@ -306,7 +306,7 @@ public struct ClawdbotPendingAttachment: Identifiable {
         fileName: String,
         mimeType: String,
         type: String = "file",
-        preview: ClawdbotPlatformImage?)
+        preview: MoltbotPlatformImage?)
     {
         self.url = url
         self.data = data
@@ -317,7 +317,7 @@ public struct ClawdbotPendingAttachment: Identifiable {
     }
 }
 
-public struct ClawdbotChatAttachmentPayload: Codable, Sendable, Hashable {
+public struct MoltbotChatAttachmentPayload: Codable, Sendable, Hashable {
     public let type: String
     public let mimeType: String
     public let fileName: String

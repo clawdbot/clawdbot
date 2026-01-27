@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 import { telegramOutbound } from "./telegram.js";
 
 describe("telegramOutbound.sendPayload", () => {
@@ -8,7 +8,7 @@ describe("telegramOutbound.sendPayload", () => {
     const sendTelegram = vi.fn(async () => ({ messageId: "m1", chatId: "c1" }));
 
     const result = await telegramOutbound.sendPayload?.({
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       to: "telegram:123",
       text: "ignored",
       payload: {
@@ -41,7 +41,7 @@ describe("telegramOutbound.sendPayload", () => {
       .mockResolvedValueOnce({ messageId: "m2", chatId: "c1" });
 
     const result = await telegramOutbound.sendPayload?.({
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       to: "telegram:123",
       text: "ignored",
       payload: {

@@ -28,7 +28,7 @@ ${body ?? `# ${name}\n`}
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
 
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -38,7 +38,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toBe("");
   });
   it("loads bundled skills when present", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     const bundledDir = path.join(workspaceDir, ".bundled");
     const bundledSkillDir = path.join(bundledDir, "peekaboo");
 
@@ -58,7 +58,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain(path.join(bundledSkillDir, "SKILL.md"));
   });
   it("loads extra skill folders from config (lowest precedence)", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     const extraDir = path.join(workspaceDir, ".extra");
     const bundledDir = path.join(workspaceDir, ".bundled");
     const managedDir = path.join(workspaceDir, ".managed");
@@ -100,7 +100,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Extra version");
   });
   it("loads skills from workspace skills/", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     const skillDir = path.join(workspaceDir, "skills", "demo-skill");
 
     await writeSkill({

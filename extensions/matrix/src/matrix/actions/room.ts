@@ -9,9 +9,9 @@ export async function getMatrixMemberInfo(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
-    // matrix-bot-sdk uses getUserProfile
+    // @vector-im/matrix-bot-sdk uses getUserProfile
     const profile = await client.getUserProfile(userId);
-    // Note: matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
+    // Note: @vector-im/matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
     // We'd need to fetch room state separately if needed
     return {
       userId,
@@ -36,7 +36,7 @@ export async function getMatrixRoomInfo(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    // matrix-bot-sdk uses getRoomState for state events
+    // @vector-im/matrix-bot-sdk uses getRoomState for state events
     let name: string | null = null;
     let topic: string | null = null;
     let canonicalAlias: string | null = null;

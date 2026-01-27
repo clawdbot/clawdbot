@@ -7,7 +7,7 @@ read_when:
 
 # Brave Search API
 
-Clawdbot uses Brave Search as the default provider for `web_search`.
+Moltbot uses Brave Search as the default provider for `web_search`.
 
 ## Get an API key
 

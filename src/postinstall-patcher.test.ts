@@ -10,7 +10,7 @@ import {
 } from "../scripts/postinstall.js";
 
 function makeTempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-patch-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-patch-"));
 }
 
 describe("postinstall patcher", () => {

@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Foundation
 
 enum ConfigStore {
@@ -44,7 +44,7 @@ enum ConfigStore {
         if let gateway = await self.loadFromGateway() {
             return gateway
         }
-        return ClawdbotConfigFile.loadDict()
+        return MoltbotConfigFile.loadDict()
     }
 
     @MainActor
@@ -63,7 +63,7 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    ClawdbotConfigFile.saveDict(root)
+                    MoltbotConfigFile.saveDict(root)
                 }
             }
         }

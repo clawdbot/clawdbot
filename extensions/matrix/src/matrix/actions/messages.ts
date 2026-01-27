@@ -95,7 +95,7 @@ export async function readMatrixMessages(
         : 20;
     const token = opts.before?.trim() || opts.after?.trim() || undefined;
     const dir = opts.after ? "f" : "b";
-    // matrix-bot-sdk uses doRequest for room messages
+    // @vector-im/matrix-bot-sdk uses doRequest for room messages
     const res = await client.doRequest(
       "GET",
       `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,

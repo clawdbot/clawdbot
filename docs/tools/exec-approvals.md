@@ -20,7 +20,7 @@ resolved by the **ask fallback** (default: deny).
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:
-- **gateway host** → `clawdbot` process on the gateway machine
+- **gateway host** → `moltbot` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
 macOS split:
@@ -133,7 +133,7 @@ must advertise `system.execApprovals.get/set` (macOS app or headless node host).
 If a node does not advertise exec approvals yet, edit its local
 `~/.clawdbot/exec-approvals.json` directly.
 
-CLI: `clawdbot approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
+CLI: `moltbot approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
 
 ## Approval flow
 

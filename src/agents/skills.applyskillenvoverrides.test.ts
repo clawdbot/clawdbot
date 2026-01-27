@@ -33,13 +33,13 @@ ${body ?? `# ${name}\n`}
 
 describe("applySkillEnvOverrides", () => {
   it("sets and restores env vars", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     const skillDir = path.join(workspaceDir, "skills", "env-skill");
     await writeSkill({
       dir: skillDir,
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"clawdbot":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata: '{"moltbot":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
@@ -66,13 +66,13 @@ describe("applySkillEnvOverrides", () => {
     }
   });
   it("applies env overrides from snapshots", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
     const skillDir = path.join(workspaceDir, "skills", "env-skill");
     await writeSkill({
       dir: skillDir,
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"clawdbot":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata: '{"moltbot":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {

@@ -57,13 +57,13 @@ markdown_to_html() {
 
 version_content=$(extract_version_section "$VERSION" "$CHANGELOG_FILE")
 if [[ -z "$version_content" ]]; then
-  echo "<h2>Clawdbot $VERSION</h2>"
-  echo "<p>Latest Clawdbot update.</p>"
-  echo "<p><a href=\"https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md\">View full changelog</a></p>"
+  echo "<h2>Moltbot $VERSION</h2>"
+  echo "<p>Latest Moltbot update.</p>"
+  echo "<p><a href=\"https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md\">View full changelog</a></p>"
   exit 0
 fi
 
-echo "<h2>Clawdbot $VERSION</h2>"
+echo "<h2>Moltbot $VERSION</h2>"
 
 in_list=false
 while IFS= read -r line; do
@@ -88,4 +88,4 @@ if [[ "$in_list" == true ]]; then
   echo "</ul>"
 fi
 
-echo "<p><a href=\"https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md\">View full changelog</a></p>"
+echo "<p><a href=\"https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md\">View full changelog</a></p>"

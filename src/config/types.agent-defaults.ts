@@ -244,6 +244,8 @@ export type AgentCompactionConfig = {
   mode?: AgentCompactionMode;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
+  /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
+  maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };

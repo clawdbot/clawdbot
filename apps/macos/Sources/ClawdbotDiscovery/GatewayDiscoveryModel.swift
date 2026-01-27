@@ -1,4 +1,4 @@
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 import Network
 import Observation
@@ -81,11 +81,11 @@ public final class GatewayDiscoveryModel {
     public func start() {
         if !self.browsers.isEmpty { return }
 
-        for domain in ClawdbotBonjour.gatewayServiceDomains {
+        for domain in MoltbotBonjour.gatewayServiceDomains {
             let params = NWParameters.tcp
             params.includePeerToPeer = true
             let browser = NWBrowser(
-                for: .bonjour(type: ClawdbotBonjour.gatewayServiceType, domain: domain),
+                for: .bonjour(type: MoltbotBonjour.gatewayServiceType, domain: domain),
                 using: params)
 
             browser.stateUpdateHandler = { [weak self] state in
@@ -113,7 +113,7 @@ public final class GatewayDiscoveryModel {
     }
 
     public func refreshWideAreaFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
-        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
+        let domain = MoltbotBonjour.wideAreaGatewayServiceDomain
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
@@ -235,7 +235,7 @@ public final class GatewayDiscoveryModel {
         }
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
 
-        if domain == ClawdbotBonjour.wideAreaGatewayServiceDomain,
+        if domain == MoltbotBonjour.wideAreaGatewayServiceDomain,
            self.hasUsableWideAreaResults
         {
             self.wideAreaFallbackGateways = []
@@ -243,7 +243,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private func scheduleWideAreaFallback() {
-        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
+        let domain = MoltbotBonjour.wideAreaGatewayServiceDomain
         if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
         self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
@@ -276,7 +276,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private var hasUsableWideAreaResults: Bool {
-        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
+        let domain = MoltbotBonjour.wideAreaGatewayServiceDomain
         guard let gateways = self.gatewaysByDomain[domain], !gateways.isEmpty else { return false }
         if !self.filterLocalGateways { return true }
         return gateways.contains(where: { !$0.isLocal })
@@ -455,7 +455,7 @@ public final class GatewayDiscoveryModel {
 
     private nonisolated static func prettifyInstanceName(_ decodedName: String) -> String {
         let normalized = decodedName.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let stripped = normalized.replacingOccurrences(of: " (Clawdbot)", with: "")
+        let stripped = normalized.replacingOccurrences(of: " (Moltbot)", with: "")
             .replacingOccurrences(of: #"\s+\(\d+\)$"#, with: "", options: .regularExpression)
         return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     }

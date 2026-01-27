@@ -1,7 +1,7 @@
 import Foundation
 import SwabbleKit
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite struct VoiceWakeRuntimeTests {
     @Test func trimsAfterTriggerKeepsPostSpeech() {

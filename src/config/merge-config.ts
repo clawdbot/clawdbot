@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "./config.js";
+import type { MoltbotConfig } from "./config.js";
 import type { WhatsAppConfig } from "./types.js";
 
 export type MergeSectionOptions<T> = {
@@ -24,10 +24,10 @@ export function mergeConfigSection<T extends Record<string, unknown>>(
 }
 
 export function mergeWhatsAppConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   patch: Partial<WhatsAppConfig>,
   options?: MergeSectionOptions<WhatsAppConfig>,
-): ClawdbotConfig {
+): MoltbotConfig {
   return {
     ...cfg,
     channels: {

@@ -21,7 +21,7 @@ async function withLaunchctlStub(
   const originalLogPath = process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG;
   const originalListOutput = process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT;
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-launchctl-test-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-launchctl-test-"));
   try {
     const binDir = path.join(tmpDir, "bin");
     const homeDir = path.join(tmpDir, "home");
@@ -147,7 +147,7 @@ describe("launchd install", () => {
     const originalPath = process.env.PATH;
     const originalLogPath = process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG;
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-launchctl-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-launchctl-test-"));
     try {
       const binDir = path.join(tmpDir, "bin");
       const homeDir = path.join(tmpDir, "home");

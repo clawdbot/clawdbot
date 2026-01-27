@@ -1,7 +1,7 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized) struct VoiceWakeGlobalSettingsSyncTests {
     @Test func appliesVoiceWakeChangedEventToAppState() async {
@@ -11,7 +11,7 @@ import Testing
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(["before"])
         }
 
-        let payload = ClawdbotProtocol.AnyCodable(["triggers": ["clawd", "computer"]])
+        let payload = MoltbotProtocol.AnyCodable(["triggers": ["clawd", "computer"]])
         let evt = EventFrame(
             type: "event",
             event: "voicewake.changed",
@@ -36,7 +36,7 @@ import Testing
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(["before"])
         }
 
-        let payload = ClawdbotProtocol.AnyCodable(["unexpected": 123])
+        let payload = MoltbotProtocol.AnyCodable(["unexpected": 123])
         let evt = EventFrame(
             type: "event",
             event: "voicewake.changed",

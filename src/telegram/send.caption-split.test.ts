@@ -19,6 +19,7 @@ vi.mock("../web/media.js", () => ({
 vi.mock("grammy", () => ({
   Bot: class {
     api = botApi;
+    catch = vi.fn();
     constructor(
       public token: string,
       public options?: {

@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { resolveMoltbotAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -12,7 +12,7 @@ import {
 } from "./live-auth-keys.js";
 import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
-import { ensureClawdbotModelsJson } from "./models-config.js";
+import { ensureMoltbotModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
@@ -151,7 +151,7 @@ describeLive("live models (profile keys)", () => {
     "completes across selected models",
     async () => {
       const cfg = loadConfig();
-      await ensureClawdbotModelsJson(cfg);
+      await ensureMoltbotModelsJson(cfg);
       if (!DIRECT_ENABLED) {
         logProgress(
           "[live-models] skipping (set CLAWDBOT_LIVE_MODELS=modern|all|<list>; all=modern)",
@@ -164,7 +164,7 @@ describeLive("live models (profile keys)", () => {
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
-      const agentDir = resolveClawdbotAgentDir();
+      const agentDir = resolveMoltbotAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const models = modelRegistry.getAll() as Array<Model<Api>>;

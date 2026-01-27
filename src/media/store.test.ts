@@ -27,7 +27,7 @@ describe("media store", () => {
 
   beforeAll(async () => {
     snapshotEnv();
-    home = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-home-"));
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-test-home-"));
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.CLAWDBOT_STATE_DIR = path.join(home, ".clawdbot");

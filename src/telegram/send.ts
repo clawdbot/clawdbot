@@ -8,6 +8,7 @@ import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -22,6 +23,7 @@ import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { splitTelegramCaption } from "./caption.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
@@ -84,7 +86,9 @@ function resolveTelegramClientOptions(
 ): ApiClientOptions | undefined {
   const proxyUrl = account.config.proxy?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch);
+  const fetchImpl = resolveTelegramFetch(proxyFetch, {
+    network: account.config.network,
+  });
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
     Number.isFinite(account.config.timeoutSeconds)
@@ -203,10 +207,14 @@ export async function sendMessageTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -434,10 +442,14 @@ export async function reactMessageTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -483,10 +495,14 @@ export async function deleteMessageTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -531,7 +547,10 @@ export async function editMessageTelegram(
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    request(fn, label).catch((err) => {
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -599,4 +618,97 @@ function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {
     default:
       return "file.bin";
   }
+}
+
+type TelegramStickerOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  /** Message ID to reply to (for threading) */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups) */
+  messageThreadId?: number;
+};
+
+/**
+ * Send a sticker to a Telegram chat by file_id.
+ * @param to - Chat ID or username (e.g., "123456789" or "@username")
+ * @param fileId - Telegram file_id of the sticker to send
+ * @param opts - Optional configuration
+ */
+export async function sendStickerTelegram(
+  to: string,
+  fileId: string,
+  opts: TelegramStickerOpts = {},
+): Promise<TelegramSendResult> {
+  if (!fileId?.trim()) {
+    throw new Error("Telegram sticker file_id is required");
+  }
+
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const target = parseTelegramTarget(to);
+  const chatId = normalizeChatId(target.chatId);
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+
+  const messageThreadId =
+    opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  const threadIdParams = buildTelegramThreadParams(messageThreadId);
+  const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
+  if (opts.replyToMessageId != null) {
+    threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
+  }
+  const hasThreadParams = Object.keys(threadParams).length > 0;
+
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    request(fn, label).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const wrapChatNotFound = (err: unknown) => {
+    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) return err;
+    return new Error(
+      [
+        `Telegram send failed: chat not found (chat_id=${chatId}).`,
+        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+        `Input was: ${JSON.stringify(to)}.`,
+      ].join(" "),
+    );
+  };
+
+  const stickerParams = hasThreadParams ? threadParams : undefined;
+
+  const result = await requestWithDiag(
+    () => api.sendSticker(chatId, fileId.trim(), stickerParams),
+    "sticker",
+  ).catch((err) => {
+    throw wrapChatNotFound(err);
+  });
+
+  const messageId = String(result?.message_id ?? "unknown");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  if (result?.message_id) {
+    recordSentMessage(chatId, result.message_id);
+  }
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { messageId, chatId: resolvedChatId };
 }

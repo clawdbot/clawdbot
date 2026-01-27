@@ -21,3 +21,4 @@ jobs:
         with:
           configuration-path: .github/labeler.yml
           repo-token: ${{ steps.app-token.outputs.token }}
+          sync-labels: true

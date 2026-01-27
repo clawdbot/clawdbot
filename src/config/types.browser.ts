@@ -14,16 +14,9 @@ export type BrowserSnapshotDefaults = {
 };
 export type BrowserConfig = {
   enabled?: boolean;
-  /** Base URL of the clawd browser control server. Default: http://127.0.0.1:18791 */
-  controlUrl?: string;
-  /**
-   * Shared token for the browser control server.
-   * If set, clients must send `Authorization: Bearer <token>`.
-   *
-   * Prefer `CLAWDBOT_BROWSER_CONTROL_TOKEN` env for ephemeral setups; use this for "works after reboot".
-   */
-  controlToken?: string;
-  /** Base URL of the CDP endpoint. Default: controlUrl with port + 1. */
+  /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
+  evaluateEnabled?: boolean;
+  /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
   cdpUrl?: string;
   /** Remote CDP HTTP timeout (ms). Default: 1500. */
   remoteCdpTimeoutMs?: number;

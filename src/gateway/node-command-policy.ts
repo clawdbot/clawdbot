@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CANVAS_COMMANDS = [
@@ -75,7 +75,7 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): string {
 }
 
 export function resolveNodeCommandAllowlist(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   node?: Pick<NodeSession, "platform" | "deviceFamily">,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);

@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
@@ -22,7 +23,7 @@ function resolvePiExtensionPath(id: string): string {
 }
 
 function resolveContextWindowTokens(params: {
-  cfg: ClawdbotConfig | undefined;
+  cfg: MoltbotConfig | undefined;
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
@@ -37,7 +38,7 @@ function resolveContextWindowTokens(params: {
 }
 
 function buildContextPruningExtension(params: {
-  cfg: ClawdbotConfig | undefined;
+  cfg: MoltbotConfig | undefined;
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
@@ -62,12 +63,12 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: ClawdbotConfig): "default" | "safeguard" {
+function resolveCompactionMode(cfg?: MoltbotConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
 export function buildEmbeddedExtensionPaths(params: {
-  cfg: ClawdbotConfig | undefined;
+  cfg: MoltbotConfig | undefined;
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
@@ -75,6 +76,10 @@ export function buildEmbeddedExtensionPaths(params: {
 }): string[] {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
+    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+    setCompactionSafeguardRuntime(params.sessionManager, {
+      maxHistoryShare: compactionCfg?.maxHistoryShare,
+    });
     paths.push(resolvePiExtensionPath("compaction-safeguard"));
   }
   const pruning = buildContextPruningExtension(params);

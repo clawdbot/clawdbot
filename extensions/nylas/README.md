@@ -1,4 +1,4 @@
-# Nylas Plugin for Clawdbot
+# Nylas Plugin for Moltbot
 
 Email, calendar, and contacts integration via Nylas API v3.
 
@@ -17,7 +17,7 @@ Built on the [official Nylas Node SDK](https://www.npmjs.com/package/nylas).
    ```
 3. **Auto-discover grants:**
    ```bash
-   clawdbot nylas status
+   moltbot nylas status
    ```
    This will connect to Nylas, discover all authenticated accounts, and show the recommended configuration.
 
@@ -33,7 +33,7 @@ Before using this plugin, you need to set up a Nylas account:
 
 ## Configuration
 
-Add the following to your `clawdbot.yaml`:
+Add the following to your `moltbot.yaml`:
 
 ```yaml
 plugins:
@@ -54,19 +54,19 @@ plugins:
 
 ```bash
 # Check API connection and auto-discover grants (recommended first step)
-clawdbot nylas status
+moltbot nylas status
 
 # Discover all authenticated accounts and show config snippet
-clawdbot nylas discover
-clawdbot nylas discover --json  # Output as JSON
+moltbot nylas discover
+moltbot nylas discover --json  # Output as JSON
 
 # Test API with specific grant (auto-discovers if not configured)
-clawdbot nylas test
-clawdbot nylas test --grant work
+moltbot nylas test
+moltbot nylas test --grant work
 
 # List configured and available grants
-clawdbot nylas grants
-clawdbot nylas grants --configured  # Only show configured grants
+moltbot nylas grants
+moltbot nylas grants --configured  # Only show configured grants
 ```
 
 ## Available Tools

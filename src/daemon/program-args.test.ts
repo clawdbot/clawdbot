@@ -23,8 +23,8 @@ afterEach(() => {
 
 describe("resolveGatewayProgramArguments", () => {
   it("uses realpath-resolved dist entry when running via npx shim", async () => {
-    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot");
-    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/entry.js");
+    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/moltbot");
+    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/moltbot/dist/entry.js");
     process.argv = ["node", argv1];
     fsMocks.realpath.mockResolvedValue(entryPath);
     fsMocks.access.mockImplementation(async (target: string) => {
@@ -46,13 +46,13 @@ describe("resolveGatewayProgramArguments", () => {
   });
 
   it("prefers symlinked path over realpath for stable service config", async () => {
-    // Simulates pnpm global install where node_modules/clawdbot is a symlink
-    // to .pnpm/clawdbot@X.Y.Z/node_modules/clawdbot
+    // Simulates pnpm global install where node_modules/moltbot is a symlink
+    // to .pnpm/moltbot@X.Y.Z/node_modules/moltbot
     const symlinkPath = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/clawdbot/dist/entry.js",
+      "/Users/test/Library/pnpm/global/5/node_modules/moltbot/dist/entry.js",
     );
     const realpathResolved = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/clawdbot@2026.1.21-2/node_modules/clawdbot/dist/entry.js",
+      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/moltbot@2026.1.21-2/node_modules/moltbot/dist/entry.js",
     );
     process.argv = ["node", symlinkPath];
     fsMocks.realpath.mockResolvedValue(realpathResolved);
@@ -66,8 +66,8 @@ describe("resolveGatewayProgramArguments", () => {
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
-    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot");
-    const indexPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/index.js");
+    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/moltbot");
+    const indexPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/moltbot/dist/index.js");
     process.argv = ["node", argv1];
     fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
     fsMocks.access.mockImplementation(async (target: string) => {

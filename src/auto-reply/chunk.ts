@@ -3,7 +3,7 @@
 // the chunk so messages are only split when they truly exceed the limit.
 
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -52,7 +52,7 @@ function resolveChunkLimitForProvider(
 }
 
 export function resolveTextChunkLimit(
-  cfg: ClawdbotConfig | undefined,
+  cfg: MoltbotConfig | undefined,
   provider?: TextChunkProvider,
   accountId?: string | null,
   opts?: { fallbackLimit?: number },
@@ -98,7 +98,7 @@ function resolveChunkModeForProvider(
 }
 
 export function resolveChunkMode(
-  cfg: ClawdbotConfig | undefined,
+  cfg: MoltbotConfig | undefined,
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {

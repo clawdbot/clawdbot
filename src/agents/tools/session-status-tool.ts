@@ -19,7 +19,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -64,7 +64,7 @@ function formatApiKeySnippet(apiKey: string): string {
 
 function resolveModelAuthLabel(params: {
   provider?: string;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   sessionEntry?: SessionEntry;
   agentDir?: string;
 }): string | undefined {
@@ -156,7 +156,7 @@ function resolveSessionEntry(params: {
 }
 
 function resolveSessionKeyFromSessionId(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   sessionId: string;
   agentId?: string;
 }): string | null {
@@ -172,7 +172,7 @@ function resolveSessionKeyFromSessionId(params: {
 }
 
 async function resolveModelOverride(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   raw: string;
   sessionEntry?: SessionEntry;
   agentId: string;
@@ -232,7 +232,7 @@ async function resolveModelOverride(params: {
 
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
 }): AnyAgentTool {
   return {
     label: "Session Status",

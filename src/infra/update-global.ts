@@ -51,7 +51,7 @@ export async function resolveGlobalPackageRoot(
 ): Promise<string | null> {
   const root = await resolveGlobalRoot(manager, runCommand, timeoutMs);
   if (!root) return null;
-  return path.join(root, "clawdbot");
+  return path.join(root, "moltbot");
 }
 
 export async function detectGlobalInstallManagerForRoot(
@@ -75,13 +75,13 @@ export async function detectGlobalInstallManagerForRoot(
     const globalRoot = res.stdout.trim();
     if (!globalRoot) continue;
     const globalReal = await tryRealpath(globalRoot);
-    const expected = path.join(globalReal, "clawdbot");
+    const expected = path.join(globalReal, "moltbot");
     if (path.resolve(expected) === path.resolve(pkgReal)) return manager;
   }
 
   const bunGlobalRoot = resolveBunGlobalRoot();
   const bunGlobalReal = await tryRealpath(bunGlobalRoot);
-  const bunExpected = path.join(bunGlobalReal, "clawdbot");
+  const bunExpected = path.join(bunGlobalReal, "moltbot");
   if (path.resolve(bunExpected) === path.resolve(pkgReal)) return "bun";
 
   return null;
@@ -94,11 +94,11 @@ export async function detectGlobalInstallManagerByPresence(
   for (const manager of ["npm", "pnpm"] as const) {
     const root = await resolveGlobalRoot(manager, runCommand, timeoutMs);
     if (!root) continue;
-    if (await pathExists(path.join(root, "clawdbot"))) return manager;
+    if (await pathExists(path.join(root, "moltbot"))) return manager;
   }
 
   const bunRoot = resolveBunGlobalRoot();
-  if (await pathExists(path.join(bunRoot, "clawdbot"))) return "bun";
+  if (await pathExists(path.join(bunRoot, "moltbot"))) return "bun";
   return null;
 }
 

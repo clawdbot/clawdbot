@@ -50,7 +50,7 @@ describe("memory indexing with OpenAI batches", () => {
       }
       return realSetTimeout(handler, delay, ...args);
     }) as typeof setTimeout);
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-mem-batch-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-mem-batch-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
   });

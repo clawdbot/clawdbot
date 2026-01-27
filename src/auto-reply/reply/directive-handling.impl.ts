@@ -5,7 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -30,7 +30,7 @@ import {
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
 function resolveExecDefaults(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   sessionEntry?: SessionEntry;
   agentId?: string;
 }): { host: ExecHost; security: ExecSecurity; ask: ExecAsk; node?: string } {
@@ -60,7 +60,7 @@ function resolveExecDefaults(params: {
 }
 
 export async function handleDirectiveOnly(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;

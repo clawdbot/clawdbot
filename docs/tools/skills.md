@@ -4,15 +4,15 @@ read_when:
   - Adding or modifying skills
   - Changing skill gating or load rules
 ---
-# Skills (Clawdbot)
+# Skills (Moltbot)
 
-Clawdbot uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. Clawdbot loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
+Moltbot uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. Moltbot loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
 
 ## Locations and precedence
 
 Skills are loaded from **three** places:
 
-1) **Bundled skills**: shipped with the install (npm package or Clawdbot.app)
+1) **Bundled skills**: shipped with the install (npm package or Moltbot.app)
 2) **Managed/local skills**: `~/.clawdbot/skills`
 3) **Workspace skills**: `<workspace>/skills`
 
@@ -21,7 +21,7 @@ If a skill name conflicts, precedence is:
 `<workspace>/skills` (highest) → `~/.clawdbot/skills` → bundled skills (lowest)
 
 Additionally, you can configure extra skill folders (lowest precedence) via
-`skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`.
+`skills.load.extraDirs` in `~/.clawdbot/moltbot.json`.
 
 ## Per-agent vs shared skills
 
@@ -39,7 +39,7 @@ applies: workspace wins, then managed/local, then bundled.
 ## Plugins + skills
 
 Plugins can ship their own skills by listing `skills` directories in
-`clawdbot.plugin.json` (paths relative to the plugin root). Plugin skills load
+`moltbot.plugin.json` (paths relative to the plugin root). Plugin skills load
 when the plugin is enabled and participate in the normal skill precedence rules.
 You can gate them via `metadata.clawdbot.requires.config` on the plugin’s config
 entry. See [Plugins](/plugin) for discovery/config and [Tools](/tools) for the
@@ -47,7 +47,7 @@ tool surface those skills teach.
 
 ## ClawdHub (install + sync)
 
-ClawdHub is the public skills registry for Clawdbot. Browse at
+ClawdHub is the public skills registry for Moltbot. Browse at
 https://clawdhub.com. Use it to discover, install, update, and back up skills.
 Full guide: [ClawdHub](/tools/clawdhub).
 
@@ -61,7 +61,7 @@ Common flows:
   - `clawdhub sync --all`
 
 By default, `clawdhub` installs into `./skills` under your current working
-directory (or falls back to the configured Clawdbot workspace). Clawdbot picks
+directory (or falls back to the configured Moltbot workspace). Moltbot picks
 that up as `<workspace>/skills` on the next session.
 
 ## Security notes
@@ -101,13 +101,13 @@ Notes:
 
 ## Gating (load-time filters)
 
-Clawdbot **filters skills at load time** using `metadata` (single-line JSON):
+Moltbot **filters skills at load time** using `metadata` (single-line JSON):
 
 ```markdown
 ---
 name: nano-banana-pro
 description: Generate or edit images via Gemini 3 Pro Image
-metadata: {"clawdbot":{"requires":{"bins":["uv"],"env":["GEMINI_API_KEY"],"config":["browser.enabled"]},"primaryEnv":"GEMINI_API_KEY"}}
+metadata: {"moltbot":{"requires":{"bins":["uv"],"env":["GEMINI_API_KEY"],"config":["browser.enabled"]},"primaryEnv":"GEMINI_API_KEY"}}
 ---
 ```
 
@@ -119,7 +119,7 @@ Fields under `metadata.clawdbot`:
 - `requires.bins` — list; each must exist on `PATH`.
 - `requires.anyBins` — list; at least one must exist on `PATH`.
 - `requires.env` — list; env var must exist **or** be provided in config.
-- `requires.config` — list of `clawdbot.json` paths that must be truthy.
+- `requires.config` — list of `moltbot.json` paths that must be truthy.
 - `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv/download).
 
@@ -138,15 +138,15 @@ Installer example:
 ---
 name: gemini
 description: Use Gemini CLI for coding assistance and Google search lookups.
-metadata: {"clawdbot":{"emoji":"♊️","requires":{"bins":["gemini"]},"install":[{"id":"brew","kind":"brew","formula":"gemini-cli","bins":["gemini"],"label":"Install Gemini CLI (brew)"}]}}
+metadata: {"moltbot":{"emoji":"♊️","requires":{"bins":["gemini"]},"install":[{"id":"brew","kind":"brew","formula":"gemini-cli","bins":["gemini"],"label":"Install Gemini CLI (brew)"}]}}
 ---
 ```
 
 Notes:
 - If multiple installers are listed, the gateway picks a **single** preferred option (brew when available, otherwise node).
-- If all installers are `download`, Clawdbot lists each entry so you can see the available artifacts.
+- If all installers are `download`, Moltbot lists each entry so you can see the available artifacts.
 - Installer specs can include `os: ["darwin"|"linux"|"win32"]` to filter options by platform.
-- Node installs honor `skills.install.nodeManager` in `clawdbot.json` (default: npm; options: npm/pnpm/yarn/bun).
+- Node installs honor `skills.install.nodeManager` in `moltbot.json` (default: npm; options: npm/pnpm/yarn/bun).
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun is not recommended for WhatsApp/Telegram).
 - Go installs: if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew’s `bin` when possible.
@@ -155,7 +155,7 @@ Notes:
 If no `metadata.clawdbot` is present, the skill is always eligible (unless
 disabled in config or blocked by `skills.allowBundled` for bundled skills).
 
-## Config overrides (`~/.clawdbot/clawdbot.json`)
+## Config overrides (`~/.clawdbot/moltbot.json`)
 
 Bundled/managed skills can be toggled and supplied with env values:
 
@@ -196,7 +196,7 @@ Rules:
 
 ## Environment injection (per agent run)
 
-When an agent run starts, Clawdbot:
+When an agent run starts, Moltbot:
 1) Reads skill metadata.
 2) Applies any `skills.entries.<key>.env` or `skills.entries.<key>.apiKey` to
    `process.env`.
@@ -207,19 +207,19 @@ This is **scoped to the agent run**, not a global shell environment.
 
 ## Session snapshot (performance)
 
-Clawdbot snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
+Moltbot snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
 
 Skills can also refresh mid-session when the skills watcher is enabled or when a new eligible remote node appears (see below). Think of this as a **hot reload**: the refreshed list is picked up on the next agent turn.
 
 ## Remote macOS nodes (Linux gateway)
 
-If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), Clawdbot can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
+If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), Moltbot can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
 
 This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
 
 ## Skills watcher (auto-refresh)
 
-By default, Clawdbot watches skill folders and bumps the skills snapshot when `SKILL.md` files change. Configure this under `skills.load`:
+By default, Moltbot watches skill folders and bumps the skills snapshot when `SKILL.md` files change. Configure this under `skills.load`:
 
 ```json5
 {
@@ -234,7 +234,7 @@ By default, Clawdbot watches skill folders and bumps the skills snapshot when `S
 
 ## Token impact (skills list)
 
-When skills are eligible, Clawdbot injects a compact XML list of available skills into the system prompt (via `formatSkillsForPrompt` in `pi-coding-agent`). The cost is deterministic:
+When skills are eligible, Moltbot injects a compact XML list of available skills into the system prompt (via `formatSkillsForPrompt` in `pi-coding-agent`). The cost is deterministic:
 
 - **Base overhead (only when ≥1 skill):** 195 characters.
 - **Per skill:** 97 characters + the length of the XML-escaped `<name>`, `<description>`, and `<location>` values.
@@ -251,8 +251,8 @@ Notes:
 
 ## Managed skills lifecycle
 
-Clawdbot ships a baseline set of skills as **bundled skills** as part of the
-install (npm package or Clawdbot.app). `~/.clawdbot/skills` exists for local
+Moltbot ships a baseline set of skills as **bundled skills** as part of the
+install (npm package or Moltbot.app). `~/.clawdbot/skills` exists for local
 overrides (for example, pinning/patching a skill without changing the bundled
 copy). Workspace skills are user-owned and override both on name conflicts.
 

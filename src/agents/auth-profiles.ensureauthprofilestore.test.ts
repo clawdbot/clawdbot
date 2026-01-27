@@ -7,7 +7,7 @@ import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-profiles-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-profiles-"));
     try {
       const legacyPath = path.join(agentDir, "auth.json");
       fs.writeFileSync(
@@ -48,7 +48,7 @@ describe("ensureAuthProfileStore", () => {
   });
 
   it("merges main auth profiles into agent store and keeps agent overrides", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-merge-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-merge-"));
     const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
     const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
     try {

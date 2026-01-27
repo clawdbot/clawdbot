@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
+INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
 SMOKE_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_SMOKE_PREVIOUS:-}"
 SKIP_PREVIOUS="${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
 
 echo "==> Resolve npm versions"
 if [[ -n "$SMOKE_PREVIOUS_VERSION" ]]; then
-  LATEST_VERSION="$(npm view clawdbot version)"
+  LATEST_VERSION="$(npm view moltbot version)"
   PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
 else
-  VERSIONS_JSON="$(npm view clawdbot versions --json)"
+  VERSIONS_JSON="$(npm view moltbot versions --json)"
   versions_line="$(node - <<'NODE'
 const raw = process.env.VERSIONS_JSON || "[]";
 let versions;
@@ -44,22 +44,22 @@ if [[ "$SKIP_PREVIOUS" == "1" ]]; then
   echo "==> Skip preinstall previous (CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path)"
-  npm install -g "clawdbot@${PREVIOUS_VERSION}"
+  npm install -g "moltbot@${PREVIOUS_VERSION}"
 fi
 
 echo "==> Run official installer one-liner"
 curl -fsSL "$INSTALL_URL" | bash
 
 echo "==> Verify installed version"
-INSTALLED_VERSION="$(clawdbot --version 2>/dev/null | head -n 1 | tr -d '\r')"
+INSTALLED_VERSION="$(moltbot --version 2>/dev/null | head -n 1 | tr -d '\r')"
 echo "installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
 
 if [[ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]]; then
-  echo "ERROR: expected clawdbot@$LATEST_VERSION, got clawdbot@$INSTALLED_VERSION" >&2
+  echo "ERROR: expected moltbot@$LATEST_VERSION, got moltbot@$INSTALLED_VERSION" >&2
   exit 1
 fi
 
 echo "==> Sanity: CLI runs"
-clawdbot --help >/dev/null
+moltbot --help >/dev/null
 
 echo "OK"

@@ -20,7 +20,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             agents: {
@@ -57,7 +57,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             agents: {
@@ -94,7 +94,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             messages: {},
@@ -119,7 +119,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             agents: {
@@ -159,11 +159,11 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             messages: {
-              messagePrefix: "[clawdbot]",
+              messagePrefix: "[moltbot]",
               responsePrefix: "🦞",
             },
             channels: {
@@ -205,7 +205,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             models: {
@@ -254,7 +254,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             agents: {
@@ -290,7 +290,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             messages: {},
@@ -319,7 +319,7 @@ describe("config identity defaults", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             agents: {

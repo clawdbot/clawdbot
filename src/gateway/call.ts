@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   loadConfig,
   resolveConfigPath,
@@ -23,7 +23,7 @@ export type CallGatewayOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   method: string;
   params?: unknown;
   expectFinal?: boolean;
@@ -52,7 +52,7 @@ export type GatewayConnectionDetails = {
 };
 
 export function buildGatewayConnectionDetails(
-  options: { config?: ClawdbotConfig; url?: string; configPath?: string } = {},
+  options: { config?: MoltbotConfig; url?: string; configPath?: string } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =

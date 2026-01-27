@@ -22,7 +22,7 @@ describe("sandbox explain command", () => {
         sandbox: { tools: { deny: ["browser"] } },
         elevated: { enabled: true, allowFrom: { whatsapp: ["*"] } },
       },
-      session: { store: "/tmp/clawdbot-test-sessions-{agentId}.json" },
+      session: { store: "/tmp/moltbot-test-sessions-{agentId}.json" },
     };
 
     const { sandboxExplainCommand } = await import("./sandbox-explain.js");
@@ -36,7 +36,7 @@ describe("sandbox explain command", () => {
 
     const out = logs.join("");
     const parsed = JSON.parse(out);
-    expect(parsed).toHaveProperty("docsUrl", "https://docs.clawd.bot/sandbox");
+    expect(parsed).toHaveProperty("docsUrl", "https://docs.molt.bot/sandbox");
     expect(parsed).toHaveProperty("sandbox.mode", "all");
     expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
     expect(Array.isArray(parsed.fixIt)).toBe(true);

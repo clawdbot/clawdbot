@@ -1,5 +1,5 @@
 import XCTest
-@testable import ClawdbotKit
+@testable import MoltbotKit
 
 final class TalkHistoryTimestampTests: XCTestCase {
     func testSecondsTimestampsAreAcceptedWithSmallTolerance() {
