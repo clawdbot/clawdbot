@@ -1,4 +1,10 @@
 import {
+  buildPixelmlModelDefinition,
+  PIXELML_BASE_URL,
+  PIXELML_DEFAULT_MODEL_REF,
+  PIXELML_MODEL_CATALOG,
+} from "../agents/pixelml-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -405,6 +411,91 @@ export function applyVeniceConfig(cfg: ClawdbotConfig): ClawdbotConfig {
               }
             : undefined),
           primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply PixelML provider configuration without changing the default model.
+ * Registers PixelML models and sets up the provider, but preserves existing model selection.
+ */
+export function applyPixelmlProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  // Add all catalog models to the allowlist
+  for (const entry of PIXELML_MODEL_CATALOG) {
+    const modelRef = `pixelml/${entry.id}`;
+    if (!models[modelRef]) {
+      models[modelRef] = {};
+    }
+  }
+  // Set alias for the default model
+  models[PIXELML_DEFAULT_MODEL_REF] = {
+    ...models[PIXELML_DEFAULT_MODEL_REF],
+    alias: models[PIXELML_DEFAULT_MODEL_REF]?.alias ?? "GPT-4o Mini",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.pixelml;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const pixelmlModels = PIXELML_MODEL_CATALOG.map(buildPixelmlModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...pixelmlModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.pixelml = {
+    ...existingProviderRest,
+    baseUrl: PIXELML_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : pixelmlModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply PixelML provider configuration AND set PixelML as the default model.
+ * Use this when PixelML is the primary provider choice during onboarding.
+ */
+export function applyPixelmlConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyPixelmlProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: PIXELML_DEFAULT_MODEL_REF,
         },
       },
     },
