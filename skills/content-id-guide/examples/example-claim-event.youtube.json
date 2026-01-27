@@ -1,0 +1,11 @@
+{
+  "platform": "youtube",
+  "claim_type": "audio",
+  "match_segments": [
+    { "start": "00:02:14", "end": "00:02:56" }
+  ],
+  "enforcement_action": "monetize",
+  "claimant_identifier": "Example Rights Administrator",
+  "raw_notice_text": "Your video contains copyrighted audio. Monetization may be redirected during review."
+}
+

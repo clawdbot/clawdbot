@@ -1,0 +1,11 @@
+{
+  "platform": "tiktok",
+  "claim_type": "audio",
+  "match_segments": [
+    { "start": "00:00:00", "end": "00:00:12" }
+  ],
+  "enforcement_action": "takedown",
+  "claimant_identifier": "Copyright Reporter",
+  "raw_notice_text": "This post was removed due to a copyright report. You may be able to appeal in the app."
+}
+

@@ -1,0 +1,11 @@
+{
+  "platform": "meta",
+  "claim_type": "video",
+  "match_segments": [
+    { "start": "00:00:10", "end": "00:00:35" }
+  ],
+  "enforcement_action": "restrict",
+  "claimant_identifier": "Rights Manager Partner",
+  "raw_notice_text": "Your video may include content that matches a reference file. Visibility may be limited."
+}
+
