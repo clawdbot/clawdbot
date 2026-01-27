@@ -1,6 +1,6 @@
 import type { AgentMailClient } from "agentmail";
 
-import type { AgentMailConfig, FilterResult } from "./utils.js";
+import type { AgentMailConfig } from "./utils.js";
 
 /**
  * Checks if a sender email matches any entry in a list.
@@ -23,69 +23,36 @@ export function matchesList(senderEmail: string, list: string[]): boolean {
 }
 
 /**
- * Determines the filter result for a sender based on allowlist/blocklist.
+ * Determines if a sender is allowed based on allowFrom config.
  *
  * Logic:
- * 1. If sender is on blocklist → blocked
- * 2. If sender is on allowlist → allowed
- * 3. If allowlist is empty and not blocked → allowed (open mode)
- * 4. If allowlist is non-empty and sender not on it → not allowed
+ * 1. If allowFrom is empty → allowed (open mode)
+ * 2. If sender matches allowFrom → allowed
+ * 3. Otherwise → not allowed
  */
-export function checkSenderFilter(
+export function checkSenderAllowed(
   senderEmail: string,
-  config: Pick<AgentMailConfig, "allowlist" | "blocklist">,
-): FilterResult {
-  const { allowlist = [], blocklist = [] } = config;
+  config: Pick<AgentMailConfig, "allowFrom">,
+): boolean {
+  const { allowFrom = [] } = config;
 
-  // Check blocklist first
-  if (matchesList(senderEmail, blocklist)) {
-    return { allowed: false, blocked: true, label: "blocked" };
+  // Open mode: all senders allowed when allowFrom is empty
+  if (allowFrom.length === 0) {
+    return true;
   }
 
-  // Check allowlist
-  if (allowlist.length === 0) {
-    // Open mode: all non-blocked senders are allowed
-    return { allowed: true, blocked: false, label: "allowed" };
-  }
-
-  if (matchesList(senderEmail, allowlist)) {
-    return { allowed: true, blocked: false, label: "allowed" };
-  }
-
-  // Not on allowlist and allowlist is non-empty
-  return { allowed: false, blocked: false, label: null };
+  return matchesList(senderEmail, allowFrom);
 }
 
 /**
- * Labels a message via the AgentMail API.
+ * Labels a message as "allowed" via the AgentMail API.
  */
-export async function labelMessage(
+export async function labelMessageAllowed(
   client: AgentMailClient,
   inboxId: string,
   messageId: string,
-  label: "allowed" | "blocked",
 ): Promise<void> {
   await client.inboxes.messages.update(inboxId, messageId, {
-    addLabels: [label],
+    addLabels: ["allowed"],
   });
-}
-
-/**
- * Processes an incoming message and applies filtering.
- * Returns the filter result and labels the message if needed.
- */
-export async function filterAndLabelMessage(
-  client: AgentMailClient,
-  inboxId: string,
-  messageId: string,
-  senderEmail: string,
-  config: Pick<AgentMailConfig, "allowlist" | "blocklist">,
-): Promise<FilterResult> {
-  const result = checkSenderFilter(senderEmail, config);
-
-  if (result.label) {
-    await labelMessage(client, inboxId, messageId, result.label);
-  }
-
-  return result;
 }

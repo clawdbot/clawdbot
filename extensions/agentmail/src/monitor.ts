@@ -5,7 +5,7 @@ import { registerPluginHttpRoute } from "clawdbot/plugin-sdk";
 import { resolveAgentMailAccount, resolveCredentials } from "./accounts.js";
 import { getAgentMailClient } from "./client.js";
 import { getAgentMailRuntime } from "./runtime.js";
-import { filterAndLabelMessage } from "./filtering.js";
+import { checkSenderAllowed, labelMessageAllowed } from "./filtering.js";
 import { extractMessageBody, fetchFormattedThread } from "./thread.js";
 import { parseEmailFromAddress, parseNameFromAddress } from "./utils.js";
 import type { CoreConfig, MessageReceivedEvent } from "./utils.js";
@@ -111,8 +111,7 @@ export async function monitorAgentMailProvider(
   }
 
   const client = getAgentMailClient(apiKey);
-  const allowlist = agentmailConfig?.allowlist ?? [];
-  const blocklist = agentmailConfig?.blocklist ?? [];
+  const allowFrom = agentmailConfig?.allowFrom ?? [];
 
   recordState(accountId, {
     running: true,
@@ -152,20 +151,15 @@ export async function monitorAgentMailProvider(
       logVerbose(`agentmail: received message from ${senderEmail}`);
 
       // Apply sender filtering
-      const filterResult = await filterAndLabelMessage(
-        client,
-        inboxId,
-        message.messageId,
-        senderEmail,
-        { allowlist, blocklist }
-      );
+      const allowed = checkSenderAllowed(senderEmail, { allowFrom });
 
-      if (!filterResult.allowed) {
-        logVerbose(
-          `agentmail: sender ${senderEmail} not allowed (blocked=${filterResult.blocked})`
-        );
+      if (!allowed) {
+        logVerbose(`agentmail: sender ${senderEmail} not in allowFrom`);
         return sendJson(res, 200, { ok: true, filtered: true });
       }
+
+      // Label message as allowed
+      await labelMessageAllowed(client, inboxId, message.messageId);
 
       recordState(accountId, { lastInboundAt: Date.now() });
 

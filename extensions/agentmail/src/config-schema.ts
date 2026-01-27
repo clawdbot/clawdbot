@@ -17,8 +17,6 @@ export const AgentMailConfigSchema = z.object({
   webhookUrl: z.string().optional(),
   /** Custom webhook path for receiving emails (default: /webhooks/agentmail). */
   webhookPath: z.string().optional(),
-  /** Allowlist of email addresses and/or domains. */
-  allowlist: z.array(z.string()).optional(),
-  /** Blocklist of email addresses and/or domains. */
-  blocklist: z.array(z.string()).optional(),
+  /** Allowed sender emails/domains. Empty = allow all. */
+  allowFrom: z.array(z.string()).optional(),
 });

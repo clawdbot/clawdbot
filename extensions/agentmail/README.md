@@ -50,7 +50,7 @@ Register a webhook in the AgentMail dashboard:
 
 - Webhook-based inbound email handling
 - Full thread context for conversation history
-- Sender allowlist/blocklist filtering
+- Sender allowFrom filtering
 - Attachment metadata with on-demand download URLs
 - Interactive onboarding with inbox creation
 

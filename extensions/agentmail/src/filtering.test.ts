@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkSenderFilter, matchesList } from "./filtering.js";
+import { checkSenderAllowed, matchesList } from "./filtering.js";
 
 describe("matchesList", () => {
   it("returns false for empty list", () => {
@@ -32,44 +32,32 @@ describe("matchesList", () => {
   });
 });
 
-describe("checkSenderFilter", () => {
-  it("blocks sender on blocklist", () => {
-    const result = checkSenderFilter("spam@bad.com", {
-      blocklist: ["bad.com"],
-      allowlist: [],
+describe("checkSenderAllowed", () => {
+  it("allows sender on allowFrom", () => {
+    const result = checkSenderAllowed("friend@good.com", {
+      allowFrom: ["good.com"],
     });
-    expect(result).toEqual({ allowed: false, blocked: true, label: "blocked" });
+    expect(result).toBe(true);
   });
 
-  it("allows sender on allowlist", () => {
-    const result = checkSenderFilter("friend@good.com", {
-      blocklist: [],
-      allowlist: ["good.com"],
+  it("allows all in open mode (empty allowFrom)", () => {
+    const result = checkSenderAllowed("anyone@anywhere.com", {
+      allowFrom: [],
     });
-    expect(result).toEqual({ allowed: true, blocked: false, label: "allowed" });
+    expect(result).toBe(true);
   });
 
-  it("allows all non-blocked in open mode (empty allowlist)", () => {
-    const result = checkSenderFilter("anyone@anywhere.com", {
-      blocklist: [],
-      allowlist: [],
+  it("rejects sender not on non-empty allowFrom", () => {
+    const result = checkSenderAllowed("stranger@unknown.com", {
+      allowFrom: ["trusted.com"],
     });
-    expect(result).toEqual({ allowed: true, blocked: false, label: "allowed" });
+    expect(result).toBe(false);
   });
 
-  it("rejects sender not on non-empty allowlist", () => {
-    const result = checkSenderFilter("stranger@unknown.com", {
-      blocklist: [],
-      allowlist: ["trusted.com"],
+  it("matches exact email in allowFrom", () => {
+    const result = checkSenderAllowed("user@example.com", {
+      allowFrom: ["user@example.com"],
     });
-    expect(result).toEqual({ allowed: false, blocked: false, label: null });
-  });
-
-  it("blocklist takes precedence over allowlist", () => {
-    const result = checkSenderFilter("user@both.com", {
-      blocklist: ["both.com"],
-      allowlist: ["both.com"],
-    });
-    expect(result).toEqual({ allowed: false, blocked: true, label: "blocked" });
+    expect(result).toBe(true);
   });
 });

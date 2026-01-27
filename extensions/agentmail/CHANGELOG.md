@@ -8,7 +8,7 @@
 - Email channel integration via AgentMail API
 - Webhook-based inbound message handling
 - Full thread context fetching for conversation history
-- Sender allowlist and blocklist filtering with automatic labeling
+- Sender allowFrom filtering (consistent with other channels)
 - Attachment metadata in thread context
 - Agent tool for fetching attachment download URLs on demand
 - Interactive onboarding flow with inbox creation support

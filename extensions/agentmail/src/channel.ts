@@ -69,8 +69,7 @@ export const agentmailPlugin: ChannelPlugin<ResolvedAgentMailAccount> = {
           "token",
           "emailAddress",
           "webhookPath",
-          "allowlist",
-          "blocklist",
+          "allowFrom",
         ],
       }),
     isConfigured: (account) => account.configured,
@@ -82,7 +81,7 @@ export const agentmailPlugin: ChannelPlugin<ResolvedAgentMailAccount> = {
       emailAddress: account.inboxId,
     }),
     resolveAllowFrom: ({ cfg }) =>
-      ((cfg as CoreConfig).channels?.agentmail?.allowlist ?? []).map((entry) =>
+      ((cfg as CoreConfig).channels?.agentmail?.allowFrom ?? []).map((entry) =>
         String(entry)
       ),
     formatAllowFrom: ({ allowFrom }) =>
@@ -93,21 +92,21 @@ export const agentmailPlugin: ChannelPlugin<ResolvedAgentMailAccount> = {
 
   security: {
     resolveDmPolicy: ({ account }) => ({
-      policy: "open", // AgentMail uses allowlist/blocklist instead of pairing
-      allowFrom: account.config.allowlist ?? [],
-      policyPath: "channels.agentmail.allowlist",
-      allowFromPath: "channels.agentmail.allowlist",
+      policy: "open",
+      allowFrom: account.config.allowFrom ?? [],
+      policyPath: "channels.agentmail.allowFrom",
+      allowFromPath: "channels.agentmail.allowFrom",
       approveHint:
-        "Add email addresses or domains to channels.agentmail.allowlist",
+        "Add email addresses or domains to channels.agentmail.allowFrom",
       normalizeEntry: (raw) => raw.toLowerCase().trim(),
     }),
     collectWarnings: ({ account }) => {
       const warnings: string[] = [];
-      const { allowlist = [], blocklist = [] } = account.config;
+      const { allowFrom = [] } = account.config;
 
-      if (allowlist.length === 0 && blocklist.length === 0) {
+      if (allowFrom.length === 0) {
         warnings.push(
-          "- AgentMail: No allowlist or blocklist configured. All senders will be allowed."
+          "- AgentMail: No allowFrom configured. All senders will be allowed."
         );
       }
 

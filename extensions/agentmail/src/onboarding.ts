@@ -263,13 +263,13 @@ export const agentmailOnboardingAdapter: ChannelOnboardingAdapter = {
     // Save webhook config
     next = updateAgentMailConfig(next, { webhookUrl, webhookPath });
 
-    // Ask about allowlist
-    const addAllowlist = await prompter.confirm({
-      message: "Add senders to allowlist? (Empty = allow all non-blocked)",
+    // Ask about allowFrom
+    const addAllowFrom = await prompter.confirm({
+      message: "Add senders to allowFrom? (Empty = allow all)",
       initialValue: false,
     });
 
-    if (addAllowlist) {
+    if (addAllowFrom) {
       const entry = String(
         await prompter.text({
           message:
@@ -279,28 +279,8 @@ export const agentmailOnboardingAdapter: ChannelOnboardingAdapter = {
 
       if (entry) {
         const existing =
-          (next as CoreConfig).channels?.agentmail?.allowlist ?? [];
-        next = updateAgentMailConfig(next, { allowlist: [...existing, entry] });
-      }
-    }
-
-    // Ask about blocklist
-    const addBlocklist = await prompter.confirm({
-      message: "Add senders to blocklist? (Block spam/unwanted emails)",
-      initialValue: false,
-    });
-
-    if (addBlocklist) {
-      const entry = String(
-        await prompter.text({
-          message: "Email or domain to block (e.g., spam@bad.com or bad.com)",
-        })
-      ).trim();
-
-      if (entry) {
-        const existing =
-          (next as CoreConfig).channels?.agentmail?.blocklist ?? [];
-        next = updateAgentMailConfig(next, { blocklist: [...existing, entry] });
+          (next as CoreConfig).channels?.agentmail?.allowFrom ?? [];
+        next = updateAgentMailConfig(next, { allowFrom: [...existing, entry] });
       }
     }
 

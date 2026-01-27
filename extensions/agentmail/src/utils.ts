@@ -34,13 +34,6 @@ export type Message = AgentMail.messages.Message;
 /** Re-export SDK webhook event type. */
 export type MessageReceivedEvent = AgentMail.events.MessageReceivedEvent;
 
-/** Result of sender filtering check. */
-export type FilterResult = {
-  allowed: boolean;
-  blocked: boolean;
-  label: "allowed" | "blocked" | null;
-};
-
 /** Formats a date as a UTC string. */
 export function formatUtcDate(date: Date | string | number): string {
   return new Date(date).toUTCString().replace("GMT", "UTC");

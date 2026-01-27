@@ -83,20 +83,18 @@ Minimal config:
 | `emailAddress` | string   | AgentMail inbox email address to monitor (required)      |
 | `webhookUrl`   | string   | Gateway public base URL (e.g., `https://gw.ngrok.io`)    |
 | `webhookPath`  | string   | Custom webhook path (default: `/webhooks/agentmail`)     |
-| `allowlist`    | string[] | Allowed sender emails/domains                            |
-| `blocklist`    | string[] | Blocked sender emails/domains                            |
+| `allowFrom`    | string[] | Allowed sender emails/domains (empty = allow all)        |
 
 ## Sender Filtering
 
-AgentMail supports allowlist and blocklist filtering for incoming emails. Both lists accept
-email addresses and domains.
+AgentMail uses `allowFrom` to filter incoming emails. The list accepts email addresses and domains.
 
-### Allowlist/Blocklist Logic
+### Filtering Logic
 
-1. If sender is on the blocklist, the message is labeled `blocked` and ignored
-2. If sender is on the allowlist, the message is labeled `allowed` and triggers Clawdbot
-3. If allowlist is empty and sender is not blocked, the message is `allowed` (open mode)
-4. If allowlist is non-empty and sender is not on it, the message is ignored
+1. If `allowFrom` is empty, all senders are allowed (open mode)
+2. If `allowFrom` is non-empty, only matching senders trigger Clawdbot
+3. Allowed messages are labeled `allowed` in AgentMail
+4. Non-matching senders are silently ignored
 
 ### Example Configuration
 
@@ -108,9 +106,7 @@ email addresses and domains.
       token: "am_***",
       emailAddress: "clawd@agentmail.to",
       // Allow specific emails and domains
-      allowlist: ["alice@example.com", "trusted-domain.org"],
-      // Block specific emails and domains
-      blocklist: ["spam@bad.com", "bad-domain.net"],
+      allowFrom: ["alice@example.com", "trusted-domain.org"],
     },
   },
 }
@@ -120,8 +116,7 @@ email addresses and domains.
 
 Domain entries match any email from that domain:
 
-- `example.org` in allowlist allows `alice@example.org`, `bob@example.org`, etc.
-- `bad.com` in blocklist blocks `spam@bad.com`, `anything@bad.com`, etc.
+- `example.org` in allowFrom allows `alice@example.org`, `bob@example.org`, etc.
 
 ## Thread Context
 
@@ -187,6 +182,6 @@ Then register the ngrok URL as your webhook endpoint in the AgentMail dashboard.
 
 ### Sender not allowed
 
-1. Check the `allowlist` and `blocklist` configuration
-2. Verify the sender email matches the expected format
-3. Check if the sender's domain is blocked
+1. Check the `allowFrom` configuration
+2. Verify the sender email matches an entry in allowFrom
+3. Remember: empty allowFrom means all senders are allowed

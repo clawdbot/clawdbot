@@ -77,23 +77,15 @@ describe("updateAgentMailConfig", () => {
     expect(result.channels?.agentmail?.enabled).toBe(true);
   });
 
-  it("adds allowlist", () => {
+  it("adds allowFrom", () => {
     const cfg = {} as never;
     const result: AnyConfig = updateAgentMailConfig(cfg, {
-      allowlist: ["user@example.com", "example.org"],
+      allowFrom: ["user@example.com", "example.org"],
     });
-    expect(result.channels?.agentmail?.allowlist).toEqual([
+    expect(result.channels?.agentmail?.allowFrom).toEqual([
       "user@example.com",
       "example.org",
     ]);
-  });
-
-  it("adds blocklist", () => {
-    const cfg = {} as never;
-    const result: AnyConfig = updateAgentMailConfig(cfg, {
-      blocklist: ["spam@bad.com"],
-    });
-    expect(result.channels?.agentmail?.blocklist).toEqual(["spam@bad.com"]);
   });
 
   it("sets webhookPath", () => {
