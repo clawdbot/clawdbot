@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { Dispatcher, filters } from "@mtcute/dispatcher";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 
 import { createTelegramUserClient } from "../client.js";
@@ -9,6 +8,15 @@ import { getTelegramUserRuntime } from "../runtime.js";
 import { setActiveTelegramUserClient } from "../active-client.js";
 import { createTelegramUserMessageHandler } from "./handler.js";
 import type { CoreConfig } from "../types.js";
+
+type MtcuteDispatcher = typeof import("@mtcute/dispatcher");
+
+let mtcuteDispatcherPromise: Promise<MtcuteDispatcher> | null = null;
+
+async function loadMtcuteDispatcher(): Promise<MtcuteDispatcher> {
+  mtcuteDispatcherPromise ??= import("@mtcute/dispatcher");
+  return mtcuteDispatcherPromise;
+}
 
 export type MonitorTelegramUserOpts = {
   runtime?: RuntimeEnv;
@@ -48,7 +56,7 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
       "Telegram user session missing. Run `clawdbot channels login --channel telegram-user` first.",
     );
   }
-  const client = createTelegramUserClient({ apiId, apiHash, storagePath });
+  const client = await createTelegramUserClient({ apiId, apiHash, storagePath });
   setActiveTelegramUserClient(client);
 
   const stop = async () => {
@@ -66,6 +74,7 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
 
   await client.start();
 
+  const { Dispatcher, filters } = await loadMtcuteDispatcher();
   const dispatcher = Dispatcher.for(client);
   const self = await client.getMe().catch(() => undefined);
   const handleMessage = createTelegramUserMessageHandler({

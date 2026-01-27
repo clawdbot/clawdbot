@@ -39,7 +39,7 @@ export async function loginTelegramUser(params: {
 }) {
   const { apiId, apiHash, storagePath, runtime } = params;
   ensureTelegramUserSessionDir({ sessionPath: storagePath });
-  const client = createTelegramUserClient({ apiId, apiHash, storagePath });
+  const client = await createTelegramUserClient({ apiId, apiHash, storagePath });
   let lastUrl = "";
 
   const passwordEnv = process.env.TELEGRAM_USER_PASSWORD?.trim() || undefined;

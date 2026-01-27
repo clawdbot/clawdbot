@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import type { TelegramClient } from "@mtcute/node";
-import { InputMedia } from "@mtcute/core";
 import type { PollInput } from "clawdbot/plugin-sdk";
 
 import { getTelegramUserRuntime } from "./runtime.js";
@@ -13,6 +12,15 @@ export type TelegramUserSendResult = {
   messageId: string;
   chatId: string;
 };
+
+type MtcuteCore = typeof import("@mtcute/core");
+
+let mtcuteCorePromise: Promise<MtcuteCore> | null = null;
+
+async function loadMtcuteCore(): Promise<MtcuteCore> {
+  mtcuteCorePromise ??= import("@mtcute/core");
+  return mtcuteCorePromise;
+}
 
 type NormalizedPollInput = {
   question: string;
@@ -129,7 +137,7 @@ async function resolveClient(params: {
       "Telegram user session missing. Run `clawdbot channels login --channel telegram-user` first.",
     );
   }
-  const client = createTelegramUserClient({ apiId, apiHash, storagePath });
+  const client = await createTelegramUserClient({ apiId, apiHash, storagePath });
   await client.start();
   return { client, stopOnDone: true };
 }
@@ -180,6 +188,7 @@ export async function sendMediaTelegramUser(
     accountId: opts.accountId,
   });
   try {
+    const { InputMedia } = await loadMtcuteCore();
     const resolved = resolveTargetAndThread(to, opts.threadId);
     const target = resolveTelegramUserPeer(resolved.target);
     const media = await getTelegramUserRuntime().media.loadWebMedia(opts.mediaUrl, opts.maxBytes);
@@ -220,6 +229,7 @@ export async function sendPollTelegramUser(
     accountId: opts.accountId,
   });
   try {
+    const { InputMedia } = await loadMtcuteCore();
     const resolved = resolveTargetAndThread(to, opts.threadId);
     const target = resolveTelegramUserPeer(resolved.target);
     const normalized = normalizePollInput(poll);
