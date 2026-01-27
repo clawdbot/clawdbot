@@ -1,5 +1,5 @@
 import { scot, da } from "@urbit/aura";
-import { markdownToStory, type Story } from "./story.js";
+import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
 export type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
@@ -12,8 +12,19 @@ type SendTextParams = {
   text: string;
 };
 
+type SendStoryParams = {
+  api: TlonPokeApi;
+  fromShip: string;
+  toShip: string;
+  story: Story;
+};
+
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
   const story: Story = markdownToStory(text);
+  return sendDmWithStory({ api, fromShip, toShip, story });
+}
+
+export async function sendDmWithStory({ api, fromShip, toShip, story }: SendStoryParams) {
   const sentAt = Date.now();
   const idUd = scot('ud', da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
@@ -53,6 +64,15 @@ type SendGroupParams = {
   replyToId?: string | null;
 };
 
+type SendGroupStoryParams = {
+  api: TlonPokeApi;
+  fromShip: string;
+  hostShip: string;
+  channelName: string;
+  story: Story;
+  replyToId?: string | null;
+};
+
 export async function sendGroupMessage({
   api,
   fromShip,
@@ -62,6 +82,17 @@ export async function sendGroupMessage({
   replyToId,
 }: SendGroupParams) {
   const story: Story = markdownToStory(text);
+  return sendGroupMessageWithStory({ api, fromShip, hostShip, channelName, story, replyToId });
+}
+
+export async function sendGroupMessageWithStory({
+  api,
+  fromShip,
+  hostShip,
+  channelName,
+  story,
+  replyToId,
+}: SendGroupStoryParams) {
   const sentAt = Date.now();
 
   // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
@@ -126,4 +157,28 @@ export function buildMediaText(text: string | undefined, mediaUrl: string | unde
   if (cleanText && cleanUrl) return `${cleanText}\n${cleanUrl}`;
   if (cleanUrl) return cleanUrl;
   return cleanText;
+}
+
+/**
+ * Build a story with text and optional media (image)
+ */
+export function buildMediaStory(text: string | undefined, mediaUrl: string | undefined): Story {
+  const story: Story = [];
+  const cleanText = text?.trim() ?? "";
+  const cleanUrl = mediaUrl?.trim() ?? "";
+  
+  // Add text content if present
+  if (cleanText) {
+    story.push(...markdownToStory(cleanText));
+  }
+  
+  // Add image block if URL looks like an image
+  if (cleanUrl && isImageUrl(cleanUrl)) {
+    story.push(createImageBlock(cleanUrl, ""));
+  } else if (cleanUrl) {
+    // For non-image URLs, add as a link
+    story.push({ inline: [{ link: { href: cleanUrl, content: cleanUrl } }] });
+  }
+  
+  return story.length > 0 ? story : [{ inline: [""] }];
 }

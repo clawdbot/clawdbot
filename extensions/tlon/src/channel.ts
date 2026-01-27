@@ -13,7 +13,7 @@ import {
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { ensureUrbitConnectPatched, Urbit } from "./urbit/http-api.js";
-import { buildMediaText, sendDm, sendGroupMessage } from "./urbit/send.js";
+import { buildMediaText, buildMediaStory, sendDm, sendGroupMessage, sendDmWithStory, sendGroupMessageWithStory } from "./urbit/send.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonOnboardingAdapter } from "./onboarding.js";
@@ -154,15 +154,50 @@ const tlonOutbound: ChannelOutboundAdapter = {
     }
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
-    const mergedText = buildMediaText(text, mediaUrl);
-    return await tlonOutbound.sendText({
-      cfg,
-      to,
-      text: mergedText,
-      accountId,
-      replyToId,
-      threadId,
+    const account = resolveTlonAccount(cfg as ClawdbotConfig, accountId ?? undefined);
+    if (!account.configured || !account.ship || !account.url || !account.code) {
+      throw new Error("Tlon account not configured");
+    }
+
+    const parsed = parseTlonTarget(to);
+    if (!parsed) {
+      throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
+    }
+
+    const api = await createHttpPokeApi({
+      url: account.url,
+      ship: account.ship,
+      code: account.code,
     });
+
+    try {
+      const fromShip = normalizeShip(account.ship);
+      const story = buildMediaStory(text, mediaUrl);
+      
+      if (parsed.kind === "dm") {
+        return await sendDmWithStory({
+          api,
+          fromShip,
+          toShip: parsed.ship,
+          story,
+        });
+      }
+      const replyId = (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
+      return await sendGroupMessageWithStory({
+        api,
+        fromShip,
+        hostShip: parsed.hostShip,
+        channelName: parsed.channelName,
+        story,
+        replyToId: replyId,
+      });
+    } finally {
+      try {
+        await api.delete();
+      } catch {
+        // ignore cleanup errors
+      }
+    }
   },
 };
 

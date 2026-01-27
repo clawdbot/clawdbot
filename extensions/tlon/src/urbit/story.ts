@@ -96,6 +96,15 @@ function parseInlineMarkdown(text: string): StoryInline[] {
       continue;
     }
 
+    // Markdown images: ![alt](url)
+    const imageMatch = remaining.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
+    if (imageMatch) {
+      // Return a special marker that will be hoisted to a block
+      result.push({ __image: { src: imageMatch[2], alt: imageMatch[1] } } as unknown as StoryInline);
+      remaining = remaining.slice(imageMatch[0].length);
+      continue;
+    }
+
     // Plain URL detection
     const urlMatch = remaining.match(/^(https?:\/\/[^\s<>"\]]+)/);
     if (urlMatch) {
@@ -142,6 +151,44 @@ function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
     }
   }
   return result;
+}
+
+/**
+ * Create an image block
+ */
+export function createImageBlock(src: string, alt: string = "", height: number = 0, width: number = 0): StoryVerse {
+  return {
+    block: {
+      image: { src, height, width, alt },
+    },
+  };
+}
+
+/**
+ * Check if URL looks like an image
+ */
+export function isImageUrl(url: string): boolean {
+  const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)(\?.*)?$/i;
+  return imageExtensions.test(url);
+}
+
+/**
+ * Process inlines and extract any image markers into blocks
+ */
+function processInlinesForImages(inlines: StoryInline[]): { inlines: StoryInline[]; imageBlocks: StoryVerse[] } {
+  const cleanInlines: StoryInline[] = [];
+  const imageBlocks: StoryVerse[] = [];
+  
+  for (const inline of inlines) {
+    if (typeof inline === "object" && "__image" in inline) {
+      const img = (inline as unknown as { __image: { src: string; alt: string } }).__image;
+      imageBlocks.push(createImageBlock(img.src, img.alt));
+    } else {
+      cleanInlines.push(inline);
+    }
+  }
+  
+  return { inlines: cleanInlines, imageBlocks };
 }
 
 /**
@@ -244,7 +291,14 @@ export function markdownToStory(markdown: string): Story {
           withBreaks.push(inline);
         }
       }
-      story.push({ inline: withBreaks });
+      
+      // Extract any images from inlines and add as separate blocks
+      const { inlines: cleanInlines, imageBlocks } = processInlinesForImages(withBreaks);
+      
+      if (cleanInlines.length > 0) {
+        story.push({ inline: cleanInlines });
+      }
+      story.push(...imageBlocks);
     }
   }
 
