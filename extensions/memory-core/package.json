@@ -9,6 +9,6 @@
     ]
   },
   "peerDependencies": {
-    "clawdbot": ">=2026.1.25"
+    "moltbot": "*"
   }
 }
