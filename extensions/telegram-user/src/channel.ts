@@ -58,6 +58,12 @@ type TelegramUserSetupInput = ChannelSetupInput & {
   apiHash?: string;
 };
 
+function parseReplyToId(replyToId?: string | null): number | undefined {
+  if (!replyToId) return undefined;
+  const parsed = Number.parseInt(replyToId, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function normalizeTelegramUserGroupKey(raw?: string | null): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim();
@@ -238,16 +244,20 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) =>
       getTelegramUserRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
-    sendText: async ({ to, text, accountId, threadId }) => {
+    sendText: async ({ to, text, accountId, threadId, replyToId }) => {
+      const parsedReplyToId = parseReplyToId(replyToId);
       const result = await sendMessageTelegramUser(to, text, {
         accountId: accountId ?? undefined,
         threadId,
+        ...(parsedReplyToId ? { replyToId: parsedReplyToId } : {}),
       });
       return { channel: "telegram-user", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, threadId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, threadId, replyToId }) => {
+      const parsedReplyToId = parseReplyToId(replyToId);
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -261,14 +271,17 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         accountId: accountId ?? undefined,
         mediaUrl,
         threadId,
+        ...(parsedReplyToId ? { replyToId: parsedReplyToId } : {}),
         ...(maxBytes ? { maxBytes } : {}),
       });
       return { channel: "telegram-user", ...result };
     },
-    sendPoll: async ({ to, poll, accountId, threadId }) => {
+    sendPoll: async ({ to, poll, accountId, threadId, replyToId }) => {
+      const parsedReplyToId = parseReplyToId(replyToId);
       const result = await sendPollTelegramUser(to, poll, {
         accountId: accountId ?? undefined,
         threadId,
+        ...(parsedReplyToId ? { replyToId: parsedReplyToId } : {}),
       });
       return { channel: "telegram-user", ...result };
     },
