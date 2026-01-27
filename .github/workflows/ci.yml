@@ -156,6 +156,10 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
+      - name: Prebuild A2UI bundle (bun tests)
+        if: ${{ matrix.runtime == 'bun' && matrix.task == 'test' }}
+        run: pnpm canvas:a2ui:bundle
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 

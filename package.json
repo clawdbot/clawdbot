@@ -139,7 +139,7 @@
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
-    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
+    "canvas:a2ui:bundle": "node --import tsx scripts/bundle-a2ui.ts", 
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500"
   },
   "keywords": [],
