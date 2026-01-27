@@ -6,8 +6,8 @@
     {
       "layers" : [
         {
-          "image-name" : "clawdbot-mac.png",
-          "name" : "clawdbot-mac",
+          "image-name" : "moltbot-mac.png",
+          "name" : "moltbot-mac",
           "position" : {
             "scale" : 1.07,
             "translation-in-points" : [

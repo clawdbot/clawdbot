@@ -14,6 +14,7 @@ export type AgentEventPayload = {
 export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
+  isHeartbeat?: boolean;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -33,6 +34,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
+  }
+  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
+    existing.isHeartbeat = context.isHeartbeat;
   }
 }
 

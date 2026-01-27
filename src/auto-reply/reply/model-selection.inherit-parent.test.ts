@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
@@ -21,7 +21,7 @@ const makeEntry = (overrides: Record<string, unknown> = {}) => ({
 });
 
 async function resolveState(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   sessionEntry: ReturnType<typeof makeEntry>;
   sessionStore: Record<string, ReturnType<typeof makeEntry>>;
   sessionKey: string;
@@ -44,7 +44,7 @@ async function resolveState(params: {
 
 describe("createModelSelectionState parent inheritance", () => {
   it("inherits parent override from explicit parentSessionKey", async () => {
-    const cfg = {} as ClawdbotConfig;
+    const cfg = {} as MoltbotConfig;
     const parentKey = "agent:main:discord:channel:c1";
     const sessionKey = "agent:main:discord:channel:c1:thread:123";
     const parentEntry = makeEntry({
@@ -70,7 +70,7 @@ describe("createModelSelectionState parent inheritance", () => {
   });
 
   it("derives parent key from topic session suffix", async () => {
-    const cfg = {} as ClawdbotConfig;
+    const cfg = {} as MoltbotConfig;
     const parentKey = "agent:main:telegram:group:123";
     const sessionKey = "agent:main:telegram:group:123:topic:99";
     const parentEntry = makeEntry({
@@ -95,7 +95,7 @@ describe("createModelSelectionState parent inheritance", () => {
   });
 
   it("prefers child override over parent", async () => {
-    const cfg = {} as ClawdbotConfig;
+    const cfg = {} as MoltbotConfig;
     const parentKey = "agent:main:telegram:group:123";
     const sessionKey = "agent:main:telegram:group:123:topic:99";
     const parentEntry = makeEntry({
@@ -131,7 +131,7 @@ describe("createModelSelectionState parent inheritance", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     const parentKey = "agent:main:slack:channel:c1";
     const sessionKey = "agent:main:slack:channel:c1:thread:123";
     const parentEntry = makeEntry({

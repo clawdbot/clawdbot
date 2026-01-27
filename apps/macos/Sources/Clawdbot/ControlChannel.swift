@@ -1,5 +1,5 @@
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotKit
+import MoltbotProtocol
 import Foundation
 import Observation
 import SwiftUI
@@ -20,7 +20,7 @@ struct ControlAgentEvent: Codable, Sendable, Identifiable {
     let seq: Int
     let stream: String
     let ts: Double
-    let data: [String: ClawdbotProtocol.AnyCodable]
+    let data: [String: MoltbotProtocol.AnyCodable]
     let summary: String?
 }
 
@@ -163,8 +163,8 @@ final class ControlChannel {
         timeoutMs: Double? = nil) async throws -> Data
     {
         do {
-            let rawParams = params?.reduce(into: [String: ClawdbotKit.AnyCodable]()) {
-                $0[$1.key] = ClawdbotKit.AnyCodable($1.value.base)
+            let rawParams = params?.reduce(into: [String: MoltbotKit.AnyCodable]()) {
+                $0[$1.key] = MoltbotKit.AnyCodable($1.value.base)
             }
             let data = try await GatewayConnection.shared.request(
                 method: method,
@@ -400,20 +400,20 @@ final class ControlChannel {
     }
 
     private static func bridgeToProtocolArgs(
-        _ value: ClawdbotProtocol.AnyCodable?) -> [String: ClawdbotProtocol.AnyCodable]?
+        _ value: MoltbotProtocol.AnyCodable?) -> [String: MoltbotProtocol.AnyCodable]?
     {
         guard let value else { return nil }
-        if let dict = value.value as? [String: ClawdbotProtocol.AnyCodable] {
+        if let dict = value.value as? [String: MoltbotProtocol.AnyCodable] {
             return dict
         }
-        if let dict = value.value as? [String: ClawdbotKit.AnyCodable],
+        if let dict = value.value as? [String: MoltbotKit.AnyCodable],
            let data = try? JSONEncoder().encode(dict),
-           let decoded = try? JSONDecoder().decode([String: ClawdbotProtocol.AnyCodable].self, from: data)
+           let decoded = try? JSONDecoder().decode([String: MoltbotProtocol.AnyCodable].self, from: data)
         {
             return decoded
         }
         if let data = try? JSONEncoder().encode(value),
-           let decoded = try? JSONDecoder().decode([String: ClawdbotProtocol.AnyCodable].self, from: data)
+           let decoded = try? JSONDecoder().decode([String: MoltbotProtocol.AnyCodable].self, from: data)
         {
             return decoded
         }
@@ -422,6 +422,6 @@ final class ControlChannel {
 }
 
 extension Notification.Name {
-    static let controlHeartbeat = Notification.Name("clawdbot.control.heartbeat")
-    static let controlAgentEvent = Notification.Name("clawdbot.control.agent")
+    static let controlHeartbeat = Notification.Name("moltbot.control.heartbeat")
+    static let controlAgentEvent = Notification.Name("moltbot.control.agent")
 }

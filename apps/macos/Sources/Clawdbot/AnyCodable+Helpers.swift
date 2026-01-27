@@ -1,10 +1,10 @@
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotKit
+import MoltbotProtocol
 import Foundation
 
-// Prefer the ClawdbotKit wrapper to keep gateway request payloads consistent.
-typealias AnyCodable = ClawdbotKit.AnyCodable
-typealias InstanceIdentity = ClawdbotKit.InstanceIdentity
+// Prefer the MoltbotKit wrapper to keep gateway request payloads consistent.
+typealias AnyCodable = MoltbotKit.AnyCodable
+typealias InstanceIdentity = MoltbotKit.InstanceIdentity
 
 extension AnyCodable {
     var stringValue: String? { self.value as? String }
@@ -26,19 +26,19 @@ extension AnyCodable {
     }
 }
 
-extension ClawdbotProtocol.AnyCodable {
+extension MoltbotProtocol.AnyCodable {
     var stringValue: String? { self.value as? String }
     var boolValue: Bool? { self.value as? Bool }
     var intValue: Int? { self.value as? Int }
     var doubleValue: Double? { self.value as? Double }
-    var dictionaryValue: [String: ClawdbotProtocol.AnyCodable]? { self.value as? [String: ClawdbotProtocol.AnyCodable] }
-    var arrayValue: [ClawdbotProtocol.AnyCodable]? { self.value as? [ClawdbotProtocol.AnyCodable] }
+    var dictionaryValue: [String: MoltbotProtocol.AnyCodable]? { self.value as? [String: MoltbotProtocol.AnyCodable] }
+    var arrayValue: [MoltbotProtocol.AnyCodable]? { self.value as? [MoltbotProtocol.AnyCodable] }
 
     var foundationValue: Any {
         switch self.value {
-        case let dict as [String: ClawdbotProtocol.AnyCodable]:
+        case let dict as [String: MoltbotProtocol.AnyCodable]:
             dict.mapValues { $0.foundationValue }
-        case let array as [ClawdbotProtocol.AnyCodable]:
+        case let array as [MoltbotProtocol.AnyCodable]:
             array.map(\.foundationValue)
         default:
             self.value

@@ -1,4 +1,4 @@
-name: Clawdbot
+name: Moltbot
 options:
   bundleIdPrefix: com.clawdbot
   deploymentTarget:
@@ -10,33 +10,33 @@ settings:
     SWIFT_VERSION: "6.0"
 
 packages:
-  ClawdbotKit:
+  MoltbotKit:
     path: ../shared/ClawdbotKit
   Swabble:
     path: ../../Swabble
 
 schemes:
-  Clawdbot:
+  Moltbot:
     shared: true
     build:
       targets:
-        Clawdbot: all
+        Moltbot: all
     test:
       targets:
-        - ClawdbotTests
+        - MoltbotTests
 
 targets:
-  Clawdbot:
+  Moltbot:
     type: application
     platform: iOS
     sources:
       - path: Sources
     dependencies:
-      - package: ClawdbotKit
-      - package: ClawdbotKit
-        product: ClawdbotChatUI
-      - package: ClawdbotKit
-        product: ClawdbotProtocol
+      - package: MoltbotKit
+      - package: MoltbotKit
+        product: MoltbotChatUI
+      - package: MoltbotKit
+        product: MoltbotProtocol
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -79,25 +79,25 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Clawdbot
+        CFBundleDisplayName: Moltbot
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.1.25"
-        CFBundleVersion: "20260125"
+        CFBundleShortVersionString: "2026.1.26"
+        CFBundleVersion: "20260126"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: Clawdbot discovers and connects to your Clawdbot gateway on the local network.
+        NSLocalNetworkUsageDescription: Moltbot discovers and connects to your Moltbot gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _clawdbot-gw._tcp
-        NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the gateway.
-        NSLocationWhenInUseUsageDescription: Clawdbot uses your location when you allow location sharing.
-        NSLocationAlwaysAndWhenInUseUsageDescription: Clawdbot can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: Clawdbot needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: Clawdbot uses on-device speech recognition for voice wake.
+          - _moltbot-gw._tcp
+        NSCameraUsageDescription: Moltbot can capture photos or short video clips when requested via the gateway.
+        NSLocationWhenInUseUsageDescription: Moltbot uses your location when you allow location sharing.
+        NSLocationAlwaysAndWhenInUseUsageDescription: Moltbot can share your location in the background when you enable Always.
+        NSMicrophoneUsageDescription: Moltbot needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: Moltbot uses on-device speech recognition for voice wake.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -109,13 +109,13 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
-  ClawdbotTests:
+  MoltbotTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: Clawdbot
+      - target: Moltbot
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -124,11 +124,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios.tests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdbot.app/Clawdbot"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Moltbot.app/Moltbot"
         BUNDLE_LOADER: "$(TEST_HOST)"
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: ClawdbotTests
-        CFBundleShortVersionString: "2026.1.25"
-        CFBundleVersion: "20260125"
+        CFBundleDisplayName: MoltbotTests
+        CFBundleShortVersionString: "2026.1.26"
+        CFBundleVersion: "20260126"

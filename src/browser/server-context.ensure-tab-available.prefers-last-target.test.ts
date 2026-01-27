@@ -62,8 +62,6 @@ describe("browser server-context ensureTabAvailable", () => {
       port: 0,
       resolved: {
         enabled: true,
-        controlUrl: "http://127.0.0.1:18791",
-        controlHost: "127.0.0.1",
         controlPort: 18791,
         cdpProtocol: "http",
         cdpHost: "127.0.0.1",
@@ -121,8 +119,6 @@ describe("browser server-context ensureTabAvailable", () => {
       port: 0,
       resolved: {
         enabled: true,
-        controlUrl: "http://127.0.0.1:18791",
-        controlHost: "127.0.0.1",
         controlPort: 18791,
         cdpProtocol: "http",
         cdpHost: "127.0.0.1",
@@ -170,8 +166,6 @@ describe("browser server-context ensureTabAvailable", () => {
       port: 0,
       resolved: {
         enabled: true,
-        controlUrl: "http://127.0.0.1:18791",
-        controlHost: "127.0.0.1",
         controlPort: 18791,
         cdpProtocol: "http",
         cdpHost: "127.0.0.1",

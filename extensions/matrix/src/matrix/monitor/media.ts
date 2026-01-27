@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 import { getMatrixRuntime } from "../../runtime.js";
 
@@ -22,7 +22,7 @@ async function fetchMatrixMediaBuffer(params: {
   mxcUrl: string;
   maxBytes: number;
 }): Promise<{ buffer: Buffer; headerType?: string } | null> {
-  // matrix-bot-sdk provides mxcToHttp helper
+  // @vector-im/matrix-bot-sdk provides mxcToHttp helper
   const url = params.client.mxcToHttp(params.mxcUrl);
   if (!url) return null;
 
@@ -40,7 +40,7 @@ async function fetchMatrixMediaBuffer(params: {
 
 /**
  * Download and decrypt encrypted media from a Matrix room.
- * Uses matrix-bot-sdk's decryptMedia which handles both download and decryption.
+ * Uses @vector-im/matrix-bot-sdk's decryptMedia which handles both download and decryption.
  */
 async function fetchEncryptedMediaBuffer(params: {
   client: MatrixClient;

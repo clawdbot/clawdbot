@@ -115,6 +115,9 @@ body::after {
 }
 
 .shell {
+  position: sticky;
+  top: 0;
+  z-index: 100;
   padding: 22px 16px 10px;
 }
 

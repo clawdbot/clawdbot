@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -22,7 +22,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "clawdbot-cron-" });
+  return withTempHomeBase(fn, { prefix: "moltbot-cron-" });
 }
 
 async function writeSessionStore(home: string) {
@@ -57,9 +57,9 @@ async function readSessionEntry(storePath: string, key: string) {
 function makeCfg(
   home: string,
   storePath: string,
-  overrides: Partial<ClawdbotConfig> = {},
-): ClawdbotConfig {
-  const base: ClawdbotConfig = {
+  overrides: Partial<MoltbotConfig> = {},
+): MoltbotConfig {
+  const base: MoltbotConfig = {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
@@ -67,7 +67,7 @@ function makeCfg(
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } as ClawdbotConfig;
+  } as MoltbotConfig;
   return { ...base, ...overrides };
 }
 
@@ -305,6 +305,80 @@ describe("runCronIsolatedAgentTurn", () => {
       };
       expect(call?.provider).toBe("openrouter");
       expect(call?.model).toBe("meta-llama/llama-3.3-70b:free");
+    });
+  });
+
+  it("wraps external hook content by default", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "Hello" }),
+        message: "Hello",
+        sessionKey: "hook:gmail:msg-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      expect(call?.prompt).toContain("EXTERNAL, UNTRUSTED");
+      expect(call?.prompt).toContain("Hello");
+    });
+  });
+
+  it("skips external content wrapping when hooks.gmail opts out", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          hooks: {
+            gmail: {
+              allowUnsafeExternalContent: true,
+            },
+          },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "Hello" }),
+        message: "Hello",
+        sessionKey: "hook:gmail:msg-2",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      expect(call?.prompt).not.toContain("EXTERNAL, UNTRUSTED");
+      expect(call?.prompt).toContain("Hello");
     });
   });
 

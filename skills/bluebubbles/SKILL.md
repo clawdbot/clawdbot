@@ -1,6 +1,6 @@
 ---
 name: bluebubbles
-description: Build or update the BlueBubbles external channel plugin for Clawdbot (extension package, REST send/probe, webhook inbound).
+description: Build or update the BlueBubbles external channel plugin for Moltbot (extension package, REST send/probe, webhook inbound).
 ---
 
 # BlueBubbles plugin

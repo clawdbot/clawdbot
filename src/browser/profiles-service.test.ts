@@ -49,9 +49,7 @@ function createCtx(resolved: BrowserServerState["resolved"]) {
 
 describe("BrowserProfilesService", () => {
   it("allocates next local port for new profiles", async () => {
-    const resolved = resolveBrowserConfig({
-      controlUrl: "http://127.0.0.1:18791",
-    });
+    const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
 
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
@@ -66,9 +64,7 @@ describe("BrowserProfilesService", () => {
   });
 
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({
-      controlUrl: "http://127.0.0.1:18791",
-    });
+    const resolved = resolveBrowserConfig({});
     const { ctx } = createCtx(resolved);
 
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
@@ -97,7 +93,6 @@ describe("BrowserProfilesService", () => {
 
   it("deletes remote profiles without stopping or removing local data", async () => {
     const resolved = resolveBrowserConfig({
-      controlUrl: "http://127.0.0.1:18791",
       profiles: {
         remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
       },
@@ -124,7 +119,6 @@ describe("BrowserProfilesService", () => {
 
   it("deletes local profiles and moves data to Trash", async () => {
     const resolved = resolveBrowserConfig({
-      controlUrl: "http://127.0.0.1:18791",
       profiles: {
         work: { cdpPort: 18801, color: "#0066CC" },
       },

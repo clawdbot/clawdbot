@@ -8,7 +8,7 @@ read_when:
 
 # Logging
 
-Clawdbot logs in two places:
+Moltbot logs in two places:
 
 - **File logs** (JSON lines) written by the Gateway.
 - **Console output** shown in terminals and the Control UI.
@@ -20,16 +20,16 @@ levels and formats.
 
 By default, the Gateway writes a rolling log file under:
 
-`/tmp/clawdbot/clawdbot-YYYY-MM-DD.log`
+`/tmp/moltbot/moltbot-YYYY-MM-DD.log`
 
 The date uses the gateway host's local timezone.
 
-You can override this in `~/.clawdbot/clawdbot.json`:
+You can override this in `~/.clawdbot/moltbot.json`:
 
 ```json
 {
   "logging": {
-    "file": "/path/to/clawdbot.log"
+    "file": "/path/to/moltbot.log"
   }
 }
 ```
@@ -41,7 +41,7 @@ You can override this in `~/.clawdbot/clawdbot.json`:
 Use the CLI to tail the gateway log file via RPC:
 
 ```bash
-clawdbot logs --follow
+moltbot logs --follow
 ```
 
 Output modes:
@@ -62,7 +62,7 @@ In JSON mode, the CLI emits `type`-tagged objects:
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
 ```bash
-clawdbot doctor
+moltbot doctor
 ```
 
 ### Control UI (web)
@@ -75,7 +75,7 @@ See [/web/control-ui](/web/control-ui) for how to open it.
 To filter channel activity (WhatsApp/Telegram/etc), use:
 
 ```bash
-clawdbot channels logs --channel whatsapp
+moltbot channels logs --channel whatsapp
 ```
 
 ## Log formats
@@ -97,13 +97,13 @@ Console formatting is controlled by `logging.consoleStyle`.
 
 ## Configuring logging
 
-All logging configuration lives under `logging` in `~/.clawdbot/clawdbot.json`.
+All logging configuration lives under `logging` in `~/.clawdbot/moltbot.json`.
 
 ```json
 {
   "logging": {
     "level": "info",
-    "file": "/tmp/clawdbot/clawdbot-YYYY-MM-DD.log",
+    "file": "/tmp/moltbot/moltbot-YYYY-MM-DD.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",
@@ -151,7 +151,7 @@ diagnostics + the exporter plugin are enabled.
 
 - **OpenTelemetry (OTel)**: the data model + SDKs for traces, metrics, and logs.
 - **OTLP**: the wire protocol used to export OTel data to a collector/backend.
-- Clawdbot exports via **OTLP/HTTP (protobuf)** today.
+- Moltbot exports via **OTLP/HTTP (protobuf)** today.
 
 ### Signals exported
 
@@ -237,7 +237,7 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "enabled": true,
       "endpoint": "http://otel-collector:4318",
       "protocol": "http/protobuf",
-      "serviceName": "clawdbot-gateway",
+      "serviceName": "moltbot-gateway",
       "traces": true,
       "metrics": true,
       "logs": true,
@@ -249,7 +249,7 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 ```
 
 Notes:
-- You can also enable the plugin with `clawdbot plugins enable diagnostics-otel`.
+- You can also enable the plugin with `moltbot plugins enable diagnostics-otel`.
 - `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
 - Metrics include token usage, cost, context size, run duration, and message-flow
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
@@ -262,58 +262,58 @@ Notes:
 ### Exported metrics (names + types)
 
 Model usage:
-- `clawdbot.tokens` (counter, attrs: `clawdbot.token`, `clawdbot.channel`,
-  `clawdbot.provider`, `clawdbot.model`)
-- `clawdbot.cost.usd` (counter, attrs: `clawdbot.channel`, `clawdbot.provider`,
-  `clawdbot.model`)
-- `clawdbot.run.duration_ms` (histogram, attrs: `clawdbot.channel`,
-  `clawdbot.provider`, `clawdbot.model`)
-- `clawdbot.context.tokens` (histogram, attrs: `clawdbot.context`,
-  `clawdbot.channel`, `clawdbot.provider`, `clawdbot.model`)
+- `moltbot.tokens` (counter, attrs: `moltbot.token`, `moltbot.channel`,
+  `moltbot.provider`, `moltbot.model`)
+- `moltbot.cost.usd` (counter, attrs: `moltbot.channel`, `moltbot.provider`,
+  `moltbot.model`)
+- `moltbot.run.duration_ms` (histogram, attrs: `moltbot.channel`,
+  `moltbot.provider`, `moltbot.model`)
+- `moltbot.context.tokens` (histogram, attrs: `moltbot.context`,
+  `moltbot.channel`, `moltbot.provider`, `moltbot.model`)
 
 Message flow:
-- `clawdbot.webhook.received` (counter, attrs: `clawdbot.channel`,
-  `clawdbot.webhook`)
-- `clawdbot.webhook.error` (counter, attrs: `clawdbot.channel`,
-  `clawdbot.webhook`)
-- `clawdbot.webhook.duration_ms` (histogram, attrs: `clawdbot.channel`,
-  `clawdbot.webhook`)
-- `clawdbot.message.queued` (counter, attrs: `clawdbot.channel`,
-  `clawdbot.source`)
-- `clawdbot.message.processed` (counter, attrs: `clawdbot.channel`,
-  `clawdbot.outcome`)
-- `clawdbot.message.duration_ms` (histogram, attrs: `clawdbot.channel`,
-  `clawdbot.outcome`)
+- `moltbot.webhook.received` (counter, attrs: `moltbot.channel`,
+  `moltbot.webhook`)
+- `moltbot.webhook.error` (counter, attrs: `moltbot.channel`,
+  `moltbot.webhook`)
+- `moltbot.webhook.duration_ms` (histogram, attrs: `moltbot.channel`,
+  `moltbot.webhook`)
+- `moltbot.message.queued` (counter, attrs: `moltbot.channel`,
+  `moltbot.source`)
+- `moltbot.message.processed` (counter, attrs: `moltbot.channel`,
+  `moltbot.outcome`)
+- `moltbot.message.duration_ms` (histogram, attrs: `moltbot.channel`,
+  `moltbot.outcome`)
 
 Queues + sessions:
-- `clawdbot.queue.lane.enqueue` (counter, attrs: `clawdbot.lane`)
-- `clawdbot.queue.lane.dequeue` (counter, attrs: `clawdbot.lane`)
-- `clawdbot.queue.depth` (histogram, attrs: `clawdbot.lane` or
-  `clawdbot.channel=heartbeat`)
-- `clawdbot.queue.wait_ms` (histogram, attrs: `clawdbot.lane`)
-- `clawdbot.session.state` (counter, attrs: `clawdbot.state`, `clawdbot.reason`)
-- `clawdbot.session.stuck` (counter, attrs: `clawdbot.state`)
-- `clawdbot.session.stuck_age_ms` (histogram, attrs: `clawdbot.state`)
-- `clawdbot.run.attempt` (counter, attrs: `clawdbot.attempt`)
+- `moltbot.queue.lane.enqueue` (counter, attrs: `moltbot.lane`)
+- `moltbot.queue.lane.dequeue` (counter, attrs: `moltbot.lane`)
+- `moltbot.queue.depth` (histogram, attrs: `moltbot.lane` or
+  `moltbot.channel=heartbeat`)
+- `moltbot.queue.wait_ms` (histogram, attrs: `moltbot.lane`)
+- `moltbot.session.state` (counter, attrs: `moltbot.state`, `moltbot.reason`)
+- `moltbot.session.stuck` (counter, attrs: `moltbot.state`)
+- `moltbot.session.stuck_age_ms` (histogram, attrs: `moltbot.state`)
+- `moltbot.run.attempt` (counter, attrs: `moltbot.attempt`)
 
 ### Exported spans (names + key attributes)
 
-- `clawdbot.model.usage`
-  - `clawdbot.channel`, `clawdbot.provider`, `clawdbot.model`
-  - `clawdbot.sessionKey`, `clawdbot.sessionId`
-  - `clawdbot.tokens.*` (input/output/cache_read/cache_write/total)
-- `clawdbot.webhook.processed`
-  - `clawdbot.channel`, `clawdbot.webhook`, `clawdbot.chatId`
-- `clawdbot.webhook.error`
-  - `clawdbot.channel`, `clawdbot.webhook`, `clawdbot.chatId`,
-    `clawdbot.error`
-- `clawdbot.message.processed`
-  - `clawdbot.channel`, `clawdbot.outcome`, `clawdbot.chatId`,
-    `clawdbot.messageId`, `clawdbot.sessionKey`, `clawdbot.sessionId`,
-    `clawdbot.reason`
-- `clawdbot.session.stuck`
-  - `clawdbot.state`, `clawdbot.ageMs`, `clawdbot.queueDepth`,
-    `clawdbot.sessionKey`, `clawdbot.sessionId`
+- `moltbot.model.usage`
+  - `moltbot.channel`, `moltbot.provider`, `moltbot.model`
+  - `moltbot.sessionKey`, `moltbot.sessionId`
+  - `moltbot.tokens.*` (input/output/cache_read/cache_write/total)
+- `moltbot.webhook.processed`
+  - `moltbot.channel`, `moltbot.webhook`, `moltbot.chatId`
+- `moltbot.webhook.error`
+  - `moltbot.channel`, `moltbot.webhook`, `moltbot.chatId`,
+    `moltbot.error`
+- `moltbot.message.processed`
+  - `moltbot.channel`, `moltbot.outcome`, `moltbot.chatId`,
+    `moltbot.messageId`, `moltbot.sessionKey`, `moltbot.sessionId`,
+    `moltbot.reason`
+- `moltbot.session.stuck`
+  - `moltbot.state`, `moltbot.ageMs`, `moltbot.queueDepth`,
+    `moltbot.sessionKey`, `moltbot.sessionId`
 
 ### Sampling + flushing
 
@@ -337,7 +337,7 @@ Queues + sessions:
 
 ## Troubleshooting tips
 
-- **Gateway not reachable?** Run `clawdbot doctor` first.
+- **Gateway not reachable?** Run `moltbot doctor` first.
 - **Logs empty?** Check that the Gateway is running and writing to the file path
   in `logging.file`.
 - **Need more detail?** Set `logging.level` to `debug` or `trace` and retry.

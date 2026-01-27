@@ -393,11 +393,17 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
     const replyTo = readStringParam(actionParams, "replyTo");
+
+    // `message.thread-reply` (tool) uses `threadId`, while the CLI historically used `to`/`channelId`.
+    // Prefer `threadId` when present to avoid accidentally replying in the parent channel.
+    const threadId = readStringParam(actionParams, "threadId");
+    const channelId = threadId ?? resolveChannelId();
+
     return await handleDiscordAction(
       {
         action: "threadReply",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId,
         content,
         mediaUrl: mediaUrl ?? undefined,
         replyTo: replyTo ?? undefined,

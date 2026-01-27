@@ -83,7 +83,7 @@ async function setupGatewayTestHome() {
   previousSkipBrowserControl = process.env.CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER;
   previousSkipGmailWatcher = process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
   previousSkipCanvasHost = process.env.CLAWDBOT_SKIP_CANVAS_HOST;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gateway-home-"));
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
   process.env.CLAWDBOT_STATE_DIR = path.join(tempHome, ".clawdbot");
@@ -105,13 +105,13 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   tempConfigRoot = options.uniqueConfigRoot
-    ? await fs.mkdtemp(path.join(tempHome, "clawdbot-test-"))
+    ? await fs.mkdtemp(path.join(tempHome, "moltbot-test-"))
     : path.join(tempHome, ".clawdbot-test");
   setTestConfigRoot(tempConfigRoot);
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testState.gatewayBind = undefined;
-  testState.gatewayAuth = undefined;
+  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
   testState.canvasHostPort = undefined;
@@ -260,10 +260,18 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
 export async function startServerWithClient(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const prev = process.env.CLAWDBOT_GATEWAY_TOKEN;
-  if (token === undefined) {
+  if (typeof token === "string") {
+    testState.gatewayAuth = { mode: "token", token };
+  }
+  const fallbackToken =
+    token ??
+    (typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
+      ? (testState.gatewayAuth as { token?: string }).token
+      : undefined);
+  if (fallbackToken === undefined) {
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   } else {
-    process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = fallbackToken;
   }
 
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
@@ -299,6 +307,7 @@ export async function connectReq(
   opts?: {
     token?: string;
     password?: string;
+    skipDefaultAuth?: boolean;
     minProtocol?: number;
     maxProtocol?: number;
     client?: {
@@ -334,6 +343,20 @@ export async function connectReq(
     mode: GATEWAY_CLIENT_MODES.TEST,
   };
   const role = opts?.role ?? "operator";
+  const defaultToken =
+    opts?.skipDefaultAuth === true
+      ? undefined
+      : typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
+        ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
+        : process.env.CLAWDBOT_GATEWAY_TOKEN;
+  const defaultPassword =
+    opts?.skipDefaultAuth === true
+      ? undefined
+      : typeof (testState.gatewayAuth as { password?: unknown } | undefined)?.password === "string"
+        ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
+        : process.env.CLAWDBOT_GATEWAY_PASSWORD;
+  const token = opts?.token ?? defaultToken;
+  const password = opts?.password ?? defaultPassword;
   const requestedScopes = Array.isArray(opts?.scopes) ? opts?.scopes : [];
   const device = (() => {
     if (opts?.device === null) return undefined;
@@ -347,7 +370,7 @@ export async function connectReq(
       role,
       scopes: requestedScopes,
       signedAtMs,
-      token: opts?.token ?? null,
+      token: token ?? null,
     });
     return {
       id: identity.deviceId,
@@ -372,10 +395,10 @@ export async function connectReq(
         role,
         scopes: opts?.scopes,
         auth:
-          opts?.token || opts?.password
+          token || password
             ? {
-                token: opts?.token,
-                password: opts?.password,
+                token,
+                password,
               }
             : undefined,
         device,

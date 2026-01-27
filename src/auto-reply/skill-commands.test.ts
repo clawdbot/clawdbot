@@ -59,7 +59,7 @@ describe("resolveSkillCommandInvocation", () => {
 
 describe("listSkillCommandsForAgents", () => {
   it("merges command names across agents and de-duplicates", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-skills-"));
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-skills-"));
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await writeSkill({

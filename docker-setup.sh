@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
-IMAGE_NAME="${CLAWDBOT_IMAGE:-clawdbot:local}"
+IMAGE_NAME="${CLAWDBOT_IMAGE:-moltbot:local}"
 EXTRA_MOUNTS="${CLAWDBOT_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${CLAWDBOT_HOME_VOLUME:-}"
 
@@ -56,7 +56,7 @@ write_extra_compose() {
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
-  clawdbot-gateway:
+  moltbot-gateway:
     volumes:
 YAML
 
@@ -71,7 +71,7 @@ YAML
   done
 
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
-  clawdbot-cli:
+  moltbot-cli:
     volumes:
 YAML
 
@@ -181,21 +181,21 @@ echo "  - Gateway token: $CLAWDBOT_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm clawdbot-cli onboard --no-install-daemon
+docker compose "${COMPOSE_ARGS[@]}" run --rm moltbot-cli onboard --no-install-daemon
 
 echo ""
 echo "==> Provider setup (optional)"
 echo "WhatsApp (QR):"
-echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers login"
+echo "  ${COMPOSE_HINT} run --rm moltbot-cli providers login"
 echo "Telegram (bot token):"
-echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers add --provider telegram --token <token>"
+echo "  ${COMPOSE_HINT} run --rm moltbot-cli providers add --provider telegram --token <token>"
 echo "Discord (bot token):"
-echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers add --provider discord --token <token>"
-echo "Docs: https://docs.clawd.bot/providers"
+echo "  ${COMPOSE_HINT} run --rm moltbot-cli providers add --provider discord --token <token>"
+echo "Docs: https://docs.molt.bot/providers"
 
 echo ""
 echo "==> Starting gateway"
-docker compose "${COMPOSE_ARGS[@]}" up -d clawdbot-gateway
+docker compose "${COMPOSE_ARGS[@]}" up -d moltbot-gateway
 
 echo ""
 echo "Gateway running with host port mapping."
@@ -205,5 +205,5 @@ echo "Workspace: $CLAWDBOT_WORKSPACE_DIR"
 echo "Token: $CLAWDBOT_GATEWAY_TOKEN"
 echo ""
 echo "Commands:"
-echo "  ${COMPOSE_HINT} logs -f clawdbot-gateway"
-echo "  ${COMPOSE_HINT} exec clawdbot-gateway node dist/index.js health --token \"$CLAWDBOT_GATEWAY_TOKEN\""
+echo "  ${COMPOSE_HINT} logs -f moltbot-gateway"
+echo "  ${COMPOSE_HINT} exec moltbot-gateway node dist/index.js health --token \"$CLAWDBOT_GATEWAY_TOKEN\""

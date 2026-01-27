@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 
+import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardRuntime,
+} from "./compaction-safeguard-runtime.js";
 import { __testing } from "./compaction-safeguard.js";
 
 const {
@@ -206,5 +210,43 @@ describe("isOversizedForSummary", () => {
     const isOversized = isOversizedForSummary(msg, CONTEXT_WINDOW);
     // Due to token estimation, this could be either true or false at the boundary
     expect(typeof isOversized).toBe("boolean");
+  });
+});
+
+describe("compaction-safeguard runtime registry", () => {
+  it("stores and retrieves config by session manager identity", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.3 });
+    const runtime = getCompactionSafeguardRuntime(sm);
+    expect(runtime).toEqual({ maxHistoryShare: 0.3 });
+  });
+
+  it("returns null for unknown session manager", () => {
+    const sm = {};
+    expect(getCompactionSafeguardRuntime(sm)).toBeNull();
+  });
+
+  it("clears entry when value is null", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.7 });
+    expect(getCompactionSafeguardRuntime(sm)).not.toBeNull();
+    setCompactionSafeguardRuntime(sm, null);
+    expect(getCompactionSafeguardRuntime(sm)).toBeNull();
+  });
+
+  it("ignores non-object session managers", () => {
+    setCompactionSafeguardRuntime(null, { maxHistoryShare: 0.5 });
+    expect(getCompactionSafeguardRuntime(null)).toBeNull();
+    setCompactionSafeguardRuntime(undefined, { maxHistoryShare: 0.5 });
+    expect(getCompactionSafeguardRuntime(undefined)).toBeNull();
+  });
+
+  it("isolates different session managers", () => {
+    const sm1 = {};
+    const sm2 = {};
+    setCompactionSafeguardRuntime(sm1, { maxHistoryShare: 0.3 });
+    setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
+    expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
+    expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
   });
 });

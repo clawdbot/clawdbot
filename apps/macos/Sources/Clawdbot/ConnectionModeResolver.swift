@@ -43,7 +43,7 @@ enum ConnectionModeResolver {
             return EffectiveConnectionMode(mode: storedMode, source: .userDefaults)
         }
 
-        let seen = defaults.bool(forKey: "clawdbot.onboardingSeen")
+        let seen = defaults.bool(forKey: "moltbot.onboardingSeen")
         return EffectiveConnectionMode(mode: seen ? .local : .unconfigured, source: .onboarding)
     }
 }

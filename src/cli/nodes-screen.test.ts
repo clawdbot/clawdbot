@@ -33,6 +33,6 @@ describe("nodes screen helpers", () => {
       tmpDir: "/tmp",
       id: "id1",
     });
-    expect(p).toBe(path.join("/tmp", "clawdbot-screen-record-id1.mp4"));
+    expect(p).toBe(path.join("/tmp", "moltbot-screen-record-id1.mp4"));
   });
 });

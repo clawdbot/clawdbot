@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import ClawdbotIPC
+import MoltbotIPC
 import CoreGraphics
 import CoreLocation
 import Foundation
@@ -380,7 +380,7 @@ enum AppleScriptPermission {
     static func isAuthorized() -> Bool {
         let script = """
         tell application "Terminal"
-            return "clawdbot-ok"
+            return "moltbot-ok"
         end tell
         """
 

@@ -14,7 +14,7 @@ export type DeviceIdentity = {
   privateKey: string;
 };
 
-const STORAGE_KEY = "clawdbot-device-identity-v1";
+const STORAGE_KEY = "moltbot-device-identity-v1";
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";

@@ -7,7 +7,7 @@ read_when:
 
 # Date & Time
 
-Clawdbot defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
+Moltbot defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
 Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
 
 ## Message envelopes (local by default)
@@ -101,7 +101,7 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 
 ## Time format detection (auto)
 
-When `timeFormat: "auto"`, Clawdbot inspects the OS preference (macOS/Windows)
+When `timeFormat: "auto"`, Moltbot inspects the OS preference (macOS/Windows)
 and falls back to locale formatting. The detected value is **cached per process**
 to avoid repeated system calls.
 

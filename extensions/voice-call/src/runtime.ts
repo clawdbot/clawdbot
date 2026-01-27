@@ -1,6 +1,6 @@
 import type { CoreConfig } from "./core-bridge.js";
 import type { VoiceCallConfig } from "./config.js";
-import { validateProviderConfig } from "./config.js";
+import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
@@ -33,24 +33,34 @@ type Logger = {
   debug: (message: string) => void;
 };
 
+function isLoopbackBind(bind: string | undefined): boolean {
+  if (!bind) return false;
+  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
+}
+
 function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
+  const allowNgrokFreeTierLoopbackBypass =
+    config.tunnel?.provider === "ngrok" &&
+    isLoopbackBind(config.serve?.bind) &&
+    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ||
+      config.tunnel?.allowNgrokFreeTier ||
+      false);
+
   switch (config.provider) {
     case "telnyx":
       return new TelnyxProvider({
-        apiKey: config.telnyx?.apiKey ?? process.env.TELNYX_API_KEY,
-        connectionId:
-          config.telnyx?.connectionId ?? process.env.TELNYX_CONNECTION_ID,
-        publicKey: config.telnyx?.publicKey ?? process.env.TELNYX_PUBLIC_KEY,
+        apiKey: config.telnyx?.apiKey,
+        connectionId: config.telnyx?.connectionId,
+        publicKey: config.telnyx?.publicKey,
       });
     case "twilio":
       return new TwilioProvider(
         {
-          accountSid:
-            config.twilio?.accountSid ?? process.env.TWILIO_ACCOUNT_SID,
-          authToken: config.twilio?.authToken ?? process.env.TWILIO_AUTH_TOKEN,
+          accountSid: config.twilio?.accountSid,
+          authToken: config.twilio?.authToken,
         },
         {
-          allowNgrokFreeTier: config.tunnel?.allowNgrokFreeTier ?? true,
+          allowNgrokFreeTierLoopbackBypass,
           publicUrl: config.publicUrl,
           skipVerification: config.skipSignatureVerification,
           streamPath: config.streaming?.enabled
@@ -61,8 +71,8 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
     case "plivo":
       return new PlivoProvider(
         {
-          authId: config.plivo?.authId ?? process.env.PLIVO_AUTH_ID,
-          authToken: config.plivo?.authToken ?? process.env.PLIVO_AUTH_TOKEN,
+          authId: config.plivo?.authId,
+          authToken: config.plivo?.authToken,
         },
         {
           publicUrl: config.publicUrl,
@@ -85,13 +95,15 @@ export async function createVoiceCallRuntime(params: {
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
 }): Promise<VoiceCallRuntime> {
-  const { config, coreConfig, ttsRuntime, logger } = params;
+  const { config: rawConfig, coreConfig, ttsRuntime, logger } = params;
   const log = logger ?? {
     info: console.log,
     warn: console.warn,
     error: console.error,
     debug: console.debug,
   };
+
+  const config = resolveVoiceCallConfig(rawConfig);
 
   if (!config.enabled) {
     throw new Error(
@@ -125,9 +137,8 @@ export async function createVoiceCallRuntime(params: {
         provider: config.tunnel.provider,
         port: config.serve.port,
         path: config.serve.path,
-        ngrokAuthToken:
-          config.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN,
-        ngrokDomain: config.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN,
+        ngrokAuthToken: config.tunnel.ngrokAuthToken,
+        ngrokDomain: config.tunnel.ngrokDomain,
       });
       publicUrl = tunnelResult?.publicUrl ?? null;
     } catch (err) {

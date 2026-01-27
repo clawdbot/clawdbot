@@ -5,17 +5,17 @@ read_when:
 ---
 # Groups
 
-Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Microsoft Teams.
+Moltbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Microsoft Teams.
 
 ## Beginner intro (2 minutes)
-Clawdbot “lives” on your own messaging accounts. There is no separate WhatsApp bot user.
-If **you** are in a group, Clawdbot can see that group and respond there.
+Moltbot “lives” on your own messaging accounts. There is no separate WhatsApp bot user.
+If **you** are in a group, Moltbot can see that group and respond there.
 
 Default behavior:
 - Groups are restricted (`groupPolicy: "allowlist"`).
 - Replies require a mention unless you explicitly disable mention gating.
 
-Translation: allowlisted senders can trigger Clawdbot by mentioning it.
+Translation: allowlisted senders can trigger Moltbot by mentioning it.
 
 > TL;DR
 > - **DM access** is controlled by `*.allowFrom`.
@@ -215,7 +215,7 @@ Replying to a bot message counts as an implicit mention (when the channel suppor
       {
         id: "main",
         groupChat: {
-          mentionPatterns: ["@clawd", "clawdbot", "\\+15555550123"],
+          mentionPatterns: ["@clawd", "moltbot", "\\+15555550123"],
           historyLimit: 50
         }
       }
@@ -231,6 +231,42 @@ Notes:
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
 - Group history context is wrapped uniformly across channels and is **pending-only** (messages skipped due to mention gating); use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
+
+## Group/channel tool restrictions (optional)
+Some channel configs support restricting which tools are available **inside a specific group/room/channel**.
+
+- `tools`: allow/deny tools for the whole group.
+- `toolsBySender`: per-sender overrides within the group (keys are sender IDs/usernames/emails/phone numbers depending on the channel). Use `"*"` as a wildcard.
+
+Resolution order (most specific wins):
+1) group/channel `toolsBySender` match
+2) group/channel `tools`
+3) default (`"*"`) `toolsBySender` match
+4) default (`"*"`) `tools`
+
+Example (Telegram):
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "*": { tools: { deny: ["exec"] } },
+        "-1001234567890": {
+          tools: { deny: ["exec", "read", "write"] },
+          toolsBySender: {
+            "123456789": { alsoAllow: ["exec"] }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Group/channel tool restrictions are applied in addition to global/agent tool policy (deny still wins).
+- Some channels use different nesting for rooms/channels (e.g., Discord `guilds.*.channels.*`, Slack `channels.*`, MS Teams `teams.*.channels.*`).
 
 ## Group allowlists
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.

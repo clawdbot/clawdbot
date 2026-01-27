@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Foundation
 import OSLog
 
@@ -102,7 +102,7 @@ public enum GatewayAuthSource: String, Sendable {
 }
 
 // Avoid ambiguity with the app's own AnyCodable type.
-private typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
+private typealias ProtoAnyCodable = MoltbotProtocol.AnyCodable
 
 private enum ConnectChallengeError: Error {
     case timeout
@@ -268,7 +268,7 @@ public actor GatewayChannelActor {
             caps: [],
             commands: [],
             permissions: [:],
-            clientId: "clawdbot-macos",
+            clientId: "moltbot-macos",
             clientMode: "ui",
             clientDisplayName: InstanceIdentity.displayName)
         let clientDisplayName = options.clientDisplayName ?? InstanceIdentity.displayName

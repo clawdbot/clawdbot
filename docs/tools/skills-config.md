@@ -6,7 +6,7 @@ read_when:
 ---
 # Skills Config
 
-All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.json`.
+All skills-related configuration lives under `skills` in `~/.clawdbot/moltbot.json`.
 
 ```json5
 {

@@ -3,15 +3,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClawdbotKit",
+    name: "MoltbotKit",
     platforms: [
         .iOS(.v18),
         .macOS(.v15),
     ],
     products: [
-        .library(name: "ClawdbotProtocol", targets: ["ClawdbotProtocol"]),
-        .library(name: "ClawdbotKit", targets: ["ClawdbotKit"]),
-        .library(name: "ClawdbotChatUI", targets: ["ClawdbotChatUI"]),
+        .library(name: "MoltbotProtocol", targets: ["MoltbotProtocol"]),
+        .library(name: "MoltbotKit", targets: ["MoltbotKit"]),
+        .library(name: "MoltbotChatUI", targets: ["MoltbotChatUI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.0"),
@@ -19,14 +19,16 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "ClawdbotProtocol",
+            name: "MoltbotProtocol",
+            path: "Sources/ClawdbotProtocol",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
-            name: "ClawdbotKit",
+            name: "MoltbotKit",
+            path: "Sources/ClawdbotKit",
             dependencies: [
-                "ClawdbotProtocol",
+                "MoltbotProtocol",
                 .product(name: "ElevenLabsKit", package: "ElevenLabsKit"),
             ],
             resources: [
@@ -36,9 +38,10 @@ let package = Package(
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
-            name: "ClawdbotChatUI",
+            name: "MoltbotChatUI",
+            path: "Sources/ClawdbotChatUI",
             dependencies: [
-                "ClawdbotKit",
+                "MoltbotKit",
                 .product(
                     name: "Textual",
                     package: "textual",
@@ -48,8 +51,9 @@ let package = Package(
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .testTarget(
-            name: "ClawdbotKitTests",
-            dependencies: ["ClawdbotKit", "ClawdbotChatUI"],
+            name: "MoltbotKitTests",
+            dependencies: ["MoltbotKit", "MoltbotChatUI"],
+            path: "Tests/ClawdbotKitTests",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

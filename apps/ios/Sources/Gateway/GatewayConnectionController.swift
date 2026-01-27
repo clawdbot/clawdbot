@@ -1,4 +1,4 @@
-import ClawdbotKit
+import MoltbotKit
 import Darwin
 import Foundation
 import Network
@@ -283,7 +283,7 @@ final class GatewayConnectionController {
             caps: self.currentCaps(),
             commands: self.currentCommands(),
             permissions: [:],
-            clientId: "clawdbot-ios",
+            clientId: "moltbot-ios",
             clientMode: "node",
             clientDisplayName: displayName)
     }
@@ -304,51 +304,51 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [ClawdbotCapability.canvas.rawValue, ClawdbotCapability.screen.rawValue]
+        var caps = [MoltbotCapability.canvas.rawValue, MoltbotCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(ClawdbotCapability.camera.rawValue) }
+        if cameraEnabled { caps.append(MoltbotCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(ClawdbotCapability.voiceWake.rawValue) }
+        if voiceWakeEnabled { caps.append(MoltbotCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
-        let locationMode = ClawdbotLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off { caps.append(ClawdbotCapability.location.rawValue) }
+        let locationMode = MoltbotLocationMode(rawValue: locationModeRaw) ?? .off
+        if locationMode != .off { caps.append(MoltbotCapability.location.rawValue) }
 
         return caps
     }
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            ClawdbotCanvasCommand.present.rawValue,
-            ClawdbotCanvasCommand.hide.rawValue,
-            ClawdbotCanvasCommand.navigate.rawValue,
-            ClawdbotCanvasCommand.evalJS.rawValue,
-            ClawdbotCanvasCommand.snapshot.rawValue,
-            ClawdbotCanvasA2UICommand.push.rawValue,
-            ClawdbotCanvasA2UICommand.pushJSONL.rawValue,
-            ClawdbotCanvasA2UICommand.reset.rawValue,
-            ClawdbotScreenCommand.record.rawValue,
-            ClawdbotSystemCommand.notify.rawValue,
-            ClawdbotSystemCommand.which.rawValue,
-            ClawdbotSystemCommand.run.rawValue,
-            ClawdbotSystemCommand.execApprovalsGet.rawValue,
-            ClawdbotSystemCommand.execApprovalsSet.rawValue,
+            MoltbotCanvasCommand.present.rawValue,
+            MoltbotCanvasCommand.hide.rawValue,
+            MoltbotCanvasCommand.navigate.rawValue,
+            MoltbotCanvasCommand.evalJS.rawValue,
+            MoltbotCanvasCommand.snapshot.rawValue,
+            MoltbotCanvasA2UICommand.push.rawValue,
+            MoltbotCanvasA2UICommand.pushJSONL.rawValue,
+            MoltbotCanvasA2UICommand.reset.rawValue,
+            MoltbotScreenCommand.record.rawValue,
+            MoltbotSystemCommand.notify.rawValue,
+            MoltbotSystemCommand.which.rawValue,
+            MoltbotSystemCommand.run.rawValue,
+            MoltbotSystemCommand.execApprovalsGet.rawValue,
+            MoltbotSystemCommand.execApprovalsSet.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
-        if caps.contains(ClawdbotCapability.camera.rawValue) {
-            commands.append(ClawdbotCameraCommand.list.rawValue)
-            commands.append(ClawdbotCameraCommand.snap.rawValue)
-            commands.append(ClawdbotCameraCommand.clip.rawValue)
+        if caps.contains(MoltbotCapability.camera.rawValue) {
+            commands.append(MoltbotCameraCommand.list.rawValue)
+            commands.append(MoltbotCameraCommand.snap.rawValue)
+            commands.append(MoltbotCameraCommand.clip.rawValue)
         }
-        if caps.contains(ClawdbotCapability.location.rawValue) {
-            commands.append(ClawdbotLocationCommand.get.rawValue)
+        if caps.contains(MoltbotCapability.location.rawValue) {
+            commands.append(MoltbotLocationCommand.get.rawValue)
         }
 
         return commands

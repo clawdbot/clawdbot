@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfig,
@@ -14,7 +14,7 @@ const log = createSubsystemLogger("skills");
 
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
 }): string[] {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) return [];

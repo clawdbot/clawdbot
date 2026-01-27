@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import SwiftUI
 
 extension ChannelsSettings {

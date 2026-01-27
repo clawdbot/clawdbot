@@ -50,7 +50,7 @@ const runtime: RuntimeEnv = {
 };
 
 const baseSnapshot = {
-  path: "/tmp/clawdbot.json",
+  path: "/tmp/moltbot.json",
   exists: true,
   raw: "{}",
   parsed: {},
@@ -244,7 +244,7 @@ describe("channels command", () => {
     authMocks.loadAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "anthropic:claude-cli": {
+        "anthropic:default": {
           type: "oauth",
           provider: "anthropic",
           access: "token",
@@ -252,7 +252,7 @@ describe("channels command", () => {
           expires: 0,
           created: 0,
         },
-        "openai-codex:codex-cli": {
+        "openai-codex:default": {
           type: "oauth",
           provider: "openai",
           access: "token",
@@ -268,8 +268,8 @@ describe("channels command", () => {
       auth?: Array<{ id: string }>;
     };
     const ids = payload.auth?.map((entry) => entry.id) ?? [];
-    expect(ids).toContain("anthropic:claude-cli");
-    expect(ids).toContain("openai-codex:codex-cli");
+    expect(ids).toContain("anthropic:default");
+    expect(ids).toContain("openai-codex:default");
   });
 
   it("stores default account names in accounts when multiple accounts exist", async () => {
@@ -370,7 +370,7 @@ describe("channels command", () => {
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/Message Content Intent is disabled/i);
-    expect(lines.join("\n")).toMatch(/Run: clawdbot doctor/);
+    expect(lines.join("\n")).toMatch(/Run: (?:moltbot|moltbot)( --profile isolated)? doctor/);
   });
 
   it("surfaces Discord permission audit issues in channels status output", () => {
@@ -425,12 +425,12 @@ describe("channels command", () => {
             accountId: "default",
             enabled: true,
             configured: true,
-            probe: { ok: true, bot: { username: "clawdbot_bot" } },
+            probe: { ok: true, bot: { username: "moltbot_bot" } },
           },
         ],
       },
     });
-    expect(lines.join("\n")).toMatch(/bot:@clawdbot_bot/);
+    expect(lines.join("\n")).toMatch(/bot:@moltbot_bot/);
   });
 
   it("surfaces Telegram group membership audit issues in channels status output", () => {

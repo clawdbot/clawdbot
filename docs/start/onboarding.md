@@ -1,5 +1,5 @@
 ---
-summary: "First-run onboarding flow for Clawdbot (macOS app)"
+summary: "First-run onboarding flow for Moltbot (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
@@ -64,7 +64,7 @@ Onboarding requests TCC permissions needed for:
 
 ## 5) CLI (optional)
 
-The app can install the global `clawdbot` CLI via npm/pnpm so terminal
+The app can install the global `moltbot` CLI via npm/pnpm so terminal
 workflows and launchd tasks work out of the box.
 
 ## 6) Onboarding chat (dedicated session)
@@ -75,7 +75,7 @@ from your normal conversation.
 
 ## Agent bootstrap ritual
 
-On the first agent run, Clawdbot bootstraps a workspace (default `~/clawd`):
+On the first agent run, Moltbot bootstraps a workspace (default `~/clawd`):
 
 - Seeds `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`
 - Runs a short Q&A ritual (one question at a time)
@@ -87,7 +87,7 @@ On the first agent run, Clawdbot bootstraps a workspace (default `~/clawd`):
 Gmail Pub/Sub setup is currently a manual step. Use:
 
 ```bash
-clawdbot webhooks gmail setup --account you@gmail.com
+moltbot webhooks gmail setup --account you@gmail.com
 ```
 
 See [/automation/gmail-pubsub](/automation/gmail-pubsub) for details.

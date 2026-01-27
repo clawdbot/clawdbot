@@ -6,7 +6,7 @@ import JSZip from "jszip";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const realOs = await vi.importActual<typeof import("node:os")>("node:os");
-const HOME = path.join(realOs.tmpdir(), "clawdbot-home-redirect");
+const HOME = path.join(realOs.tmpdir(), "moltbot-home-redirect");
 const mockRequest = vi.fn();
 
 vi.doMock("node:os", () => ({
@@ -17,6 +17,9 @@ vi.doMock("node:os", () => ({
 
 vi.doMock("node:https", () => ({
   request: (...args: unknown[]) => mockRequest(...args),
+}));
+vi.doMock("node:dns/promises", () => ({
+  lookup: async () => [{ address: "93.184.216.34", family: 4 }],
 }));
 
 const loadStore = async () => await import("./store.js");

@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import { LEGACY_MANIFEST_KEY } from "../compat/legacy-names.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
 import {
   parseFrontmatter,
-  resolveClawdbotMetadata,
+  resolveMoltbotMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
 import type {
@@ -21,12 +22,13 @@ import type {
 
 type HookPackageManifest = {
   name?: string;
-  clawdbot?: { hooks?: string[] };
+  moltbot?: { hooks?: string[] };
+  [LEGACY_MANIFEST_KEY]?: { hooks?: string[] };
 };
 
 function filterHookEntries(
   entries: HookEntry[],
-  config?: ClawdbotConfig,
+  config?: MoltbotConfig,
   eligibility?: HookEligibilityContext,
 ): HookEntry[] {
   return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
@@ -44,7 +46,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
-  const raw = manifest.clawdbot?.hooks;
+  const raw = manifest.moltbot?.hooks ?? manifest[LEGACY_MANIFEST_KEY]?.hooks;
   if (!Array.isArray(raw)) return [];
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
@@ -167,7 +169,7 @@ export function loadHookEntriesFromDir(params: {
         pluginId: params.pluginId,
       },
       frontmatter,
-      clawdbot: resolveClawdbotMetadata(frontmatter),
+      metadata: resolveMoltbotMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
     return entry;
@@ -177,7 +179,7 @@ export function loadHookEntriesFromDir(params: {
 function loadHookEntries(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
   },
@@ -193,23 +195,23 @@ function loadHookEntries(
   const bundledHooks = bundledHooksDir
     ? loadHooksFromDir({
         dir: bundledHooksDir,
-        source: "clawdbot-bundled",
+        source: "moltbot-bundled",
       })
     : [];
   const extraHooks = extraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadHooksFromDir({
       dir: resolved,
-      source: "clawdbot-workspace", // Extra dirs treated as workspace
+      source: "moltbot-workspace", // Extra dirs treated as workspace
     });
   });
   const managedHooks = loadHooksFromDir({
     dir: managedHooksDir,
-    source: "clawdbot-managed",
+    source: "moltbot-managed",
   });
   const workspaceHooks = loadHooksFromDir({
     dir: workspaceHooksDir,
-    source: "clawdbot-workspace",
+    source: "moltbot-workspace",
   });
 
   const merged = new Map<string, Hook>();
@@ -230,7 +232,7 @@ function loadHookEntries(
     return {
       hook,
       frontmatter,
-      clawdbot: resolveClawdbotMetadata(frontmatter),
+      metadata: resolveMoltbotMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
   });
@@ -239,7 +241,7 @@ function loadHookEntries(
 export function buildWorkspaceHookSnapshot(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
     entries?: HookEntry[];
@@ -253,7 +255,7 @@ export function buildWorkspaceHookSnapshot(
   return {
     hooks: eligible.map((entry) => ({
       name: entry.hook.name,
-      events: entry.clawdbot?.events ?? [],
+      events: entry.metadata?.events ?? [],
     })),
     resolvedHooks: eligible.map((entry) => entry.hook),
     version: opts?.snapshotVersion,
@@ -263,7 +265,7 @@ export function buildWorkspaceHookSnapshot(
 export function loadWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
   },

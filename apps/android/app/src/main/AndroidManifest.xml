@@ -32,7 +32,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:theme="@style/Theme.ClawdbotNode">
+        android:theme="@style/Theme.MoltbotNode">
         <service
             android:name=".NodeForegroundService"
             android:exported="false"

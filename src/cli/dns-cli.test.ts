@@ -9,6 +9,6 @@ describe("dns cli", () => {
     await program.parseAsync(["dns", "setup"], { from: "user" });
     const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(output).toContain("DNS setup");
-    expect(output).toContain("clawdbot.internal");
+    expect(output).toContain("moltbot.internal");
   });
 });

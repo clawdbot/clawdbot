@@ -19,6 +19,7 @@ export type CronPayload =
       model?: string;
       thinking?: string;
       timeoutSeconds?: number;
+      allowUnsafeExternalContent?: boolean;
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;
@@ -33,6 +34,7 @@ export type CronPayloadPatch =
       model?: string;
       thinking?: string;
       timeoutSeconds?: number;
+      allowUnsafeExternalContent?: boolean;
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
+INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
 MODELS_MODE="${CLAWDBOT_E2E_MODELS:-both}" # both|openai|anthropic
 INSTALL_TAG="${CLAWDBOT_INSTALL_TAG:-latest}"
 E2E_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}"
@@ -33,9 +33,9 @@ elif [[ "$MODELS_MODE" == "anthropic" && -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHR
 fi
 
 echo "==> Resolve npm versions"
-EXPECTED_VERSION="$(npm view "clawdbot@${INSTALL_TAG}" version)"
+EXPECTED_VERSION="$(npm view "moltbot@${INSTALL_TAG}" version)"
 if [[ -z "$EXPECTED_VERSION" || "$EXPECTED_VERSION" == "undefined" || "$EXPECTED_VERSION" == "null" ]]; then
-  echo "ERROR: unable to resolve clawdbot@${INSTALL_TAG} version" >&2
+  echo "ERROR: unable to resolve moltbot@${INSTALL_TAG} version" >&2
   exit 2
 fi
 if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
@@ -43,7 +43,7 @@ if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
 else
   PREVIOUS_VERSION="$(node - <<'NODE'
 const { execSync } = require("node:child_process");
-const versions = JSON.parse(execSync("npm view clawdbot versions --json", { encoding: "utf8" }));
+const versions = JSON.parse(execSync("npm view moltbot versions --json", { encoding: "utf8" }));
 if (!Array.isArray(versions) || versions.length === 0) process.exit(1);
 process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : versions[0]);
 NODE
@@ -55,7 +55,7 @@ if [[ "$SKIP_PREVIOUS" == "1" ]]; then
   echo "==> Skip preinstall previous (CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path; avoids read() prompt)"
-  npm install -g "clawdbot@${PREVIOUS_VERSION}"
+  npm install -g "moltbot@${PREVIOUS_VERSION}"
 fi
 
 echo "==> Run official installer one-liner"
@@ -68,10 +68,10 @@ else
 fi
 
 echo "==> Verify installed version"
-INSTALLED_VERSION="$(clawdbot --version 2>/dev/null | head -n 1 | tr -d '\r')"
+INSTALLED_VERSION="$(moltbot --version 2>/dev/null | head -n 1 | tr -d '\r')"
 echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
 if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
-  echo "ERROR: expected clawdbot@$EXPECTED_VERSION, got clawdbot@$INSTALLED_VERSION" >&2
+  echo "ERROR: expected moltbot@$EXPECTED_VERSION, got moltbot@$INSTALLED_VERSION" >&2
   exit 1
 fi
 
@@ -80,7 +80,7 @@ set_image_model() {
   shift
   local candidate
   for candidate in "$@"; do
-    if clawdbot --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
+    if moltbot --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
@@ -94,7 +94,7 @@ set_agent_model() {
   local candidate
   shift
   for candidate in "$@"; do
-    if clawdbot --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
+    if moltbot --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
@@ -177,7 +177,7 @@ run_agent_turn() {
   local session_id="$2"
   local prompt="$3"
   local out_json="$4"
-  clawdbot --profile "$profile" agent \
+  moltbot --profile "$profile" agent \
     --session-id "$session_id" \
     --message "$prompt" \
     --thinking off \
@@ -339,7 +339,7 @@ run_profile() {
 
 	  echo "==> Onboard ($profile)"
 	  if [[ "$agent_model_provider" == "openai" ]]; then
-	    clawdbot --profile "$profile" onboard \
+	    moltbot --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -351,7 +351,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
-	    clawdbot --profile "$profile" onboard \
+	    moltbot --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -364,7 +364,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  else
-	    clawdbot --profile "$profile" onboard \
+	    moltbot --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -425,7 +425,7 @@ run_profile() {
 
   echo "==> Start gateway ($profile)"
   GATEWAY_LOG="$workspace/gateway.log"
-  clawdbot --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
+  moltbot --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
   GATEWAY_PID="$!"
   cleanup_profile() {
     if kill -0 "$GATEWAY_PID" 2>/dev/null; then
@@ -437,12 +437,12 @@ run_profile() {
 
   echo "==> Wait for health ($profile)"
   for _ in $(seq 1 60); do
-    if clawdbot --profile "$profile" health --timeout 2000 --json >/dev/null 2>&1; then
+    if moltbot --profile "$profile" health --timeout 2000 --json >/dev/null 2>&1; then
       break
     fi
     sleep 0.25
   done
-  clawdbot --profile "$profile" health --timeout 10000 --json >/dev/null
+  moltbot --profile "$profile" health --timeout 10000 --json >/dev/null
 
   echo "==> Agent turns ($profile)"
   TURN1_JSON="/tmp/agent-${profile}-1.json"

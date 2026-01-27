@@ -139,7 +139,7 @@ describe("gateway-cli coverage", () => {
     discoverGatewayBeacons.mockReset();
     discoverGatewayBeacons.mockResolvedValueOnce([
       {
-        instanceName: "Studio (Clawdbot)",
+        instanceName: "Studio (Moltbot)",
         displayName: "Studio",
         domain: "local.",
         host: "studio.local",
@@ -171,9 +171,9 @@ describe("gateway-cli coverage", () => {
     discoverGatewayBeacons.mockReset();
     discoverGatewayBeacons.mockResolvedValueOnce([
       {
-        instanceName: "Studio (Clawdbot)",
+        instanceName: "Studio (Moltbot)",
         displayName: "Studio",
-        domain: "clawdbot.internal.",
+        domain: "moltbot.internal.",
         host: "studio.clawdbot.internal",
         lanHost: "studio.local",
         tailnetDns: "studio.tailnet.ts.net",
@@ -194,7 +194,7 @@ describe("gateway-cli coverage", () => {
     const out = runtimeLogs.join("\n");
     expect(out).toContain("Gateway Discovery");
     expect(out).toContain("Found 1 gateway(s)");
-    expect(out).toContain("- Studio clawdbot.internal.");
+    expect(out).toContain("- Studio moltbot.internal.");
     expect(out).toContain("  tailnet: studio.tailnet.ts.net");
     expect(out).toContain("  host: studio.clawdbot.internal");
     expect(out).toContain("  ws: ws://studio.tailnet.ts.net:18789");
@@ -249,7 +249,7 @@ describe("gateway-cli coverage", () => {
     programInvalidPort.exitOverride();
     registerGatewayCli(programInvalidPort);
     await expect(
-      programInvalidPort.parseAsync(["gateway", "--port", "0"], {
+      programInvalidPort.parseAsync(["gateway", "--port", "0", "--token", "test-token"], {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
@@ -263,7 +263,7 @@ describe("gateway-cli coverage", () => {
     registerGatewayCli(programForceFail);
     await expect(
       programForceFail.parseAsync(
-        ["gateway", "--port", "18789", "--force", "--allow-unconfigured"],
+        ["gateway", "--port", "18789", "--token", "test-token", "--force", "--allow-unconfigured"],
         { from: "user" },
       ),
     ).rejects.toThrow("__exit__:1");
@@ -276,9 +276,12 @@ describe("gateway-cli coverage", () => {
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));
     await expect(
-      programStartFail.parseAsync(["gateway", "--port", "18789", "--allow-unconfigured"], {
-        from: "user",
-      }),
+      programStartFail.parseAsync(
+        ["gateway", "--port", "18789", "--token", "test-token", "--allow-unconfigured"],
+        {
+          from: "user",
+        },
+      ),
     ).rejects.toThrow("__exit__:1");
     for (const listener of process.listeners("SIGTERM")) {
       if (!beforeSigterm.has(listener)) process.removeListener("SIGTERM", listener);
@@ -304,14 +307,14 @@ describe("gateway-cli coverage", () => {
     registerGatewayCli(program);
 
     await expect(
-      program.parseAsync(["gateway", "--allow-unconfigured"], {
+      program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
 
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
-    expect(runtimeErrors.join("\n")).toContain("clawdbot gateway stop");
+    expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
 
   it("uses env/config port when --port is omitted", async () => {
@@ -327,7 +330,7 @@ describe("gateway-cli coverage", () => {
 
       startGatewayServer.mockRejectedValueOnce(new Error("nope"));
       await expect(
-        program.parseAsync(["gateway", "--allow-unconfigured"], {
+        program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
           from: "user",
         }),
       ).rejects.toThrow("__exit__:1");

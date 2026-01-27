@@ -27,7 +27,7 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
-export const ClawdbotSchema = z
+export const MoltbotSchema = z
   .object({
     meta: z
       .object({
@@ -134,8 +134,7 @@ export const ClawdbotSchema = z
     browser: z
       .object({
         enabled: z.boolean().optional(),
-        controlUrl: z.string().optional(),
-        controlToken: z.string().optional(),
+        evaluateEnabled: z.boolean().optional(),
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),
@@ -272,6 +271,12 @@ export const ClawdbotSchema = z
           })
           .strict()
           .optional(),
+        mdns: z
+          .object({
+            mode: z.enum(["off", "minimal", "full"]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -313,6 +318,7 @@ export const ClawdbotSchema = z
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
             allowInsecureAuth: z.boolean().optional(),
+            dangerouslyDisableDeviceAuth: z.boolean().optional(),
           })
           .strict()
           .optional(),

@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `clawdbot doctor` (health checks + guided repairs)"
+summary: "CLI reference for `moltbot doctor` (health checks + guided repairs)"
 read_when:
   - You have connectivity/auth issues and want guided fixes
   - You updated and want a sanity check
 ---
 
-# `clawdbot doctor`
+# `moltbot doctor`
 
 Health checks + quick fixes for the gateway and channels.
 
@@ -16,14 +16,14 @@ Related:
 ## Examples
 
 ```bash
-clawdbot doctor
-clawdbot doctor --repair
-clawdbot doctor --deep
+moltbot doctor
+moltbot doctor --repair
+moltbot doctor --deep
 ```
 
 Notes:
 - Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
-- `--fix` (alias for `--repair`) writes a backup to `~/.clawdbot/clawdbot.json.bak` and drops unknown config keys, listing each removal.
+- `--fix` (alias for `--repair`) writes a backup to `~/.clawdbot/moltbot.json.bak` and drops unknown config keys, listing each removal.
 
 ## macOS: `launchctl` env overrides
 

@@ -7,7 +7,7 @@ read_when:
 
 # Perplexity Sonar
 
-Clawdbot can use Perplexity Sonar for the `web_search` tool. You can connect
+Moltbot can use Perplexity Sonar for the `web_search` tool. You can connect
 through Perplexity’s direct API or via OpenRouter.
 
 ## API options
@@ -64,7 +64,7 @@ If both `PERPLEXITY_API_KEY` and `OPENROUTER_API_KEY` are set, set
 `tools.web.search.perplexity.baseUrl` (or `tools.web.search.perplexity.apiKey`)
 to disambiguate.
 
-If no base URL is set, Clawdbot chooses a default based on the API key source:
+If no base URL is set, Moltbot chooses a default based on the API key source:
 
 - `PERPLEXITY_API_KEY` or `pplx-...` → direct Perplexity (`https://api.perplexity.ai`)
 - `OPENROUTER_API_KEY` or `sk-or-...` → OpenRouter (`https://openrouter.ai/api/v1`)

@@ -1,19 +1,19 @@
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite
-struct ClawdbotOAuthStoreTests {
+struct MoltbotOAuthStoreTests {
     @Test
     func returnsMissingWhenFileAbsent() {
         let url = FileManager().temporaryDirectory
-            .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)")
+            .appendingPathComponent("moltbot-oauth-\(UUID().uuidString)")
             .appendingPathComponent("oauth.json")
-        #expect(ClawdbotOAuthStore.anthropicOAuthStatus(at: url) == .missingFile)
+        #expect(MoltbotOAuthStore.anthropicOAuthStatus(at: url) == .missingFile)
     }
 
     @Test
-    func usesEnvOverrideForClawdbotOAuthDir() throws {
+    func usesEnvOverrideForMoltbotOAuthDir() throws {
         let key = "CLAWDBOT_OAUTH_DIR"
         let previous = ProcessInfo.processInfo.environment[key]
         defer {
@@ -25,10 +25,10 @@ struct ClawdbotOAuthStoreTests {
         }
 
         let dir = FileManager().temporaryDirectory
-            .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("moltbot-oauth-\(UUID().uuidString)", isDirectory: true)
         setenv(key, dir.path, 1)
 
-        #expect(ClawdbotOAuthStore.oauthDir().standardizedFileURL == dir.standardizedFileURL)
+        #expect(MoltbotOAuthStore.oauthDir().standardizedFileURL == dir.standardizedFileURL)
     }
 
     @Test
@@ -42,7 +42,7 @@ struct ClawdbotOAuthStoreTests {
             ],
         ])
 
-        #expect(ClawdbotOAuthStore.anthropicOAuthStatus(at: url).isConnected)
+        #expect(MoltbotOAuthStore.anthropicOAuthStatus(at: url).isConnected)
     }
 
     @Test
@@ -55,7 +55,7 @@ struct ClawdbotOAuthStoreTests {
             ],
         ])
 
-        #expect(ClawdbotOAuthStore.anthropicOAuthStatus(at: url).isConnected)
+        #expect(MoltbotOAuthStore.anthropicOAuthStatus(at: url).isConnected)
     }
 
     @Test
@@ -68,7 +68,7 @@ struct ClawdbotOAuthStoreTests {
             ],
         ])
 
-        #expect(ClawdbotOAuthStore.anthropicOAuthStatus(at: url) == .missingProviderEntry)
+        #expect(MoltbotOAuthStore.anthropicOAuthStatus(at: url) == .missingProviderEntry)
     }
 
     @Test
@@ -81,12 +81,12 @@ struct ClawdbotOAuthStoreTests {
             ],
         ])
 
-        #expect(ClawdbotOAuthStore.anthropicOAuthStatus(at: url) == .missingTokens)
+        #expect(MoltbotOAuthStore.anthropicOAuthStatus(at: url) == .missingTokens)
     }
 
     private func writeOAuthFile(_ json: [String: Any]) throws -> URL {
         let dir = FileManager().temporaryDirectory
-            .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("moltbot-oauth-\(UUID().uuidString)", isDirectory: true)
         try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
 
         let url = dir.appendingPathComponent("oauth.json")

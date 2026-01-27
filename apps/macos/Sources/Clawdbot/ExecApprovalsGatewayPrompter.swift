@@ -1,5 +1,5 @@
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotKit
+import MoltbotProtocol
 import CoreGraphics
 import Foundation
 import OSLog

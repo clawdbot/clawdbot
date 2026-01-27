@@ -1,6 +1,6 @@
 import { randomToken } from "../commands/onboard-helpers.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
@@ -12,8 +12,8 @@ import type { WizardPrompter } from "./prompts.js";
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
-  baseConfig: ClawdbotConfig;
-  nextConfig: ClawdbotConfig;
+  baseConfig: MoltbotConfig;
+  nextConfig: MoltbotConfig;
   localPort: number;
   quickstartGateway: QuickstartGatewayDefaults;
   prompter: WizardPrompter;
@@ -21,7 +21,7 @@ type ConfigureGatewayOptions = {
 };
 
 type ConfigureGatewayResult = {
-  nextConfig: ClawdbotConfig;
+  nextConfig: MoltbotConfig;
   settings: GatewayWizardSettings;
 };
 
@@ -94,11 +94,6 @@ export async function configureGatewayForOnboarding(
           message: "Gateway auth",
           options: [
             {
-              value: "off",
-              label: "Off (loopback only)",
-              hint: "Not recommended unless you fully trust local processes",
-            },
-            {
               value: "token",
               label: "Token",
               hint: "Recommended default (local + remote)",
@@ -150,9 +145,7 @@ export async function configureGatewayForOnboarding(
   let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(
-      ["Docs:", "https://docs.clawd.bot/gateway/tailscale", "https://docs.clawd.bot/web"].join(
-        "\n",
-      ),
+      ["Docs:", "https://docs.molt.bot/gateway/tailscale", "https://docs.molt.bot/web"].join("\n"),
       "Tailscale",
     );
     tailscaleResetOnExit = Boolean(
@@ -165,17 +158,11 @@ export async function configureGatewayForOnboarding(
 
   // Safety + constraints:
   // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
-  // - Auth off only allowed for bind=loopback.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
     await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
     customBindHost = undefined;
-  }
-
-  if (authMode === "off" && bind !== "loopback") {
-    await prompter.note("Non-loopback bind requires auth. Switching to token auth.", "Note");
-    authMode = "token";
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {

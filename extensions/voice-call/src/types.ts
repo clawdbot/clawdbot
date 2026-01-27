@@ -180,6 +180,7 @@ export type WebhookContext = {
   url: string;
   method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   query?: Record<string, string | string[] | undefined>;
+  remoteAddress?: string;
 };
 
 export type ProviderWebhookParseResult = {

@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import type { AuthProfileConfig } from "../../config/types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
@@ -17,7 +17,7 @@ function isEmailLike(value: string): boolean {
 }
 
 export function suggestOAuthProfileIdForLegacyDefault(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   store: AuthProfileStore;
   provider: string;
   legacyProfileId: string;
@@ -64,7 +64,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
 }
 
 export function repairOAuthProfileIdMismatch(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   store: AuthProfileStore;
   provider: string;
   legacyProfileId?: string;
@@ -123,7 +123,7 @@ export function repairOAuthProfileIdMismatch(params: {
     return { ...order, [resolvedKey]: deduped };
   })();
 
-  const nextCfg: ClawdbotConfig = {
+  const nextCfg: MoltbotConfig = {
     ...params.cfg,
     auth: {
       ...params.cfg.auth,

@@ -217,13 +217,17 @@ export const VoiceCallTunnelConfigSchema = z
     /**
      * Allow ngrok free tier compatibility mode.
      * When true, signature verification failures on ngrok-free.app URLs
-     * will be logged but allowed through. Less secure, but necessary
-     * for ngrok free tier which may modify URLs.
+     * will be allowed only for loopback requests (ngrok local agent).
      */
-    allowNgrokFreeTier: z.boolean().default(true),
+    allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
+    /**
+     * Legacy ngrok free tier compatibility mode (deprecated).
+     * Use allowNgrokFreeTierLoopbackBypass instead.
+     */
+    allowNgrokFreeTier: z.boolean().optional(),
   })
   .strict()
-  .default({ provider: "none", allowNgrokFreeTier: true });
+  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
 export type VoiceCallTunnelConfig = z.infer<typeof VoiceCallTunnelConfigSchema>;
 
 // -----------------------------------------------------------------------------
@@ -380,6 +384,59 @@ export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 // -----------------------------------------------------------------------------
 // Configuration Helpers
 // -----------------------------------------------------------------------------
+
+/**
+ * Resolves the configuration by merging environment variables into missing fields.
+ * Returns a new configuration object with environment variables applied.
+ */
+export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
+  const resolved = JSON.parse(JSON.stringify(config)) as VoiceCallConfig;
+
+  // Telnyx
+  if (resolved.provider === "telnyx") {
+    resolved.telnyx = resolved.telnyx ?? {};
+    resolved.telnyx.apiKey =
+      resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
+    resolved.telnyx.connectionId =
+      resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
+    resolved.telnyx.publicKey =
+      resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+  }
+
+  // Twilio
+  if (resolved.provider === "twilio") {
+    resolved.twilio = resolved.twilio ?? {};
+    resolved.twilio.accountSid =
+      resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
+    resolved.twilio.authToken =
+      resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+  }
+
+  // Plivo
+  if (resolved.provider === "plivo") {
+    resolved.plivo = resolved.plivo ?? {};
+    resolved.plivo.authId =
+      resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
+    resolved.plivo.authToken =
+      resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+  }
+
+  // Tunnel Config
+  resolved.tunnel = resolved.tunnel ?? {
+    provider: "none",
+    allowNgrokFreeTierLoopbackBypass: false,
+  };
+  resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
+    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ||
+    resolved.tunnel.allowNgrokFreeTier ||
+    false;
+  resolved.tunnel.ngrokAuthToken =
+    resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
+  resolved.tunnel.ngrokDomain =
+    resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+
+  return resolved;
+}
 
 /**
  * Validate that the configuration has all required fields for the selected provider.

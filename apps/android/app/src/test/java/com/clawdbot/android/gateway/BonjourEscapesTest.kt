@@ -12,7 +12,7 @@ class BonjourEscapesTest {
 
   @Test
   fun decodeDecodesDecimalEscapes() {
-    assertEquals("Clawdbot Gateway", BonjourEscapes.decode("Clawdbot\\032Gateway"))
+    assertEquals("Moltbot Gateway", BonjourEscapes.decode("Moltbot\\032Gateway"))
     assertEquals("A B", BonjourEscapes.decode("A\\032B"))
     assertEquals("Peter\u2019s Mac", BonjourEscapes.decode("Peter\\226\\128\\153s Mac"))
   }

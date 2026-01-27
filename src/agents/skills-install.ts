@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath } from "../utils.js";
@@ -23,7 +23,7 @@ export type SkillInstallRequest = {
   skillName: string;
   installId: string;
   timeoutMs?: number;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
 };
 
 export type SkillInstallResult = {
@@ -74,7 +74,7 @@ function resolveInstallId(spec: SkillInstallSpec, index: number): string {
 }
 
 function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
-  const specs = entry.clawdbot?.install ?? [];
+  const specs = entry.metadata?.install ?? [];
   for (const [index, spec] of specs.entries()) {
     if (resolveInstallId(spec, index) === installId) return spec;
   }

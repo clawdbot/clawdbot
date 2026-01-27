@@ -43,7 +43,7 @@ enum LaunchAgentManager {
           <string>com.clawdbot.mac</string>
           <key>ProgramArguments</key>
           <array>
-            <string>\(bundlePath)/Contents/MacOS/Clawdbot</string>
+            <string>\(bundlePath)/Contents/MacOS/Moltbot</string>
           </array>
           <key>WorkingDirectory</key>
           <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>

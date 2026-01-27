@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
   test("defaults to main/default when no bindings exist", () => {
-    const cfg: ClawdbotConfig = {};
+    const cfg: MoltbotConfig = {};
     const route = resolveAgentRoute({
       cfg,
       channel: "whatsapp",
@@ -19,7 +19,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("dmScope=per-peer isolates DM sessions by sender id", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       session: { dmScope: "per-peer" },
     };
     const route = resolveAgentRoute({
@@ -32,7 +32,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("dmScope=per-channel-peer isolates DM sessions per channel and sender", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       session: { dmScope: "per-channel-peer" },
     };
     const route = resolveAgentRoute({
@@ -45,7 +45,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("identityLinks collapses per-peer DM sessions across providers", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       session: {
         dmScope: "per-peer",
         identityLinks: {
@@ -63,7 +63,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("identityLinks applies to per-channel-peer DM sessions", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       session: {
         dmScope: "per-channel-peer",
         identityLinks: {
@@ -81,7 +81,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("peer binding wins over account binding", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       bindings: [
         {
           agentId: "a",
@@ -109,7 +109,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("discord channel peer binding wins over guild binding", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       bindings: [
         {
           agentId: "chan",
@@ -142,7 +142,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("guild binding wins over account binding when peer not bound", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       bindings: [
         {
           agentId: "guild",
@@ -170,7 +170,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("missing accountId in binding matches default account only", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       bindings: [{ agentId: "defaultAcct", match: { channel: "whatsapp" } }],
     };
 
@@ -193,7 +193,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("accountId=* matches any account as a channel fallback", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       bindings: [
         {
           agentId: "any",
@@ -212,7 +212,7 @@ describe("resolveAgentRoute", () => {
   });
 
   test("defaultAgentId is used when no binding matches", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         list: [{ id: "home", default: true, workspace: "~/clawd-home" }],
       },

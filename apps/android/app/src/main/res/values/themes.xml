@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.ClawdbotNode" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.MoltbotNode" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>

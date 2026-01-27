@@ -37,10 +37,10 @@ function schedule(coalesceMs: number) {
         pendingReason = reason ?? "retry";
         schedule(DEFAULT_RETRY_MS);
       }
-    } catch (err) {
+    } catch {
+      // Error is already logged by the heartbeat runner; schedule a retry.
       pendingReason = reason ?? "retry";
       schedule(DEFAULT_RETRY_MS);
-      throw err;
     } finally {
       running = false;
       if (pendingReason || scheduled) schedule(coalesceMs);

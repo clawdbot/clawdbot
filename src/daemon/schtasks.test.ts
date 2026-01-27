@@ -9,7 +9,7 @@ import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } f
 describe("schtasks runtime parsing", () => {
   it("parses status and last run info", () => {
     const output = [
-      "TaskName: \\Clawdbot Gateway",
+      "TaskName: \\Moltbot Gateway",
       "Status: Ready",
       "Last Run Time: 1/8/2026 1:23:45 AM",
       "Last Run Result: 0x0",
@@ -23,7 +23,7 @@ describe("schtasks runtime parsing", () => {
 
   it("parses running status", () => {
     const output = [
-      "TaskName: \\Clawdbot Gateway",
+      "TaskName: \\Moltbot Gateway",
       "Status: Running",
       "Last Run Time: 1/8/2026 1:23:45 AM",
       "Last Run Result: 0x0",
@@ -62,9 +62,9 @@ describe("resolveTaskScriptPath", () => {
     const env = {
       USERPROFILE: "C:\\Users\\test",
       CLAWDBOT_PROFILE: "rescue",
-      CLAWDBOT_STATE_DIR: "C:\\State\\clawdbot",
+      CLAWDBOT_STATE_DIR: "C:\\State\\moltbot",
     };
-    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\clawdbot", "gateway.cmd"));
+    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\moltbot", "gateway.cmd"));
   });
 
   it("handles case-insensitive 'Default' profile", () => {
@@ -96,7 +96,7 @@ describe("resolveTaskScriptPath", () => {
 
 describe("readScheduledTaskCommand", () => {
   it("parses basic command script", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const scriptPath = path.join(tmpDir, ".clawdbot", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -117,13 +117,13 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses script with working directory", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const scriptPath = path.join(tmpDir, ".clawdbot", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
-        ["@echo off", "cd /d C:\\Projects\\clawdbot", "node gateway.js"].join("\r\n"),
+        ["@echo off", "cd /d C:\\Projects\\moltbot", "node gateway.js"].join("\r\n"),
         "utf8",
       );
 
@@ -131,7 +131,7 @@ describe("readScheduledTaskCommand", () => {
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js"],
-        workingDirectory: "C:\\Projects\\clawdbot",
+        workingDirectory: "C:\\Projects\\moltbot",
       });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -139,7 +139,7 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses script with environment variables", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const scriptPath = path.join(tmpDir, ".clawdbot", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -164,7 +164,7 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses script with quoted arguments containing spaces", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const scriptPath = path.join(tmpDir, ".clawdbot", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -186,7 +186,7 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("returns null when script does not exist", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const env = { USERPROFILE: tmpDir, CLAWDBOT_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
@@ -197,7 +197,7 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("returns null when script has no command", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const scriptPath = path.join(tmpDir, ".clawdbot", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -216,7 +216,7 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses full script with all components", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-schtasks-test-"));
     try {
       const scriptPath = path.join(tmpDir, ".clawdbot", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -224,8 +224,8 @@ describe("readScheduledTaskCommand", () => {
         scriptPath,
         [
           "@echo off",
-          "rem Clawdbot Gateway",
-          "cd /d C:\\Projects\\clawdbot",
+          "rem Moltbot Gateway",
+          "cd /d C:\\Projects\\moltbot",
           "set NODE_ENV=production",
           "set CLAWDBOT_PORT=18789",
           "node gateway.js --verbose",
@@ -237,7 +237,7 @@ describe("readScheduledTaskCommand", () => {
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js", "--verbose"],
-        workingDirectory: "C:\\Projects\\clawdbot",
+        workingDirectory: "C:\\Projects\\moltbot",
         environment: {
           NODE_ENV: "production",
           CLAWDBOT_PORT: "18789",

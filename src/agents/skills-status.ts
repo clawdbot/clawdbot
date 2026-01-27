@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -69,7 +69,7 @@ export type SkillStatusReport = {
 };
 
 function resolveSkillKey(entry: SkillEntry): string {
-  return entry.clawdbot?.skillKey ?? entry.skill.name;
+  return entry.metadata?.skillKey ?? entry.skill.name;
 }
 
 function selectPreferredInstallSpec(
@@ -98,7 +98,7 @@ function normalizeInstallOptions(
   entry: SkillEntry,
   prefs: SkillsInstallPreferences,
 ): SkillInstallOption[] {
-  const install = entry.clawdbot?.install ?? [];
+  const install = entry.metadata?.install ?? [];
   if (install.length === 0) return [];
 
   const platform = process.platform;
@@ -147,7 +147,7 @@ function normalizeInstallOptions(
 
 function buildSkillStatus(
   entry: SkillEntry,
-  config?: ClawdbotConfig,
+  config?: MoltbotConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
 ): SkillStatusEntry {
@@ -156,20 +156,20 @@ function buildSkillStatus(
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const always = entry.clawdbot?.always === true;
-  const emoji = entry.clawdbot?.emoji ?? entry.frontmatter.emoji;
+  const always = entry.metadata?.always === true;
+  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
   const homepageRaw =
-    entry.clawdbot?.homepage ??
+    entry.metadata?.homepage ??
     entry.frontmatter.homepage ??
     entry.frontmatter.website ??
     entry.frontmatter.url;
   const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
 
-  const requiredBins = entry.clawdbot?.requires?.bins ?? [];
-  const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
-  const requiredEnv = entry.clawdbot?.requires?.env ?? [];
-  const requiredConfig = entry.clawdbot?.requires?.config ?? [];
-  const requiredOs = entry.clawdbot?.os ?? [];
+  const requiredBins = entry.metadata?.requires?.bins ?? [];
+  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
+  const requiredEnv = entry.metadata?.requires?.env ?? [];
+  const requiredConfig = entry.metadata?.requires?.config ?? [];
+  const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
     if (hasBinary(bin)) return false;
@@ -195,7 +195,7 @@ function buildSkillStatus(
   for (const envName of requiredEnv) {
     if (process.env[envName]) continue;
     if (skillConfig?.env?.[envName]) continue;
-    if (skillConfig?.apiKey && entry.clawdbot?.primaryEnv === envName) {
+    if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
       continue;
     }
     missingEnv.push(envName);
@@ -234,7 +234,7 @@ function buildSkillStatus(
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
     skillKey,
-    primaryEnv: entry.clawdbot?.primaryEnv,
+    primaryEnv: entry.metadata?.primaryEnv,
     emoji,
     homepage,
     always,
@@ -257,7 +257,7 @@ function buildSkillStatus(
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: {
-    config?: ClawdbotConfig;
+    config?: MoltbotConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;

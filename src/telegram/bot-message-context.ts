@@ -1,6 +1,12 @@
 import type { Bot } from "grammy";
 
 import { resolveAckReaction } from "../agents/identity.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../agents/model-catalog.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
@@ -15,7 +21,7 @@ import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -25,6 +31,7 @@ import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reac
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { logInboundDrop } from "../channels/logging.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -48,7 +55,17 @@ import {
 import { upsertTelegramPairingRequest } from "./pairing-store.js";
 import type { TelegramContext } from "./bot/types.js";
 
-type TelegramMediaRef = { path: string; contentType?: string };
+type TelegramMediaRef = {
+  path: string;
+  contentType?: string;
+  stickerMetadata?: {
+    emoji?: string;
+    setName?: string;
+    fileId?: string;
+    fileUniqueId?: string;
+    cachedDescription?: string;
+  };
+};
 
 type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
@@ -79,7 +96,7 @@ type BuildTelegramMessageContextParams = {
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   account: { accountId: string };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -92,6 +109,24 @@ type BuildTelegramMessageContextParams = {
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
 };
+
+async function resolveStickerVisionSupport(params: {
+  cfg: MoltbotConfig;
+  agentId?: string;
+}): Promise<boolean> {
+  try {
+    const catalog = await loadModelCatalog({ config: params.cfg });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
+    if (!entry) return false;
+    return modelSupportsVision(entry);
+  } catch {
+    return false;
+  }
+}
 
 export const buildTelegramMessageContext = async ({
   primaryCtx,
@@ -165,16 +200,19 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
-    await bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId));
+    await withTelegramApiErrorLogging({
+      operation: "sendChatAction",
+      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId)),
+    });
   };
 
   const sendRecordVoice = async () => {
     try {
-      await bot.api.sendChatAction(
-        chatId,
-        "record_voice",
-        buildTypingThreadParams(resolvedThreadId),
-      );
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: () =>
+          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(resolvedThreadId)),
+      });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
@@ -227,19 +265,23 @@ export const buildTelegramMessageContext = async ({
                 },
                 "telegram pairing request",
               );
-              await bot.api.sendMessage(
-                chatId,
-                [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Your Telegram user id: ${telegramUserId}`,
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  formatCliCommand("clawdbot pairing approve telegram <code>"),
-                ].join("\n"),
-              );
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    [
+                      "Moltbot: access not configured.",
+                      "",
+                      `Your Telegram user id: ${telegramUserId}`,
+                      "",
+                      `Pairing code: ${code}`,
+                      "",
+                      "Ask the bot owner to approve with:",
+                      formatCliCommand("moltbot pairing approve telegram <code>"),
+                    ].join("\n"),
+                  ),
+              });
             }
           } catch (err) {
             logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
@@ -294,6 +336,21 @@ export const buildTelegramMessageContext = async ({
   else if (msg.video) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   else if (msg.document) placeholder = "<media:document>";
+  else if (msg.sticker) placeholder = "<media:sticker>";
+
+  // Check if sticker has a cached description - if so, use it instead of sending the image
+  const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
+  const stickerSupportsVision = msg.sticker
+    ? await resolveStickerVisionSupport({ cfg, agentId: route.agentId })
+    : false;
+  const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
+  if (stickerCacheHit) {
+    // Format cached description with sticker context
+    const emoji = allMedia[0]?.stickerMetadata?.emoji;
+    const setName = allMedia[0]?.stickerMetadata?.setName;
+    const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
+    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
+  }
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
@@ -408,7 +465,10 @@ export const buildTelegramMessageContext = async ({
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
   const ackReactionPromise =
     shouldAckReaction() && msg.message_id && reactionApi
-      ? reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]).then(
+      ? withTelegramApiErrorLogging({
+          operation: "setMessageReaction",
+          fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
+        }).then(
           () => true,
           (err) => {
             logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
@@ -514,15 +574,26 @@ export const buildTelegramMessageContext = async ({
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    MediaPath: allMedia[0]?.path,
-    MediaType: allMedia[0]?.contentType,
-    MediaUrl: allMedia[0]?.path,
-    MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-    MediaUrls: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      allMedia.length > 0
+    // Filter out cached stickers from media - their description is already in the message body
+    MediaPath: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaType: stickerCacheHit ? undefined : allMedia[0]?.contentType,
+    MediaUrl: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaPaths: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? allMedia.map((m) => m.path)
+        : undefined,
+    MediaUrls: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? allMedia.map((m) => m.path)
+        : undefined,
+    MediaTypes: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
         ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
+    Sticker: allMedia[0]?.stickerMetadata,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     MessageThreadId: resolvedThreadId,

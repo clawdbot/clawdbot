@@ -8,8 +8,8 @@ read_when:
 
 # Text-to-speech (TTS)
 
-Clawdbot can convert outbound replies into audio using ElevenLabs, OpenAI, Edge TTS, or Gemini.
-It works anywhere Clawdbot can send audio; Telegram gets a round voice-note bubble.
+Moltbot can convert outbound replies into audio using ElevenLabs, OpenAI, Edge TTS, or Gemini.
+It works anywhere Moltbot can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
@@ -37,7 +37,7 @@ If you want OpenAI, ElevenLabs, or Gemini:
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 
-Edge TTS does **not** require an API key. If no API keys are found, Clawdbot defaults
+Edge TTS does **not** require an API key. If no API keys are found, Moltbot defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
@@ -67,7 +67,7 @@ when no OpenAI or ElevenLabs API keys are available.
 
 ## Config
 
-TTS config lives under `messages.tts` in `clawdbot.json`.
+TTS config lives under `messages.tts` in `moltbot.json`.
 Full schema is in [Gateway configuration](/gateway/configuration).
 
 ### Minimal config (enable + provider)
@@ -228,7 +228,7 @@ Then run:
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: `"elevenlabs"`, `"openai"`, `"edge"`, or `"gemini"`.
-  - If `provider` is **unset**, Clawdbot picks OpenAI when configured, then ElevenLabs, then Edge.
+  - If `provider` is **unset**, Moltbot picks OpenAI when configured, then ElevenLabs, then Edge.
   - Gemini falls back to ElevenLabs, then OpenAI, then Edge (if enabled).
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
@@ -342,7 +342,7 @@ These override `messages.tts.*` for that host.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
     guaranteed Opus voice notes.
-  - If the configured Edge output format fails, Clawdbot retries with MP3.
+  - If the configured Edge output format fails, Moltbot retries with MP3.
 
 Gemini returns raw PCM audio and requires `ffmpeg` to transcode into MP3/Opus.
 
@@ -350,7 +350,7 @@ OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
 
 ## Auto-TTS behavior
 
-When enabled, Clawdbot:
+When enabled, Moltbot:
 - skips TTS if the reply already contains media or a `MEDIA:` directive.
 - skips very short replies (< 10 chars).
 - summarizes long replies when enabled using `agents.defaults.model.primary` (or `summaryModel`).
@@ -380,7 +380,7 @@ Reply -> TTS enabled?
 There is a single command: `/tts`.
 See [Slash commands](/tools/slash-commands) for enablement details.
 
-Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
+Discord note: `/tts` is a built-in Discord command, so Moltbot registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
 ```
@@ -392,7 +392,7 @@ Discord note: `/tts` is a built-in Discord command, so Clawdbot registers
 /tts provider gemini
 /tts limit 2000
 /tts summary off
-/tts audio Hello from Clawdbot
+/tts audio Hello from Moltbot
 ```
 
 Notes:

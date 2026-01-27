@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import {
   mergeAllowlist,
   summarizeMapping,
-  type ClawdbotConfig,
+  type MoltbotConfig,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -20,7 +20,7 @@ import { resolveMSTeamsCredentials } from "./token.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 export type MonitorMSTeamsOpts = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;

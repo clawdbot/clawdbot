@@ -252,6 +252,7 @@ export class VoiceCallWebhookServer {
       url: `http://${req.headers.host}${req.url}`,
       method: "POST",
       query: Object.fromEntries(url.searchParams),
+      remoteAddress: req.socket.remoteAddress ?? undefined,
     };
 
     // Verify signature

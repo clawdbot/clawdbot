@@ -4,18 +4,18 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 
 async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `clawdbot-${label}-`));
+  return fs.mkdtemp(path.join(os.tmpdir(), `moltbot-${label}-`));
 }
 
 async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
 }
 
-function buildParams(params: { config?: ClawdbotConfig; workspaceDir?: string; cwd?: string }) {
+function buildParams(params: { config?: MoltbotConfig; workspaceDir?: string; cwd?: string }) {
   return buildSystemPromptParams({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -63,7 +63,7 @@ describe("buildSystemPromptParams repo root", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await makeRepoRoot(workspaceDir);
 
-    const config: ClawdbotConfig = {
+    const config: MoltbotConfig = {
       agents: {
         defaults: {
           repoRoot,
@@ -83,7 +83,7 @@ describe("buildSystemPromptParams repo root", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await makeRepoRoot(repoRoot);
 
-    const config: ClawdbotConfig = {
+    const config: MoltbotConfig = {
       agents: {
         defaults: {
           repoRoot: path.join(temp, "missing"),

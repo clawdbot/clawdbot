@@ -1,7 +1,7 @@
-import ClawdbotIPC
+import MoltbotIPC
 import CoreLocation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized)
 @MainActor

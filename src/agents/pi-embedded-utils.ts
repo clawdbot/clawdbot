@@ -211,7 +211,13 @@ export function formatReasoningMessage(text: string): string {
   if (!trimmed) return "";
   // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
   // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
-  return `Reasoning:\n_${trimmed}_`;
+  // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
+  // each non-empty line separately.
+  const italicLines = trimmed
+    .split("\n")
+    .map((line) => (line ? `_${line}_` : line))
+    .join("\n");
+  return `Reasoning:\n${italicLines}`;
 }
 
 type ThinkTaggedSplitBlock =

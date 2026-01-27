@@ -6,7 +6,7 @@ import { ensureAuthProfileStore, markAuthProfileFailure } from "./auth-profiles.
 
 describe("markAuthProfileFailure", () => {
   it("disables billing failures for ~5 hours by default", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       fs.writeFileSync(
@@ -42,7 +42,7 @@ describe("markAuthProfileFailure", () => {
     }
   });
   it("honors per-provider billing backoff overrides", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       fs.writeFileSync(
@@ -86,7 +86,7 @@ describe("markAuthProfileFailure", () => {
     }
   });
   it("resets backoff counters outside the failure window", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       const now = Date.now();

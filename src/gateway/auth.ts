@@ -1,8 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
-import { isTrustedProxyAddress, resolveGatewayClientIp } from "./net.js";
-export type ResolvedGatewayAuthMode = "none" | "token" | "password";
+import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
+export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
@@ -13,7 +14,7 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token";
+  method?: "token" | "password" | "tailscale" | "device-token";
   user?: string;
   reason?: string;
 };
@@ -29,9 +30,15 @@ type TailscaleUser = {
   profilePic?: string;
 };
 
+type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
+
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+function normalizeLogin(login: string): string {
+  return login.trim().toLowerCase();
 }
 
 function isLoopbackAddress(ip: string | undefined): boolean {
@@ -58,6 +65,12 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
+  if (!req) return undefined;
+  const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
+  return forwardedFor ? parseForwardedForClientIp(forwardedFor) : undefined;
+}
+
 function resolveRequestClientIp(
   req?: IncomingMessage,
   trustedProxies?: string[],
@@ -71,7 +84,7 @@ function resolveRequestClientIp(
   });
 }
 
-function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
   if (!req) return false;
   const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
   if (!isLoopbackAddress(clientIp)) return false;
@@ -118,6 +131,39 @@ function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
   return isLoopbackAddress(req.socket?.remoteAddress) && hasTailscaleProxyHeaders(req);
 }
 
+async function resolveVerifiedTailscaleUser(params: {
+  req?: IncomingMessage;
+  tailscaleWhois: TailscaleWhoisLookup;
+}): Promise<{ ok: true; user: TailscaleUser } | { ok: false; reason: string }> {
+  const { req, tailscaleWhois } = params;
+  const tailscaleUser = getTailscaleUser(req);
+  if (!tailscaleUser) {
+    return { ok: false, reason: "tailscale_user_missing" };
+  }
+  if (!isTailscaleProxyRequest(req)) {
+    return { ok: false, reason: "tailscale_proxy_missing" };
+  }
+  const clientIp = resolveTailscaleClientIp(req);
+  if (!clientIp) {
+    return { ok: false, reason: "tailscale_whois_failed" };
+  }
+  const whois = await tailscaleWhois(clientIp);
+  if (!whois?.login) {
+    return { ok: false, reason: "tailscale_whois_failed" };
+  }
+  if (normalizeLogin(whois.login) !== normalizeLogin(tailscaleUser.login)) {
+    return { ok: false, reason: "tailscale_user_mismatch" };
+  }
+  return {
+    ok: true,
+    user: {
+      login: whois.login,
+      name: whois.name ?? tailscaleUser.name,
+      profilePic: tailscaleUser.profilePic,
+    },
+  };
+}
+
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
   env?: NodeJS.ProcessEnv;
@@ -127,8 +173,7 @@ export function resolveGatewayAuth(params: {
   const env = params.env ?? process.env;
   const token = authConfig.token ?? env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
   const password = authConfig.password ?? env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
-  const mode: ResolvedGatewayAuth["mode"] =
-    authConfig.mode ?? (password ? "password" : token ? "token" : "none");
+  const mode: ResolvedGatewayAuth["mode"] = authConfig.mode ?? (password ? "password" : "token");
   const allowTailscale =
     authConfig.allowTailscale ?? (params.tailscaleMode === "serve" && mode !== "password");
   return {
@@ -141,6 +186,7 @@ export function resolveGatewayAuth(params: {
 
 export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
   if (auth.mode === "token" && !auth.token) {
+    if (auth.allowTailscale) return;
     throw new Error(
       "gateway auth mode is token, but no token was configured (set gateway.auth.token or CLAWDBOT_GATEWAY_TOKEN)",
     );
@@ -155,34 +201,24 @@ export async function authorizeGatewayConnect(params: {
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
   trustedProxies?: string[];
+  tailscaleWhois?: TailscaleWhoisLookup;
 }): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
+  const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
   if (auth.allowTailscale && !localDirect) {
-    const tailscaleUser = getTailscaleUser(req);
-    const tailscaleProxy = isTailscaleProxyRequest(req);
-
-    if (tailscaleUser && tailscaleProxy) {
+    const tailscaleCheck = await resolveVerifiedTailscaleUser({
+      req,
+      tailscaleWhois,
+    });
+    if (tailscaleCheck.ok) {
       return {
         ok: true,
         method: "tailscale",
-        user: tailscaleUser.login,
+        user: tailscaleCheck.user.login,
       };
     }
-
-    if (auth.mode === "none") {
-      if (!tailscaleUser) {
-        return { ok: false, reason: "tailscale_user_missing" };
-      }
-      if (!tailscaleProxy) {
-        return { ok: false, reason: "tailscale_proxy_missing" };
-      }
-    }
-  }
-
-  if (auth.mode === "none") {
-    return { ok: true, method: "none" };
   }
 
   if (auth.mode === "token") {
@@ -192,7 +228,7 @@ export async function authorizeGatewayConnect(params: {
     if (!connectAuth?.token) {
       return { ok: false, reason: "token_missing" };
     }
-    if (connectAuth.token !== auth.token) {
+    if (!safeEqual(connectAuth.token, auth.token)) {
       return { ok: false, reason: "token_mismatch" };
     }
     return { ok: true, method: "token" };

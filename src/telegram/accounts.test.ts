@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveTelegramAccount } from "./accounts.js";
 
 describe("resolveTelegramAccount", () => {
@@ -8,7 +8,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -31,7 +31,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "tok-env";
     try {
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -54,7 +54,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "tok-env";
     try {
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         channels: {
           telegram: { botToken: "tok-config" },
         },
@@ -77,7 +77,7 @@ describe("resolveTelegramAccount", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },

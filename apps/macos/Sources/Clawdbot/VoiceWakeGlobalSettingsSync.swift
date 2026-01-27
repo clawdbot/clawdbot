@@ -1,4 +1,4 @@
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 import OSLog
 

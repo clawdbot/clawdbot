@@ -6,7 +6,7 @@ read_when:
 ---
 # Platforms
 
-Clawdbot core is written in TypeScript. **Node is the recommended runtime**.
+Moltbot core is written in TypeScript. **Node is the recommended runtime**.
 Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
 Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
@@ -24,7 +24,6 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 ## VPS & hosting
 
 - VPS hub: [VPS hosting](/vps)
-- Railway (one-click): [Railway](/railway)
 - Fly.io: [Fly.io](/platforms/fly)
 - Hetzner (Docker): [Hetzner](/platforms/hetzner)
 - GCP (Compute Engine): [GCP](/platforms/gcp)
@@ -35,17 +34,17 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Install guide: [Getting Started](/start/getting-started)
 - Gateway runbook: [Gateway](/gateway)
 - Gateway configuration: [Configuration](/gateway/configuration)
-- Service status: `clawdbot gateway status`
+- Service status: `moltbot gateway status`
 
 ## Gateway service install (CLI)
 
 Use one of these (all supported):
 
-- Wizard (recommended): `clawdbot onboard --install-daemon`
-- Direct: `clawdbot gateway install`
-- Configure flow: `clawdbot configure` → select **Gateway service**
-- Repair/migrate: `clawdbot doctor` (offers to install or fix the service)
+- Wizard (recommended): `moltbot onboard --install-daemon`
+- Direct: `moltbot gateway install`
+- Configure flow: `moltbot configure` → select **Gateway service**
+- Repair/migrate: `moltbot doctor` (offers to install or fix the service)
 
 The service target depends on OS:
 - macOS: LaunchAgent (`com.clawdbot.gateway` or `com.clawdbot.<profile>`)
-- Linux/WSL2: systemd user service (`clawdbot-gateway[-<profile>].service`)
+- Linux/WSL2: systemd user service (`moltbot-gateway[-<profile>].service`)

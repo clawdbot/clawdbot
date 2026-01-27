@@ -1,5 +1,5 @@
 ---
-summary: "Integrated browser control server + action commands"
+summary: "Integrated browser control service + action commands"
 read_when:
   - Adding agent-controlled browser automation
   - Debugging why clawd is interfering with your own Chrome
@@ -8,9 +8,9 @@ read_when:
 
 # Browser (clawd-managed)
 
-Clawdbot can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
+Moltbot can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
 It is isolated from your personal browser and is managed through a small local
-control server.
+control service inside the Gateway (loopback only).
 
 Beginner view:
 - Think of it as a **separate, agent-only browser**.
@@ -32,10 +32,10 @@ agent automation and verification.
 ## Quick start
 
 ```bash
-clawdbot browser --browser-profile clawd status
-clawdbot browser --browser-profile clawd start
-clawdbot browser --browser-profile clawd open https://example.com
-clawdbot browser --browser-profile clawd snapshot
+moltbot browser --browser-profile clawd status
+moltbot browser --browser-profile clawd start
+moltbot browser --browser-profile clawd open https://example.com
+moltbot browser --browser-profile clawd snapshot
 ```
 
 If you get “Browser disabled”, enable it in config (see below) and restart the
@@ -44,21 +44,20 @@ Gateway.
 ## Profiles: `clawd` vs `chrome`
 
 - `clawd`: managed, isolated browser (no extension required).
-- `chrome`: extension relay to your **system browser** (requires the Clawdbot
+- `chrome`: extension relay to your **system browser** (requires the Moltbot
   extension to be attached to a tab).
 
 Set `browser.defaultProfile: "clawd"` if you want managed mode by default.
 
 ## Configuration
 
-Browser settings live in `~/.clawdbot/clawdbot.json`.
+Browser settings live in `~/.clawdbot/moltbot.json`.
 
 ```json5
 {
   browser: {
     enabled: true,                    // default: true
-    controlUrl: "http://127.0.0.1:18791",
-    cdpUrl: "http://127.0.0.1:18792", // defaults to controlUrl + 1
+    // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500,         // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
     defaultProfile: "chrome",
@@ -77,10 +76,11 @@ Browser settings live in `~/.clawdbot/clawdbot.json`.
 ```
 
 Notes:
-- `controlUrl` defaults to `http://127.0.0.1:18791`.
+- The browser control service binds to loopback on a port derived from `gateway.port`
+  (default: `18791`, which is gateway + 2). The relay uses the next port (`18792`).
 - If you override the Gateway port (`gateway.port` or `CLAWDBOT_GATEWAY_PORT`),
-  the default browser ports shift to stay in the same “family” (control = gateway + 2).
-- `cdpUrl` defaults to `controlUrl + 1` when unset.
+  the derived browser ports shift to stay in the same “family”.
+- `cdpUrl` defaults to the relay port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
@@ -92,13 +92,13 @@ Notes:
 ## Use Brave (or another Chromium-based browser)
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
-Clawdbot uses it automatically. Set `browser.executablePath` to override
+Moltbot uses it automatically. Set `browser.executablePath` to override
 auto-detection:
 
 CLI example:
 
 ```bash
-clawdbot config set browser.executablePath "/usr/bin/google-chrome"
+moltbot config set browser.executablePath "/usr/bin/google-chrome"
 ```
 
 ```json5
@@ -126,51 +126,24 @@ clawdbot config set browser.executablePath "/usr/bin/google-chrome"
 
 ## Local vs remote control
 
-- **Local control (default):** `controlUrl` is loopback (`127.0.0.1`/`localhost`).
-  The Gateway starts the control server and can launch a local browser.
-- **Remote control:** `controlUrl` is non-loopback. The Gateway **does not** start
-  a local server; it assumes you are pointing at an existing server elsewhere.
+- **Local control (default):** the Gateway starts the loopback control service and can launch a local browser.
+- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
-  attach to a remote Chromium-based browser. In this case, Clawdbot will not launch a local browser.
-
-## Remote browser (control server)
-
-You can run the **browser control server** on another machine and point your
-Gateway at it with a remote `controlUrl`. This lets the agent drive a browser
-outside the host (lab box, VM, remote desktop, etc.).
-
-Key points:
-- The **control server** speaks to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
-- The **Gateway** only needs the HTTP control URL.
-- Profiles are resolved on the **control server** side.
-
-Example:
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://10.0.0.42:18791",
-    defaultProfile: "work"
-  }
-}
-```
-
-Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
-directly to a Chromium-based browser instance without a remote control server.
+  attach to a remote Chromium-based browser. In this case, Moltbot will not launch a local browser.
 
 Remote CDP URLs can include auth:
 - Query tokens (e.g., `https://provider.example?token=<token>`)
 - HTTP Basic auth (e.g., `https://user:pass@provider.example`)
 
-Clawdbot preserves the auth when calling `/json/*` endpoints and when connecting
+Moltbot preserves the auth when calling `/json/*` endpoints and when connecting
 to the CDP WebSocket. Prefer environment variables or secrets managers for
 tokens instead of committing them to config files.
 
-### Node browser proxy (zero-config default)
+## Node browser proxy (zero-config default)
 
-If you run a **node host** on the machine that has your browser, Clawdbot can
-auto-route browser tool calls to that node without any custom `controlUrl`
-setup. This is the default path for remote gateways.
+If you run a **node host** on the machine that has your browser, Moltbot can
+auto-route browser tool calls to that node without any extra browser config.
+This is the default path for remote gateways.
 
 Notes:
 - The node host exposes its local browser control server via a **proxy command**.
@@ -179,10 +152,10 @@ Notes:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"`
 
-### Browserless (hosted remote CDP)
+## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
-CDP endpoints over HTTPS. You can point a Clawdbot browser profile at a
+CDP endpoints over HTTPS. You can point a Moltbot browser profile at a
 Browserless region endpoint and authenticate with your API key.
 
 Example:
@@ -207,98 +180,20 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
-### Running the control server on the browser machine
-
-Run a standalone browser control server (recommended when your Gateway is remote):
-
-```bash
-# on the machine that runs Chrome/Brave/Edge
-clawdbot browser serve --bind <browser-host> --port 18791 --token <token>
-```
-
-Then point your Gateway at it:
-
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://<browser-host>:18791",
-
-    // Option A (recommended): keep token in env on the Gateway
-    // (avoid writing secrets into config files)
-    // controlToken: "<token>"
-  }
-}
-```
-
-And set the auth token in the Gateway environment:
-
-```bash
-export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
-```
-
-Option B: store the token in the Gateway config instead (same shared token):
-
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://<browser-host>:18791",
-    controlToken: "<token>"
-  }
-}
-```
-
 ## Security
 
-This section covers the **browser control server** (`browser.controlUrl`) used for agent browser automation.
-
 Key ideas:
-- Treat the browser control server like an admin API: **private network only**.
-- Use **token auth** always when the server is reachable off-machine.
-- Prefer **Tailnet-only** connectivity over LAN exposure.
+- Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
+- Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
-### Tokens (what is shared with what?)
-
-- `browser.controlToken` / `CLAWDBOT_BROWSER_CONTROL_TOKEN` is **only** for authenticating browser control HTTP requests to `browser.controlUrl`.
-- It is **not** the Gateway token (`gateway.auth.token`) and **not** a node pairing token.
-- You *can* reuse the same string value, but it’s better to keep them separate to reduce blast radius.
-
-### Binding (don’t expose to your LAN by accident)
-
-Recommended:
-- Keep `clawdbot browser serve` bound to loopback (`127.0.0.1`) and publish it via Tailscale.
-- Or bind to a Tailnet IP only (never `0.0.0.0`) and require a token.
-
-Avoid:
-- `--bind 0.0.0.0` (LAN-visible). Even with token auth, traffic is plain HTTP unless you also add TLS.
-
-### TLS / HTTPS (recommended approach: terminate in front)
-
-Best practice here: keep `clawdbot browser serve` on HTTP and terminate TLS in front.
-
-If you’re already using Tailscale, you have two good options:
-
-1) **Tailnet-only, still HTTP** (transport is encrypted by Tailscale):
-- Keep `controlUrl` as `http://…` but ensure it’s only reachable over your tailnet.
-
-2) **Serve HTTPS via Tailscale** (nice UX: `https://…` URL):
-
-```bash
-# on the browser machine
-clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
-tailscale serve https / http://127.0.0.1:18791
-```
-
-Then set your Gateway config `browser.controlUrl` to the HTTPS URL (MagicDNS/ts.net) and keep using the same token.
-
-Notes:
-- Do **not** use Tailscale Funnel for this unless you explicitly want to make the endpoint public.
-- For Tailnet setup/background, see [Gateway web surfaces](/web/index) and the [Gateway CLI](/cli/gateway).
+Remote CDP tips:
+- Prefer HTTPS endpoints and short-lived tokens where possible.
+- Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
 
-Clawdbot supports multiple named profiles (routing configs). Profiles can be:
+Moltbot supports multiple named profiles (routing configs). Profiles can be:
 - **clawd-managed**: a dedicated Chromium-based browser instance with its own user data directory + CDP port
 - **remote**: an explicit CDP URL (Chromium-based browser running elsewhere)
 - **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
@@ -313,18 +208,17 @@ All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`
 
 ## Chrome extension relay (use your existing Chrome)
 
-Clawdbot can also drive **your existing Chrome tabs** (no separate “clawd” Chrome instance) via a local CDP relay + a Chrome extension.
+Moltbot can also drive **your existing Chrome tabs** (no separate “clawd” Chrome instance) via a local CDP relay + a Chrome extension.
 
 Full guide: [Chrome extension](/tools/chrome-extension)
 
 Flow:
-- You run a **browser control server** (Gateway on the same machine, or `clawdbot browser serve`).
+- The Gateway runs locally (same machine) or a node host runs on the browser machine.
 - A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
-- You click the **Clawdbot Browser Relay** extension icon on a tab to attach (it does not auto-attach).
+- You click the **Moltbot Browser Relay** extension icon on a tab to attach (it does not auto-attach).
 - The agent controls that tab via the normal `browser` tool, by selecting the right profile.
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
-Use `browser serve` only when the Gateway runs elsewhere (remote mode).
+If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
 
 ### Sandboxed sessions
 
@@ -338,21 +232,21 @@ Chrome extension relay takeover requires host browser control, so either:
 1) Load the extension (dev/unpacked):
 
 ```bash
-clawdbot browser extension install
+moltbot browser extension install
 ```
 
 - Chrome → `chrome://extensions` → enable “Developer mode”
-- “Load unpacked” → select the directory printed by `clawdbot browser extension path`
+- “Load unpacked” → select the directory printed by `moltbot browser extension path`
 - Pin the extension, then click it on the tab you want to control (badge shows `ON`).
 
 2) Use it:
-- CLI: `clawdbot browser --browser-profile chrome tabs`
+- CLI: `moltbot browser --browser-profile chrome tabs`
 - Agent tool: `browser` with `profile="chrome"`
 
 Optional: if you want a different name or relay port, create your own profile:
 
 ```bash
-clawdbot browser create-profile \
+moltbot browser create-profile \
   --name my-chrome \
   --driver extension \
   --cdp-url http://127.0.0.1:18792 \
@@ -371,7 +265,7 @@ Notes:
 
 ## Browser selection
 
-When launching locally, Clawdbot picks the first available:
+When launching locally, Moltbot picks the first available:
 1. Chrome
 2. Brave
 3. Edge
@@ -387,8 +281,7 @@ Platforms:
 
 ## Control API (optional)
 
-If you want to integrate directly, the browser control server exposes a small
-HTTP API:
+For local integrations only, the Gateway exposes a small loopback HTTP API:
 
 - Status/start/stop: `GET /`, `POST /start`, `POST /stop`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
@@ -414,7 +307,7 @@ For the Chrome extension relay driver, ARIA snapshots and screenshots require Pl
 
 If you see `Playwright is not available in this gateway build`, install the full
 Playwright package (not `playwright-core`) and restart the gateway, or reinstall
-Clawdbot with browser support.
+Moltbot with browser support.
 
 ## How it works (internal)
 
@@ -434,76 +327,76 @@ All commands accept `--browser-profile <name>` to target a specific profile.
 All commands also accept `--json` for machine-readable output (stable payloads).
 
 Basics:
-- `clawdbot browser status`
-- `clawdbot browser start`
-- `clawdbot browser stop`
-- `clawdbot browser tabs`
-- `clawdbot browser tab`
-- `clawdbot browser tab new`
-- `clawdbot browser tab select 2`
-- `clawdbot browser tab close 2`
-- `clawdbot browser open https://example.com`
-- `clawdbot browser focus abcd1234`
-- `clawdbot browser close abcd1234`
+- `moltbot browser status`
+- `moltbot browser start`
+- `moltbot browser stop`
+- `moltbot browser tabs`
+- `moltbot browser tab`
+- `moltbot browser tab new`
+- `moltbot browser tab select 2`
+- `moltbot browser tab close 2`
+- `moltbot browser open https://example.com`
+- `moltbot browser focus abcd1234`
+- `moltbot browser close abcd1234`
 
 Inspection:
-- `clawdbot browser screenshot`
-- `clawdbot browser screenshot --full-page`
-- `clawdbot browser screenshot --ref 12`
-- `clawdbot browser screenshot --ref e12`
-- `clawdbot browser snapshot`
-- `clawdbot browser snapshot --format aria --limit 200`
-- `clawdbot browser snapshot --interactive --compact --depth 6`
-- `clawdbot browser snapshot --efficient`
-- `clawdbot browser snapshot --labels`
-- `clawdbot browser snapshot --selector "#main" --interactive`
-- `clawdbot browser snapshot --frame "iframe#main" --interactive`
-- `clawdbot browser console --level error`
-- `clawdbot browser errors --clear`
-- `clawdbot browser requests --filter api --clear`
-- `clawdbot browser pdf`
-- `clawdbot browser responsebody "**/api" --max-chars 5000`
+- `moltbot browser screenshot`
+- `moltbot browser screenshot --full-page`
+- `moltbot browser screenshot --ref 12`
+- `moltbot browser screenshot --ref e12`
+- `moltbot browser snapshot`
+- `moltbot browser snapshot --format aria --limit 200`
+- `moltbot browser snapshot --interactive --compact --depth 6`
+- `moltbot browser snapshot --efficient`
+- `moltbot browser snapshot --labels`
+- `moltbot browser snapshot --selector "#main" --interactive`
+- `moltbot browser snapshot --frame "iframe#main" --interactive`
+- `moltbot browser console --level error`
+- `moltbot browser errors --clear`
+- `moltbot browser requests --filter api --clear`
+- `moltbot browser pdf`
+- `moltbot browser responsebody "**/api" --max-chars 5000`
 
 Actions:
-- `clawdbot browser navigate https://example.com`
-- `clawdbot browser resize 1280 720`
-- `clawdbot browser click 12 --double`
-- `clawdbot browser click e12 --double`
-- `clawdbot browser type 23 "hello" --submit`
-- `clawdbot browser press Enter`
-- `clawdbot browser hover 44`
-- `clawdbot browser scrollintoview e12`
-- `clawdbot browser drag 10 11`
-- `clawdbot browser select 9 OptionA OptionB`
-- `clawdbot browser download e12 /tmp/report.pdf`
-- `clawdbot browser waitfordownload /tmp/report.pdf`
-- `clawdbot browser upload /tmp/file.pdf`
-- `clawdbot browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
-- `clawdbot browser dialog --accept`
-- `clawdbot browser wait --text "Done"`
-- `clawdbot browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"`
-- `clawdbot browser evaluate --fn '(el) => el.textContent' --ref 7`
-- `clawdbot browser highlight e12`
-- `clawdbot browser trace start`
-- `clawdbot browser trace stop`
+- `moltbot browser navigate https://example.com`
+- `moltbot browser resize 1280 720`
+- `moltbot browser click 12 --double`
+- `moltbot browser click e12 --double`
+- `moltbot browser type 23 "hello" --submit`
+- `moltbot browser press Enter`
+- `moltbot browser hover 44`
+- `moltbot browser scrollintoview e12`
+- `moltbot browser drag 10 11`
+- `moltbot browser select 9 OptionA OptionB`
+- `moltbot browser download e12 /tmp/report.pdf`
+- `moltbot browser waitfordownload /tmp/report.pdf`
+- `moltbot browser upload /tmp/file.pdf`
+- `moltbot browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
+- `moltbot browser dialog --accept`
+- `moltbot browser wait --text "Done"`
+- `moltbot browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"`
+- `moltbot browser evaluate --fn '(el) => el.textContent' --ref 7`
+- `moltbot browser highlight e12`
+- `moltbot browser trace start`
+- `moltbot browser trace stop`
 
 State:
-- `clawdbot browser cookies`
-- `clawdbot browser cookies set session abc123 --url "https://example.com"`
-- `clawdbot browser cookies clear`
-- `clawdbot browser storage local get`
-- `clawdbot browser storage local set theme dark`
-- `clawdbot browser storage session clear`
-- `clawdbot browser set offline on`
-- `clawdbot browser set headers --json '{"X-Debug":"1"}'`
-- `clawdbot browser set credentials user pass`
-- `clawdbot browser set credentials --clear`
-- `clawdbot browser set geo 37.7749 -122.4194 --origin "https://example.com"`
-- `clawdbot browser set geo --clear`
-- `clawdbot browser set media dark`
-- `clawdbot browser set timezone America/New_York`
-- `clawdbot browser set locale en-US`
-- `clawdbot browser set device "iPhone 14"`
+- `moltbot browser cookies`
+- `moltbot browser cookies set session abc123 --url "https://example.com"`
+- `moltbot browser cookies clear`
+- `moltbot browser storage local get`
+- `moltbot browser storage local set theme dark`
+- `moltbot browser storage session clear`
+- `moltbot browser set offline on`
+- `moltbot browser set headers --json '{"X-Debug":"1"}'`
+- `moltbot browser set credentials user pass`
+- `moltbot browser set credentials --clear`
+- `moltbot browser set geo 37.7749 -122.4194 --origin "https://example.com"`
+- `moltbot browser set geo --clear`
+- `moltbot browser set media dark`
+- `moltbot browser set timezone America/New_York`
+- `moltbot browser set locale en-US`
+- `moltbot browser set device "iPhone 14"`
 
 Notes:
 - `upload` and `dialog` are **arming** calls; run them before the click/press
@@ -523,16 +416,16 @@ Notes:
 
 ## Snapshots and refs
 
-Clawdbot supports two “snapshot” styles:
+Moltbot supports two “snapshot” styles:
 
-- **AI snapshot (numeric refs)**: `clawdbot browser snapshot` (default; `--format ai`)
+- **AI snapshot (numeric refs)**: `moltbot browser snapshot` (default; `--format ai`)
   - Output: a text snapshot that includes numeric refs.
-  - Actions: `clawdbot browser click 12`, `clawdbot browser type 23 "hello"`.
+  - Actions: `moltbot browser click 12`, `moltbot browser type 23 "hello"`.
   - Internally, the ref is resolved via Playwright’s `aria-ref`.
 
-- **Role snapshot (role refs like `e12`)**: `clawdbot browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
+- **Role snapshot (role refs like `e12`)**: `moltbot browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
-  - Actions: `clawdbot browser click e12`, `clawdbot browser highlight e12`.
+  - Actions: `moltbot browser click e12`, `moltbot browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
   - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
 
@@ -545,18 +438,18 @@ Ref behavior:
 You can wait on more than just time/text:
 
 - Wait for URL (globs supported by Playwright):
-  - `clawdbot browser wait --url "**/dash"`
+  - `moltbot browser wait --url "**/dash"`
 - Wait for load state:
-  - `clawdbot browser wait --load networkidle`
+  - `moltbot browser wait --load networkidle`
 - Wait for a JS predicate:
-  - `clawdbot browser wait --fn "window.ready===true"`
+  - `moltbot browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
-  - `clawdbot browser wait "#main"`
+  - `moltbot browser wait "#main"`
 
 These can be combined:
 
 ```bash
-clawdbot browser wait "#main" \
+moltbot browser wait "#main" \
   --url "**/dash" \
   --load networkidle \
   --fn "window.ready===true" \
@@ -567,16 +460,16 @@ clawdbot browser wait "#main" \
 
 When an action fails (e.g. “not visible”, “strict mode violation”, “covered”):
 
-1. `clawdbot browser snapshot --interactive`
+1. `moltbot browser snapshot --interactive`
 2. Use `click <ref>` / `type <ref>` (prefer role refs in interactive mode)
-3. If it still fails: `clawdbot browser highlight <ref>` to see what Playwright is targeting
+3. If it still fails: `moltbot browser highlight <ref>` to see what Playwright is targeting
 4. If the page behaves oddly:
-   - `clawdbot browser errors --clear`
-   - `clawdbot browser requests --filter api --clear`
+   - `moltbot browser errors --clear`
+   - `moltbot browser requests --filter api --clear`
 5. For deep debugging: record a trace:
-   - `clawdbot browser trace start`
+   - `moltbot browser trace start`
    - reproduce the issue
-   - `clawdbot browser trace stop` (prints `TRACE:<path>`)
+   - `moltbot browser trace stop` (prints `TRACE:<path>`)
 
 ## JSON output
 
@@ -585,10 +478,10 @@ When an action fails (e.g. “not visible”, “strict mode violation”, “co
 Examples:
 
 ```bash
-clawdbot browser status --json
-clawdbot browser snapshot --interactive --json
-clawdbot browser requests --filter api --json
-clawdbot browser cookies --json
+moltbot browser status --json
+moltbot browser snapshot --interactive --json
+moltbot browser requests --filter api --json
+moltbot browser cookies --json
 ```
 
 Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/refs/interactive) so tools can reason about payload size and density.
@@ -612,8 +505,11 @@ These are useful for “make the site behave like X” workflows:
 ## Security & privacy
 
 - The clawd browser profile may contain logged-in sessions; treat it as sensitive.
+- `browser act kind=evaluate` / `moltbot browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. Prompt injection can steer
+  this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
-- Keep control URLs loopback-only unless you intentionally expose the server.
+- Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.
 
 ## Troubleshooting
@@ -631,12 +527,10 @@ How it maps:
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page or element).
 - `browser` accepts:
-  - `profile` to choose a named browser profile (host or remote control server).
-  - `target` (`sandbox` | `host` | `custom`) to select where the browser lives.
-  - `controlUrl` sets `target: "custom"` implicitly (remote control server).
+  - `profile` to choose a named browser profile (clawd, chrome, or remote CDP).
+  - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
   - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
   - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
-  - Sandbox allowlists can restrict `target: "custom"` to specific URLs/hosts/ports.
-  - Defaults: allowlists unset (no restriction), and sandbox host control is disabled.
+  - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
 
 This keeps the agent deterministic and avoids brittle selectors.

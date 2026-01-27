@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveTelegramAccount } from "./accounts.js";
 
 export type TelegramReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -17,7 +17,7 @@ export type ResolvedReactionLevel = {
  * Resolve the effective reaction level and its implications.
  */
 export function resolveTelegramReactionLevel(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId?: string;
 }): ResolvedReactionLevel {
   const account = resolveTelegramAccount({

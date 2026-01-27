@@ -21,8 +21,8 @@ How to see whether the linked channel is healthy from the menu bar app.
 - **Channels tab** surfaces channel status + controls for WhatsApp/Telegram (login QR, logout, probe, last disconnect/error).
 
 ## How the probe works
-- App runs `clawdbot health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds and reports status without sending messages.
+- App runs `moltbot health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds and reports status without sending messages.
 - Cache the last good snapshot and the last error separately to avoid flicker; show the timestamp of each.
 
 ## When in doubt
-- You can still use the CLI flow in [Gateway health](/gateway/health) (`clawdbot status`, `clawdbot status --deep`, `clawdbot health --json`) and tail `/tmp/clawdbot/clawdbot-*.log` for `web-heartbeat` / `web-reconnect`.
+- You can still use the CLI flow in [Gateway health](/gateway/health) (`moltbot status`, `moltbot status --deep`, `moltbot health --json`) and tail `/tmp/moltbot/moltbot-*.log` for `web-heartbeat` / `web-reconnect`.

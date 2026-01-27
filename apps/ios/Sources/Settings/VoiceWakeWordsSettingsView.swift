@@ -36,7 +36,7 @@ struct VoiceWakeWordsSettingsView: View {
                 Text("Wake Words")
             } footer: {
                 Text(
-                    "Clawdbot reacts when any trigger appears in a transcription. "
+                    "Moltbot reacts when any trigger appears in a transcription. "
                         + "Keep them short to avoid false positives.")
             }
         }

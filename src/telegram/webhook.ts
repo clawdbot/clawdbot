@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 
 import { webhookCallback } from "grammy";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,11 +15,12 @@ import {
 } from "../logging/diagnostic.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   path?: string;
   port?: number;
   host?: string;
@@ -97,9 +98,14 @@ export async function startTelegramWebhook(opts: {
   const publicUrl =
     opts.publicUrl ?? `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
 
-  await bot.api.setWebhook(publicUrl, {
-    secret_token: opts.secret,
-    allowed_updates: resolveTelegramAllowedUpdates(),
+  await withTelegramApiErrorLogging({
+    operation: "setWebhook",
+    runtime,
+    fn: () =>
+      bot.api.setWebhook(publicUrl, {
+        secret_token: opts.secret,
+        allowed_updates: resolveTelegramAllowedUpdates(),
+      }),
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));

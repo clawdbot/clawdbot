@@ -34,7 +34,7 @@ export function registerSecurityCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.clawd.bot/cli/security")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.molt.bot/cli/security")}\n`,
     );
 
   security
@@ -66,12 +66,12 @@ export function registerSecurityCli(program: Command) {
       const muted = (text: string) => (rich ? theme.muted(text) : text);
 
       const lines: string[] = [];
-      lines.push(heading("Clawdbot security audit"));
+      lines.push(heading("Moltbot security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
-      lines.push(muted(`Run deeper: ${formatCliCommand("clawdbot security audit --deep")}`));
+      lines.push(muted(`Run deeper: ${formatCliCommand("moltbot security audit --deep")}`));
 
       if (opts.fix) {
-        lines.push(muted(`Fix: ${formatCliCommand("clawdbot security audit --fix")}`));
+        lines.push(muted(`Fix: ${formatCliCommand("moltbot security audit --fix")}`));
         if (!fixResult) {
           lines.push(muted("Fixes: failed to apply (unexpected error)"));
         } else if (
@@ -87,16 +87,23 @@ export function registerSecurityCli(program: Command) {
             lines.push(muted(`  ${shortenHomeInString(change)}`));
           }
           for (const action of fixResult.actions) {
-            const mode = action.mode.toString(8).padStart(3, "0");
-            if (action.ok) lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
-            else if (action.skipped)
-              lines.push(
-                muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
-              );
-            else if (action.error)
-              lines.push(
-                muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
-              );
+            if (action.kind === "chmod") {
+              const mode = action.mode.toString(8).padStart(3, "0");
+              if (action.ok) lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
+              else if (action.skipped)
+                lines.push(
+                  muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
+                );
+              else if (action.error)
+                lines.push(
+                  muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
+                );
+              continue;
+            }
+            const command = shortenHomeInString(action.command);
+            if (action.ok) lines.push(muted(`  ${command}`));
+            else if (action.skipped) lines.push(muted(`  skip ${command} (${action.skipped})`));
+            else if (action.error) lines.push(muted(`  ${command} failed: ${action.error}`));
           }
           if (fixResult.errors.length > 0) {
             for (const err of fixResult.errors) {

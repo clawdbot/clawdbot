@@ -20,6 +20,11 @@ export type GatewayBonjourAdvertiseOpts = {
   canvasPort?: number;
   tailnetDns?: string;
   cliPath?: string;
+  /**
+   * Minimal mode - omit sensitive fields (cliPath, sshPort) from TXT records.
+   * Reduces information disclosure for better operational security.
+   */
+  minimal?: boolean;
 };
 
 function isDisabledByEnv() {
@@ -31,12 +36,12 @@ function isDisabledByEnv() {
 
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "Clawdbot";
+  return trimmed.length > 0 ? trimmed : "Moltbot";
 }
 
 function prettifyInstanceName(name: string) {
   const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(Clawdbot\)\s*$/i, "").trim() || normalized;
+  return normalized.replace(/\s+\(Moltbot\)\s*$/i, "").trim() || normalized;
 }
 
 type BonjourService = {
@@ -90,11 +95,11 @@ export async function startGatewayBonjourAdvertiser(
       .hostname()
       .replace(/\.local$/i, "")
       .split(".")[0]
-      .trim() || "clawdbot";
+      .trim() || "moltbot";
   const instanceName =
     typeof opts.instanceName === "string" && opts.instanceName.trim()
       ? opts.instanceName.trim()
-      : `${hostname} (Clawdbot)`;
+      : `${hostname} (Moltbot)`;
   const displayName = prettifyInstanceName(instanceName);
 
   const txtBase: Record<string, string> = {
@@ -115,24 +120,32 @@ export async function startGatewayBonjourAdvertiser(
   if (typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
     txtBase.tailnetDns = opts.tailnetDns.trim();
   }
-  if (typeof opts.cliPath === "string" && opts.cliPath.trim()) {
+  // In minimal mode, omit cliPath to avoid exposing filesystem structure.
+  // This info can be obtained via the authenticated WebSocket if needed.
+  if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
     txtBase.cliPath = opts.cliPath.trim();
   }
 
   const services: Array<{ label: string; svc: BonjourService }> = [];
 
+  // Build TXT record for the gateway service.
+  // In minimal mode, omit sshPort to avoid advertising SSH availability.
+  const gatewayTxt: Record<string, string> = {
+    ...txtBase,
+    transport: "gateway",
+  };
+  if (!opts.minimal) {
+    gatewayTxt.sshPort = String(opts.sshPort ?? 22);
+  }
+
   const gateway = responder.createService({
     name: safeServiceName(instanceName),
-    type: "clawdbot-gw",
+    type: "moltbot-gw",
     protocol: Protocol.TCP,
     port: opts.gatewayPort,
     domain: "local",
     hostname,
-    txt: {
-      ...txtBase,
-      sshPort: String(opts.sshPort ?? 22),
-      transport: "gateway",
-    },
+    txt: gatewayTxt,
   });
   services.push({
     label: "gateway",
@@ -149,7 +162,7 @@ export async function startGatewayBonjourAdvertiser(
   logDebug(
     `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
       safeServiceName(instanceName),
-    )}, gatewayPort=${opts.gatewayPort}, sshPort=${opts.sshPort ?? 22})`,
+    )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
   );
 
   for (const { label, svc } of services) {

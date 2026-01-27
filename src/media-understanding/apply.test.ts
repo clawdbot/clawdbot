@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
@@ -49,7 +49,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "note.ogg");
     await fs.writeFile(audioPath, "hello");
 
@@ -58,7 +58,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -92,7 +92,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("keeps caption for command parsing when audio has user text", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "note.ogg");
     await fs.writeFile(audioPath, "hello");
 
@@ -101,7 +101,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -140,7 +140,7 @@ describe("applyMediaUnderstanding", () => {
       MediaType: "audio/ogg",
       ChatType: "dm",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -174,7 +174,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "large.wav");
     await fs.writeFile(audioPath, "0123456789");
 
@@ -184,7 +184,7 @@ describe("applyMediaUnderstanding", () => {
       MediaType: "audio/wav",
     };
     const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -209,7 +209,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("falls back to CLI model when provider fails", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "note.ogg");
     await fs.writeFile(audioPath, "hello");
 
@@ -218,7 +218,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -262,7 +262,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses CLI image understanding and preserves caption for commands", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const imagePath = path.join(dir, "photo.jpg");
     await fs.writeFile(imagePath, "image-bytes");
 
@@ -271,7 +271,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           image: {
@@ -309,7 +309,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses shared media models list when capability config is missing", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const imagePath = path.join(dir, "shared.jpg");
     await fs.writeFile(imagePath, "image-bytes");
 
@@ -318,7 +318,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           models: [
@@ -350,7 +350,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses active model when enabled and models are missing", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPath = path.join(dir, "fallback.ogg");
     await fs.writeFile(audioPath, "hello");
 
@@ -359,7 +359,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -387,7 +387,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
     await fs.writeFile(audioPathA, "hello");
@@ -398,7 +398,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPaths: [audioPathA, audioPathB],
       MediaTypes: ["audio/ogg", "audio/ogg"],
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           audio: {
@@ -430,7 +430,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("orders mixed media outputs as image, audio, video", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
     const imagePath = path.join(dir, "photo.jpg");
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
@@ -443,7 +443,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPaths: [imagePath, audioPath, videoPath],
       MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
     };
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         media: {
           image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.2" }] },

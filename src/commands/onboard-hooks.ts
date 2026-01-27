@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
@@ -6,16 +6,16 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { formatCliCommand } from "../cli/command-format.js";
 
 export async function setupInternalHooks(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-): Promise<ClawdbotConfig> {
+): Promise<MoltbotConfig> {
   await prompter.note(
     [
       "Hooks let you automate actions when agent commands are issued.",
       "Example: Save session context to memory when you issue /new.",
       "",
-      "Learn more: https://docs.clawd.bot/hooks",
+      "Learn more: https://docs.molt.bot/hooks",
     ].join("\n"),
     "Hooks",
   );
@@ -58,7 +58,7 @@ export async function setupInternalHooks(
     entries[name] = { enabled: true };
   }
 
-  const next: ClawdbotConfig = {
+  const next: MoltbotConfig = {
     ...cfg,
     hooks: {
       ...cfg.hooks,
@@ -74,9 +74,9 @@ export async function setupInternalHooks(
       `Enabled ${selected.length} hook${selected.length > 1 ? "s" : ""}: ${selected.join(", ")}`,
       "",
       "You can manage hooks later with:",
-      `  ${formatCliCommand("clawdbot hooks list")}`,
-      `  ${formatCliCommand("clawdbot hooks enable <name>")}`,
-      `  ${formatCliCommand("clawdbot hooks disable <name>")}`,
+      `  ${formatCliCommand("moltbot hooks list")}`,
+      `  ${formatCliCommand("moltbot hooks enable <name>")}`,
+      `  ${formatCliCommand("moltbot hooks disable <name>")}`,
     ].join("\n"),
     "Hooks Configured",
   );

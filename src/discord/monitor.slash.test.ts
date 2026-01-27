@@ -16,6 +16,7 @@ vi.mock("@buape/carbon", () => ({
   MessageCreateListener: class {},
   MessageReactionAddListener: class {},
   MessageReactionRemoveListener: class {},
+  PresenceUpdateListener: class {},
   Row: class {
     constructor(_components: unknown[]) {}
   },
@@ -63,7 +64,7 @@ describe("discord native commands", () => {
           workspace: "/tmp/clawd",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/moltbot-sessions.json" },
       discord: { dm: { enabled: true, policy: "open" } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 

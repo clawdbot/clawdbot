@@ -12,7 +12,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
-import type { ClawdbotConfig, ReplyToMode } from "../../config/config.js";
+import type { MoltbotConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -28,6 +28,7 @@ import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import {
   DiscordMessageListener,
+  DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   registerDiscordListener,
@@ -42,7 +43,7 @@ import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-app
 export type MonitorDiscordOpts = {
   token?: string;
   accountId?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
@@ -107,6 +108,25 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
     }
   }
   return details.length > 0 ? ` (${details.join(", ")})` : "";
+}
+
+function resolveDiscordGatewayIntents(
+  intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,
+): number {
+  let intents =
+    GatewayIntents.Guilds |
+    GatewayIntents.GuildMessages |
+    GatewayIntents.MessageContent |
+    GatewayIntents.DirectMessages |
+    GatewayIntents.GuildMessageReactions |
+    GatewayIntents.DirectMessageReactions;
+  if (intentsConfig?.presence) {
+    intents |= GatewayIntents.GuildPresences;
+  }
+  if (intentsConfig?.guildMembers) {
+    intents |= GatewayIntents.GuildMembers;
+  }
+  return intents;
 }
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -451,13 +471,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         reconnect: {
           maxAttempts: Number.POSITIVE_INFINITY,
         },
-        intents:
-          GatewayIntents.Guilds |
-          GatewayIntents.GuildMessages |
-          GatewayIntents.MessageContent |
-          GatewayIntents.DirectMessages |
-          GatewayIntents.GuildMessageReactions |
-          GatewayIntents.DirectMessageReactions,
+        intents: resolveDiscordGatewayIntents(discordCfg.intents),
         autoInteractions: true,
       }),
     ],
@@ -526,6 +540,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       logger,
     }),
   );
+
+  if (discordCfg.intents?.presence) {
+    registerDiscordListener(
+      client.listeners,
+      new DiscordPresenceListener({ logger, accountId: account.accountId }),
+    );
+    runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
+  }
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 

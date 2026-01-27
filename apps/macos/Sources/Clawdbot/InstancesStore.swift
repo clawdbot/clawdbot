@@ -1,5 +1,5 @@
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotKit
+import MoltbotProtocol
 import Cocoa
 import Foundation
 import Observation
@@ -293,7 +293,7 @@ final class InstancesStore {
         }
     }
 
-    func handlePresenceEventPayload(_ payload: ClawdbotProtocol.AnyCodable) {
+    func handlePresenceEventPayload(_ payload: MoltbotProtocol.AnyCodable) {
         do {
             let wrapper = try GatewayPayloadDecoding.decode(payload, as: PresenceEventPayload.self)
             self.applyPresence(wrapper.presence)

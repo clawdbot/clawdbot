@@ -7,7 +7,7 @@ read_when:
 ---
 # Streaming + chunking
 
-Clawdbot has two separate “streaming” layers:
+Moltbot has two separate “streaming” layers:
 - **Block streaming (channels):** emit completed **blocks** as the assistant writes. These are normal channel messages (not token deltas).
 - **Token-ish streaming (Telegram only):** update a **draft bubble** with partial text while generating; final message is sent at the end.
 
@@ -59,7 +59,7 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
 
 ## Coalescing (merge streamed blocks)
 
-When block streaming is enabled, Clawdbot can **merge consecutive block chunks**
+When block streaming is enabled, Moltbot can **merge consecutive block chunks**
 before sending them out. This reduces “single-line spam” while still providing
 progressive output.
 
@@ -109,7 +109,7 @@ Telegram is the only channel with draft streaming:
 - Final reply is still a normal message.
 - `/reasoning stream` writes reasoning into the draft bubble (Telegram only).
 
-When draft streaming is active, Clawdbot disables block streaming for that reply to avoid double-streaming.
+When draft streaming is active, Moltbot disables block streaming for that reply to avoid double-streaming.
 
 ```
 Telegram (private + topics)

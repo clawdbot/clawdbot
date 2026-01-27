@@ -44,7 +44,7 @@ export function registerModelsCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.clawd.bot/cli/models")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.molt.bot/cli/models")}\n`,
     );
 
   models
@@ -389,7 +389,7 @@ export function registerModelsCli(program: Command) {
     .description("Set per-agent auth order override (locks rotation to this list)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
-    .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:claude-cli)")
+    .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:default)")
     .action(async (profileIds: string[], opts) => {
       await runModelsCommand(async () => {
         await modelsAuthOrderSetCommand(

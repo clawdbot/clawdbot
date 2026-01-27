@@ -1,6 +1,6 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized)
 @MainActor
@@ -12,7 +12,7 @@ struct SkillsSettingsSmokeTests {
             SkillStatus(
                 name: "Needs Setup",
                 description: "Missing bins and env",
-                source: "clawdbot-managed",
+                source: "moltbot-managed",
                 filePath: "/tmp/skills/needs-setup",
                 baseDir: "/tmp/skills",
                 skillKey: "needs-setup",
@@ -39,7 +39,7 @@ struct SkillsSettingsSmokeTests {
             SkillStatus(
                 name: "Ready Skill",
                 description: "All set",
-                source: "clawdbot-bundled",
+                source: "moltbot-bundled",
                 filePath: "/tmp/skills/ready",
                 baseDir: "/tmp/skills",
                 skillKey: "ready",
@@ -59,7 +59,7 @@ struct SkillsSettingsSmokeTests {
             SkillStatus(
                 name: "Disabled Skill",
                 description: "Disabled in config",
-                source: "clawdbot-extra",
+                source: "moltbot-extra",
                 filePath: "/tmp/skills/disabled",
                 baseDir: "/tmp/skills",
                 skillKey: "disabled",
@@ -90,7 +90,7 @@ struct SkillsSettingsSmokeTests {
             SkillStatus(
                 name: "Local Skill",
                 description: "Local ready",
-                source: "clawdbot-workspace",
+                source: "moltbot-workspace",
                 filePath: "/tmp/skills/local",
                 baseDir: "/tmp/skills",
                 skillKey: "local",

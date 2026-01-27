@@ -124,7 +124,7 @@ describe("runReplyAgent memory flush", () => {
   it("skips memory flush for CLI providers", async () => {
     runEmbeddedPiAgentMock.mockReset();
     runCliAgentMock.mockReset();
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-flush-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-flush-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {

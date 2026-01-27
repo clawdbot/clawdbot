@@ -7,7 +7,7 @@ set -euo pipefail
 #   scripts/create-dmg.sh <app_path> [output_dmg]
 #
 # Env:
-#   DMG_VOLUME_NAME        default: CFBundleName (or "Clawdbot")
+#   DMG_VOLUME_NAME        default: CFBundleName (or "Moltbot")
 #   DMG_BACKGROUND_PATH    default: assets/dmg-background.png
 #   DMG_BACKGROUND_SMALL   default: assets/dmg-background-small.png (recommended)
 #   DMG_WINDOW_BOUNDS      default: "400 100 900 420" (500x320)
@@ -33,7 +33,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/dist"
 mkdir -p "$BUILD_DIR"
 
-APP_NAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleName" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "Clawdbot")
+APP_NAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleName" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "Moltbot")
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
 
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
@@ -71,7 +71,7 @@ for vol in "/Volumes/$DMG_VOLUME_NAME"* "/Volumes/$APP_NAME"*; do
   fi
 done
 
-DMG_TEMP="$(mktemp -d /tmp/clawdbot-dmg.XXXXXX)"
+DMG_TEMP="$(mktemp -d /tmp/moltbot-dmg.XXXXXX)"
 trap 'hdiutil detach "/Volumes/'"$DMG_VOLUME_NAME"'" -force 2>/dev/null || true; rm -rf "$DMG_TEMP" 2>/dev/null || true' EXIT
 
 cp -R "$APP_PATH" "$DMG_TEMP/"
@@ -109,7 +109,7 @@ if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
   fi
 
   # Volume icon: reuse the app icon if available.
-  ICON_SRC="$ROOT_DIR/apps/macos/Sources/Clawdbot/Resources/Clawdbot.icns"
+  ICON_SRC="$ROOT_DIR/apps/macos/Sources/Moltbot/Resources/Moltbot.icns"
   if [[ -f "$ICON_SRC" ]]; then
     cp "$ICON_SRC" "$MOUNT_POINT/.VolumeIcon.icns"
     if command -v SetFile >/dev/null 2>&1; then
@@ -160,9 +160,9 @@ for i in {1..5}; do
   sleep 2
 done
 
-hdiutil resize -limits "$DMG_RW_PATH" >/tmp/clawdbot-dmg-limits.txt 2>/dev/null || true
-MIN_SECTORS="$(tail -n 1 /tmp/clawdbot-dmg-limits.txt 2>/dev/null | awk '{print $1}')"
-rm -f /tmp/clawdbot-dmg-limits.txt
+hdiutil resize -limits "$DMG_RW_PATH" >/tmp/moltbot-dmg-limits.txt 2>/dev/null || true
+MIN_SECTORS="$(tail -n 1 /tmp/moltbot-dmg-limits.txt 2>/dev/null | awk '{print $1}')"
+rm -f /tmp/moltbot-dmg-limits.txt
 if [[ "$MIN_SECTORS" =~ ^[0-9]+$ ]] && [[ "$DMG_EXTRA_SECTORS" =~ ^[0-9]+$ ]]; then
   TARGET_SECTORS=$((MIN_SECTORS + DMG_EXTRA_SECTORS))
   echo "Shrinking RW image: min sectors=$MIN_SECTORS (+$DMG_EXTRA_SECTORS) -> $TARGET_SECTORS"

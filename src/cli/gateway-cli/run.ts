@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import type { GatewayAuthMode } from "../../config/config.js";
 import {
-  CONFIG_PATH_CLAWDBOT,
+  CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
@@ -157,12 +157,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordRaw = toOptionString(opts.password);
   const tokenRaw = toOptionString(opts.token);
 
-  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
+  const configExists = fs.existsSync(CONFIG_PATH);
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
-        `Missing config. Run \`${formatCliCommand("clawdbot setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
+        `Missing config. Run \`${formatCliCommand("moltbot setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
       );
     } else {
       defaultRuntime.error(
@@ -203,6 +203,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const resolvedAuthMode = resolvedAuth.mode;
   const tokenValue = resolvedAuth.token;
   const passwordValue = resolvedAuth.password;
+  const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
+  const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  const hasSharedSecret =
+    (resolvedAuthMode === "token" && hasToken) || (resolvedAuthMode === "password" && hasPassword);
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -212,7 +216,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
-  if (resolvedAuthMode === "token" && !tokenValue) {
+  if (resolvedAuthMode === "token" && !hasToken && !resolvedAuth.allowTailscale) {
     defaultRuntime.error(
       [
         "Gateway auth is set to token, but no token is configured.",
@@ -225,7 +229,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (resolvedAuthMode === "password" && !passwordValue) {
+  if (resolvedAuthMode === "password" && !hasPassword) {
     defaultRuntime.error(
       [
         "Gateway auth is set to password, but no password is configured.",
@@ -238,11 +242,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (bind !== "loopback" && resolvedAuthMode === "none") {
+  if (bind !== "loopback" && !hasSharedSecret) {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,
-        "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) or pass --token.",
+        "Set gateway.auth.token/password (or CLAWDBOT_GATEWAY_TOKEN/CLAWDBOT_GATEWAY_PASSWORD) or pass --token/--password.",
         ...authHints,
       ]
         .filter(Boolean)
@@ -282,7 +286,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     ) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("clawdbot gateway stop")}`,
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("moltbot gateway stop")}`,
       );
       try {
         const diagnostics = await inspectPortUsage(port);

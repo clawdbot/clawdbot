@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 type SendMessageDiscord = typeof import("../../../discord/send.js").sendMessageDiscord;
 type SendPollDiscord = typeof import("../../../discord/send.js").sendPollDiscord;
 
@@ -34,7 +34,7 @@ const loadDiscordMessageActions = async () => {
 
 describe("discord message actions", () => {
   it("lists channel and upload actions by default", async () => {
-    const cfg = { channels: { discord: { token: "d0" } } } as ClawdbotConfig;
+    const cfg = { channels: { discord: { token: "d0" } } } as MoltbotConfig;
     const discordMessageActions = await loadDiscordMessageActions();
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
@@ -46,7 +46,7 @@ describe("discord message actions", () => {
   it("respects disabled channel actions", async () => {
     const cfg = {
       channels: { discord: { token: "d0", actions: { channels: false } } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     const discordMessageActions = await loadDiscordMessageActions();
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
@@ -65,7 +65,7 @@ describe("handleDiscordMessageAction", () => {
         to: "channel:123",
         message: "hi",
       },
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       accountId: "ops",
     });
 
@@ -90,7 +90,7 @@ describe("handleDiscordMessageAction", () => {
         pollOption: ["Yes", "No"],
         accountId: "marve",
       },
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
     });
 
     expect(sendPollDiscord).toHaveBeenCalledWith(
@@ -115,12 +115,38 @@ describe("handleDiscordMessageAction", () => {
         channelId: "123",
         message: "hi",
       },
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       accountId: "ops",
     });
 
     expect(sendMessageDiscord).toHaveBeenCalledWith(
       "channel:123",
+      "hi",
+      expect.objectContaining({
+        accountId: "ops",
+      }),
+    );
+  });
+
+  it("accepts threadId for thread replies (tool compatibility)", async () => {
+    sendMessageDiscord.mockClear();
+    const handleDiscordMessageAction = await loadHandleDiscordMessageAction();
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        // The `message` tool uses `threadId`.
+        threadId: "999",
+        // Include a conflicting channelId to ensure threadId takes precedence.
+        channelId: "123",
+        message: "hi",
+      },
+      cfg: {} as MoltbotConfig,
+      accountId: "ops",
+    });
+
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:999",
       "hi",
       expect.objectContaining({
         accountId: "ops",

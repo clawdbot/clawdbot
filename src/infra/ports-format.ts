@@ -3,7 +3,7 @@ import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js
 
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
   const raw = `${listener.commandLine ?? ""} ${listener.command ?? ""}`.trim().toLowerCase();
-  if (raw.includes("clawdbot")) return "gateway";
+  if (raw.includes("moltbot")) return "gateway";
   if (raw.includes("ssh")) {
     const portToken = String(port);
     const tunnelPattern = new RegExp(
@@ -21,7 +21,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   const hints: string[] = [];
   if (kinds.has("gateway")) {
     hints.push(
-      `Gateway already running locally. Stop it (${formatCliCommand("clawdbot gateway stop")}) or use a different port.`,
+      `Gateway already running locally. Stop it (${formatCliCommand("moltbot gateway stop")}) or use a different port.`,
     );
   }
   if (kinds.has("ssh")) {

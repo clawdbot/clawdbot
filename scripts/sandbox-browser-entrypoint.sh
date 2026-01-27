@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export DISPLAY=:1
-export HOME=/tmp/clawdbot-home
+export HOME=/tmp/moltbot-home
 export XDG_CONFIG_HOME="${HOME}/.config"
 export XDG_CACHE_HOME="${HOME}/.cache"
 

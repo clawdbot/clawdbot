@@ -111,12 +111,12 @@ describe("gateway bonjour advertiser", () => {
       gatewayPort: 18789,
       sshPort: 2222,
       tailnetDns: "host.tailnet.ts.net",
-      cliPath: "/opt/homebrew/bin/clawdbot",
+      cliPath: "/opt/homebrew/bin/moltbot",
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
     const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
-    expect(gatewayCall?.[0]?.type).toBe("clawdbot-gw");
+    expect(gatewayCall?.[0]?.type).toBe("moltbot-gw");
     const gatewayType = asString(gatewayCall?.[0]?.type, "");
     expect(gatewayType.length).toBeLessThanOrEqual(15);
     expect(gatewayCall?.[0]?.port).toBe(18789);
@@ -126,7 +126,7 @@ describe("gateway bonjour advertiser", () => {
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayPort).toBe("18789");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
-      "/opt/homebrew/bin/clawdbot",
+      "/opt/homebrew/bin/moltbot",
     );
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.transport).toBe("gateway");
 
@@ -136,6 +136,42 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits cliPath and sshPort in minimal mode", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+
+    createService.mockImplementation((options: Record<string, unknown>) => {
+      return {
+        advertise,
+        destroy,
+        serviceState: "announced",
+        on: vi.fn(),
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getHostname: () => asString(options.hostname, "unknown"),
+        getPort: () => Number(options.port ?? -1),
+      };
+    });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+      cliPath: "/opt/homebrew/bin/moltbot",
+      minimal: true,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBeUndefined();
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBeUndefined();
+
+    await started.stop();
   });
 
   it("attaches conflict listeners for services", async () => {
@@ -328,7 +364,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
-    expect(gatewayCall?.[0]?.name).toBe("Mac (Clawdbot)");
+    expect(gatewayCall?.[0]?.name).toBe("Mac (Moltbot)");
     expect(gatewayCall?.[0]?.domain).toBe("local");
     expect(gatewayCall?.[0]?.hostname).toBe("Mac");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");

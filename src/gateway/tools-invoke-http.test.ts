@@ -1,11 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { CONFIG_PATH } from "../config/config.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+beforeEach(() => {
+  // Ensure these tests are not affected by host env vars.
+  delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
+});
+
+const resolveGatewayToken = (): string => {
+  const token = (testState.gatewayAuth as { token?: string } | undefined)?.token;
+  if (!token) throw new Error("test gateway token missing");
+  return token;
+};
 
 describe("POST /tools/invoke", () => {
   it("invokes a tool and returns {ok:true,result}", async () => {
@@ -25,10 +41,11 @@ describe("POST /tools/invoke", () => {
     const server = await startGatewayServer(port, {
       bind: "loopback",
     });
+    const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
@@ -36,6 +53,64 @@ describe("POST /tools/invoke", () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("result");
+
+    await server.close();
+  });
+
+  it("supports tools.alsoAllow as additive allowlist (profile stage)", async () => {
+    // No explicit tool allowlist; rely on profile + alsoAllow.
+    testState.agentsConfig = {
+      list: [{ id: "main" }],
+    } as any;
+
+    // minimal profile does NOT include sessions_list, but alsoAllow should.
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      tools: { profile: "minimal", alsoAllow: ["sessions_list"] },
+    } as any);
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
+
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+
+    await server.close();
+  });
+
+  it("supports tools.alsoAllow without allow/profile (implicit allow-all)", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main" }],
+    } as any;
+
+    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+    await fs.writeFile(
+      CONFIG_PATH,
+      JSON.stringify({ tools: { alsoAllow: ["sessions_list"] } }, null, 2),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
+
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
 
     await server.close();
   });
@@ -105,9 +180,10 @@ describe("POST /tools/invoke", () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port, { bind: "loopback" });
     try {
+      const token = resolveGatewayToken();
       const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({
           tool: "sessions_list",
           action: "json",
@@ -167,10 +243,11 @@ describe("POST /tools/invoke", () => {
 
     const port = await getFreePort();
     const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
@@ -198,10 +275,11 @@ describe("POST /tools/invoke", () => {
 
     const port = await getFreePort();
     const server = await startGatewayServer(port, { bind: "loopback" });
+    const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
@@ -234,17 +312,18 @@ describe("POST /tools/invoke", () => {
     const server = await startGatewayServer(port, { bind: "loopback" });
 
     const payload = { tool: "sessions_list", action: "json", args: {} };
+    const token = resolveGatewayToken();
 
     const resDefault = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
     expect(resDefault.status).toBe(200);
 
     const resMain = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ ...payload, sessionKey: "main" }),
     });
     expect(resMain.status).toBe(200);

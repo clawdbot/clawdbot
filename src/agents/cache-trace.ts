@@ -5,7 +5,7 @@ import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { resolveUserPath } from "../utils.js";
@@ -52,7 +52,7 @@ export type CacheTrace = {
 };
 
 type CacheTraceInit = {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   env?: NodeJS.ProcessEnv;
   runId?: string;
   sessionId?: string;

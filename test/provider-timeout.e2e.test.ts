@@ -151,7 +151,7 @@ describe("provider timeouts (e2e)", () => {
       };
       (globalThis as unknown as { fetch: unknown }).fetch = fetchImpl;
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-timeout-e2e-"));
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-timeout-e2e-"));
       process.env.HOME = tempHome;
       process.env.CLAWDBOT_SKIP_CHANNELS = "1";
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
@@ -163,7 +163,7 @@ describe("provider timeouts (e2e)", () => {
 
       const configDir = path.join(tempHome, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "clawdbot.json");
+      const configPath = path.join(configDir, "moltbot.json");
 
       const cfg = {
         agents: {

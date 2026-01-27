@@ -2,7 +2,7 @@
 summary: "Webhook ingress for wake and isolated agent runs"
 read_when:
   - Adding or changing webhook endpoints
-  - Wiring external systems into Clawdbot
+  - Wiring external systems into Moltbot
 ---
 
 # Webhooks
@@ -27,10 +27,10 @@ Notes:
 
 ## Auth
 
-Every request must include the hook token:
-- `Authorization: Bearer <token>`
-- or `x-clawdbot-token: <token>`
-- or `?token=<token>`
+Every request must include the hook token. Prefer headers:
+- `Authorization: Bearer <token>` (recommended)
+- `x-moltbot-token: <token>`
+- `?token=<token>` (deprecated; logs a warning and will be removed in a future major release)
 
 ## Endpoints
 
@@ -96,7 +96,9 @@ Mapping options (summary):
 - TS transforms require a TS loader (e.g. `bun` or `tsx`) or precompiled `.js` at runtime.
 - Set `deliver: true` + `channel`/`to` on mappings to route replies to a chat surface
   (`channel` defaults to `last` and falls back to WhatsApp).
-- `clawdbot webhooks gmail setup` writes `hooks.gmail` config for `clawdbot webhooks gmail run`.
+- `allowUnsafeExternalContent: true` disables the external content safety wrapper for that hook
+  (dangerous; only for trusted internal sources).
+- `moltbot webhooks gmail setup` writes `hooks.gmail` config for `moltbot webhooks gmail run`.
 See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
 ## Responses
@@ -118,7 +120,7 @@ curl -X POST http://127.0.0.1:18789/hooks/wake \
 
 ```bash
 curl -X POST http://127.0.0.1:18789/hooks/agent \
-  -H 'x-clawdbot-token: SECRET' \
+  -H 'x-moltbot-token: SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","wakeMode":"next-heartbeat"}'
 ```
@@ -129,7 +131,7 @@ Add `model` to the agent payload (or mapping) to override the model for that run
 
 ```bash
 curl -X POST http://127.0.0.1:18789/hooks/agent \
-  -H 'x-clawdbot-token: SECRET' \
+  -H 'x-moltbot-token: SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
 ```
@@ -148,3 +150,6 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 - Use a dedicated hook token; do not reuse gateway auth tokens.
 - Avoid including sensitive raw payloads in webhook logs.
+- Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
+  If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`
+  in that hook's mapping (dangerous).

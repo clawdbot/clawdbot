@@ -1,15 +1,15 @@
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
-  nextConfig: ClawdbotConfig;
+  nextConfig: MoltbotConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
 }): {
-  nextConfig: ClawdbotConfig;
+  nextConfig: MoltbotConfig;
   port: number;
   bind: string;
   authMode: string;
@@ -28,16 +28,20 @@ export function applyNonInteractiveGatewayConfig(params: {
 
   const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
-  let authMode = opts.gatewayAuth ?? "token";
+  const authModeRaw = opts.gatewayAuth ?? "token";
+  if (authModeRaw !== "token" && authModeRaw !== "password") {
+    runtime.error("Invalid --gateway-auth (use token|password).");
+    runtime.exit(1);
+    return null;
+  }
+  let authMode = authModeRaw;
   const tailscaleMode = opts.tailscale ?? "off";
   const tailscaleResetOnExit = Boolean(opts.tailscaleResetOnExit);
 
   // Tighten config to safe combos:
   // - If Tailscale is on, force loopback bind (the tunnel handles external access).
-  // - If binding beyond loopback, disallow auth=off.
   // - If using Tailscale Funnel, require password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") bind = "loopback";
-  if (authMode === "off" && bind !== "loopback") authMode = "token";
   if (tailscaleMode === "funnel" && authMode !== "password") authMode = "password";
 
   let nextConfig = params.nextConfig;

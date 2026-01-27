@@ -63,7 +63,7 @@ describe("hooks mapping", () => {
   });
 
   it("runs transform module", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-hooks-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-hooks-"));
     const modPath = path.join(dir, "transform.mjs");
     const placeholder = "${" + "payload.name}";
     fs.writeFileSync(
@@ -99,7 +99,7 @@ describe("hooks mapping", () => {
   });
 
   it("treats null transform as a handled skip", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-hooks-skip-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-hooks-skip-"));
     const modPath = path.join(dir, "transform.mjs");
     fs.writeFileSync(modPath, "export default () => null;");
 

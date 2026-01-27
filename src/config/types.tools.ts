@@ -140,14 +140,25 @@ export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 export type ToolPolicyConfig = {
   allow?: string[];
+  /**
+   * Additional allowlist entries merged into the effective allowlist.
+   *
+   * Intended for additive configuration (e.g., "also allow lobster") without forcing
+   * users to replace/duplicate an existing allowlist or profile.
+   */
+  alsoAllow?: string[];
   deny?: string[];
   profile?: ToolProfileId;
 };
 
 export type GroupToolPolicyConfig = {
   allow?: string[];
+  /** Additional allowlist entries merged into allow. */
+  alsoAllow?: string[];
   deny?: string[];
 };
+
+export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */
@@ -188,6 +199,8 @@ export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];
+  /** Additional allowlist entries merged into allow and/or profile allowlist. */
+  alsoAllow?: string[];
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
@@ -312,6 +325,8 @@ export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];
+  /** Additional allowlist entries merged into allow and/or profile allowlist. */
+  alsoAllow?: string[];
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;

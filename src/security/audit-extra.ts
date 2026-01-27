@@ -3,7 +3,7 @@ import path from "node:path";
 
 import JSON5 from "json5";
 
-import type { ClawdbotConfig, ConfigFileSnapshot } from "../config/config.js";
+import type { MoltbotConfig, ConfigFileSnapshot } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { resolveOAuthDir } from "../config/paths.js";
@@ -22,14 +22,12 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
-  formatOctal,
-  isGroupReadable,
-  isGroupWritable,
-  isWorldReadable,
-  isWorldWritable,
-  modeBits,
+  formatPermissionDetail,
+  formatPermissionRemediation,
+  inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
+import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -50,7 +48,7 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
-function summarizeGroupPolicy(cfg: ClawdbotConfig): {
+function summarizeGroupPolicy(cfg: MoltbotConfig): {
   open: number;
   allowlist: number;
   other: number;
@@ -71,11 +69,11 @@ function summarizeGroupPolicy(cfg: ClawdbotConfig): {
   return { open, allowlist, other };
 }
 
-export function collectAttackSurfaceSummaryFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+export function collectAttackSurfaceSummaryFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const hooksEnabled = cfg.hooks?.enabled === true;
-  const browserEnabled = Boolean(cfg.browser?.enabled ?? cfg.browser?.controlUrl);
+  const browserEnabled = cfg.browser?.enabled ?? true;
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
@@ -118,7 +116,7 @@ export function collectSyncedFolderFindings(params: {
       severity: "warn",
       title: "State/config path looks like a synced folder",
       detail: `stateDir=${params.stateDir}, configPath=${params.configPath}. Synced folders (iCloud/Dropbox/OneDrive/Google Drive) can leak tokens and transcripts onto other devices.`,
-      remediation: `Keep CLAWDBOT_STATE_DIR on a local-only volume and re-run "${formatCliCommand("clawdbot security audit --fix")}".`,
+      remediation: `Keep CLAWDBOT_STATE_DIR on a local-only volume and re-run "${formatCliCommand("moltbot security audit --fix")}".`,
     });
   }
   return findings;
@@ -129,7 +127,7 @@ function looksLikeEnvRef(value: string): boolean {
   return v.startsWith("${") && v.endsWith("}");
 }
 
-export function collectSecretsInConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+export function collectSecretsInConfigFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password =
     typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
@@ -142,20 +140,6 @@ export function collectSecretsInConfigFindings(cfg: ClawdbotConfig): SecurityAud
         "gateway.auth.password is set in the config file; prefer environment variables for secrets when possible.",
       remediation:
         "Prefer CLAWDBOT_GATEWAY_PASSWORD (env) and remove gateway.auth.password from disk.",
-    });
-  }
-
-  const browserToken =
-    typeof cfg.browser?.controlToken === "string" ? cfg.browser.controlToken.trim() : "";
-  if (browserToken && !looksLikeEnvRef(browserToken)) {
-    findings.push({
-      checkId: "config.secrets.browser_control_token_in_config",
-      severity: "warn",
-      title: "Browser control token is stored in config",
-      detail:
-        "browser.controlToken is set in the config file; prefer environment variables for secrets when possible.",
-      remediation:
-        "Prefer CLAWDBOT_BROWSER_CONTROL_TOKEN (env) and remove browser.controlToken from disk.",
     });
   }
 
@@ -173,7 +157,7 @@ export function collectSecretsInConfigFindings(cfg: ClawdbotConfig): SecurityAud
   return findings;
 }
 
-export function collectHooksHardeningFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+export function collectHooksHardeningFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.hooks?.enabled !== true) return findings;
 
@@ -208,21 +192,6 @@ export function collectHooksHardeningFindings(cfg: ClawdbotConfig): SecurityAudi
     });
   }
 
-  const browserToken =
-    typeof cfg.browser?.controlToken === "string" && cfg.browser.controlToken.trim()
-      ? cfg.browser.controlToken.trim()
-      : process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim() || null;
-  if (token && browserToken && token === browserToken) {
-    findings.push({
-      checkId: "hooks.token_reuse_browser_token",
-      severity: "warn",
-      title: "Hooks token reuses the browser control token",
-      detail:
-        "hooks.token matches browser control token; compromise of hooks may enable browser control endpoints.",
-      remediation: "Use a separate hooks.token dedicated to hook ingress.",
-    });
-  }
-
   const rawPath = typeof cfg.hooks?.path === "string" ? cfg.hooks.path.trim() : "";
   if (rawPath === "/") {
     findings.push({
@@ -246,7 +215,7 @@ function addModel(models: ModelRef[], raw: unknown, source: string) {
   models.push({ id, source });
 }
 
-function collectModels(cfg: ClawdbotConfig): ModelRef[] {
+function collectModels(cfg: MoltbotConfig): ModelRef[] {
   const out: ModelRef[] = [];
   addModel(out, cfg.agents?.defaults?.model?.primary, "agents.defaults.model.primary");
   for (const f of cfg.agents?.defaults?.model?.fallbacks ?? [])
@@ -314,7 +283,7 @@ function isClaude45OrHigher(id: string): boolean {
   return /\bclaude-[^\s/]*?(?:-4-5\b|4\.5\b)/i.test(id);
 }
 
-export function collectModelHygieneFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+export function collectModelHygieneFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const models = collectModels(cfg);
   if (models.length === 0) return findings;
@@ -409,7 +378,7 @@ function pickToolPolicy(config?: { allow?: string[]; deny?: string[] }): Sandbox
 }
 
 function resolveToolPolicies(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentTools?: AgentToolsConfig;
   sandboxMode?: "off" | "non-main" | "all";
   agentId?: string | null;
@@ -433,7 +402,7 @@ function resolveToolPolicies(params: {
   return policies;
 }
 
-function hasWebSearchKey(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): boolean {
+function hasWebSearchKey(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolean {
   const search = cfg.tools?.web?.search;
   return Boolean(
     search?.apiKey ||
@@ -444,29 +413,29 @@ function hasWebSearchKey(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): boolean {
   );
 }
 
-function isWebSearchEnabled(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): boolean {
+function isWebSearchEnabled(cfg: MoltbotConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) return false;
   if (enabled === true) return true;
   return hasWebSearchKey(cfg, env);
 }
 
-function isWebFetchEnabled(cfg: ClawdbotConfig): boolean {
+function isWebFetchEnabled(cfg: MoltbotConfig): boolean {
   const enabled = cfg.tools?.web?.fetch?.enabled;
   if (enabled === false) return false;
   return true;
 }
 
-function isBrowserEnabled(cfg: ClawdbotConfig): boolean {
+function isBrowserEnabled(cfg: MoltbotConfig): boolean {
   try {
-    return resolveBrowserConfig(cfg.browser).enabled;
+    return resolveBrowserConfig(cfg.browser, cfg).enabled;
   } catch {
     return true;
   }
 }
 
 export function collectSmallModelRiskFindings(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -545,7 +514,7 @@ export function collectSmallModelRiskFindings(params: {
 }
 
 export async function collectPluginsTrustFindings(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
@@ -707,6 +676,9 @@ async function collectIncludePathsRecursive(params: {
 
 export async function collectIncludeFilePermFindings(params: {
   configSnapshot: ConfigFileSnapshot;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  execIcacls?: ExecFn;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   if (!params.configSnapshot.exists) return findings;
@@ -720,32 +692,53 @@ export async function collectIncludeFilePermFindings(params: {
 
   for (const p of includePaths) {
     // eslint-disable-next-line no-await-in-loop
-    const st = await safeStat(p);
-    if (!st.ok) continue;
-    const bits = modeBits(st.mode);
-    if (isWorldWritable(bits) || isGroupWritable(bits)) {
+    const perms = await inspectPathPermissions(p, {
+      env: params.env,
+      platform: params.platform,
+      exec: params.execIcacls,
+    });
+    if (!perms.ok) continue;
+    if (perms.worldWritable || perms.groupWritable) {
       findings.push({
         checkId: "fs.config_include.perms_writable",
         severity: "critical",
         title: "Config include file is writable by others",
-        detail: `${p} mode=${formatOctal(bits)}; another user could influence your effective config.`,
-        remediation: `chmod 600 ${p}`,
+        detail: `${formatPermissionDetail(p, perms)}; another user could influence your effective config.`,
+        remediation: formatPermissionRemediation({
+          targetPath: p,
+          perms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
       });
-    } else if (isWorldReadable(bits)) {
+    } else if (perms.worldReadable) {
       findings.push({
         checkId: "fs.config_include.perms_world_readable",
         severity: "critical",
         title: "Config include file is world-readable",
-        detail: `${p} mode=${formatOctal(bits)}; include files can contain tokens and private settings.`,
-        remediation: `chmod 600 ${p}`,
+        detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
+        remediation: formatPermissionRemediation({
+          targetPath: p,
+          perms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
       });
-    } else if (isGroupReadable(bits)) {
+    } else if (perms.groupReadable) {
       findings.push({
         checkId: "fs.config_include.perms_group_readable",
         severity: "warn",
         title: "Config include file is group-readable",
-        detail: `${p} mode=${formatOctal(bits)}; include files can contain tokens and private settings.`,
-        remediation: `chmod 600 ${p}`,
+        detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
+        remediation: formatPermissionRemediation({
+          targetPath: p,
+          perms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
       });
     }
   }
@@ -754,31 +747,48 @@ export async function collectIncludeFilePermFindings(params: {
 }
 
 export async function collectStateDeepFilesystemFindings(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
+  platform?: NodeJS.Platform;
+  execIcacls?: ExecFn;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const oauthDir = resolveOAuthDir(params.env, params.stateDir);
 
-  const oauthStat = await safeStat(oauthDir);
-  if (oauthStat.ok && oauthStat.isDir) {
-    const bits = modeBits(oauthStat.mode);
-    if (isWorldWritable(bits) || isGroupWritable(bits)) {
+  const oauthPerms = await inspectPathPermissions(oauthDir, {
+    env: params.env,
+    platform: params.platform,
+    exec: params.execIcacls,
+  });
+  if (oauthPerms.ok && oauthPerms.isDir) {
+    if (oauthPerms.worldWritable || oauthPerms.groupWritable) {
       findings.push({
         checkId: "fs.credentials_dir.perms_writable",
         severity: "critical",
         title: "Credentials dir is writable by others",
-        detail: `${oauthDir} mode=${formatOctal(bits)}; another user could drop/modify credential files.`,
-        remediation: `chmod 700 ${oauthDir}`,
+        detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; another user could drop/modify credential files.`,
+        remediation: formatPermissionRemediation({
+          targetPath: oauthDir,
+          perms: oauthPerms,
+          isDir: true,
+          posixMode: 0o700,
+          env: params.env,
+        }),
       });
-    } else if (isGroupReadable(bits) || isWorldReadable(bits)) {
+    } else if (oauthPerms.groupReadable || oauthPerms.worldReadable) {
       findings.push({
         checkId: "fs.credentials_dir.perms_readable",
         severity: "warn",
         title: "Credentials dir is readable by others",
-        detail: `${oauthDir} mode=${formatOctal(bits)}; credentials and allowlists can be sensitive.`,
-        remediation: `chmod 700 ${oauthDir}`,
+        detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; credentials and allowlists can be sensitive.`,
+        remediation: formatPermissionRemediation({
+          targetPath: oauthDir,
+          perms: oauthPerms,
+          isDir: true,
+          posixMode: 0o700,
+          env: params.env,
+        }),
       });
     }
   }
@@ -795,40 +805,64 @@ export async function collectStateDeepFilesystemFindings(params: {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
     const authPath = path.join(agentDir, "auth-profiles.json");
     // eslint-disable-next-line no-await-in-loop
-    const authStat = await safeStat(authPath);
-    if (authStat.ok) {
-      const bits = modeBits(authStat.mode);
-      if (isWorldWritable(bits) || isGroupWritable(bits)) {
+    const authPerms = await inspectPathPermissions(authPath, {
+      env: params.env,
+      platform: params.platform,
+      exec: params.execIcacls,
+    });
+    if (authPerms.ok) {
+      if (authPerms.worldWritable || authPerms.groupWritable) {
         findings.push({
           checkId: "fs.auth_profiles.perms_writable",
           severity: "critical",
           title: "auth-profiles.json is writable by others",
-          detail: `${authPath} mode=${formatOctal(bits)}; another user could inject credentials.`,
-          remediation: `chmod 600 ${authPath}`,
+          detail: `${formatPermissionDetail(authPath, authPerms)}; another user could inject credentials.`,
+          remediation: formatPermissionRemediation({
+            targetPath: authPath,
+            perms: authPerms,
+            isDir: false,
+            posixMode: 0o600,
+            env: params.env,
+          }),
         });
-      } else if (isWorldReadable(bits) || isGroupReadable(bits)) {
+      } else if (authPerms.worldReadable || authPerms.groupReadable) {
         findings.push({
           checkId: "fs.auth_profiles.perms_readable",
           severity: "warn",
           title: "auth-profiles.json is readable by others",
-          detail: `${authPath} mode=${formatOctal(bits)}; auth-profiles.json contains API keys and OAuth tokens.`,
-          remediation: `chmod 600 ${authPath}`,
+          detail: `${formatPermissionDetail(authPath, authPerms)}; auth-profiles.json contains API keys and OAuth tokens.`,
+          remediation: formatPermissionRemediation({
+            targetPath: authPath,
+            perms: authPerms,
+            isDir: false,
+            posixMode: 0o600,
+            env: params.env,
+          }),
         });
       }
     }
 
     const storePath = path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
     // eslint-disable-next-line no-await-in-loop
-    const storeStat = await safeStat(storePath);
-    if (storeStat.ok) {
-      const bits = modeBits(storeStat.mode);
-      if (isWorldReadable(bits) || isGroupReadable(bits)) {
+    const storePerms = await inspectPathPermissions(storePath, {
+      env: params.env,
+      platform: params.platform,
+      exec: params.execIcacls,
+    });
+    if (storePerms.ok) {
+      if (storePerms.worldReadable || storePerms.groupReadable) {
         findings.push({
           checkId: "fs.sessions_store.perms_readable",
           severity: "warn",
           title: "sessions.json is readable by others",
-          detail: `${storePath} mode=${formatOctal(bits)}; routing and transcript metadata can be sensitive.`,
-          remediation: `chmod 600 ${storePath}`,
+          detail: `${formatPermissionDetail(storePath, storePerms)}; routing and transcript metadata can be sensitive.`,
+          remediation: formatPermissionRemediation({
+            targetPath: storePath,
+            perms: storePerms,
+            isDir: false,
+            posixMode: 0o600,
+            env: params.env,
+          }),
         });
       }
     }
@@ -840,16 +874,25 @@ export async function collectStateDeepFilesystemFindings(params: {
     const expanded = logFile.startsWith("~") ? expandTilde(logFile, params.env) : logFile;
     if (expanded) {
       const logPath = path.resolve(expanded);
-      const st = await safeStat(logPath);
-      if (st.ok) {
-        const bits = modeBits(st.mode);
-        if (isWorldReadable(bits) || isGroupReadable(bits)) {
+      const logPerms = await inspectPathPermissions(logPath, {
+        env: params.env,
+        platform: params.platform,
+        exec: params.execIcacls,
+      });
+      if (logPerms.ok) {
+        if (logPerms.worldReadable || logPerms.groupReadable) {
           findings.push({
             checkId: "fs.log_file.perms_readable",
             severity: "warn",
             title: "Log file is readable by others",
-            detail: `${logPath} mode=${formatOctal(bits)}; logs can contain private messages and tool output.`,
-            remediation: `chmod 600 ${logPath}`,
+            detail: `${formatPermissionDetail(logPath, logPerms)}; logs can contain private messages and tool output.`,
+            remediation: formatPermissionRemediation({
+              targetPath: logPath,
+              perms: logPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
           });
         }
       }
@@ -859,7 +902,7 @@ export async function collectStateDeepFilesystemFindings(params: {
   return findings;
 }
 
-function listGroupPolicyOpen(cfg: ClawdbotConfig): string[] {
+function listGroupPolicyOpen(cfg: MoltbotConfig): string[] {
   const out: string[] = [];
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") return out;
@@ -880,7 +923,7 @@ function listGroupPolicyOpen(cfg: ClawdbotConfig): string[] {
   return out;
 }
 
-export function collectExposureMatrixFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+export function collectExposureMatrixFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);
   if (openGroups.length === 0) return findings;

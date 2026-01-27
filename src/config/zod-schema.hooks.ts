@@ -16,6 +16,7 @@ export const HookMappingSchema = z
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
+    allowUnsafeExternalContent: z.boolean().optional(),
     channel: z
       .union([
         z.literal("last"),
@@ -97,6 +98,7 @@ export const HooksGmailSchema = z
     includeBody: z.boolean().optional(),
     maxBytes: z.number().int().positive().optional(),
     renewEveryMinutes: z.number().int().positive().optional(),
+    allowUnsafeExternalContent: z.boolean().optional(),
     serve: z
       .object({
         bind: z.string().optional(),

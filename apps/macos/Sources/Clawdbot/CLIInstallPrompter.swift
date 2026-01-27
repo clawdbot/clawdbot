@@ -15,7 +15,7 @@ final class CLIInstallPrompter {
         UserDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
         let alert = NSAlert()
-        alert.messageText = "Install Clawdbot CLI?"
+        alert.messageText = "Install Moltbot CLI?"
         alert.informativeText = "Local mode needs the CLI so launchd can run the gateway."
         alert.addButton(withTitle: "Install CLI")
         alert.addButton(withTitle: "Not now")

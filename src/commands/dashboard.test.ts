@@ -42,7 +42,7 @@ function resetRuntime() {
 
 function mockSnapshot(token = "abc") {
   mocks.readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/clawdbot.json",
+    path: "/tmp/moltbot.json",
     exists: true,
     raw: "{}",
     parsed: {},
@@ -87,7 +87,7 @@ describe("dashboardCommand", () => {
     expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/?token=abc123");
     expect(mocks.openUrl).toHaveBeenCalledWith("http://127.0.0.1:18789/?token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control Clawdbot.",
+      "Opened in your browser. Keep that tab to control Moltbot.",
     );
   });
 

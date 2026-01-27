@@ -1,18 +1,13 @@
 import type { Request, Response, NextFunction } from "express";
-import crypto from "node:crypto";
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import { logVerbose, danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { validateLineSignature } from "./signature.js";
 
 export interface LineWebhookOptions {
   channelSecret: string;
   onEvents: (body: WebhookRequestBody) => Promise<void>;
   runtime?: RuntimeEnv;
-}
-
-function validateSignature(body: string, signature: string, channelSecret: string): boolean {
-  const hash = crypto.createHmac("SHA256", channelSecret).update(body).digest("base64");
-  return hash === signature;
 }
 
 function readRawBody(req: Request): string | null {
@@ -52,7 +47,7 @@ export function createLineWebhookMiddleware(options: LineWebhookOptions) {
         return;
       }
 
-      if (!validateSignature(rawBody, signature, channelSecret)) {
+      if (!validateLineSignature(rawBody, signature, channelSecret)) {
         logVerbose("line: webhook signature validation failed");
         res.status(401).json({ error: "Invalid signature" });
         return;

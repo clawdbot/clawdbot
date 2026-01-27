@@ -7,7 +7,7 @@ read_when:
 ---
 # Network hub
 
-This hub links the core docs for how Clawdbot connects, pairs, and secures
+This hub links the core docs for how Moltbot connects, pairs, and secures
 devices across localhost, LAN, and tailnet.
 
 ## Core model

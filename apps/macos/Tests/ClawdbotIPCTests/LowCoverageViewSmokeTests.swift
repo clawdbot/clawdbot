@@ -1,9 +1,9 @@
 import AppKit
-import ClawdbotProtocol
+import MoltbotProtocol
 import SwiftUI
 import Testing
 
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized)
 @MainActor

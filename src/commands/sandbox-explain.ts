@@ -4,7 +4,7 @@ import {
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -30,10 +30,10 @@ type SandboxExplainOptions = {
   json: boolean;
 };
 
-const SANDBOX_DOCS_URL = "https://docs.clawd.bot/sandbox";
+const SANDBOX_DOCS_URL = "https://docs.molt.bot/sandbox";
 
 function normalizeExplainSessionKey(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId: string;
   session?: string;
 }): string {
@@ -53,7 +53,7 @@ function normalizeExplainSessionKey(params: {
 }
 
 function inferProviderFromSessionKey(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   sessionKey: string;
 }): string | undefined {
   const parsed = parseAgentSessionKey(params.sessionKey);
@@ -71,7 +71,7 @@ function inferProviderFromSessionKey(params: {
 }
 
 function resolveActiveChannel(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId: string;
   sessionKey: string;
 }): string | undefined {
@@ -307,7 +307,7 @@ export async function sandboxExplainCommand(
   lines.push(heading("Fix-it:"));
   for (const key of payload.fixIt) lines.push(`  - ${key}`);
   lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.clawd.bot/sandbox")}`);
+  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.molt.bot/sandbox")}`);
 
   runtime.log(`${lines.join("\n")}\n`);
 }

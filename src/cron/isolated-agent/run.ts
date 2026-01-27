@@ -1,5 +1,6 @@
 import {
   resolveAgentConfig,
+  resolveAgentDir,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -37,13 +38,20 @@ import {
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  buildSafeExternalPrompt,
+  detectSuspiciousPatterns,
+  getHookType,
+  isExternalHookSession,
+} from "../../security/external-content.js";
+import { logWarn } from "../../logger.js";
 import type { CronJob } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
@@ -78,7 +86,7 @@ export type RunCronAgentTurnResult = {
 };
 
 export async function runCronIsolatedAgentTurn(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   deps: CliDeps;
   job: CronJob;
   message: string;
@@ -109,7 +117,7 @@ export async function runCronIsolatedAgentTurn(params: {
   } else if (overrideModel) {
     agentCfg.model = overrideModel;
   }
-  const cfgWithAgentDefaults: ClawdbotConfig = {
+  const cfgWithAgentDefaults: MoltbotConfig = {
     ...params.cfg,
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
@@ -121,6 +129,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
+  const agentDir = resolveAgentDir(params.cfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
@@ -230,13 +239,50 @@ export async function runCronIsolatedAgentTurn(params: {
     to: agentPayload?.to,
   });
 
-  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
   const userTimezone = resolveUserTimezone(params.cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(params.cfg.agents?.defaults?.timeFormat);
   const formattedTime =
     formatUserTime(new Date(now), userTimezone, userTimeFormat) ?? new Date(now).toISOString();
   const timeLine = `Current time: ${formattedTime} (${userTimezone})`;
-  const commandBody = `${base}\n${timeLine}`.trim();
+  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
+
+  // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
+  // unless explicitly allowed via a dangerous config override.
+  const isExternalHook = isExternalHookSession(baseSessionKey);
+  const allowUnsafeExternalContent =
+    agentPayload?.allowUnsafeExternalContent === true ||
+    (isGmailHook && params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
+  const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
+  let commandBody: string;
+
+  if (isExternalHook) {
+    // Log suspicious patterns for security monitoring
+    const suspiciousPatterns = detectSuspiciousPatterns(params.message);
+    if (suspiciousPatterns.length > 0) {
+      logWarn(
+        `[security] Suspicious patterns detected in external hook content ` +
+          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ` +
+          `${suspiciousPatterns.slice(0, 3).join(", ")}`,
+      );
+    }
+  }
+
+  if (shouldWrapExternal) {
+    // Wrap external content with security boundaries
+    const hookType = getHookType(baseSessionKey);
+    const safeContent = buildSafeExternalPrompt({
+      content: params.message,
+      source: hookType,
+      jobName: params.job.name,
+      jobId: params.job.id,
+      timestamp: formattedTime,
+    });
+
+    commandBody = `${safeContent}\n\n${timeLine}`.trim();
+  } else {
+    // Internal/trusted source - use original format
+    commandBody = `${base}\n${timeLine}`.trim();
+  }
 
   const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
@@ -286,6 +332,7 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: cfgWithAgentDefaults,
       provider,
       model,
+      agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {

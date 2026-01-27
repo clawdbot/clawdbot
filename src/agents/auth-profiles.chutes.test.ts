@@ -34,7 +34,7 @@ describe("auth-profiles (chutes)", () => {
   });
 
   it("refreshes expired Chutes OAuth credentials", async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-chutes-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-chutes-"));
     process.env.CLAWDBOT_STATE_DIR = tempDir;
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempDir, "agents", "main", "agent");
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;

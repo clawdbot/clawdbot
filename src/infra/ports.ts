@@ -63,10 +63,10 @@ export async function handlePortError(
     if (details) {
       runtime.error(info("Port listener details:"));
       runtime.error(details);
-      if (/clawdbot|src\/index\.ts|dist\/index\.js/.test(details)) {
+      if (/moltbot|src\/index\.ts|dist\/index\.js/.test(details)) {
         runtime.error(
           warn(
-            "It looks like another clawdbot instance is already running. Stop it or pick a different port.",
+            "It looks like another moltbot instance is already running. Stop it or pick a different port.",
           ),
         );
       }

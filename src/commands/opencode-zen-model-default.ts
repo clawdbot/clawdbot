@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { AgentModelListConfig } from "../config/types.js";
 
 export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-5";
@@ -12,8 +12,8 @@ function resolvePrimaryModel(model?: AgentModelListConfig | string): string | un
   return undefined;
 }
 
-export function applyOpencodeZenModelDefault(cfg: ClawdbotConfig): {
-  next: ClawdbotConfig;
+export function applyOpencodeZenModelDefault(cfg: MoltbotConfig): {
+  next: MoltbotConfig;
   changed: boolean;
 } {
   const current = resolvePrimaryModel(cfg.agents?.defaults?.model)?.trim();

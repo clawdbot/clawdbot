@@ -1,14 +1,17 @@
 import crypto from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import { request } from "node:https";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { resolveConfigDir } from "../utils.js";
+import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
-const MAX_BYTES = 5 * 1024 * 1024; // 5MB default
+export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
+const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
 /**
@@ -17,10 +20,9 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
  * Keeps: alphanumeric, dots, hyphens, underscores, Unicode letters/numbers.
  */
 function sanitizeFilename(name: string): string {
-  // Remove: < > : " / \ | ? * and control chars (U+0000-U+001F)
-  // oxlint-disable-next-line no-control-regex -- Intentionally matching control chars
-  const unsafe = /[<>:"/\\|?*\x00-\x1f]/g;
-  const sanitized = name.trim().replace(unsafe, "_").replace(/\s+/g, "_"); // Replace whitespace runs with underscore
+  const trimmed = name.trim();
+  if (!trimmed) return "";
+  const sanitized = trimmed.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   // Collapse multiple underscores, trim leading/trailing, limit length
   return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
 }
@@ -54,7 +56,7 @@ export function getMediaDir() {
 
 export async function ensureMediaDir() {
   const mediaDir = resolveMediaDir();
-  await fs.mkdir(mediaDir, { recursive: true });
+  await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
   return mediaDir;
 }
 
@@ -88,51 +90,67 @@ async function downloadToFile(
   maxRedirects = 5,
 ): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
   return await new Promise((resolve, reject) => {
-    const req = request(url, { headers }, (res) => {
-      // Follow redirects
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-        const location = res.headers.location;
-        if (!location || maxRedirects <= 0) {
-          reject(new Error(`Redirect loop or missing Location header`));
-          return;
-        }
-        const redirectUrl = new URL(location, url).href;
-        resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
-        return;
-      }
-      if (!res.statusCode || res.statusCode >= 400) {
-        reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
-        return;
-      }
-      let total = 0;
-      const sniffChunks: Buffer[] = [];
-      let sniffLen = 0;
-      const out = createWriteStream(dest);
-      res.on("data", (chunk) => {
-        total += chunk.length;
-        if (sniffLen < 16384) {
-          sniffChunks.push(chunk);
-          sniffLen += chunk.length;
-        }
-        if (total > MAX_BYTES) {
-          req.destroy(new Error("Media exceeds 5MB limit"));
-        }
-      });
-      pipeline(res, out)
-        .then(() => {
-          const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
-          const rawHeader = res.headers["content-type"];
-          const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-          resolve({
-            headerMime,
-            sniffBuffer,
-            size: total,
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      reject(new Error("Invalid URL"));
+      return;
+    }
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      reject(new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`));
+      return;
+    }
+    const requestImpl = parsedUrl.protocol === "https:" ? httpsRequest : httpRequest;
+    resolvePinnedHostname(parsedUrl.hostname)
+      .then((pinned) => {
+        const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
+          // Follow redirects
+          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+            const location = res.headers.location;
+            if (!location || maxRedirects <= 0) {
+              reject(new Error(`Redirect loop or missing Location header`));
+              return;
+            }
+            const redirectUrl = new URL(location, url).href;
+            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            return;
+          }
+          if (!res.statusCode || res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
+            return;
+          }
+          let total = 0;
+          const sniffChunks: Buffer[] = [];
+          let sniffLen = 0;
+          const out = createWriteStream(dest, { mode: 0o600 });
+          res.on("data", (chunk) => {
+            total += chunk.length;
+            if (sniffLen < 16384) {
+              sniffChunks.push(chunk);
+              sniffLen += chunk.length;
+            }
+            if (total > MAX_BYTES) {
+              req.destroy(new Error("Media exceeds 5MB limit"));
+            }
           });
-        })
-        .catch(reject);
-    });
-    req.on("error", reject);
-    req.end();
+          pipeline(res, out)
+            .then(() => {
+              const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
+              const rawHeader = res.headers["content-type"];
+              const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+              resolve({
+                headerMime,
+                sniffBuffer,
+                size: total,
+              });
+            })
+            .catch(reject);
+        });
+        req.on("error", reject);
+        req.end();
+      })
+      .catch(reject);
   });
 }
 
@@ -150,7 +168,7 @@ export async function saveMediaSource(
 ): Promise<SavedMedia> {
   const baseDir = resolveMediaDir();
   const dir = subdir ? path.join(baseDir, subdir) : baseDir;
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await cleanOldMedia();
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
@@ -180,7 +198,7 @@ export async function saveMediaSource(
   const ext = extensionForMime(mime) ?? path.extname(source);
   const id = ext ? `${baseId}${ext}` : baseId;
   const dest = path.join(dir, id);
-  await fs.writeFile(dest, buffer);
+  await fs.writeFile(dest, buffer, { mode: 0o600 });
   return { id, path: dest, size: stat.size, contentType: mime };
 }
 
@@ -195,7 +213,7 @@ export async function saveMediaBuffer(
     throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
   }
   const dir = path.join(resolveMediaDir(), subdir);
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
@@ -213,6 +231,6 @@ export async function saveMediaBuffer(
   }
 
   const dest = path.join(dir, id);
-  await fs.writeFile(dest, buffer);
+  await fs.writeFile(dest, buffer, { mode: 0o600 });
   return { id, path: dest, size: buffer.byteLength, contentType: mime };
 }

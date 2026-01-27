@@ -1,9 +1,8 @@
-import type express from "express";
-
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 
-export function registerBrowserTabRoutes(app: express.Express, ctx: BrowserRouteContext) {
+export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.get("/tabs", async (req, res) => {
     const profileCtx = getProfileContext(req, ctx);
     if ("error" in profileCtx) return jsonError(res, profileCtx.status, profileCtx.error);

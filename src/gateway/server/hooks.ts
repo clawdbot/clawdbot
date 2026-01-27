@@ -41,6 +41,7 @@ export function createGatewayHooksRequestHandler(params: {
     model?: string;
     thinking?: string;
     timeoutSeconds?: number;
+    allowUnsafeExternalContent?: boolean;
   }) => {
     const sessionKey = value.sessionKey.trim() ? value.sessionKey.trim() : `hook:${randomUUID()}`;
     const mainSessionKey = resolveMainSessionKeyFromConfig();
@@ -64,6 +65,7 @@ export function createGatewayHooksRequestHandler(params: {
         deliver: value.deliver,
         channel: value.channel,
         to: value.to,
+        allowUnsafeExternalContent: value.allowUnsafeExternalContent,
       },
       state: { nextRunAtMs: now },
     };

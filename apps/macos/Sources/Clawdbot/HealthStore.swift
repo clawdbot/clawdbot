@@ -221,9 +221,9 @@ final class HealthStore {
             if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
                 let fallbackLabel = snap.channelLabels?[fallback.id] ?? fallback.id.capitalized
                 let fallbackState = (fallback.summary.probe?.ok ?? true) ? "ok" : "degraded"
-                return "\(fallbackLabel) \(fallbackState) · Not linked — run clawdbot login"
+                return "\(fallbackLabel) \(fallbackState) · Not linked — run moltbot login"
             }
-            return "Not linked — run clawdbot login"
+            return "Not linked — run moltbot login"
         }
         let auth = link.summary.authAgeMs.map { msToAge($0) } ?? "unknown"
         if let probe = link.summary.probe, probe.ok == false {
@@ -241,7 +241,7 @@ final class HealthStore {
             if lower.contains("connection refused") {
                 let port = GatewayEnvironment.gatewayPort()
                 let host = GatewayConnectivityCoordinator.shared.localEndpointHostLabel ?? "127.0.0.1:\(port)"
-                return "The gateway control port (\(host)) isn’t listening — restart Clawdbot to bring it back."
+                return "The gateway control port (\(host)) isn’t listening — restart Moltbot to bring it back."
             }
             if lower.contains("timeout") {
                 return "Timed out waiting for the control server; the gateway may be crashed or still starting."
@@ -253,7 +253,7 @@ final class HealthStore {
 
     func describeFailure(from snap: HealthSnapshot, fallback: String?) -> String {
         if let link = self.resolveLinkChannel(snap), link.summary.linked != true {
-            return "Not linked — run clawdbot login"
+            return "Not linked — run moltbot login"
         }
         if let link = self.resolveLinkChannel(snap), let probe = link.summary.probe, probe.ok == false {
             return Self.describeProbeFailure(probe)

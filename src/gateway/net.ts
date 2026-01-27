@@ -36,7 +36,7 @@ function stripOptionalPort(ip: string): string {
   return ip;
 }
 
-function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
+export function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
   const raw = forwardedFor?.split(",")[0]?.trim();
   if (!raw) return undefined;
   return normalizeIp(stripOptionalPort(raw));

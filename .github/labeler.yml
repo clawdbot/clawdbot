@@ -24,6 +24,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/line/**"
+          - "docs/channels/line.md"
 "channel: matrix":
   - changed-files:
       - any-glob-to-any-file:
@@ -131,6 +132,53 @@
       - any-glob-to-any-file:
           - "docs/**"
           - "docs.acp.md"
+
+"cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cli/**"
+
+"commands":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/commands/**"
+
+"scripts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "scripts/**"
+
+"docker":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Dockerfile"
+          - "Dockerfile.*"
+          - "docker-compose.yml"
+          - "docker-setup.sh"
+          - ".dockerignore"
+          - "scripts/**/*docker*"
+          - "scripts/**/Dockerfile*"
+          - "scripts/sandbox-*.sh"
+          - "src/agents/sandbox*.ts"
+          - "src/commands/sandbox*.ts"
+          - "src/cli/sandbox-cli.ts"
+          - "src/docker-setup.test.ts"
+          - "src/config/**/*sandbox*"
+          - "docs/cli/sandbox.md"
+          - "docs/gateway/sandbox*.md"
+          - "docs/install/docker.md"
+          - "docs/multi-agent-sandbox-tools.md"
+
+"agents":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/agents/**"
+
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/cli/security.md"
+          - "docs/gateway/security.md"
 
 "extensions: copilot-proxy":
   - changed-files:

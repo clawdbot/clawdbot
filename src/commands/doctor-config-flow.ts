@@ -1,9 +1,9 @@
 import type { ZodIssue } from "zod";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
-  ClawdbotSchema,
-  CONFIG_PATH_CLAWDBOT,
+  MoltbotSchema,
+  CONFIG_PATH,
   migrateLegacyConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
@@ -60,16 +60,16 @@ function resolvePathTarget(root: unknown, path: Array<string | number>): unknown
   return current;
 }
 
-function stripUnknownConfigKeys(config: ClawdbotConfig): {
-  config: ClawdbotConfig;
+function stripUnknownConfigKeys(config: MoltbotConfig): {
+  config: MoltbotConfig;
   removed: string[];
 } {
-  const parsed = ClawdbotSchema.safeParse(config);
+  const parsed = MoltbotSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
   }
 
-  const next = structuredClone(config) as ClawdbotConfig;
+  const next = structuredClone(config) as MoltbotConfig;
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
     if (!isUnrecognizedKeysIssue(issue)) continue;
@@ -88,7 +88,7 @@ function stripUnknownConfigKeys(config: ClawdbotConfig): {
   return { config: next, removed };
 }
 
-function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
+function noteOpencodeProviderOverrides(cfg: MoltbotConfig) {
   const providers = cfg.models?.providers;
   if (!providers) return;
 
@@ -124,8 +124,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const snapshot = await readConfigFileSnapshot();
   const baseCfg = snapshot.config ?? {};
-  let cfg: ClawdbotConfig = baseCfg;
-  let candidate = structuredClone(baseCfg) as ClawdbotConfig;
+  let cfg: MoltbotConfig = baseCfg;
+  let candidate = structuredClone(baseCfg) as MoltbotConfig;
   let pendingChanges = false;
   let shouldWriteConfig = false;
   const fixHints: string[] = [];
@@ -156,7 +156,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (migrated) cfg = migrated;
     } else {
       fixHints.push(
-        `Run "${formatCliCommand("clawdbot doctor --fix")}" to apply legacy migrations.`,
+        `Run "${formatCliCommand("moltbot doctor --fix")}" to apply legacy migrations.`,
       );
     }
   }
@@ -169,7 +169,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (shouldRepair) {
       cfg = normalized.config;
     } else {
-      fixHints.push(`Run "${formatCliCommand("clawdbot doctor --fix")}" to apply these changes.`);
+      fixHints.push(`Run "${formatCliCommand("moltbot doctor --fix")}" to apply these changes.`);
     }
   }
 
@@ -181,7 +181,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (shouldRepair) {
       cfg = autoEnable.config;
     } else {
-      fixHints.push(`Run "${formatCliCommand("clawdbot doctor --fix")}" to apply these changes.`);
+      fixHints.push(`Run "${formatCliCommand("moltbot doctor --fix")}" to apply these changes.`);
     }
   }
 
@@ -195,7 +195,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(lines, "Doctor changes");
     } else {
       note(lines, "Unknown config keys");
-      fixHints.push('Run "clawdbot doctor --fix" to remove these keys.');
+      fixHints.push('Run "moltbot doctor --fix" to remove these keys.');
     }
   }
 
@@ -214,5 +214,5 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   noteOpencodeProviderOverrides(cfg);
 
-  return { cfg, path: snapshot.path ?? CONFIG_PATH_CLAWDBOT, shouldWriteConfig };
+  return { cfg, path: snapshot.path ?? CONFIG_PATH, shouldWriteConfig };
 }
