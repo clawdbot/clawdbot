@@ -69,6 +69,7 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
 - Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
 - Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
 - macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.
