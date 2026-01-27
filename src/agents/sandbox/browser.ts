@@ -1,6 +1,9 @@
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
-import { DEFAULT_CLAWD_BROWSER_COLOR } from "../../browser/constants.js";
+import {
+  DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_CLAWD_BROWSER_COLOR,
+} from "../../browser/constants.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -39,14 +42,12 @@ function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
   cdpPort: number;
   headless: boolean;
+  evaluateEnabled: boolean;
 }): ResolvedBrowserConfig {
-  const controlHost = "127.0.0.1";
-  const controlUrl = `http://${controlHost}:${params.controlPort}`;
   const cdpHost = "127.0.0.1";
   return {
     enabled: true,
-    controlUrl,
-    controlHost,
+    evaluateEnabled: params.evaluateEnabled,
     controlPort: params.controlPort,
     cdpProtocol: "http",
     cdpHost,
@@ -80,6 +81,7 @@ export async function ensureSandboxBrowser(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  evaluateEnabled?: boolean;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) return null;
   if (!isToolAllowed(params.cfg.tools, "browser")) return null;
@@ -174,6 +176,7 @@ export async function ensureSandboxBrowser(params: {
         controlPort: 0,
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
+        evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
       onEnsureAttachTarget,
     });
@@ -204,7 +207,7 @@ export async function ensureSandboxBrowser(params: {
       : undefined;
 
   return {
-    controlUrl: resolvedBridge.baseUrl,
+    bridgeUrl: resolvedBridge.baseUrl,
     noVncUrl,
     containerName,
   };

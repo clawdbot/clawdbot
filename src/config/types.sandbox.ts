@@ -59,21 +59,6 @@ export type SandboxBrowserSettings = {
    */
   allowHostControl?: boolean;
   /**
-   * Allowlist of exact control URLs for target="custom".
-   * When set, any custom controlUrl must match this list.
-   */
-  allowedControlUrls?: string[];
-  /**
-   * Allowlist of hostnames for control URLs (hostname only, no ports).
-   * When set, controlUrl hostname must match.
-   */
-  allowedControlHosts?: string[];
-  /**
-   * Allowlist of ports for control URLs.
-   * When set, controlUrl port must match (defaults: http=80, https=443).
-   */
-  allowedControlPorts?: number[];
-  /**
    * When true (default), sandboxed browser control will try to start/reattach to
    * the sandbox browser container when a tool call needs it.
    */

@@ -1,21 +1,9 @@
 import type { Command } from "commander";
 
-import { resolveBrowserControlUrl } from "../browser/client.js";
-import {
-  browserSetDevice,
-  browserSetGeolocation,
-  browserSetHeaders,
-  browserSetHttpCredentials,
-  browserSetLocale,
-  browserSetMedia,
-  browserSetOffline,
-  browserSetTimezone,
-} from "../browser/client-actions.js";
-import { browserAct } from "../browser/client-actions-core.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
@@ -47,7 +35,6 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (width: number, height: number, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       if (!Number.isFinite(width) || !Number.isFinite(height)) {
         defaultRuntime.error(danger("width and height must be numbers"));
@@ -55,15 +42,20 @@ export function registerBrowserStateCommands(
         return;
       }
       await runBrowserCommand(async () => {
-        const result = await browserAct(
-          baseUrl,
+        const result = await callBrowserRequest(
+          parent,
           {
-            kind: "resize",
-            width,
-            height,
-            targetId: opts.targetId?.trim() || undefined,
+            method: "POST",
+            path: "/act",
+            query: profile ? { profile } : undefined,
+            body: {
+              kind: "resize",
+              width,
+              height,
+              targetId: opts.targetId?.trim() || undefined,
+            },
           },
-          { profile },
+          { timeoutMs: 20000 },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -80,7 +72,6 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       const offline = parseOnOff(value);
       if (offline === null) {
@@ -89,11 +80,19 @@ export function registerBrowserStateCommands(
         return;
       }
       await runBrowserCommand(async () => {
-        const result = await browserSetOffline(baseUrl, {
-          offline,
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/offline",
+            query: profile ? { profile } : undefined,
+            body: {
+              offline,
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -109,7 +108,6 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         const parsed = JSON.parse(String(opts.json)) as unknown;
@@ -120,11 +118,19 @@ export function registerBrowserStateCommands(
         for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
           if (typeof v === "string") headers[k] = v;
         }
-        const result = await browserSetHeaders(baseUrl, {
-          headers,
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/headers",
+            query: profile ? { profile } : undefined,
+            body: {
+              headers,
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -142,16 +148,23 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await browserSetHttpCredentials(baseUrl, {
-          username: username?.trim() || undefined,
-          password,
-          clear: Boolean(opts.clear),
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/credentials",
+            query: profile ? { profile } : undefined,
+            body: {
+              username: username?.trim() || undefined,
+              password,
+              clear: Boolean(opts.clear),
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -171,18 +184,25 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (latitude: number | undefined, longitude: number | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await browserSetGeolocation(baseUrl, {
-          latitude: Number.isFinite(latitude) ? latitude : undefined,
-          longitude: Number.isFinite(longitude) ? longitude : undefined,
-          accuracy: Number.isFinite(opts.accuracy) ? opts.accuracy : undefined,
-          origin: opts.origin?.trim() || undefined,
-          clear: Boolean(opts.clear),
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/geolocation",
+            query: profile ? { profile } : undefined,
+            body: {
+              latitude: Number.isFinite(latitude) ? latitude : undefined,
+              longitude: Number.isFinite(longitude) ? longitude : undefined,
+              accuracy: Number.isFinite(opts.accuracy) ? opts.accuracy : undefined,
+              origin: opts.origin?.trim() || undefined,
+              clear: Boolean(opts.clear),
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -198,7 +218,6 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       const v = value.trim().toLowerCase();
       const colorScheme =
@@ -209,11 +228,19 @@ export function registerBrowserStateCommands(
         return;
       }
       await runBrowserCommand(async () => {
-        const result = await browserSetMedia(baseUrl, {
-          colorScheme,
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/media",
+            query: profile ? { profile } : undefined,
+            body: {
+              colorScheme,
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -229,14 +256,21 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (timezoneId: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await browserSetTimezone(baseUrl, {
-          timezoneId,
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/timezone",
+            query: profile ? { profile } : undefined,
+            body: {
+              timezoneId,
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -252,14 +286,21 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (locale: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await browserSetLocale(baseUrl, {
-          locale,
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/locale",
+            query: profile ? { profile } : undefined,
+            body: {
+              locale,
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -275,14 +316,21 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (name: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await browserSetDevice(baseUrl, {
-          name,
-          targetId: opts.targetId?.trim() || undefined,
-          profile,
-        });
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/set/device",
+            query: profile ? { profile } : undefined,
+            body: {
+              name,
+              targetId: opts.targetId?.trim() || undefined,
+            },
+          },
+          { timeoutMs: 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;

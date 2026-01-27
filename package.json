@@ -1,15 +1,17 @@
 {
-  "name": "clawdbot",
-  "version": "2026.1.25",
+  "name": "moltbot",
+  "version": "2026.1.26",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
     "./plugin-sdk": "./dist/plugin-sdk/index.js",
-    "./plugin-sdk/*": "./dist/plugin-sdk/*"
+    "./plugin-sdk/*": "./dist/plugin-sdk/*",
+    "./cli-entry": "./dist/entry.js"
   },
   "bin": {
+    "moltbot": "dist/entry.js",
     "clawdbot": "dist/entry.js"
   },
   "files": [
@@ -82,7 +84,7 @@
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
-    "build": "tsc -p tsconfig.json && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts",
+    "build": "pnpm canvas:a2ui:bundle && tsc -p tsconfig.json && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "release:check": "node --import tsx scripts/release-check.ts",
     "ui:install": "node scripts/ui.js install",
@@ -90,6 +92,7 @@
     "ui:build": "node scripts/ui.js build",
     "start": "node scripts/run-node.mjs",
     "clawdbot": "node scripts/run-node.mjs",
+    "moltbot": "node scripts/run-node.mjs",
     "gateway:watch": "node scripts/watch-node.mjs gateway --force",
     "gateway:dev": "CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway --reset",

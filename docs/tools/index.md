@@ -249,16 +249,17 @@ Profile management:
 - `reset-profile` — kill orphan process on profile's port (local only)
 
 Common parameters:
-- `controlUrl` (defaults from config)
 - `profile` (optional; defaults to `browser.defaultProfile`)
+- `target` (`sandbox` | `host` | `node`)
+- `node` (optional; picks a specific node id/name)
 Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
-- Uses `browser.controlUrl` unless `controlUrl` is passed explicitly.
 - All actions accept optional `profile` parameter for multi-instance support.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to "chrome").
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).
+- If a browser-capable node is connected, the tool may auto-route to it (unless you pin `target`).
 - `snapshot` defaults to `ai` when Playwright is installed; use `aria` for the accessibility tree.
 - `snapshot` also supports role-snapshot options (`interactive`, `compact`, `depth`, `selector`) which return refs like `e12`.
 - `act` requires `ref` from `snapshot` (numeric `12` from AI snapshots, or `e12` from role snapshots); use `evaluate` for rare CSS selector needs.
@@ -410,7 +411,9 @@ Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `timeoutMs`
 
 Browser tool:
-- `controlUrl` (defaults from config)
+- `profile` (optional; defaults to `browser.defaultProfile`)
+- `target` (`sandbox` | `host` | `node`)
+- `node` (optional; pin a specific node id/name)
 
 ## Recommended agent flows
 

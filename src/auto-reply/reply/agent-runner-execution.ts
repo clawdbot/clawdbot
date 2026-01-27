@@ -138,6 +138,7 @@ export async function runAgentTurnWithFallback(params: {
         cfg: params.followupRun.run.config,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
+        agentDir: params.followupRun.run.agentDir,
         fallbacksOverride: resolveAgentModelFallbacksOverride(
           params.followupRun.run.config,
           resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
@@ -231,6 +232,10 @@ export async function runAgentTurnWithFallback(params: {
             groupChannel:
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+            senderId: params.sessionCtx.SenderId?.trim() || undefined,
+            senderName: params.sessionCtx.SenderName?.trim() || undefined,
+            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
             // Provider threading context for tool auto-injection
             ...buildThreadingToolContext({
               sessionCtx: params.sessionCtx,

@@ -78,6 +78,48 @@ describe("argv helpers", () => {
     });
     expect(nodeArgv).toEqual(["node", "clawdbot", "status"]);
 
+    const versionedNodeArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["node-22", "clawdbot", "status"],
+    });
+    expect(versionedNodeArgv).toEqual(["node-22", "clawdbot", "status"]);
+
+    const versionedNodeWindowsArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["node-22.2.0.exe", "clawdbot", "status"],
+    });
+    expect(versionedNodeWindowsArgv).toEqual(["node-22.2.0.exe", "clawdbot", "status"]);
+
+    const versionedNodePatchlessArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["node-22.2", "clawdbot", "status"],
+    });
+    expect(versionedNodePatchlessArgv).toEqual(["node-22.2", "clawdbot", "status"]);
+
+    const versionedNodeWindowsPatchlessArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["node-22.2.exe", "clawdbot", "status"],
+    });
+    expect(versionedNodeWindowsPatchlessArgv).toEqual(["node-22.2.exe", "clawdbot", "status"]);
+
+    const versionedNodeWithPathArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["/usr/bin/node-22.2.0", "clawdbot", "status"],
+    });
+    expect(versionedNodeWithPathArgv).toEqual(["/usr/bin/node-22.2.0", "clawdbot", "status"]);
+
+    const nodejsArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["nodejs", "clawdbot", "status"],
+    });
+    expect(nodejsArgv).toEqual(["nodejs", "clawdbot", "status"]);
+
+    const nonVersionedNodeArgv = buildParseArgv({
+      programName: "clawdbot",
+      rawArgs: ["node-dev", "clawdbot", "status"],
+    });
+    expect(nonVersionedNodeArgv).toEqual(["node", "clawdbot", "node-dev", "clawdbot", "status"]);
+
     const directArgv = buildParseArgv({
       programName: "clawdbot",
       rawArgs: ["clawdbot", "status"],

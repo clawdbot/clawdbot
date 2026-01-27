@@ -96,7 +96,6 @@ describe("createClawdbotCodingTools", () => {
     };
     expect(parameters.properties?.action).toBeDefined();
     expect(parameters.properties?.target).toBeDefined();
-    expect(parameters.properties?.controlUrl).toBeDefined();
     expect(parameters.properties?.targetUrl).toBeDefined();
     expect(parameters.properties?.request).toBeDefined();
     expect(parameters.required ?? []).toContain("action");

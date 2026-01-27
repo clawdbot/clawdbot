@@ -6,7 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -64,6 +64,7 @@ export type IMessageAccountConfig = {
     {
       requireMention?: boolean;
       tools?: GroupToolPolicyConfig;
+      toolsBySender?: GroupToolPolicyBySenderConfig;
     }
   >;
   /** Heartbeat visibility settings for this channel. */

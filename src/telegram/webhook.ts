@@ -15,6 +15,7 @@ import {
 } from "../logging/diagnostic.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export async function startTelegramWebhook(opts: {
   token: string;
@@ -97,9 +98,14 @@ export async function startTelegramWebhook(opts: {
   const publicUrl =
     opts.publicUrl ?? `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
 
-  await bot.api.setWebhook(publicUrl, {
-    secret_token: opts.secret,
-    allowed_updates: resolveTelegramAllowedUpdates(),
+  await withTelegramApiErrorLogging({
+    operation: "setWebhook",
+    runtime,
+    fn: () =>
+      bot.api.setWebhook(publicUrl, {
+        secret_token: opts.secret,
+        allowed_updates: resolveTelegramAllowedUpdates(),
+      }),
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));

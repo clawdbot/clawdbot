@@ -1,5 +1,6 @@
 import {
   resolveAgentConfig,
+  resolveAgentDir,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -128,6 +129,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
+  const agentDir = resolveAgentDir(params.cfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
@@ -330,6 +332,7 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: cfgWithAgentDefaults,
       provider,
       model,
+      agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {

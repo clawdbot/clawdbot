@@ -83,13 +83,13 @@ Defaults (can be overridden via env/flags/config):
 - `CLAWDBOT_STATE_DIR=~/.clawdbot-dev`
 - `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/clawdbot.json`
 - `CLAWDBOT_GATEWAY_PORT=19001` (Gateway WS + HTTP)
-- `browser.controlUrl=http://127.0.0.1:19003` (derived: `gateway.port+2`)
+- browser control service port = `19003` (derived: `gateway.port+2`, loopback only)
 - `canvasHost.port=19005` (derived: `gateway.port+4`)
 - `agents.defaults.workspace` default becomes `~/clawd-dev` when you run `setup`/`onboard` under `--dev`.
 
 Derived ports (rules of thumb):
 - Base port = `gateway.port` (or `CLAWDBOT_GATEWAY_PORT` / `--port`)
-- `browser.controlUrl port = base + 2` (or `CLAWDBOT_BROWSER_CONTROL_URL` / config override)
+- browser control service port = base + 2 (loopback only)
 - `canvasHost.port = base + 4` (or `CLAWDBOT_CANVAS_HOST_PORT` / config override)
 - Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108` (persisted per profile).
 

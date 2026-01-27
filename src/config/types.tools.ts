@@ -158,6 +158,8 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
+
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";

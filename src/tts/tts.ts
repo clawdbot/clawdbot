@@ -40,7 +40,7 @@ import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
-const DEFAULT_MAX_TEXT_LENGTH = 4000;
+const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
@@ -1386,32 +1386,34 @@ export async function maybeApplyTtsToPayload(params: {
 
   if (textForAudio.length > maxLength) {
     if (!isSummarizationEnabled(prefsPath)) {
+      // Truncate text when summarization is disabled
       logVerbose(
-        `TTS: skipping long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
+        `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );
-      return nextPayload;
-    }
-
-    try {
-      const summary = await summarizeText({
-        text: textForAudio,
-        targetLength: maxLength,
-        cfg: params.cfg,
-        config,
-        timeoutMs: config.timeoutMs,
-      });
-      textForAudio = summary.summary;
-      wasSummarized = true;
-      if (textForAudio.length > config.maxTextLength) {
-        logVerbose(
-          `TTS: summary exceeded hard limit (${textForAudio.length} > ${config.maxTextLength}); truncating.`,
-        );
-        textForAudio = `${textForAudio.slice(0, config.maxTextLength - 3)}...`;
+      textForAudio = `${textForAudio.slice(0, maxLength - 3)}...`;
+    } else {
+      // Summarize text when enabled
+      try {
+        const summary = await summarizeText({
+          text: textForAudio,
+          targetLength: maxLength,
+          cfg: params.cfg,
+          config,
+          timeoutMs: config.timeoutMs,
+        });
+        textForAudio = summary.summary;
+        wasSummarized = true;
+        if (textForAudio.length > config.maxTextLength) {
+          logVerbose(
+            `TTS: summary exceeded hard limit (${textForAudio.length} > ${config.maxTextLength}); truncating.`,
+          );
+          textForAudio = `${textForAudio.slice(0, config.maxTextLength - 3)}...`;
+        }
+      } catch (err) {
+        const error = err as Error;
+        logVerbose(`TTS: summarization failed, truncating instead: ${error.message}`);
+        textForAudio = `${textForAudio.slice(0, maxLength - 3)}...`;
       }
-    } catch (err) {
-      const error = err as Error;
-      logVerbose(`TTS: summarization failed: ${error.message}`);
-      return nextPayload;
     }
   }
 
@@ -1436,12 +1438,12 @@ export async function maybeApplyTtsToPayload(params: {
 
     const channelId = resolveChannelId(params.channel);
     const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
-
-    return {
+    const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: shouldVoice || params.payload.audioAsVoice,
     };
+    return finalPayload;
   }
 
   lastTtsAttempt = {

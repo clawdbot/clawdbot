@@ -73,7 +73,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: ClawdbotConfig): Securi
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const hooksEnabled = cfg.hooks?.enabled === true;
-  const browserEnabled = Boolean(cfg.browser?.enabled ?? cfg.browser?.controlUrl);
+  const browserEnabled = cfg.browser?.enabled ?? true;
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
@@ -143,20 +143,6 @@ export function collectSecretsInConfigFindings(cfg: ClawdbotConfig): SecurityAud
     });
   }
 
-  const browserToken =
-    typeof cfg.browser?.controlToken === "string" ? cfg.browser.controlToken.trim() : "";
-  if (browserToken && !looksLikeEnvRef(browserToken)) {
-    findings.push({
-      checkId: "config.secrets.browser_control_token_in_config",
-      severity: "warn",
-      title: "Browser control token is stored in config",
-      detail:
-        "browser.controlToken is set in the config file; prefer environment variables for secrets when possible.",
-      remediation:
-        "Prefer CLAWDBOT_BROWSER_CONTROL_TOKEN (env) and remove browser.controlToken from disk.",
-    });
-  }
-
   const hooksToken = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
   if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
     findings.push({
@@ -202,21 +188,6 @@ export function collectHooksHardeningFindings(cfg: ClawdbotConfig): SecurityAudi
       title: "Hooks token reuses the Gateway token",
       detail:
         "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
-      remediation: "Use a separate hooks.token dedicated to hook ingress.",
-    });
-  }
-
-  const browserToken =
-    typeof cfg.browser?.controlToken === "string" && cfg.browser.controlToken.trim()
-      ? cfg.browser.controlToken.trim()
-      : process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim() || null;
-  if (token && browserToken && token === browserToken) {
-    findings.push({
-      checkId: "hooks.token_reuse_browser_token",
-      severity: "warn",
-      title: "Hooks token reuses the browser control token",
-      detail:
-        "hooks.token matches browser control token; compromise of hooks may enable browser control endpoints.",
       remediation: "Use a separate hooks.token dedicated to hook ingress.",
     });
   }
@@ -457,7 +428,7 @@ function isWebFetchEnabled(cfg: ClawdbotConfig): boolean {
 
 function isBrowserEnabled(cfg: ClawdbotConfig): boolean {
   try {
-    return resolveBrowserConfig(cfg.browser).enabled;
+    return resolveBrowserConfig(cfg.browser, cfg).enabled;
   } catch {
     return true;
   }

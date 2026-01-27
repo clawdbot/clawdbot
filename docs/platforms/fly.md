@@ -185,7 +185,7 @@ cat > /data/clawdbot.json << 'EOF'
     "bind": "auto"
   },
   "meta": {
-    "lastTouchedVersion": "2026.1.25"
+    "lastTouchedVersion": "2026.1.26"
   }
 }
 EOF

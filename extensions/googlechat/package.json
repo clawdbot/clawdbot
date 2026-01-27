@@ -1,6 +1,6 @@
 {
-  "name": "@clawdbot/googlechat",
-  "version": "2026.1.25",
+  "name": "@moltbot/googlechat",
+  "version": "2026.1.26",
   "type": "module",
   "description": "Clawdbot Google Chat channel plugin",
   "clawdbot": {
@@ -22,7 +22,7 @@
       "order": 55
     },
     "install": {
-      "npmSpec": "@clawdbot/googlechat",
+      "npmSpec": "@moltbot/googlechat",
       "localPath": "extensions/googlechat",
       "defaultChoice": "npm"
     }
@@ -34,6 +34,6 @@
     "clawdbot": "workspace:*"
   },
   "peerDependencies": {
-    "clawdbot": ">=2026.1.25"
+    "clawdbot": ">=2026.1.26"
   }
 }

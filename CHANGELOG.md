@@ -2,10 +2,15 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.25
+## 2026.1.26
 Status: unreleased.
 
 ### Changes
+- Rebrand: rename the npm package/CLI to `moltbot`, add a `clawdbot` compatibility shim, and move extensions to the `@moltbot/*` scope.
+- Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
+- macOS: limit project-local `node_modules/.bin` PATH preference to debug builds (reduce PATH hijacking risk).
+- Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
+- Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Matrix: switch plugin SDK to @vector-im/matrix-bot-sdk.
@@ -35,10 +40,14 @@ Status: unreleased.
 - CI: increase Node heap size for macOS checks. (#1890) Thanks @realZachi.
 - macOS: avoid crash when rendering code blocks by bumping Textual to 0.3.1. (#2033) Thanks @garricn.
 - Browser: fall back to URL matching for extension relay target resolution. (#1999) Thanks @jonit-dev.
+- Browser: route browser control via gateway/node; remove standalone browser control command and control URL config.
+- Browser: route `browser.request` via node proxies when available; honor proxy timeouts; derive browser ports from `gateway.port`.
 - Update: ignore dist/control-ui for dirty checks and restore after ui builds. (#1976) Thanks @Glucksberg.
+- Build: bundle A2UI assets during build and stop tracking generated bundles. (#2455) Thanks @0oAstro.
 - Telegram: allow caption param for media sends. (#1888) Thanks @mguellsegarra.
 - Telegram: support plugin sendPayload channelData (media/buttons) and validate plugin commands. (#1917) Thanks @JoshuaLelon.
 - Telegram: avoid block replies when streaming is disabled. (#1885) Thanks @ivancasco.
+- Docs: keep docs header sticky so navbar stays visible while scrolling. (#2445) Thanks @chenyuan99.
 - Security: use Windows ACLs for permission audits and fixes on Windows. (#1957)
 - Auth: show copyable Google auth URL after ASCII prompt. (#1787) Thanks @robbyczgw-cla.
 - Routing: precompile session key regexes. (#1697) Thanks @Ray0907.
@@ -46,6 +55,8 @@ Status: unreleased.
 - Telegram: keep topic IDs in restart sentinel notifications. (#1807) Thanks @hsrvc.
 - Telegram: add optional silent send flag (disable notifications). (#2382) Thanks @Suksham-sharma.
 - Telegram: support editing sent messages via message(action="edit"). (#2394) Thanks @marcelomar21.
+- Telegram: add sticker receive/send with vision caching. (#2629) Thanks @longjos.
+- Telegram: send sticker pixels to vision models. (#2650)
 - Config: apply config.env before ${VAR} substitution. (#1813) Thanks @spanishflu-est1918.
 - Slack: clear ack reaction after streamed replies. (#2044) Thanks @fancyboi999.
 - macOS: keep custom SSH usernames in remote target. (#2046) Thanks @algal.
@@ -54,14 +65,22 @@ Status: unreleased.
 - **BREAKING:** Gateway auth mode "none" is removed; gateway now requires token/password (Tailscale Serve identity still allowed).
 
 ### Fixes
+- Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
+- macOS: auto-scroll to bottom when sending a new message while scrolled up. (#2471) Thanks @kennyklee.
+- Gateway: suppress AbortError and transient network errors in unhandled rejections. (#2451) Thanks @Glucksberg.
+- TTS: keep /tts status replies on text-only commands and avoid duplicate block-stream audio. (#2451) Thanks @Glucksberg.
 - Security: pin npm overrides to keep tar@7.5.4 for install toolchains.
 - Security: properly test Windows ACL audit for config includes. (#2403) Thanks @dominicnunez.
+- CLI: recognize versioned Node executables when parsing argv. (#2490) Thanks @David-Marsh-Photo.
 - BlueBubbles: coalesce inbound URL link preview messages. (#1981) Thanks @tyler6204.
 - Cron: allow payloads containing "heartbeat" in event filter. (#2219) Thanks @dwfinkelstein.
 - CLI: avoid loading config for global help/version while registering plugin commands. (#2212) Thanks @dial481.
 - Agents: include memory.md when bootstrapping memory context. (#2318) Thanks @czekaj.
+- Agents: release session locks on process termination and cover more signals. (#2483) Thanks @janeexai.
+- Agents: skip cooldowned providers during model failover. (#2143) Thanks @YiWang24.
 - Telegram: harden polling + retry behavior for transient network errors and Node 22 transport issues. (#2420) Thanks @techboss.
 - Telegram: wrap reasoning italics per line to avoid raw underscores. (#2181) Thanks @YuriNachos.
+- Telegram: centralize API error logging for delivery and bot calls. (#2492) Thanks @altryne.
 - Voice Call: enforce Twilio webhook signature verification for ngrok URLs; disable ngrok free tier bypass by default.
 - Security: harden Tailscale Serve auth by validating identity via local tailscaled before trusting headers.
 - Build: align memory-core peer dependency with lockfile.
@@ -697,7 +716,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 ### Highlights
 - Web search: `web_search`/`web_fetch` tools (Brave API) + first-time setup in onboarding/configure.
-- Browser control: Chrome extension relay takeover mode + remote browser control via `clawdbot browser serve`.
+- Browser control: Chrome extension relay takeover mode + remote browser control support.
 - Plugins: channel plugins (gateway HTTP hooks) + Zalo plugin + onboarding install flow. (#854) — thanks @longmaba.
 - Security: expanded `clawdbot security audit` (+ `--fix`), detect-secrets CI scan, and a `SECURITY.md` reporting policy.
 
@@ -715,7 +734,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Security: add detect-secrets CI scan and baseline guidance. (#227) — thanks @Hyaxia.
 - Tools: add `web_search`/`web_fetch` (Brave API), auto-enable `web_fetch` for sandboxed sessions, and remove the `brave-search` skill.
 - CLI/Docs: add a web tools configure section for storing Brave API keys and update onboarding tips.
-- Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control via `clawdbot browser serve` + `browser.controlToken`.
+- Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control (standalone server + token auth).
 
 ### Fixes
 - Sessions: refactor session store updates to lock + mutate per-entry, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.

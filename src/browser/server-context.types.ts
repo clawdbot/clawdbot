@@ -17,7 +17,7 @@ export type ProfileRuntimeState = {
 };
 
 export type BrowserServerState = {
-  server: Server;
+  server?: Server | null;
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;

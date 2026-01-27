@@ -1,6 +1,6 @@
 {
-  "name": "@clawdbot/msteams",
-  "version": "2026.1.25",
+  "name": "@moltbot/msteams",
+  "version": "2026.1.26",
   "type": "module",
   "description": "Clawdbot Microsoft Teams channel plugin",
   "clawdbot": {
@@ -20,7 +20,7 @@
       "order": 60
     },
     "install": {
-      "npmSpec": "@clawdbot/msteams",
+      "npmSpec": "@moltbot/msteams",
       "localPath": "extensions/msteams",
       "defaultChoice": "npm"
     }

@@ -318,9 +318,30 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(commandArg).toContain('export PATH="/custom/bin:/usr/local/bin:/usr/bin:$PATH"');
+    expect(args).toContain("CLAWDBOT_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
+    expect(commandArg).toContain('export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"');
     expect(commandArg).toContain("echo hello");
-    expect(commandArg).toBe('export PATH="/custom/bin:/usr/local/bin:/usr/bin:$PATH"; echo hello');
+    expect(commandArg).toBe(
+      'export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"; unset CLAWDBOT_PREPEND_PATH; echo hello',
+    );
+  });
+
+  it("does not interpolate PATH into the shell command", () => {
+    const injectedPath = "$(touch /tmp/clawdbot-path-injection)";
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        PATH: injectedPath,
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(args).toContain(`CLAWDBOT_PREPEND_PATH=${injectedPath}`);
+    expect(commandArg).not.toContain(injectedPath);
+    expect(commandArg).toContain("CLAWDBOT_PREPEND_PATH");
   });
 
   it("does not add PATH export when PATH is not in env", () => {

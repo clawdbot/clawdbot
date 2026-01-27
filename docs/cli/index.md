@@ -859,9 +859,8 @@ Location:
 Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`clawdbot browser`](/cli/browser) and the [Browser tool](/tools/browser).
 
 Common options:
-- `--url <controlUrl>`
+- `--url`, `--token`, `--timeout`, `--json`
 - `--browser-profile <name>`
-- `--json`
 
 Manage:
 - `browser status`

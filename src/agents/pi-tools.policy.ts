@@ -233,6 +233,10 @@ export function resolveGroupToolPolicy(params: {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 }): SandboxToolPolicy | undefined {
   if (!params.config) return undefined;
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
@@ -255,12 +259,20 @@ export function resolveGroupToolPolicy(params: {
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       accountId: params.accountId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
     }) ??
     resolveChannelGroupToolsPolicy({
       cfg: params.config,
       channel,
       groupId,
       accountId: params.accountId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
     });
   return pickToolPolicy(toolsConfig);
 }

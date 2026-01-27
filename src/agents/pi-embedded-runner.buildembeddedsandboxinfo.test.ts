@@ -127,7 +127,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       },
       browserAllowHostControl: true,
       browser: {
-        controlUrl: "http://localhost:9222",
+        bridgeUrl: "http://localhost:9222",
         noVncUrl: "http://localhost:6080",
         containerName: "clawdbot-sbx-browser-test",
       },
@@ -138,7 +138,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       workspaceDir: "/tmp/clawdbot-sandbox",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
-      browserControlUrl: "http://localhost:9222",
+      browserBridgeUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
       hostBrowserAllowed: true,
     });

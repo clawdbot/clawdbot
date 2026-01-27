@@ -234,6 +234,8 @@ describe("buildGatewayInstallPlan", () => {
 describe("gatewayInstallErrorHint", () => {
   it("returns platform-specific hints", () => {
     expect(gatewayInstallErrorHint("win32")).toContain("Run as administrator");
-    expect(gatewayInstallErrorHint("linux")).toContain("clawdbot gateway install");
+    expect(gatewayInstallErrorHint("linux")).toMatch(
+      /clawdbot( --profile isolated)? gateway install/,
+    );
   });
 });

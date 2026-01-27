@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 

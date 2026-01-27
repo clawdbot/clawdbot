@@ -1,6 +1,6 @@
 {
-  "name": "@clawdbot/zalo",
-  "version": "2026.1.25",
+  "name": "@moltbot/zalo",
+  "version": "2026.1.26",
   "type": "module",
   "description": "Clawdbot Zalo channel plugin",
   "clawdbot": {
@@ -21,7 +21,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@clawdbot/zalo",
+      "npmSpec": "@moltbot/zalo",
       "localPath": "extensions/zalo",
       "defaultChoice": "npm"
     }

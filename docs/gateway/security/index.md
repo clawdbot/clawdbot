@@ -7,6 +7,8 @@ read_when:
 
 ## Quick check: `clawdbot security audit`
 
+See also: [Formal Verification (Security Models)](/security/formal-verification/)
+
 Run this regularly (especially after changing config or exposing network surfaces):
 
 ```bash
@@ -36,7 +38,7 @@ Start with the smallest access that still works, then widen it as you gain confi
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
 - **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel).
-- **Browser control exposure** (remote controlUrl without token, HTTP, token reuse).
+- **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
@@ -61,7 +63,7 @@ When the audit prints findings, treat this as a priority order:
 
 1. **Anything “open” + tools enabled**: lock down DMs/groups first (pairing/allowlists), then tighten tool policy/sandboxing.
 2. **Public network exposure** (LAN bind, Funnel, missing auth): fix immediately.
-3. **Browser control remote exposure**: treat it like a remote admin API (token required; HTTPS/tailnet-only).
+3. **Browser control remote exposure**: treat it like operator access (tailnet-only, pair nodes deliberately, avoid public exposure).
 4. **Permissions**: make sure state/config/credentials/auth are not group/world-readable.
 5. **Plugins/extensions**: only load what you explicitly trust.
 6. **Model choice**: prefer modern, instruction-hardened models for any bot with tools.
@@ -277,7 +279,7 @@ Assume “compromised” means: someone got into a room that can trigger the bot
    - Lock down inbound surfaces (DM policy, group allowlists, mention gating).
 2. **Rotate secrets**
    - Rotate `gateway.auth` token/password.
-   - Rotate `browser.controlToken` and `hooks.token` (if used).
+   - Rotate `hooks.token` (if used) and revoke any suspicious node pairings.
    - Revoke/rotate model provider credentials (API keys / OAuth).
 3. **Review artifacts**
    - Check Gateway logs and recent sessions/transcripts for unexpected tool calls.
@@ -430,26 +432,19 @@ Trusted proxies:
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
-### 0.6.1) Browser control server over Tailscale (recommended)
+### 0.6.1) Browser control via node host (recommended)
 
-If your Gateway is remote but the browser runs on another machine, you’ll often run a **separate browser control server**
-on the browser machine (see [Browser tool](/tools/browser)). Treat this like an admin API.
+If your Gateway is remote but the browser runs on another machine, run a **node host**
+on the browser machine and let the Gateway proxy browser actions (see [Browser tool](/tools/browser)).
+Treat node pairing like admin access.
 
 Recommended pattern:
-
-```bash
-# on the machine that runs Chrome
-clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
-tailscale serve https / http://127.0.0.1:18791
-```
-
-Then on the Gateway, set:
-- `browser.controlUrl` to the `https://…` Serve URL (MagicDNS/ts.net)
-- and authenticate with the same token (`CLAWDBOT_BROWSER_CONTROL_TOKEN` env preferred)
+- Keep the Gateway and node host on the same tailnet (Tailscale).
+- Pair the node intentionally; disable browser proxy routing if you don’t need it.
 
 Avoid:
-- `--bind 0.0.0.0` (LAN-visible surface)
-- Tailscale Funnel for browser control endpoints (public exposure)
+- Exposing relay/control ports over LAN or public Internet.
+- Tailscale Funnel for browser control endpoints (public exposure).
 
 ### 0.7) Secrets on disk (what’s sensitive)
 
@@ -577,13 +572,15 @@ If that browser profile already contains logged-in sessions, the model can
 access those accounts and data. Treat browser profiles as **sensitive state**:
 - Prefer a dedicated profile for the agent (the default `clawd` profile).
 - Avoid pointing the agent at your personal daily-driver profile.
+- `act:evaluate` and `wait --fn` run arbitrary JavaScript in the page context.
+  Prompt injection can steer the model into calling them. If you do not need
+  them, set `browser.evaluateEnabled=false` (see [Configuration](/gateway/configuration#browser-clawd-managed-browser)).
 - Keep host browser control disabled for sandboxed agents unless you trust them.
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
-- Treat `browser.controlUrl` endpoints as an admin API: tailnet-only + token auth. Prefer Tailscale Serve over LAN binds.
-- Keep `browser.controlToken` separate from `gateway.auth.token` (you can reuse it, but that increases blast radius).
-- Prefer env vars for the token (`CLAWDBOT_BROWSER_CONTROL_TOKEN`) instead of storing it in config on disk.
+- Keep the Gateway and node hosts tailnet-only; avoid exposing relay/control ports to LAN or public Internet.
+- Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
 - Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
 
 ## Per-agent access profiles (multi-agent)

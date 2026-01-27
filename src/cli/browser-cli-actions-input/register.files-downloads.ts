@@ -1,13 +1,7 @@
 import type { Command } from "commander";
-import {
-  browserArmDialog,
-  browserArmFileChooser,
-  browserDownload,
-  browserWaitForDownload,
-} from "../../browser/client-actions.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { BrowserParentOpts } from "../browser-cli-shared.js";
+import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { resolveBrowserActionContext } from "./shared.js";
 import { shortenHomePath } from "../../utils.js";
 
@@ -29,17 +23,26 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (paths: string[], opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
-        const result = await browserArmFileChooser(baseUrl, {
-          paths,
-          ref: opts.ref?.trim() || undefined,
-          inputRef: opts.inputRef?.trim() || undefined,
-          element: opts.element?.trim() || undefined,
-          targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
-          profile,
-        });
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const result = await callBrowserRequest<{ download: { path: string } }>(
+          parent,
+          {
+            method: "POST",
+            path: "/hooks/file-chooser",
+            query: profile ? { profile } : undefined,
+            body: {
+              paths,
+              ref: opts.ref?.trim() || undefined,
+              inputRef: opts.inputRef?.trim() || undefined,
+              element: opts.element?.trim() || undefined,
+              targetId: opts.targetId?.trim() || undefined,
+              timeoutMs,
+            },
+          },
+          { timeoutMs: timeoutMs ?? 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -62,14 +65,23 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
-        const result = await browserWaitForDownload(baseUrl, {
-          path: outPath?.trim() || undefined,
-          targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
-          profile,
-        });
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const result = await callBrowserRequest<{ download: { path: string } }>(
+          parent,
+          {
+            method: "POST",
+            path: "/wait/download",
+            query: profile ? { profile } : undefined,
+            body: {
+              path: outPath?.trim() || undefined,
+              targetId: opts.targetId?.trim() || undefined,
+              timeoutMs,
+            },
+          },
+          { timeoutMs: timeoutMs ?? 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -93,15 +105,24 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
-        const result = await browserDownload(baseUrl, {
-          ref,
-          path: outPath,
-          targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
-          profile,
-        });
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const result = await callBrowserRequest<{ download: { path: string } }>(
+          parent,
+          {
+            method: "POST",
+            path: "/download",
+            query: profile ? { profile } : undefined,
+            body: {
+              ref,
+              path: outPath,
+              targetId: opts.targetId?.trim() || undefined,
+              timeoutMs,
+            },
+          },
+          { timeoutMs: timeoutMs ?? 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -126,7 +147,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
         defaultRuntime.error(danger("Specify --accept or --dismiss"));
@@ -134,13 +155,22 @@ export function registerBrowserFilesAndDownloadsCommands(
         return;
       }
       try {
-        const result = await browserArmDialog(baseUrl, {
-          accept,
-          promptText: opts.prompt?.trim() || undefined,
-          targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
-          profile,
-        });
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const result = await callBrowserRequest(
+          parent,
+          {
+            method: "POST",
+            path: "/hooks/dialog",
+            query: profile ? { profile } : undefined,
+            body: {
+              accept,
+              promptText: opts.prompt?.trim() || undefined,
+              targetId: opts.targetId?.trim() || undefined,
+              timeoutMs,
+            },
+          },
+          { timeoutMs: timeoutMs ?? 20000 },
+        );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;

@@ -1093,9 +1093,10 @@ clawdbot browser extension path
 
 Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → pick that folder.
 
-Full guide (including remote Gateway via Tailscale + security notes): [Chrome extension](/tools/chrome-extension)
+Full guide (including remote Gateway + security notes): [Chrome extension](/tools/chrome-extension)
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
+If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need anything extra.
+If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
 You still need to click the extension button on the tab you want to control (it doesn’t auto-attach).
 
 ## Sandboxing and memory
@@ -1479,7 +1480,7 @@ setup is an always‑on host plus your laptop as a node.
 - **Safer execution controls.** `system.run` is gated by node allowlists/approvals on that laptop.
 - **More device tools.** Nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
 - **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally and relay control
-  with the Chrome extension + `clawdbot browser serve`.
+  with the Chrome extension + a node host on the laptop.
 
 SSH is fine for ad‑hoc shell access, but nodes are simpler for ongoing agent workflows and
 device automation.

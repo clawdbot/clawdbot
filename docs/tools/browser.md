@@ -1,5 +1,5 @@
 ---
-summary: "Integrated browser control server + action commands"
+summary: "Integrated browser control service + action commands"
 read_when:
   - Adding agent-controlled browser automation
   - Debugging why clawd is interfering with your own Chrome
@@ -10,7 +10,7 @@ read_when:
 
 Clawdbot can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
 It is isolated from your personal browser and is managed through a small local
-control server.
+control service inside the Gateway (loopback only).
 
 Beginner view:
 - Think of it as a **separate, agent-only browser**.
@@ -57,8 +57,7 @@ Browser settings live in `~/.clawdbot/clawdbot.json`.
 {
   browser: {
     enabled: true,                    // default: true
-    controlUrl: "http://127.0.0.1:18791",
-    cdpUrl: "http://127.0.0.1:18792", // defaults to controlUrl + 1
+    // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500,         // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
     defaultProfile: "chrome",
@@ -77,10 +76,11 @@ Browser settings live in `~/.clawdbot/clawdbot.json`.
 ```
 
 Notes:
-- `controlUrl` defaults to `http://127.0.0.1:18791`.
+- The browser control service binds to loopback on a port derived from `gateway.port`
+  (default: `18791`, which is gateway + 2). The relay uses the next port (`18792`).
 - If you override the Gateway port (`gateway.port` or `CLAWDBOT_GATEWAY_PORT`),
-  the default browser ports shift to stay in the same “family” (control = gateway + 2).
-- `cdpUrl` defaults to `controlUrl + 1` when unset.
+  the derived browser ports shift to stay in the same “family”.
+- `cdpUrl` defaults to the relay port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
@@ -126,37 +126,10 @@ clawdbot config set browser.executablePath "/usr/bin/google-chrome"
 
 ## Local vs remote control
 
-- **Local control (default):** `controlUrl` is loopback (`127.0.0.1`/`localhost`).
-  The Gateway starts the control server and can launch a local browser.
-- **Remote control:** `controlUrl` is non-loopback. The Gateway **does not** start
-  a local server; it assumes you are pointing at an existing server elsewhere.
+- **Local control (default):** the Gateway starts the loopback control service and can launch a local browser.
+- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, Clawdbot will not launch a local browser.
-
-## Remote browser (control server)
-
-You can run the **browser control server** on another machine and point your
-Gateway at it with a remote `controlUrl`. This lets the agent drive a browser
-outside the host (lab box, VM, remote desktop, etc.).
-
-Key points:
-- The **control server** speaks to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
-- The **Gateway** only needs the HTTP control URL.
-- Profiles are resolved on the **control server** side.
-
-Example:
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://10.0.0.42:18791",
-    defaultProfile: "work"
-  }
-}
-```
-
-Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
-directly to a Chromium-based browser instance without a remote control server.
 
 Remote CDP URLs can include auth:
 - Query tokens (e.g., `https://provider.example?token=<token>`)
@@ -166,11 +139,11 @@ Clawdbot preserves the auth when calling `/json/*` endpoints and when connecting
 to the CDP WebSocket. Prefer environment variables or secrets managers for
 tokens instead of committing them to config files.
 
-### Node browser proxy (zero-config default)
+## Node browser proxy (zero-config default)
 
 If you run a **node host** on the machine that has your browser, Clawdbot can
-auto-route browser tool calls to that node without any custom `controlUrl`
-setup. This is the default path for remote gateways.
+auto-route browser tool calls to that node without any extra browser config.
+This is the default path for remote gateways.
 
 Notes:
 - The node host exposes its local browser control server via a **proxy command**.
@@ -179,7 +152,7 @@ Notes:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"`
 
-### Browserless (hosted remote CDP)
+## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
 CDP endpoints over HTTPS. You can point a Clawdbot browser profile at a
@@ -207,94 +180,16 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
-### Running the control server on the browser machine
-
-Run a standalone browser control server (recommended when your Gateway is remote):
-
-```bash
-# on the machine that runs Chrome/Brave/Edge
-clawdbot browser serve --bind <browser-host> --port 18791 --token <token>
-```
-
-Then point your Gateway at it:
-
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://<browser-host>:18791",
-
-    // Option A (recommended): keep token in env on the Gateway
-    // (avoid writing secrets into config files)
-    // controlToken: "<token>"
-  }
-}
-```
-
-And set the auth token in the Gateway environment:
-
-```bash
-export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
-```
-
-Option B: store the token in the Gateway config instead (same shared token):
-
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://<browser-host>:18791",
-    controlToken: "<token>"
-  }
-}
-```
-
 ## Security
 
-This section covers the **browser control server** (`browser.controlUrl`) used for agent browser automation.
-
 Key ideas:
-- Treat the browser control server like an admin API: **private network only**.
-- Use **token auth** always when the server is reachable off-machine.
-- Prefer **Tailnet-only** connectivity over LAN exposure.
+- Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
+- Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
-### Tokens (what is shared with what?)
-
-- `browser.controlToken` / `CLAWDBOT_BROWSER_CONTROL_TOKEN` is **only** for authenticating browser control HTTP requests to `browser.controlUrl`.
-- It is **not** the Gateway token (`gateway.auth.token`) and **not** a node pairing token.
-- You *can* reuse the same string value, but it’s better to keep them separate to reduce blast radius.
-
-### Binding (don’t expose to your LAN by accident)
-
-Recommended:
-- Keep `clawdbot browser serve` bound to loopback (`127.0.0.1`) and publish it via Tailscale.
-- Or bind to a Tailnet IP only (never `0.0.0.0`) and require a token.
-
-Avoid:
-- `--bind 0.0.0.0` (LAN-visible). Even with token auth, traffic is plain HTTP unless you also add TLS.
-
-### TLS / HTTPS (recommended approach: terminate in front)
-
-Best practice here: keep `clawdbot browser serve` on HTTP and terminate TLS in front.
-
-If you’re already using Tailscale, you have two good options:
-
-1) **Tailnet-only, still HTTP** (transport is encrypted by Tailscale):
-- Keep `controlUrl` as `http://…` but ensure it’s only reachable over your tailnet.
-
-2) **Serve HTTPS via Tailscale** (nice UX: `https://…` URL):
-
-```bash
-# on the browser machine
-clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
-tailscale serve https / http://127.0.0.1:18791
-```
-
-Then set your Gateway config `browser.controlUrl` to the HTTPS URL (MagicDNS/ts.net) and keep using the same token.
-
-Notes:
-- Do **not** use Tailscale Funnel for this unless you explicitly want to make the endpoint public.
-- For Tailnet setup/background, see [Gateway web surfaces](/web/index) and the [Gateway CLI](/cli/gateway).
+Remote CDP tips:
+- Prefer HTTPS endpoints and short-lived tokens where possible.
+- Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
 
@@ -318,13 +213,12 @@ Clawdbot can also drive **your existing Chrome tabs** (no separate “clawd” C
 Full guide: [Chrome extension](/tools/chrome-extension)
 
 Flow:
-- You run a **browser control server** (Gateway on the same machine, or `clawdbot browser serve`).
+- The Gateway runs locally (same machine) or a node host runs on the browser machine.
 - A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
 - You click the **Clawdbot Browser Relay** extension icon on a tab to attach (it does not auto-attach).
 - The agent controls that tab via the normal `browser` tool, by selecting the right profile.
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
-Use `browser serve` only when the Gateway runs elsewhere (remote mode).
+If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
 
 ### Sandboxed sessions
 
@@ -387,8 +281,7 @@ Platforms:
 
 ## Control API (optional)
 
-If you want to integrate directly, the browser control server exposes a small
-HTTP API:
+For local integrations only, the Gateway exposes a small loopback HTTP API:
 
 - Status/start/stop: `GET /`, `POST /start`, `POST /stop`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
@@ -612,8 +505,11 @@ These are useful for “make the site behave like X” workflows:
 ## Security & privacy
 
 - The clawd browser profile may contain logged-in sessions; treat it as sensitive.
+- `browser act kind=evaluate` / `clawdbot browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. Prompt injection can steer
+  this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
-- Keep control URLs loopback-only unless you intentionally expose the server.
+- Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.
 
 ## Troubleshooting
@@ -631,12 +527,10 @@ How it maps:
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page or element).
 - `browser` accepts:
-  - `profile` to choose a named browser profile (host or remote control server).
-  - `target` (`sandbox` | `host` | `custom`) to select where the browser lives.
-  - `controlUrl` sets `target: "custom"` implicitly (remote control server).
+  - `profile` to choose a named browser profile (clawd, chrome, or remote CDP).
+  - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
   - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
   - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
-  - Sandbox allowlists can restrict `target: "custom"` to specific URLs/hosts/ports.
-  - Defaults: allowlists unset (no restriction), and sandbox host control is disabled.
+  - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
 
 This keeps the agent deterministic and avoids brittle selectors.

@@ -412,6 +412,39 @@ async function resolveAutoEntries(params: {
   return [];
 }
 
+export async function resolveAutoImageModel(params: {
+  cfg: ClawdbotConfig;
+  agentDir?: string;
+  activeModel?: ActiveMediaModel;
+}): Promise<ActiveMediaModel | null> {
+  const providerRegistry = buildProviderRegistry();
+  const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
+    if (!entry || entry.type === "cli") return null;
+    const provider = entry.provider;
+    if (!provider) return null;
+    const model = entry.model ?? DEFAULT_IMAGE_MODELS[provider];
+    if (!model) return null;
+    return { provider, model };
+  };
+  const activeEntry = await resolveActiveModelEntry({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    providerRegistry,
+    capability: "image",
+    activeModel: params.activeModel,
+  });
+  const resolvedActive = toActive(activeEntry);
+  if (resolvedActive) return resolvedActive;
+  const keyEntry = await resolveKeyEntry({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    providerRegistry,
+    capability: "image",
+    activeModel: params.activeModel,
+  });
+  return toActive(keyEntry);
+}
+
 async function resolveActiveModelEntry(params: {
   cfg: ClawdbotConfig;
   agentDir?: string;

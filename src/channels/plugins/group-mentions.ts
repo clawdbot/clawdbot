@@ -2,9 +2,13 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
+  resolveToolsBySender,
 } from "../../config/group-policy.js";
 import type { DiscordConfig } from "../../config/types.js";
-import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "../../config/types.tools.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -13,6 +17,10 @@ type GroupMentionParams = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 };
 
 function normalizeDiscordSlug(value?: string | null) {
@@ -172,6 +180,10 @@ export function resolveGoogleChatGroupToolPolicy(
     channel: "googlechat",
     groupId: params.groupId,
     accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
   });
 }
 
@@ -226,6 +238,10 @@ export function resolveTelegramGroupToolPolicy(
     channel: "telegram",
     groupId: chatId ?? params.groupId,
     accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
   });
 }
 
@@ -237,6 +253,10 @@ export function resolveWhatsAppGroupToolPolicy(
     channel: "whatsapp",
     groupId: params.groupId,
     accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
   });
 }
 
@@ -248,6 +268,10 @@ export function resolveIMessageGroupToolPolicy(
     channel: "imessage",
     groupId: params.groupId,
     accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
   });
 }
 
@@ -268,8 +292,24 @@ export function resolveDiscordGroupToolPolicy(
         ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
         : undefined) ??
       (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
+    const senderPolicy = resolveToolsBySender({
+      toolsBySender: entry?.toolsBySender,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+    if (senderPolicy) return senderPolicy;
     if (entry?.tools) return entry.tools;
   }
+  const guildSenderPolicy = resolveToolsBySender({
+    toolsBySender: guildEntry?.toolsBySender,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (guildSenderPolicy) return guildSenderPolicy;
   if (guildEntry?.tools) return guildEntry.tools;
   return undefined;
 }
@@ -294,7 +334,9 @@ export function resolveSlackGroupToolPolicy(
     channelName ?? "",
     normalizedName,
   ].filter(Boolean);
-  let matched: { tools?: GroupToolPolicyConfig } | undefined;
+  let matched:
+    | { tools?: GroupToolPolicyConfig; toolsBySender?: GroupToolPolicyBySenderConfig }
+    | undefined;
   for (const candidate of candidates) {
     if (candidate && channels[candidate]) {
       matched = channels[candidate];
@@ -302,6 +344,14 @@ export function resolveSlackGroupToolPolicy(
     }
   }
   const resolved = matched ?? channels["*"];
+  const senderPolicy = resolveToolsBySender({
+    toolsBySender: resolved?.toolsBySender,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (senderPolicy) return senderPolicy;
   if (resolved?.tools) return resolved.tools;
   return undefined;
 }
@@ -314,5 +364,9 @@ export function resolveBlueBubblesGroupToolPolicy(
     channel: "bluebubbles",
     groupId: params.groupId,
     accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
   });
 }

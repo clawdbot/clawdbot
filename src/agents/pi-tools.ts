@@ -140,6 +140,10 @@ export function createClawdbotCodingTools(options?: {
   groupSpace?: string | null;
   /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -174,6 +178,10 @@ export function createClawdbotCodingTools(options?: {
     groupChannel: options?.groupChannel,
     groupSpace: options?.groupSpace,
     accountId: options?.agentAccountId,
+    senderId: options?.senderId,
+    senderName: options?.senderName,
+    senderUsername: options?.senderUsername,
+    senderE164: options?.senderE164,
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
@@ -294,11 +302,8 @@ export function createClawdbotCodingTools(options?: {
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
     ...createClawdbotTools({
-      browserControlUrl: sandbox?.browser?.controlUrl,
+      sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-      allowedControlUrls: sandbox?.browserAllowedControlUrls,
-      allowedControlHosts: sandbox?.browserAllowedControlHosts,
-      allowedControlPorts: sandbox?.browserAllowedControlPorts,
       agentSessionKey: options?.sessionKey,
       agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
       agentAccountId: options?.agentAccountId,

@@ -1,57 +1,51 @@
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
-import { loadConfig } from "../config/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveBrowserConfig } from "./config.js";
+import {
+  createBrowserControlContext,
+  startBrowserControlServiceFromConfig,
+} from "./control-service.js";
+import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 
-let cachedConfigToken: string | null | undefined = undefined;
-
-function getBrowserControlToken(): string | null {
-  const env = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim();
-  if (env) return env;
-
-  if (cachedConfigToken !== undefined) return cachedConfigToken;
-  try {
-    const cfg = loadConfig();
-    const resolved = resolveBrowserConfig(cfg.browser);
-    const token = resolved.controlToken?.trim() || "";
-    cachedConfigToken = token ? token : null;
-  } catch {
-    cachedConfigToken = null;
-  }
-  return cachedConfigToken;
-}
-
-function unwrapCause(err: unknown): unknown {
-  if (!err || typeof err !== "object") return null;
-  const cause = (err as { cause?: unknown }).cause;
-  return cause ?? null;
+function isAbsoluteHttp(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
 }
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
-  const cause = unwrapCause(err);
-  const code = extractErrorCode(cause) ?? extractErrorCode(err) ?? "";
-
-  const hint = `Start (or restart) the Clawdbot gateway (Clawdbot.app menubar, or \`${formatCliCommand("clawdbot gateway")}\`) and try again.`;
-
-  if (code === "ECONNREFUSED") {
+  const hint = isAbsoluteHttp(url)
+    ? "If this is a sandboxed session, ensure the sandbox browser is running and try again."
+    : `Start (or restart) the Clawdbot gateway (Clawdbot.app menubar, or \`${formatCliCommand("clawdbot gateway")}\`) and try again.`;
+  const msg = String(err);
+  const msgLower = msg.toLowerCase();
+  const looksLikeTimeout =
+    msgLower.includes("timed out") ||
+    msgLower.includes("timeout") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort") ||
+    msgLower.includes("aborterror");
+  if (looksLikeTimeout) {
     return new Error(
-      `Can't reach the clawd browser control server at ${url} (connection refused). ${hint}`,
+      `Can't reach the clawd browser control service (timed out after ${timeoutMs}ms). ${hint}`,
     );
   }
-  if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT") {
-    return new Error(
-      `Can't reach the clawd browser control server at ${url} (timed out after ${timeoutMs}ms). ${hint}`,
-    );
-  }
+  return new Error(`Can't reach the clawd browser control service. ${hint} (${msg})`);
+}
 
-  const msg = formatErrorMessage(err);
-  if (msg.toLowerCase().includes("abort")) {
-    return new Error(
-      `Can't reach the clawd browser control server at ${url} (timed out after ${timeoutMs}ms). ${hint}`,
-    );
+async function fetchHttpJson<T>(
+  url: string,
+  init: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const timeoutMs = init.timeoutMs ?? 5000;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
   }
-
-  return new Error(`Can't reach the clawd browser control server at ${url}. ${hint} (${msg})`);
 }
 
 export async function fetchBrowserJson<T>(
@@ -59,32 +53,58 @@ export async function fetchBrowserJson<T>(
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  let res: Response;
   try {
-    const token = getBrowserControlToken();
-    const mergedHeaders = (() => {
-      if (!token) return init?.headers;
-      const h = new Headers(init?.headers ?? {});
-      if (!h.has("Authorization")) {
-        h.set("Authorization", `Bearer ${token}`);
+    if (isAbsoluteHttp(url)) {
+      return await fetchHttpJson<T>(url, { ...init, timeoutMs });
+    }
+    const started = await startBrowserControlServiceFromConfig();
+    if (!started) {
+      throw new Error("browser control disabled");
+    }
+    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+    const parsed = new URL(url, "http://localhost");
+    const query: Record<string, unknown> = {};
+    for (const [key, value] of parsed.searchParams.entries()) {
+      query[key] = value;
+    }
+    let body = init?.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        // keep as string
       }
-      return h;
-    })();
-    res = await fetch(url, {
-      ...init,
-      ...(mergedHeaders ? { headers: mergedHeaders } : {}),
-      signal: ctrl.signal,
-    } as RequestInit);
+    }
+    const dispatchPromise = dispatcher.dispatch({
+      method:
+        init?.method?.toUpperCase() === "DELETE"
+          ? "DELETE"
+          : init?.method?.toUpperCase() === "POST"
+            ? "POST"
+            : "GET",
+      path: parsed.pathname,
+      query,
+      body,
+    });
+
+    const result = await (timeoutMs
+      ? Promise.race([
+          dispatchPromise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("timed out")), timeoutMs),
+          ),
+        ])
+      : dispatchPromise);
+
+    if (result.status >= 400) {
+      const message =
+        result.body && typeof result.body === "object" && "error" in result.body
+          ? String((result.body as { error?: unknown }).error)
+          : `HTTP ${result.status}`;
+      throw new Error(message);
+    }
+    return result.body as T;
   } catch (err) {
     throw enhanceBrowserFetchError(url, err, timeoutMs);
-  } finally {
-    clearTimeout(t);
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text ? `${res.status}: ${text}` : `HTTP ${res.status}`);
-  }
-  return (await res.json()) as T;
 }

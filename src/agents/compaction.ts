@@ -301,6 +301,7 @@ export function pruneHistoryForContextShare(params: {
   parts?: number;
 }): {
   messages: AgentMessage[];
+  droppedMessagesList: AgentMessage[];
   droppedChunks: number;
   droppedMessages: number;
   droppedTokens: number;
@@ -310,6 +311,7 @@ export function pruneHistoryForContextShare(params: {
   const maxHistoryShare = params.maxHistoryShare ?? 0.5;
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
   let keptMessages = params.messages;
+  const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
   let droppedMessages = 0;
   let droppedTokens = 0;
@@ -323,11 +325,13 @@ export function pruneHistoryForContextShare(params: {
     droppedChunks += 1;
     droppedMessages += dropped.length;
     droppedTokens += estimateMessagesTokens(dropped);
+    allDroppedMessages.push(...dropped);
     keptMessages = rest.flat();
   }
 
   return {
     messages: keptMessages,
+    droppedMessagesList: allDroppedMessages,
     droppedChunks,
     droppedMessages,
     droppedTokens,

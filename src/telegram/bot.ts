@@ -24,6 +24,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -261,7 +262,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     if (typeof botHasTopicsEnabled === "boolean") return botHasTopicsEnabled;
     try {
-      const me = (await bot.api.getMe()) as { has_topics_enabled?: boolean };
+      const me = (await withTelegramApiErrorLogging({
+        operation: "getMe",
+        runtime,
+        fn: () => bot.api.getMe(),
+      })) as { has_topics_enabled?: boolean };
       botHasTopicsEnabled = Boolean(me?.has_topics_enabled);
     } catch (err) {
       logVerbose(`telegram getMe failed: ${String(err)}`);

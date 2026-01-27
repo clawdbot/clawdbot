@@ -1,7 +1,5 @@
 import path from "node:path";
 
-import type express from "express";
-
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
@@ -23,8 +21,12 @@ import {
   resolveProfileContext,
 } from "./agent.shared.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 
-export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: BrowserRouteContext) {
+export function registerBrowserAgentSnapshotRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   app.post("/navigate", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;

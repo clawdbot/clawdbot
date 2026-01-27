@@ -93,6 +93,7 @@ const commandSpy = vi.fn();
 const botCtorSpy = vi.fn();
 const answerCallbackQuerySpy = vi.fn(async () => undefined);
 const sendChatActionSpy = vi.fn();
+const editMessageTextSpy = vi.fn(async () => ({ message_id: 88 }));
 const setMessageReactionSpy = vi.fn(async () => undefined);
 const setMyCommandsSpy = vi.fn(async () => undefined);
 const sendMessageSpy = vi.fn(async () => ({ message_id: 77 }));
@@ -102,6 +103,7 @@ type ApiStub = {
   config: { use: (arg: unknown) => void };
   answerCallbackQuery: typeof answerCallbackQuerySpy;
   sendChatAction: typeof sendChatActionSpy;
+  editMessageText: typeof editMessageTextSpy;
   setMessageReaction: typeof setMessageReactionSpy;
   setMyCommands: typeof setMyCommandsSpy;
   sendMessage: typeof sendMessageSpy;
@@ -112,6 +114,7 @@ const apiStub: ApiStub = {
   config: { use: useSpy },
   answerCallbackQuery: answerCallbackQuerySpy,
   sendChatAction: sendChatActionSpy,
+  editMessageText: editMessageTextSpy,
   setMessageReaction: setMessageReactionSpy,
   setMyCommands: setMyCommandsSpy,
   sendMessage: sendMessageSpy,
@@ -192,6 +195,7 @@ describe("createTelegramBot", () => {
     sendPhotoSpy.mockReset();
     setMessageReactionSpy.mockReset();
     answerCallbackQuerySpy.mockReset();
+    editMessageTextSpy.mockReset();
     setMyCommandsSpy.mockReset();
     wasSentByBot.mockReset();
     middlewareUseSpy.mockReset();
@@ -422,6 +426,87 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
+  });
+
+  it("edits commands list for pagination callbacks", async () => {
+    onSpy.mockReset();
+    listSkillCommandsForAgents.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-3",
+        data: "commands_page_2:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 12,
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentIds: ["main"],
+    });
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
+    expect(chatId).toBe(1234);
+    expect(messageId).toBe(12);
+    expect(String(text)).toContain("ℹ️ Commands");
+    expect(params).toEqual(
+      expect.objectContaining({
+        reply_markup: expect.any(Object),
+      }),
+    );
+  });
+
+  it("blocks pagination callbacks when allowlist rejects sender", async () => {
+    onSpy.mockReset();
+    editMessageTextSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            capabilities: { inlineButtons: "allowlist" },
+            allowFrom: [],
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-4",
+        data: "commands_page_2",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 13,
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
   it("wraps inbound message with Telegram envelope", async () => {

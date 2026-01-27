@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.25
+## 2026.1.26
 
 ### Changes
 - Breaking: voice-call TTS now uses core `messages.tts` (plugin TTS config deep‑merges with core).

@@ -2759,7 +2759,7 @@ Example:
 
 ### `browser` (clawd-managed browser)
 
-Clawdbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control server.
+Clawdbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control service.
 Profiles can point at a **remote** Chromium-based browser via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
@@ -2768,8 +2768,9 @@ scheme/host for profiles that only set `cdpPort`.
 
 Defaults:
 - enabled: `true`
-- control URL: `http://127.0.0.1:18791` (CDP uses `18792`)
-- CDP URL: `http://127.0.0.1:18792` (control URL + 1, legacy single-profile)
+- evaluateEnabled: `true` (set `false` to disable `act:evaluate` and `wait --fn`)
+- control service: loopback only (port derived from `gateway.port`, default `18791`)
+- CDP URL: `http://127.0.0.1:18792` (control service + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
 - Note: the control server is started by the running gateway (Clawdbot.app menubar, or `clawdbot gateway`).
 - Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
@@ -2778,7 +2779,7 @@ Defaults:
 {
   browser: {
     enabled: true,
-    controlUrl: "http://127.0.0.1:18791",
+    evaluateEnabled: true,
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     defaultProfile: "chrome",
     profiles: {

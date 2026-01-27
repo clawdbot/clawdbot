@@ -421,8 +421,12 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply Style](#reply-style-threads-vs-posts)).
 - `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
 - `channels.msteams.teams.<teamId>.requireMention`: per-team override.
+- `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
+- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions

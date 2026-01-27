@@ -298,8 +298,12 @@ ack reaction after the bot replies.
 - `guilds."*"`: default per-guild settings applied when no explicit entry exists.
 - `guilds.<id>.slug`: optional friendly slug used for display names.
 - `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
+- `guilds.<id>.tools`: optional per-guild tool policy overrides (`allow`/`deny`/`alsoAllow`) used when the channel override is missing.
+- `guilds.<id>.toolsBySender`: optional per-sender tool policy overrides at the guild level (applies when the channel override is missing; `"*"` wildcard supported).
 - `guilds.<id>.channels.<channel>.allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `guilds.<id>.channels.<channel>.requireMention`: mention gating for the channel.
+- `guilds.<id>.channels.<channel>.tools`: optional per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `guilds.<id>.channels.<channel>.toolsBySender`: optional per-sender tool policy overrides within the channel (`"*"` wildcard supported).
 - `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
 - `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
 - `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel (combined with channel topic).

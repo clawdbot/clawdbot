@@ -93,16 +93,18 @@ function buildDiscordCommandOptions(params: {
             typeof focused?.value === "string" ? focused.value.trim().toLowerCase() : "";
           const choices = resolveCommandArgChoices({ command, arg, cfg });
           const filtered = focusValue
-            ? choices.filter((choice) => choice.toLowerCase().includes(focusValue))
+            ? choices.filter((choice) => choice.label.toLowerCase().includes(focusValue))
             : choices;
           await interaction.respond(
-            filtered.slice(0, 25).map((choice) => ({ name: choice, value: choice })),
+            filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
           );
         }
       : undefined;
     const choices =
       resolvedChoices.length > 0 && !autocomplete
-        ? resolvedChoices.slice(0, 25).map((choice) => ({ name: choice, value: choice }))
+        ? resolvedChoices
+            .slice(0, 25)
+            .map((choice) => ({ name: choice.label, value: choice.value }))
         : undefined;
     return {
       name: arg.name,
@@ -351,7 +353,11 @@ export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgC
 
 function buildDiscordCommandArgMenu(params: {
   command: ChatCommandDefinition;
-  menu: { arg: CommandArgDefinition; choices: string[]; title?: string };
+  menu: {
+    arg: CommandArgDefinition;
+    choices: Array<{ value: string; label: string }>;
+    title?: string;
+  };
   interaction: CommandInteraction;
   cfg: ReturnType<typeof loadConfig>;
   discordConfig: DiscordConfig;
@@ -365,11 +371,11 @@ function buildDiscordCommandArgMenu(params: {
     const buttons = choices.map(
       (choice) =>
         new DiscordCommandArgButton({
-          label: choice,
+          label: choice.label,
           customId: buildDiscordCommandArgCustomId({
             command: commandLabel,
             arg: menu.arg.name,
-            value: choice,
+            value: choice.value,
             userId,
           }),
           cfg: params.cfg,

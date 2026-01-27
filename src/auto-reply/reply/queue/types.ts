@@ -51,6 +51,10 @@ export type FollowupRun = {
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    senderId?: string;
+    senderName?: string;
+    senderUsername?: string;
+    senderE164?: string;
     sessionFile: string;
     workspaceDir: string;
     config: ClawdbotConfig;

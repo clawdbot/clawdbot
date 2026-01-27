@@ -4,7 +4,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { buildCommandsMessage, buildHelpMessage, buildStatusMessage } from "./status.js";
+import {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+  buildStatusMessage,
+} from "./status.js";
+
+const { listPluginCommands } = vi.hoisted(() => ({
+  listPluginCommands: vi.fn(() => []),
+}));
+
+vi.mock("../plugins/commands.js", () => ({
+  listPluginCommands,
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -400,10 +413,12 @@ describe("buildCommandsMessage", () => {
     const text = buildCommandsMessage({
       commands: { config: false, debug: false },
     } as ClawdbotConfig);
+    expect(text).toContain("ℹ️ Slash commands");
+    expect(text).toContain("Status");
     expect(text).toContain("/commands - List all slash commands.");
     expect(text).toContain("/skill - Run a skill by name.");
-    expect(text).toContain("/think (aliases: /thinking, /t) - Set thinking level.");
-    expect(text).toContain("/compact (text-only) - Compact the session context.");
+    expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
+    expect(text).toContain("/compact [text] - Compact the session context.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
@@ -430,8 +445,39 @@ describe("buildHelpMessage", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
     } as ClawdbotConfig);
-    expect(text).toContain("Skills: /skill <name> [input]");
+    expect(text).toContain("Skills");
+    expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
+  });
+});
+
+describe("buildCommandsMessagePaginated", () => {
+  it("formats telegram output with pages", () => {
+    const result = buildCommandsMessagePaginated(
+      {
+        commands: { config: false, debug: false },
+      } as ClawdbotConfig,
+      undefined,
+      { surface: "telegram", page: 1 },
+    );
+    expect(result.text).toContain("ℹ️ Commands (1/");
+    expect(result.text).toContain("Session");
+    expect(result.text).toContain("/stop - Stop the current run.");
+  });
+
+  it("includes plugin commands in the paginated list", () => {
+    listPluginCommands.mockReturnValue([
+      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
+    ]);
+    const result = buildCommandsMessagePaginated(
+      {
+        commands: { config: false, debug: false },
+      } as ClawdbotConfig,
+      undefined,
+      { surface: "telegram", page: 99 },
+    );
+    expect(result.text).toContain("Plugins");
+    expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });

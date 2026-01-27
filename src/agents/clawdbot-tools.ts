@@ -20,11 +20,8 @@ import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 
 export function createClawdbotTools(options?: {
-  browserControlUrl?: string;
+  sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
@@ -75,11 +72,8 @@ export function createClawdbotTools(options?: {
   });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
-      defaultControlUrl: options?.browserControlUrl,
+      sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
-      allowedControlUrls: options?.allowedControlUrls,
-      allowedControlHosts: options?.allowedControlHosts,
-      allowedControlPorts: options?.allowedControlPorts,
     }),
     createCanvasTool(),
     createNodesTool({

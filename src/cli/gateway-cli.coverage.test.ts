@@ -314,7 +314,7 @@ describe("gateway-cli coverage", () => {
 
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
-    expect(runtimeErrors.join("\n")).toContain("clawdbot gateway stop");
+    expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
 
   it("uses env/config port when --port is omitted", async () => {

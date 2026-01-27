@@ -1,9 +1,8 @@
-import type express from "express";
-
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import { getProfileContext, jsonError } from "./utils.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "Error: 'selector' is not supported. Use 'ref' from snapshot instead.",
@@ -15,21 +14,21 @@ export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "This is more reliable for modern SPAs.",
 ].join("\n");
 
-export function readBody(req: express.Request): Record<string, unknown> {
+export function readBody(req: BrowserRequest): Record<string, unknown> {
   const body = req.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object" || Array.isArray(body)) return {};
   return body;
 }
 
-export function handleRouteError(ctx: BrowserRouteContext, res: express.Response, err: unknown) {
+export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
   const mapped = ctx.mapTabError(err);
   if (mapped) return jsonError(res, mapped.status, mapped.message);
   jsonError(res, 500, String(err));
 }
 
 export function resolveProfileContext(
-  req: express.Request,
-  res: express.Response,
+  req: BrowserRequest,
+  res: BrowserResponse,
   ctx: BrowserRouteContext,
 ): ProfileContext | null {
   const profileCtx = getProfileContext(req, ctx);
@@ -45,7 +44,7 @@ export async function getPwAiModule(): Promise<PwAiModule | null> {
 }
 
 export async function requirePwAi(
-  res: express.Response,
+  res: BrowserResponse,
   feature: string,
 ): Promise<PwAiModule | null> {
   const mod = await getPwAiModule();

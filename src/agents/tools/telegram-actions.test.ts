@@ -8,12 +8,17 @@ const sendMessageTelegram = vi.fn(async () => ({
   messageId: "789",
   chatId: "123",
 }));
+const sendStickerTelegram = vi.fn(async () => ({
+  messageId: "456",
+  chatId: "123",
+}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
+  sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
 }));
 
@@ -21,6 +26,7 @@ describe("handleTelegramAction", () => {
   beforeEach(() => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
+    sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -93,6 +99,40 @@ describe("handleTelegramAction", () => {
       456,
       "",
       expect.objectContaining({ token: "tok", remove: false }),
+    );
+  });
+
+  it("rejects sticker actions when disabled by default", async () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendSticker",
+          to: "123",
+          fileId: "sticker",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/sticker actions are disabled/i);
+    expect(sendStickerTelegram).not.toHaveBeenCalled();
+  });
+
+  it("sends stickers when enabled", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { sticker: true } } },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendSticker",
+        to: "123",
+        fileId: "sticker",
+      },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker",
+      expect.objectContaining({ token: "tok" }),
     );
   });
 

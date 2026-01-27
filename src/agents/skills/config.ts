@@ -6,6 +6,7 @@ import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
+  "browser.evaluateEnabled": true,
 };
 
 function isTruthy(value: unknown): boolean {

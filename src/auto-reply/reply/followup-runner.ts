@@ -129,6 +129,7 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
           provider: queued.run.provider,
           model: queued.run.model,
+          agentDir: queued.run.agentDir,
           fallbacksOverride: resolveAgentModelFallbacksOverride(
             queued.run.config,
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
@@ -146,6 +147,10 @@ export function createFollowupRunner(params: {
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
+              senderId: queued.run.senderId,
+              senderName: queued.run.senderName,
+              senderUsername: queued.run.senderUsername,
+              senderE164: queued.run.senderE164,
               sessionFile: queued.run.sessionFile,
               workspaceDir: queued.run.workspaceDir,
               config: queued.run.config,

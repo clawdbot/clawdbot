@@ -14,6 +14,11 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
+import {
+  ensureAuthProfileStore,
+  isProfileInCooldown,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
 type ModelCandidate = {
   provider: string;
@@ -189,6 +194,7 @@ export async function runWithModelFallback<T>(params: {
   cfg: ClawdbotConfig | undefined;
   provider: string;
   model: string;
+  agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
@@ -211,11 +217,33 @@ export async function runWithModelFallback<T>(params: {
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
   });
+  const authStore = params.cfg
+    ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
+    : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i] as ModelCandidate;
+    if (authStore) {
+      const profileIds = resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store: authStore,
+        provider: candidate.provider,
+      });
+      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+
+      if (profileIds.length > 0 && !isAnyProfileAvailable) {
+        // All profiles for this provider are in cooldown; skip without attempting
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+          reason: "rate_limit",
+        });
+        continue;
+      }
+    }
     try {
       const result = await params.run(candidate.provider, candidate.model);
       return {

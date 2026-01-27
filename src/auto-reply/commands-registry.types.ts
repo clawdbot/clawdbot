@@ -2,6 +2,15 @@ import type { ClawdbotConfig } from "../config/types.js";
 
 export type CommandScope = "text" | "native" | "both";
 
+export type CommandCategory =
+  | "session"
+  | "options"
+  | "status"
+  | "management"
+  | "media"
+  | "tools"
+  | "docks";
+
 export type CommandArgType = "string" | "number" | "boolean";
 
 export type CommandArgChoiceContext = {
@@ -12,14 +21,16 @@ export type CommandArgChoiceContext = {
   arg: CommandArgDefinition;
 };
 
-export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => string[];
+export type CommandArgChoice = string | { value: string; label: string };
+
+export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
 
 export type CommandArgDefinition = {
   name: string;
   description: string;
   type: CommandArgType;
   required?: boolean;
-  choices?: string[] | CommandArgChoicesProvider;
+  choices?: CommandArgChoice[] | CommandArgChoicesProvider;
   captureRemaining?: boolean;
 };
 
@@ -49,6 +60,7 @@ export type ChatCommandDefinition = {
   formatArgs?: (values: CommandArgValues) => string | undefined;
   argsMenu?: CommandArgMenuSpec | "auto";
   scope: CommandScope;
+  category?: CommandCategory;
 };
 
 export type NativeCommandSpec = {

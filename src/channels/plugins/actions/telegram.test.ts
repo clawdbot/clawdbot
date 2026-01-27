@@ -10,6 +10,13 @@ vi.mock("../../../agents/tools/telegram-actions.js", () => ({
 }));
 
 describe("telegramMessageActions", () => {
+  it("excludes sticker actions when not enabled", () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as ClawdbotConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+    expect(actions).not.toContain("sticker");
+    expect(actions).not.toContain("sticker-search");
+  });
+
   it("allows media-only sends and passes asVoice", async () => {
     handleTelegramAction.mockClear();
     const cfg = { channels: { telegram: { botToken: "tok" } } } as ClawdbotConfig;

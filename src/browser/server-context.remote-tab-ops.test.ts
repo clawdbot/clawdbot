@@ -21,8 +21,6 @@ function makeState(
     port: 0,
     resolved: {
       enabled: true,
-      controlUrl: "http://127.0.0.1:18791",
-      controlHost: "127.0.0.1",
       controlPort: 18791,
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "browserless.example" : "127.0.0.1",
