@@ -41,6 +41,11 @@ export type RateLimitMetricName = "rate_limit.per_sender" | "rate_limit.global";
 
 export type DecryptMetricName = "decrypt.success" | "decrypt.failure";
 
+export type TypingMetricName =
+  | "typing.start.sent"
+  | "typing.stop.sent"
+  | "typing.error";
+
 export type MemoryMetricName =
   | "memory.seen_tracker_size"
   | "memory.rate_limiter_entries";
@@ -50,6 +55,7 @@ export type MetricName =
   | RelayMetricName
   | RateLimitMetricName
   | DecryptMetricName
+  | TypingMetricName
   | MemoryMetricName;
 
 // ============================================================================
@@ -126,6 +132,13 @@ export interface MetricsSnapshot {
   decrypt: {
     success: number;
     failure: number;
+  };
+
+  /** Typing indicator stats */
+  typing: {
+    startSent: number;
+    stopSent: number;
+    errors: number;
   };
 
   /** Memory/capacity stats */
@@ -211,6 +224,13 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
   const decrypt = {
     success: 0,
     failure: 0,
+  };
+
+  // Typing indicator stats
+  const typing = {
+    startSent: 0,
+    stopSent: 0,
+    errors: 0,
   };
 
   // Memory stats (updated via gauge-style metrics)
@@ -371,6 +391,16 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
         decrypt.failure += value;
         break;
 
+      case "typing.start.sent":
+        typing.startSent += value;
+        break;
+      case "typing.stop.sent":
+        typing.stopSent += value;
+        break;
+      case "typing.error":
+        typing.errors += value;
+        break;
+
       // Memory (gauge-style - value replaces, not adds)
       case "memory.seen_tracker_size":
         memory.seenTrackerSize = value;
@@ -396,6 +426,7 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
       relays: relaysObj,
       rateLimiting: { ...rateLimiting },
       decrypt: { ...decrypt },
+      typing: { ...typing },
       memory: { ...memory },
       snapshotAt: Date.now(),
     };
@@ -422,6 +453,9 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
     rateLimiting.globalHits = 0;
     decrypt.success = 0;
     decrypt.failure = 0;
+    typing.startSent = 0;
+    typing.stopSent = 0;
+    typing.errors = 0;
     memory.seenTrackerSize = 0;
     memory.rateLimiterEntries = 0;
   }
@@ -452,6 +486,7 @@ export function createNoopMetrics(): NostrMetrics {
     relays: {},
     rateLimiting: { perSenderHits: 0, globalHits: 0 },
     decrypt: { success: 0, failure: 0 },
+    typing: { startSent: 0, stopSent: 0, errors: 0 },
     memory: { seenTrackerSize: 0, rateLimiterEntries: 0 },
     snapshotAt: 0,
   };

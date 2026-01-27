@@ -51,6 +51,11 @@ const CIRCUIT_BREAKER_RESET_MS = 30000; // 30 seconds before half-open
 // Health tracker configuration
 const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 
+// Typing indicator configuration (NIP-01 ephemeral events)
+const TYPING_KIND = 20001; // Community convention for typing indicators
+const TYPING_TTL_SEC = 30; // 30 second expiration
+const TYPING_THROTTLE_MS = 5000; // Max 1 event per 5 seconds per recipient
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -66,7 +71,8 @@ export interface NostrBusOptions {
   onMessage: (
     pubkey: string,
     text: string,
-    reply: (text: string) => Promise<void>
+    reply: (text: string) => Promise<void>,
+    eventId: string
   ) => Promise<void>;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
@@ -101,6 +107,10 @@ export interface NostrBusHandle {
     lastPublishedEventId: string | null;
     lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
   }>;
+  /** Send typing indicator start (kind 20001) */
+  sendTypingStart: (toPubkey: string, conversationEventId?: string) => Promise<void>;
+  /** Send typing indicator stop (kind 20001) */
+  sendTypingStop: (toPubkey: string, conversationEventId?: string) => Promise<void>;
 }
 
 // ============================================================================
@@ -496,7 +506,7 @@ export async function startNostrBus(
       };
 
       // Call the message handler
-      await onMessage(event.pubkey, plaintext, replyTo);
+      await onMessage(event.pubkey, plaintext, replyTo, event.id);
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -512,26 +522,21 @@ export async function startNostrBus(
 
   const sub = pool.subscribeMany(
     relays,
-    [{ kinds: [4], "#p": [pk], since }],
+    { kinds: [4], "#p": [pk], since },
     {
       onevent: handleEvent,
       oneose: () => {
-        // EOSE handler - called when all stored events have been received
         for (const relay of relays) {
           metrics.emit("relay.message.eose", 1, { relay });
         }
         onEose?.(relays.join(", "));
       },
       onclose: (reason) => {
-        // Handle subscription close
         for (const relay of relays) {
           metrics.emit("relay.message.closed", 1, { relay });
           options.onDisconnect?.(relay);
         }
-        onError?.(
-          new Error(`Subscription closed: ${reason}`),
-          "subscription"
-        );
+        onError?.(new Error(`Subscription closed: ${reason}`), "subscription");
       },
     }
   );
@@ -590,6 +595,17 @@ export async function startNostrBus(
     };
   };
 
+  // Create typing controller for throttled typing indicators
+  const typingController = createTypingController(
+    pool,
+    sk,
+    relays,
+    metrics,
+    circuitBreakers,
+    healthTracker,
+    onError
+  );
+
   return {
     close: () => {
       sub.close();
@@ -610,6 +626,8 @@ export async function startNostrBus(
     getMetrics: () => metrics.getSnapshot(),
     publishProfile,
     getProfileState,
+    sendTypingStart: typingController.sendTypingStart,
+    sendTypingStop: typingController.sendTypingStop,
   };
 }
 
@@ -646,6 +664,7 @@ async function sendEncryptedDm(
   const sortedRelays = healthTracker.getSortedRelays(relays);
 
   // Try relays in order of health, respecting circuit breakers
+  let successCount = 0;
   let lastError: Error | undefined;
   for (const relay of sortedRelays) {
     const cb = circuitBreakers.get(relay);
@@ -663,7 +682,7 @@ async function sendEncryptedDm(
       // Record success
       cb?.recordSuccess();
       healthTracker.recordSuccess(relay, latency);
-
+      successCount++;
       return; // Success - exit early
     } catch (err) {
       lastError = err as Error;
