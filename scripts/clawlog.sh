@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-SUBSYSTEM="com.clawdbot"
+SUBSYSTEM="bot.molt"
 DEFAULT_LEVEL="info"
 
 # Colors for output
@@ -58,7 +58,7 @@ DESCRIPTION:
     Requires sudo access configured for /usr/bin/log command.
 
 LOG FLOW ARCHITECTURE:
-    Moltbot logs flow through the macOS unified log (subsystem: com.clawdbot).
+    Moltbot logs flow through the macOS unified log (subsystem: bot.molt).
 
 LOG CATEGORIES (examples):
     • voicewake           - Voice wake detection/test harness

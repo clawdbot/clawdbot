@@ -109,7 +109,7 @@ private enum ConnectChallengeError: Error {
 }
 
 public actor GatewayChannelActor {
-    private let logger = Logger(subsystem: "com.clawdbot", category: "gateway")
+    private let logger = Logger(subsystem: "bot.molt", category: "gateway")
     private var task: WebSocketTaskBox?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false

@@ -2328,7 +2328,7 @@ Quick setup (recommended):
 - Set a unique `gateway.port` in each profile config (or pass `--port` for manual runs).
 - Install a per-profile service: `moltbot --profile <name> gateway install`.
 
-Profiles also suffix service names (`com.clawdbot.<profile>`, `moltbot-gateway-<profile>.service`, `Moltbot Gateway (<profile>)`).
+Profiles also suffix service names (`bot.molt.<profile>`; legacy `com.clawdbot.*`, `moltbot-gateway-<profile>.service`, `Moltbot Gateway (<profile>)`).
 Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ### What does invalid handshake code 1008 mean

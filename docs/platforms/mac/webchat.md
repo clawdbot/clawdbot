@@ -20,7 +20,7 @@ agent (with a session switcher for other sessions).
   ```bash
   dist/Moltbot.app/Contents/MacOS/Moltbot --webchat
   ```
-- Logs: `./scripts/clawlog.sh` (subsystem `com.clawdbot`, category `WebChatSwiftUI`).
+- Logs: `./scripts/clawlog.sh` (subsystem `bot.molt`, category `WebChatSwiftUI`).
 
 ## How it’s wired
 

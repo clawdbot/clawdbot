@@ -9,7 +9,7 @@ APP_PROCESS_PATTERN="Moltbot.app/Contents/MacOS/Moltbot"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Moltbot"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Moltbot"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Moltbot"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.clawdbot.mac.plist"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/bot.molt.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/moltbot-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
@@ -145,7 +145,7 @@ kill_all_moltbot() {
 }
 
 stop_launch_agent() {
-  launchctl bootout gui/"$UID"/com.clawdbot.mac 2>/dev/null || true
+  launchctl bootout gui/"$UID"/bot.molt.mac 2>/dev/null || true
 }
 
 # 1) Kill all running instances first.
@@ -265,5 +265,5 @@ else
 fi
 
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/com.clawdbot.gateway.plist' | head -n 40 || true"
+  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/bot.molt.gateway.plist' | head -n 40 || true"
 fi

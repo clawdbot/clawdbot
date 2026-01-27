@@ -107,7 +107,7 @@ describe("launchd runtime parsing", () => {
 
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
-    await withLaunchctlStub({ listOutput: "123 0 com.clawdbot.gateway\n" }, async ({ env }) => {
+    await withLaunchctlStub({ listOutput: "123 0 bot.molt.gateway\n" }, async ({ env }) => {
       const listed = await isLaunchAgentListed({ env });
       expect(listed).toBe(true);
     });
@@ -133,7 +133,7 @@ describe("launchd bootstrap repair", () => {
         .map((line) => JSON.parse(line) as string[]);
 
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const label = "com.clawdbot.gateway";
+      const label = "bot.molt.gateway";
       const plistPath = resolveLaunchAgentPlistPath(env);
 
       expect(calls).toContainEqual(["bootstrap", domain, plistPath]);
@@ -201,7 +201,7 @@ describe("launchd install", () => {
         .map((line) => JSON.parse(line) as string[]);
 
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const label = "com.clawdbot.gateway";
+      const label = "bot.molt.gateway";
       const plistPath = resolveLaunchAgentPlistPath(env);
       const serviceId = `${domain}/${label}`;
 
@@ -231,21 +231,21 @@ describe("resolveLaunchAgentPlistPath", () => {
   it("uses default label when CLAWDBOT_PROFILE is default", () => {
     const env = { HOME: "/Users/test", CLAWDBOT_PROFILE: "default" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.gateway.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.gateway.plist",
     );
   });
 
   it("uses default label when CLAWDBOT_PROFILE is unset", () => {
     const env = { HOME: "/Users/test" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.gateway.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.gateway.plist",
     );
   });
 
   it("uses profile-specific label when CLAWDBOT_PROFILE is set to a custom value", () => {
     const env = { HOME: "/Users/test", CLAWDBOT_PROFILE: "jbphoenix" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.jbphoenix.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.jbphoenix.plist",
     );
   });
 
@@ -277,28 +277,28 @@ describe("resolveLaunchAgentPlistPath", () => {
       CLAWDBOT_LAUNCHD_LABEL: "   ",
     };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.myprofile.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.myprofile.plist",
     );
   });
 
   it("handles case-insensitive 'Default' profile", () => {
     const env = { HOME: "/Users/test", CLAWDBOT_PROFILE: "Default" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.gateway.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.gateway.plist",
     );
   });
 
   it("handles case-insensitive 'DEFAULT' profile", () => {
     const env = { HOME: "/Users/test", CLAWDBOT_PROFILE: "DEFAULT" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.gateway.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.gateway.plist",
     );
   });
 
   it("trims whitespace from CLAWDBOT_PROFILE", () => {
     const env = { HOME: "/Users/test", CLAWDBOT_PROFILE: "  myprofile  " };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.clawdbot.myprofile.plist",
+      "/Users/test/Library/LaunchAgents/bot.molt.myprofile.plist",
     );
   });
 });

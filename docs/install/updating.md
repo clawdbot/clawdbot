@@ -158,7 +158,7 @@ moltbot logs --follow
 ```
 
 If you’re supervised:
-- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway` (use `com.clawdbot.<profile>` if set)
+- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (use `bot.molt.<profile>`; legacy `com.clawdbot.*` still works)
 - Linux systemd user service: `systemctl --user restart moltbot-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart moltbot-gateway[-<profile>].service`
   - `launchctl`/`systemctl` only work if the service is installed; otherwise run `moltbot gateway install`.

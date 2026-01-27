@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-  namespace = "com.clawdbot.android"
+  namespace = "bot.molt.android"
   compileSdk = 36
 
   sourceSets {
@@ -18,7 +18,7 @@ android {
   }
 
   defaultConfig {
-    applicationId = "com.clawdbot.android"
+    applicationId = "bot.molt.android"
     minSdk = 31
     targetSdk = 36
     versionCode = 202601260

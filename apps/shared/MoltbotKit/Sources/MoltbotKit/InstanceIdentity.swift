@@ -5,11 +5,16 @@ import UIKit
 #endif
 
 public enum InstanceIdentity {
-    private static let suiteName = "com.clawdbot.shared"
+    private static let suiteName = "bot.molt.shared"
+    private static let legacySuiteName = "com.clawdbot.shared"
     private static let instanceIdKey = "instanceId"
 
     private static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
+    }
+
+    private static var legacyDefaults: UserDefaults? {
+        UserDefaults(suiteName: legacySuiteName)
     }
 
 #if canImport(UIKit)
@@ -30,6 +35,14 @@ public enum InstanceIdentity {
             !existing.isEmpty
         {
             return existing
+        }
+
+        if let legacy = Self.legacyDefaults?.string(forKey: instanceIdKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !legacy.isEmpty
+        {
+            defaults.set(legacy, forKey: instanceIdKey)
+            return legacy
         }
 
         let id = UUID().uuidString.lowercased()

@@ -10,7 +10,7 @@ import AppKit
 import UIKit
 #endif
 
-private let chatUILogger = Logger(subsystem: "com.clawdbot", category: "MoltbotChatUI")
+private let chatUILogger = Logger(subsystem: "bot.molt", category: "MoltbotChatUI")
 
 @MainActor
 @Observable

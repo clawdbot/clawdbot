@@ -7,8 +7,8 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let gatewayService = "com.clawdbot.gateway"
-private let nodeService = "com.clawdbot.node"
+private let gatewayService = "bot.molt.gateway"
+private let nodeService = "bot.molt.node"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
