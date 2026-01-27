@@ -183,6 +183,8 @@ export type ExecToolConfig = {
   cleanupMs?: number;
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit?: boolean;
+  /** Enable PTY mode by default for exec commands (ignored when sandboxed). */
+  pty?: boolean;
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */

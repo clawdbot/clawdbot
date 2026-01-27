@@ -48,6 +48,7 @@ Notes:
 - `tools.exec.node` (default: unset)
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
+- `tools.exec.pty` (default: false): enable PTY mode by default for exec commands. Useful when commands hang without a TTY. Ignored when sandboxed.
 
 Example:
 ```json5
