@@ -29,6 +29,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "clawdbot": "workspace:*"
+    "moltbot": "workspace:*"
   }
 }

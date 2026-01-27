@@ -269,14 +269,14 @@ importers:
         version: 0.2.5
       agentmail-toolkit:
         specifier: ^0.2.5
-        version: 0.2.5(@napi-rs/canvas@0.1.88)(clawdbot@)
+        version: 0.2.5(@napi-rs/canvas@0.1.88)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
 
   extensions/bluebubbles: {}
 
@@ -330,17 +330,17 @@ importers:
         specifier: ^10.5.0
         version: 10.5.0
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
 
   extensions/imessage: {}
 
   extensions/line:
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
 
   extensions/llm-task: {}
 
@@ -351,12 +351,12 @@ importers:
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
+      '@vector-im/matrix-bot-sdk':
+        specifier: 0.8.0-element.3
+        version: 0.8.0-element.3
       markdown-it:
         specifier: 14.1.0
         version: 14.1.0
-      matrix-bot-sdk:
-        specifier: 0.8.0
-        version: 0.8.0
       music-metadata:
         specifier: ^11.10.6
         version: 11.10.6
@@ -364,17 +364,17 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
 
   extensions/mattermost: {}
 
   extensions/memory-core:
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
 
   extensions/memory-lancedb:
     dependencies:
@@ -399,12 +399,12 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.2
         version: 1.2.2
-      clawdbot:
-        specifier: workspace:*
-        version: link:../..
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      moltbot:
+        specifier: workspace:*
+        version: link:../../packages/clawdbot
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -413,9 +413,9 @@ importers:
 
   extensions/nostr:
     dependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
       nostr-tools:
         specifier: ^2.20.0
         version: 2.20.0(typescript@5.9.3)
@@ -455,9 +455,9 @@ importers:
         specifier: ^4.3.5
         version: 4.3.6
     devDependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
 
   extensions/voice-call:
     dependencies:
@@ -475,9 +475,9 @@ importers:
 
   extensions/zalo:
     dependencies:
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
       undici:
         specifier: 7.19.0
         version: 7.19.0
@@ -487,9 +487,15 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
-      clawdbot:
+      moltbot:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../packages/clawdbot
+
+  packages/clawdbot:
+    dependencies:
+      moltbot:
+        specifier: workspace:*
+        version: 'link:'
 
   ui:
     dependencies:
@@ -2684,6 +2690,9 @@ packages:
   '@types/bun@1.3.6':
     resolution: {integrity: sha512-uWCv6FO/8LcpREhenN1d1b6fcspAB+cefwD7uti8C8VffIv0Um08TKMn98FynpTiU38+y2dUO55T11NgDt8VAA==}
 
+  '@types/caseless@0.12.5':
+    resolution: {integrity: sha512-hWtVTC2q7hc7xZ/RLbxapMvDMgUnDvKvMOpKal4DrMyfGBUfB1oKaZlIRr6mJL+If3bAP6sV/QneGzF6tJjZDg==}
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -2765,6 +2774,9 @@ packages:
   '@types/range-parser@1.2.7':
     resolution: {integrity: sha512-hKormJbkJqzQGhziax5PItDUTMAM9uE2XXQmM37dyd4hVM+5aVl7oVxMVUiVQn2oCQFN/LKCZdvSM0pFRqbSmQ==}
 
+  '@types/request@2.48.13':
+    resolution: {integrity: sha512-FGJ6udDNUCjd19pp0Q3iTiDkwhYup7J8hpMW9c4k53NrccQFFWKRho6hvtPPEhnXWKvukfwAlB6DbDz4yhH5Gg==}
+
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
 
@@ -2782,6 +2794,9 @@ packages:
 
   '@types/serve-static@2.2.0':
     resolution: {integrity: sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==}
+
+  '@types/tough-cookie@4.0.5':
+    resolution: {integrity: sha512-/Ad8+nIOV7Rl++6f1BdKxFSMgmoqEoYbHRpPcx3JEfv8VRsQe9Z4mCXeJBzxs7mbHY/XOZZuXlRNfhpVPbs6ZA==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
@@ -2838,6 +2853,10 @@ packages:
 
   '@urbit/http-api@3.0.0':
     resolution: {integrity: sha512-EmyPbWHWXhfYQ/9wWFcLT53VvCn8ct9ljd6QEe+UBjNPEhUPOFBLpDsDp3iPLQgg8ykSU8JMMHxp95LHCorExA==}
+
+  '@vector-im/matrix-bot-sdk@0.8.0-element.3':
+    resolution: {integrity: sha512-2FFo/Kz2vTnOZDv59Q0s803LHf7KzuQ2EwOYYAtO0zUKJ8pV5CPsVC/IHyFb+Fsxl3R9XWFiX529yhslb4v9cQ==}
+    engines: {node: '>=22.0.0'}
 
   '@vitest/browser-playwright@4.0.18':
     resolution: {integrity: sha512-gfajTHVCiwpxRj1qh0Sh/5bbGLG4F/ZH/V9xvFVoFddpITfMta9YGow0W6ZpTTORv2vdJuz9TnrNSmjKvpOf4g==}
@@ -3649,6 +3668,10 @@ packages:
     resolution: {integrity: sha512-1lLKB2Mu3aGP1Q/2eCOx0fNbRMe7XdwktwOruhfqqd0rIJWwN4Dh+E3hrPSlDCXnSR7UtZ1N38rVXm+6+MEhJQ==}
     engines: {node: '>= 0.12'}
 
+  form-data@2.5.5:
+    resolution: {integrity: sha512-jqdObeR2rxZZbPSGL+3VckHMYtu+f9//KXBsVny6JSX/pa38Fy+bGjuG8eW/H6USNQWhLi8Num++cU2yOCNz4A==}
+    engines: {node: '>= 0.12'}
+
   form-data@4.0.5:
     resolution: {integrity: sha512-8RipRLol37bNs2bhoV67fiTEvdTrbMUYcFTiy3+wuuOnUog2QBHCZWXDRijWQfAkhBj2Uf5UnVaiWwA5vdd82w==}
     engines: {node: '>= 6'}
@@ -4272,10 +4295,6 @@ packages:
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
-
-  matrix-bot-sdk@0.8.0:
-    resolution: {integrity: sha512-sCY5UvZfsZhJdCjSc8wZhGhIHOe5cSFSILxx9Zp5a/NEXtmQ6W/bIhefIk4zFAZXetFwXsgvKh1960k1hG5WDw==}
-    engines: {node: '>=22.0.0'}
 
   mdurl@2.0.0:
     resolution: {integrity: sha512-Lf+9+2r+Tdp5wXDXC4PcIBjTDtq4UKjCPMQhKIuzpJNW0b96kVqSwW0bT7FhRSfmAiFYgP+SCRvdrDozfh0U5w==}
@@ -8465,6 +8484,8 @@ snapshots:
       bun-types: 1.3.6
     optional: true
 
+  '@types/caseless@0.12.5': {}
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -8557,6 +8578,13 @@ snapshots:
 
   '@types/range-parser@1.2.7': {}
 
+  '@types/request@2.48.13':
+    dependencies:
+      '@types/caseless': 0.12.5
+      '@types/node': 25.0.10
+      '@types/tough-cookie': 4.0.5
+      form-data: 2.5.5
+
   '@types/retry@0.12.0': {}
 
   '@types/retry@0.12.5': {}
@@ -8580,6 +8608,8 @@ snapshots:
     dependencies:
       '@types/http-errors': 2.0.5
       '@types/node': 25.0.10
+
+  '@types/tough-cookie@4.0.5': {}
 
   '@types/trusted-types@2.0.7': {}
 
@@ -8633,6 +8663,30 @@ snapshots:
       '@babel/runtime': 7.28.6
       browser-or-node: 1.3.0
       core-js: 3.48.0
+
+  '@vector-im/matrix-bot-sdk@0.8.0-element.3':
+    dependencies:
+      '@matrix-org/matrix-sdk-crypto-nodejs': 0.4.0
+      '@types/express': 4.17.25
+      '@types/request': 2.48.13
+      another-json: 0.2.0
+      async-lock: 1.4.1
+      chalk: 4.1.2
+      express: 4.22.1
+      glob-to-regexp: 0.4.1
+      hash.js: 1.1.7
+      html-to-text: 9.0.5
+      htmlencode: 0.0.4
+      lowdb: 1.0.0
+      lru-cache: 10.4.3
+      mkdirp: 3.0.1
+      morgan: 1.10.1
+      postgres: 3.4.8
+      request: 2.88.2
+      request-promise: 4.2.6(request@2.88.2)
+      sanitize-html: 2.17.0
+    transitivePeerDependencies:
+      - supports-color
 
   '@vitest/browser-playwright@4.0.18(playwright@1.58.0)(vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.0.18)':
     dependencies:
@@ -8793,14 +8847,12 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  agentmail-toolkit@0.2.5(@napi-rs/canvas@0.1.88)(clawdbot@):
+  agentmail-toolkit@0.2.5(@napi-rs/canvas@0.1.88):
     dependencies:
       agentmail: 0.2.5
       jszip: 3.10.1
       unpdf: 1.4.0(@napi-rs/canvas@0.1.88)
       zod: 4.3.6
-    optionalDependencies:
-      clawdbot: 'link:'
     transitivePeerDependencies:
       - '@napi-rs/canvas'
       - bufferutil
@@ -9584,6 +9636,15 @@ snapshots:
       combined-stream: 1.0.8
       mime-types: 2.1.35
 
+  form-data@2.5.5:
+    dependencies:
+      asynckit: 0.4.0
+      combined-stream: 1.0.8
+      es-set-tostringtag: 2.1.0
+      hasown: 2.0.2
+      mime-types: 2.1.35
+      safe-buffer: 5.2.1
+
   form-data@4.0.5:
     dependencies:
       asynckit: 0.4.0
@@ -10262,29 +10323,6 @@ snapshots:
   marked@17.0.1: {}
 
   math-intrinsics@1.1.0: {}
-
-  matrix-bot-sdk@0.8.0:
-    dependencies:
-      '@matrix-org/matrix-sdk-crypto-nodejs': 0.4.0
-      '@types/express': 4.17.25
-      another-json: 0.2.0
-      async-lock: 1.4.1
-      chalk: 4.1.2
-      express: 4.22.1
-      glob-to-regexp: 0.4.1
-      hash.js: 1.1.7
-      html-to-text: 9.0.5
-      htmlencode: 0.0.4
-      lowdb: 1.0.0
-      lru-cache: 10.4.3
-      mkdirp: 3.0.1
-      morgan: 1.10.1
-      postgres: 3.4.8
-      request: 2.88.2
-      request-promise: 4.2.6(request@2.88.2)
-      sanitize-html: 2.17.0
-    transitivePeerDependencies:
-      - supports-color
 
   mdurl@2.0.0: {}
 
