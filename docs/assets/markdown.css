@@ -177,3 +177,49 @@
   font-family: var(--font-pixel);
   letter-spacing: 0.06em;
 }
+
+/**
+ * Make table of contents sticky on right side while scrolling
+ */
+@media (min-width: 1024px) {
+  /* Target Mintlify's table of contents container */
+  .docs-toc,
+  aside[class*="toc"],
+  .right-sidebar,
+  [class*="TableOfContents"],
+  nav[class*="toc"] {
+    position: sticky !important;
+    top: 80px !important;
+    align-self: flex-start;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+  }
+
+  /* Ensure the TOC container doesn't get covered by header */
+  .docs-toc-wrapper,
+  [class*="toc-wrapper"],
+  .aside-wrapper {
+    position: relative;
+  }
+
+  /* Smooth scrolling for TOC links */
+  .docs-toc a,
+  aside[class*="toc"] a,
+  [class*="TableOfContents"] a {
+    scroll-behavior: smooth;
+  }
+
+  /* Hide scrollbar for TOC but keep functionality */
+  .docs-toc::-webkit-scrollbar,
+  aside[class*="toc"]::-webkit-scrollbar,
+  [class*="TableOfContents"]::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .docs-toc::-webkit-scrollbar-thumb,
+  aside[class*="toc"]::-webkit-scrollbar-thumb,
+  [class*="TableOfContents"]::-webkit-scrollbar-thumb {
+    background: var(--frame-border);
+    border-radius: 4px;
+  }
+}
