@@ -156,9 +156,7 @@ describe("full pipeline: inbound -> routing -> agent -> reply", () => {
 
   it("returns an error reply when the agent throws", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(
-        new Error("model rate limit exceeded"),
-      );
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(new Error("model rate limit exceeded"));
 
       const cfg = makeCfg(home);
 

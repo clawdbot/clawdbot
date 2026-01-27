@@ -181,7 +181,16 @@ function resolveDiscordGuildEntry(guilds: DiscordConfig["guilds"], groupSpace?: 
 }
 
 function resolveDiscordChannelEntry(
-  channelEntries: Record<string, { requireMention?: boolean; tools?: GroupToolPolicyConfig; toolsBySender?: GroupToolPolicyBySenderConfig }> | undefined,
+  channelEntries:
+    | Record<
+        string,
+        {
+          requireMention?: boolean;
+          tools?: GroupToolPolicyConfig;
+          toolsBySender?: GroupToolPolicyBySenderConfig;
+        }
+      >
+    | undefined,
   params: GroupMentionParams,
 ) {
   if (!channelEntries || Object.keys(channelEntries).length === 0) return undefined;

@@ -40,10 +40,7 @@ export function createAccountBase<TAccountConfig extends Record<string, unknown>
     return ids[0] ?? DEFAULT_ACCOUNT_ID;
   }
 
-  function resolveAccountConfig(
-    cfg: MoltbotConfig,
-    accountId: string,
-  ): TAccountConfig | undefined {
+  function resolveAccountConfig(cfg: MoltbotConfig, accountId: string): TAccountConfig | undefined {
     const accounts = getChannelSection(cfg)?.accounts;
     if (!accounts || typeof accounts !== "object") return undefined;
     return accounts[accountId] as TAccountConfig | undefined;
