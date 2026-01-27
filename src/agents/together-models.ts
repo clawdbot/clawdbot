@@ -11,7 +11,7 @@ export const TOGETHER_DEFAULT_COST = {
   cacheWrite: 0.5,
 };
 
-export const TOGETHER_MODEL_CATALOG = [
+export const TOGETHER_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "zai-org/GLM-4.7",
     name: "GLM 4.7 Fp8",
