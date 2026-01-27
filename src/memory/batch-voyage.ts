@@ -1,6 +1,9 @@
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
+
 import { retryAsync } from "../infra/retry.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
-import { hashText } from "./internal.js";
+import { hashText, runWithConcurrency } from "./internal.js";
 
 /**
  * Voyage Batch API Input Line format.
@@ -153,40 +156,26 @@ async function fetchVoyageBatchStatus(params: {
   return (await res.json()) as VoyageBatchStatus;
 }
 
-async function fetchVoyageFileContent(params: {
-  client: VoyageEmbeddingClient;
-  fileId: string;
-}): Promise<string> {
-  const baseUrl = getVoyageBaseUrl(params.client);
-  const res = await fetch(`${baseUrl}/files/${params.fileId}/content`, {
-    headers: getVoyageHeaders(params.client, { json: true }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`voyage batch file content failed: ${res.status} ${text}`);
-  }
-  return await res.text();
-}
-
-function parseVoyageBatchOutput(text: string): VoyageBatchOutputLine[] {
-  if (!text.trim()) return [];
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
-}
-
 async function readVoyageBatchError(params: {
   client: VoyageEmbeddingClient;
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
-    const content = await fetchVoyageFileContent({
-      client: params.client,
-      fileId: params.errorFileId,
+    const baseUrl = getVoyageBaseUrl(params.client);
+    const res = await fetch(`${baseUrl}/files/${params.errorFileId}/content`, {
+      headers: getVoyageHeaders(params.client, { json: true }),
     });
-    const lines = parseVoyageBatchOutput(content);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`voyage batch error file content failed: ${res.status} ${text}`);
+    }
+    const text = await res.text();
+    if (!text.trim()) return undefined;
+    const lines = text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
     const first = lines.find((line) => line.error?.message || line.response?.body?.error);
     const message =
       first?.error?.message ??
@@ -247,33 +236,6 @@ async function waitForVoyageBatch(params: {
   }
 }
 
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  if (tasks.length === 0) return [];
-  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
-  let next = 0;
-  let firstError: unknown = null;
-
-  const workers = Array.from({ length: resolvedLimit }, async () => {
-    while (true) {
-      if (firstError) return;
-      const index = next;
-      next += 1;
-      if (index >= tasks.length) return;
-      try {
-        results[index] = await tasks[index]();
-      } catch (err) {
-        firstError = err;
-        return;
-      }
-    }
-  });
-
-  await Promise.allSettled(workers);
-  if (firstError) throw firstError;
-  return results;
-}
-
 export async function runVoyageEmbeddingBatches(params: {
   client: VoyageEmbeddingClient;
   agentId: string;
@@ -331,39 +293,52 @@ export async function runVoyageEmbeddingBatches(params: {
       throw new Error(`voyage batch ${batchInfo.id} completed without output file`);
     }
 
-    const content = await fetchVoyageFileContent({
-      client: params.client,
-      fileId: completed.outputFileId,
+    const baseUrl = getVoyageBaseUrl(params.client);
+    const contentRes = await fetch(`${baseUrl}/files/${completed.outputFileId}/content`, {
+      headers: getVoyageHeaders(params.client, { json: true }),
     });
-    const outputLines = parseVoyageBatchOutput(content);
+    if (!contentRes.ok) {
+      const text = await contentRes.text();
+      throw new Error(`voyage batch file content failed: ${contentRes.status} ${text}`);
+    }
+
     const errors: string[] = [];
     const remaining = new Set(group.map((request) => request.custom_id));
 
-    for (const line of outputLines) {
-      const customId = line.custom_id;
-      if (!customId) continue;
-      remaining.delete(customId);
-      if (line.error?.message) {
-        errors.push(`${customId}: ${line.error.message}`);
-        continue;
+    if (contentRes.body) {
+      const reader = createInterface({
+        input: Readable.fromWeb(contentRes.body as any),
+        terminal: false,
+      });
+
+      for await (const rawLine of reader) {
+        if (!rawLine.trim()) continue;
+        const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
+        const customId = line.custom_id;
+        if (!customId) continue;
+        remaining.delete(customId);
+        if (line.error?.message) {
+          errors.push(`${customId}: ${line.error.message}`);
+          continue;
+        }
+        const response = line.response;
+        const statusCode = response?.status_code ?? 0;
+        if (statusCode >= 400) {
+          const message =
+            response?.body?.error?.message ??
+            (typeof response?.body === "string" ? response.body : undefined) ??
+            "unknown error";
+          errors.push(`${customId}: ${message}`);
+          continue;
+        }
+        const data = response?.body?.data ?? [];
+        const embedding = data[0]?.embedding ?? [];
+        if (embedding.length === 0) {
+          errors.push(`${customId}: empty embedding`);
+          continue;
+        }
+        byCustomId.set(customId, embedding);
       }
-      const response = line.response;
-      const statusCode = response?.status_code ?? 0;
-      if (statusCode >= 400) {
-        const message =
-          response?.body?.error?.message ??
-          (typeof response?.body === "string" ? response.body : undefined) ??
-          "unknown error";
-        errors.push(`${customId}: ${message}`);
-        continue;
-      }
-      const data = response?.body?.data ?? [];
-      const embedding = data[0]?.embedding ?? [];
-      if (embedding.length === 0) {
-        errors.push(`${customId}: empty embedding`);
-        continue;
-      }
-      byCustomId.set(customId, embedding);
     }
 
     if (errors.length > 0) {
