@@ -663,6 +663,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
                   replyToId,
                   threadId,
                   mediaUrl,
+                  audioAsVoice: payload.audioAsVoice === true,
                   maxBytes: mediaMaxMb * 1024 * 1024,
                 });
               } catch (err) {

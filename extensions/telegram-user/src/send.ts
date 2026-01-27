@@ -39,6 +39,7 @@ export type TelegramUserSendOpts = {
   replyToId?: number;
   threadId?: string | number | null;
   mediaUrl?: string;
+  audioAsVoice?: boolean;
 };
 
 function normalizeTarget(raw: string): string {
@@ -67,6 +68,24 @@ function resolveTargetAndThread(raw: string, threadId?: string | number | null) 
   const target = (base ?? normalized).trim();
   if (!target) throw new Error("Recipient is required for Telegram User sends");
   return { target, threadId: parsedThreadId };
+}
+
+function isVoiceMessagesForbidden(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /VOICE_MESSAGES_FORBIDDEN/i.test(message);
+}
+
+function shouldSendAsVoice(params: {
+  wantsVoice: boolean;
+  contentType?: string | null;
+  fileName?: string | null;
+}): boolean {
+  if (!params.wantsVoice) return false;
+  const contentType = params.contentType?.toLowerCase() ?? "";
+  const fileName = params.fileName?.toLowerCase() ?? "";
+  if (/(^|\/)(ogg|opus)(;|$)/.test(contentType)) return true;
+  if (/\.(ogg|opus|oga)$/.test(fileName)) return true;
+  return false;
 }
 
 export function normalizeTelegramUserMessagingTarget(raw: string): string {
@@ -192,11 +211,24 @@ export async function sendMediaTelegramUser(
     const resolved = resolveTargetAndThread(to, opts.threadId);
     const target = resolveTelegramUserPeer(resolved.target);
     const media = await getTelegramUserRuntime().media.loadWebMedia(opts.mediaUrl, opts.maxBytes);
-    const input = InputMedia.auto(media.buffer, {
-      fileName: media.fileName ?? undefined,
-      fileMime: media.contentType,
-      caption: text,
+    const wantsVoice = shouldSendAsVoice({
+      wantsVoice: opts.audioAsVoice === true,
+      contentType: media.contentType,
+      fileName: media.fileName,
     });
+    const buildAuto = () =>
+      InputMedia.auto(media.buffer, {
+        fileName: media.fileName ?? undefined,
+        fileMime: media.contentType,
+        caption: text,
+      });
+    const buildVoice = () =>
+      InputMedia.voice(media.buffer, {
+        fileName: media.fileName ?? undefined,
+        fileMime: media.contentType,
+        caption: text,
+      });
+    const input = wantsVoice ? buildVoice() : buildAuto();
     let message: Awaited<ReturnType<TelegramClient["sendMedia"]>> | null = null;
     try {
       message = await client.sendMedia(target, input, {
@@ -204,7 +236,14 @@ export async function sendMediaTelegramUser(
         ...(resolved.threadId ? { threadId: resolved.threadId } : {}),
       });
     } catch (err) {
-      if (!isDestroyedClientError(err)) throw err;
+      if (wantsVoice && isVoiceMessagesForbidden(err)) {
+        message = await client.sendMedia(target, buildAuto(), {
+          ...(opts.replyToId ? { replyTo: opts.replyToId } : {}),
+          ...(resolved.threadId ? { threadId: resolved.threadId } : {}),
+        });
+      } else if (!isDestroyedClientError(err)) {
+        throw err;
+      }
     }
     if (!message) {
       return { messageId: "", chatId: String(target) };
