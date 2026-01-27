@@ -21,6 +21,9 @@ services:
       # Channel tokens - auto-configures channels on first boot
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      # Pre-approved user IDs (optional, comma-separated)
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       # Gateway configuration
       GATEWAY_PORT: ${GATEWAY_PORT:-18789}
       GATEWAY_AUTH: ${GATEWAY_AUTH:-off}
