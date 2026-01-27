@@ -85,7 +85,7 @@ If you already use `gog` for Google Workspace, you can reuse its OAuth client + 
   channels: {
     "googlechat": {
       actions: { reactions: true },
-      typingIndicator: "message",
+      typingIndicator: "reaction",
     }
   }
 }

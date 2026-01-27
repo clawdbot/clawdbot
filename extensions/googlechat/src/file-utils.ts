@@ -12,7 +12,7 @@ export function readJsonFile(filePath: string): unknown | null {
   } catch (err) {
     // Log meaningful errors (permission issues, malformed JSON) for debugging
     if (err instanceof Error && err.message && !err.message.includes("ENOENT")) {
-      console.error(`Failed to read or parse JSON file ${filePath}: ${err.message}`);
+      console.error(`Failed to read or parse JSON file ${filePath}`);
     }
     return null;
   }
