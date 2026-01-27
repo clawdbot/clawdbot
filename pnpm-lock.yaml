@@ -268,8 +268,8 @@ importers:
         specifier: ^0.2.5
         version: 0.2.5
       agentmail-toolkit:
-        specifier: ^0.2.4
-        version: 0.2.4(@napi-rs/canvas@0.1.88)(clawdbot@)
+        specifier: ^0.2.5
+        version: 0.2.5(@napi-rs/canvas@0.1.88)(clawdbot@)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -2949,8 +2949,8 @@ packages:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
 
-  agentmail-toolkit@0.2.4:
-    resolution: {integrity: sha512-p4gFMb9HeZ7iDd8G4U9hKcDPcWkiUOkdoLvHfy9hgpFmph+mOa/EMMoiGjS1GbmKVzUst6ItwBRrJKF2ETAVjA==}
+  agentmail-toolkit@0.2.5:
+    resolution: {integrity: sha512-E+SOmI5VIlkD//u6T4hGlzMXUedDBQ8VWfrGqgoISnLHk9jJfXYac4CVLVhboU5Hkl4DNu2LsuLzBXt63irQJw==}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.24.1
       ai: ^6.0.0-beta.150
@@ -8793,7 +8793,7 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  agentmail-toolkit@0.2.4(@napi-rs/canvas@0.1.88)(clawdbot@):
+  agentmail-toolkit@0.2.5(@napi-rs/canvas@0.1.88)(clawdbot@):
     dependencies:
       agentmail: 0.2.5
       jszip: 3.10.1
