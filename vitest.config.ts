@@ -8,6 +8,9 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
+// Use single fork on Windows CI to prevent "Worker exited unexpectedly" errors
+// caused by unstable child process handling in Windows GitHub Actions runners
+const useSingleFork = isCI && isWindows;
 
 export default defineConfig({
   resolve: {
@@ -19,6 +22,12 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     pool: "forks",
+    poolOptions: {
+      forks: {
+        // Single fork on Windows CI prevents "Worker exited unexpectedly" errors
+        singleFork: useSingleFork,
+      },
+    },
     maxWorkers: isCI ? ciWorkers : localWorkers,
     include: [
       "src/**/*.test.ts",

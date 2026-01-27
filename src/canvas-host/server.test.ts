@@ -229,4 +229,37 @@ describe("canvas host", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("default index.html uses safe DOM manipulation to prevent XSS", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+      liveReload: false,
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
+      const html = await res.text();
+      expect(res.status).toBe(200);
+
+      // Verify the HTML uses safe DOM manipulation methods
+      expect(html).toContain("document.createElement");
+      expect(html).toContain("textContent");
+
+      // Verify dangerous innerHTML assignment for status is not present
+      expect(html).not.toContain("statusEl.innerHTML");
+
+      // Verify the status element construction is present
+      expect(html).toContain("bridgeSpan.className");
+      expect(html).toContain("bridgeSpan.textContent");
+    } finally {
+      await server.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
