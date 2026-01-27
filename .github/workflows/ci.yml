@@ -192,6 +192,8 @@ jobs:
     runs-on: blacksmith-4vcpu-windows-2025
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      # Reduce parallelism to avoid intermittent Windows runner OOM/timeouts.
+      CLAWDBOT_TEST_WORKERS: 2
     defaults:
       run:
         shell: bash
