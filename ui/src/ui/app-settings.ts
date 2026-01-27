@@ -98,7 +98,12 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (gatewayUrlRaw != null) {
     const gatewayUrl = gatewayUrlRaw.trim();
     if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
-      applySettings(host, { ...host.settings, gatewayUrl });
+      const confirmed = window.confirm(
+        `Change gateway URL to:\n${gatewayUrl}\n\nThis will reconnect to a different gateway server. Only confirm if you trust this URL.`,
+      );
+      if (confirmed) {
+        applySettings(host, { ...host.settings, gatewayUrl });
+      }
     }
     params.delete("gatewayUrl");
     shouldCleanUrl = true;
