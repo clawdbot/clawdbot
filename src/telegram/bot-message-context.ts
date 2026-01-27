@@ -122,7 +122,7 @@ async function resolveStickerVisionSupport(params: {
     });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     if (!entry) return false;
-    return entry.input ? modelSupportsVision(entry) : true;
+    return modelSupportsVision(entry);
   } catch {
     return false;
   }
