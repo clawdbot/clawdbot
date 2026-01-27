@@ -31,12 +31,22 @@ import { getTelegramRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("telegram");
 
+function resolveTelegramMessageActions() {
+  try {
+    return getTelegramRuntime().channel.telegram?.messageActions ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const telegramMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getTelegramRuntime().channel.telegram.messageActions.listActions(ctx),
-  extractToolSend: (ctx) =>
-    getTelegramRuntime().channel.telegram.messageActions.extractToolSend(ctx),
-  handleAction: async (ctx) =>
-    await getTelegramRuntime().channel.telegram.messageActions.handleAction(ctx),
+  listActions: (ctx) => resolveTelegramMessageActions()?.listActions?.(ctx) ?? [],
+  extractToolSend: (ctx) => resolveTelegramMessageActions()?.extractToolSend?.(ctx),
+  handleAction: async (ctx) => {
+    const actions = resolveTelegramMessageActions();
+    if (!actions?.handleAction) return null;
+    return await actions.handleAction(ctx);
+  },
 };
 
 function parseReplyToMessageId(replyToId?: string | null) {
