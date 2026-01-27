@@ -22,6 +22,7 @@ type TelegramUserHandlerParams = {
   runtime: RuntimeEnv;
   accountId: string;
   accountConfig: TelegramUserAccountConfig;
+  abortSignal?: AbortSignal;
   self?: { id: number; username?: string | null };
 };
 
@@ -89,8 +90,10 @@ async function safeSendTyping(params: {
   status: Parameters<TelegramClient["sendTyping"]>[1];
   typingParams?: Parameters<TelegramClient["sendTyping"]>[2];
   runtime: TelegramUserHandlerParams["runtime"];
+  abortSignal?: AbortSignal;
   logLabel: string;
 }) {
+  if (params.abortSignal?.aborted) return;
   if (isClientDestroyed(params.client)) return;
   try {
     await params.client.sendTyping(params.target, params.status, params.typingParams);
@@ -279,7 +282,7 @@ async function resolveMediaAttachments(params: {
 }
 
 export function createTelegramUserMessageHandler(params: TelegramUserHandlerParams) {
-  const { client, cfg, runtime, accountId, accountConfig, self } = params;
+  const { client, cfg, runtime, accountId, accountConfig, self, abortSignal } = params;
   const core = getTelegramUserRuntime();
   const textLimit = accountConfig.textChunkLimit ?? DEFAULT_TEXT_LIMIT;
   const mediaMaxMb = accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
@@ -288,6 +291,8 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
   const groupAllowFrom = accountConfig.groupAllowFrom ?? allowFrom;
 
   return async (msg: MessageContext) => {
+    if (abortSignal?.aborted) return;
+    if (isClientDestroyed(client)) return;
     try {
       if (msg.isOutgoing || msg.isService) return;
       const messageGroup = msg.isMessageGroup ? msg.messages : [msg];
@@ -642,10 +647,14 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             .responsePrefix,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload) => {
+            if (abortSignal?.aborted) return;
+            if (isClientDestroyed(client)) return;
             const replyToId = hasReplied ? undefined : msg.id;
             const replyText = payload.text ?? "";
             const mediaUrl = payload.mediaUrl;
             if (mediaUrl) {
+              if (abortSignal?.aborted) return;
+              if (isClientDestroyed(client)) return;
               if (payload.audioAsVoice) {
                 await safeSendTyping({
                   client,
@@ -653,6 +662,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
                   status: "record_voice",
                   typingParams,
                   runtime,
+                  abortSignal,
                   logLabel: "voice typing",
                 });
               }
@@ -680,6 +690,8 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
             }
             if (replyText) {
               for (const chunk of core.channel.text.chunkMarkdownText(replyText, textLimit)) {
+                if (abortSignal?.aborted) return;
+                if (isClientDestroyed(client)) return;
                 const trimmed = chunk.trim();
                 if (!trimmed) continue;
                 try {
@@ -709,6 +721,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
               status: "typing",
               typingParams,
               runtime,
+              abortSignal,
               logLabel: "typing",
             });
           },

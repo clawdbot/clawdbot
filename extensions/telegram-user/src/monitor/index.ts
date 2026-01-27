@@ -18,6 +18,11 @@ async function loadMtcuteDispatcher(): Promise<MtcuteDispatcher> {
   return mtcuteDispatcherPromise;
 }
 
+function isDestroyedClientError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /client is destroyed/i.test(message);
+}
+
 export type MonitorTelegramUserOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -32,6 +37,8 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
     accountId: opts.accountId,
   });
   if (!account.enabled) return;
+
+  let shuttingDown = false;
 
   const apiId = account.credentials.apiId;
   const apiHash = account.credentials.apiHash;
@@ -60,6 +67,7 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
   setActiveTelegramUserClient(client);
 
   const stop = async () => {
+    shuttingDown = true;
     setActiveTelegramUserClient(null);
     await client.destroy().catch(() => undefined);
   };
@@ -67,6 +75,7 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
   opts.abortSignal?.addEventListener(
     "abort",
     () => {
+      shuttingDown = true;
       void stop();
     },
     { once: true },
@@ -83,6 +92,7 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
     runtime,
     accountId: account.accountId,
     accountConfig: account.config,
+    abortSignal: opts.abortSignal,
     self: self
       ? { id: self.id, username: "username" in self ? self.username : undefined }
       : undefined,
@@ -99,15 +109,31 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
   );
 
   await new Promise<void>((resolve, reject) => {
-    client.onError.add((err) => {
-      runtime.error?.(`telegram-user client error: ${String(err)}`);
+    let settled = false;
+    const settleResolve = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const settleReject = (err: unknown) => {
+      if (settled) return;
+      settled = true;
       reject(err);
+    };
+
+    client.onError.add((err) => {
+      if (shuttingDown || opts.abortSignal?.aborted || isDestroyedClientError(err)) {
+        settleResolve();
+        return;
+      }
+      runtime.error?.(`telegram-user client error: ${String(err)}`);
+      settleReject(err);
     });
     if (opts.abortSignal?.aborted) {
-      resolve();
+      settleResolve();
       return;
     }
-    opts.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+    opts.abortSignal?.addEventListener("abort", () => settleResolve(), { once: true });
   });
 
   await stop();
