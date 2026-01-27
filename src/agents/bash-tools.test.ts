@@ -11,7 +11,8 @@ const isWin = process.platform === "win32";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
-const longDelayCmd = isWin ? "Start-Sleep -Seconds 2" : "sleep 2";
+// Use longer delay on Windows for reliable timeout testing (Windows scheduling is less precise)
+const longDelayCmd = isWin ? "Start-Sleep -Seconds 5" : "sleep 2";
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
 const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, `echo ${message}`]);
