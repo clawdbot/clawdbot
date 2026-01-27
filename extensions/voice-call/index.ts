@@ -62,8 +62,8 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     "tunnel.ngrokDomain": { label: "ngrok Domain", advanced: true },
-    "tunnel.allowNgrokFreeTier": {
-      label: "Allow ngrok Free Tier",
+    "tunnel.allowNgrokFreeTierLoopbackBypass": {
+      label: "Allow ngrok Free Tier (Loopback Bypass)",
       advanced: true,
     },
     "streaming.enabled": { label: "Enable Streaming", advanced: true },

@@ -23,12 +23,12 @@ read_when:
 - `plugins.entries.<id>.config` must be validated by the plugin’s schema.
   - If a plugin lacks a schema, **reject plugin load** and surface a clear error.
 - Unknown `channels.<id>` keys are errors unless a plugin manifest declares the channel id.
-- Plugin manifests (`clawdbot.plugin.json`) are required for all plugins.
+- Plugin manifests (`moltbot.plugin.json`) are required for all plugins.
 
 ## Plugin schema enforcement
 - Each plugin provides a strict JSON Schema for its config (inline in the manifest).
 - Plugin load flow:
-  1) Resolve plugin manifest + schema (`clawdbot.plugin.json`).
+  1) Resolve plugin manifest + schema (`moltbot.plugin.json`).
   2) Validate config against the schema.
   3) If missing schema or invalid config: block plugin load, record error.
 - Error message includes:
@@ -41,22 +41,22 @@ read_when:
 - Doctor runs **every time** config is loaded (dry-run by default).
 - If config invalid:
   - Print a summary + actionable errors.
-  - Instruct: `clawdbot doctor --fix`.
-- `clawdbot doctor --fix`:
+  - Instruct: `moltbot doctor --fix`.
+- `moltbot doctor --fix`:
   - Applies migrations.
   - Removes unknown keys.
   - Writes updated config.
 
 ## Command gating (when config is invalid)
 Allowed (diagnostic-only):
-- `clawdbot doctor`
-- `clawdbot logs`
-- `clawdbot health`
-- `clawdbot help`
-- `clawdbot status`
-- `clawdbot gateway status`
+- `moltbot doctor`
+- `moltbot logs`
+- `moltbot health`
+- `moltbot help`
+- `moltbot status`
+- `moltbot gateway status`
 
-Everything else must hard-fail with: “Config invalid. Run `clawdbot doctor --fix`.”
+Everything else must hard-fail with: “Config invalid. Run `moltbot doctor --fix`.”
 
 ## Error UX format
 - Single summary header.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
@@ -8,7 +8,7 @@ import {
 
 describe("applyGoogleGeminiModelDefault", () => {
   it("sets gemini default when model is unset", () => {
-    const cfg: ClawdbotConfig = { agents: { defaults: {} } };
+    const cfg: MoltbotConfig = { agents: { defaults: {} } };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expect(applied.changed).toBe(true);
     expect(applied.next.agents?.defaults?.model).toEqual({
@@ -17,7 +17,7 @@ describe("applyGoogleGeminiModelDefault", () => {
   });
 
   it("overrides existing model", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
@@ -28,7 +28,7 @@ describe("applyGoogleGeminiModelDefault", () => {
   });
 
   it("no-ops when already gemini default", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: { defaults: { model: GOOGLE_GEMINI_DEFAULT_MODEL } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);

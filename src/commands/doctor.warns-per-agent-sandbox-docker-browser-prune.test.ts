@@ -26,7 +26,7 @@ beforeEach(() => {
 
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
-  resolveClawdbotPackageRoot.mockReset().mockResolvedValue(null);
+  resolveMoltbotPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue({
     status: "skipped",
     mode: "unknown",
@@ -78,7 +78,7 @@ beforeEach(() => {
   originalStateDir = process.env.CLAWDBOT_STATE_DIR;
   originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
   process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-doctor-state-"));
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-doctor-state-"));
   process.env.CLAWDBOT_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
@@ -109,7 +109,7 @@ const confirm = vi.fn().mockResolvedValue(true);
 const select = vi.fn().mockResolvedValue("node");
 const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
-const resolveClawdbotPackageRoot = vi.fn().mockResolvedValue(null);
+const resolveMoltbotPackageRoot = vi.fn().mockResolvedValue(null);
 const runGatewayUpdate = vi.fn().mockResolvedValue({
   status: "skipped",
   mode: "unknown",
@@ -173,14 +173,14 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadClawdbotPlugins: () => ({ plugins: [], diagnostics: [] }),
+  loadMoltbotPlugins: () => ({ plugins: [], diagnostics: [] }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    CONFIG_PATH_MOLTBOT: "/tmp/moltbot.json",
+    CONFIG_PATH: "/tmp/moltbot.json",
     createConfigIO,
     readConfigFileSnapshot,
     writeConfigFile,
@@ -215,8 +215,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
-vi.mock("../infra/clawdbot-root.js", () => ({
-  resolveClawdbotPackageRoot,
+vi.mock("../infra/moltbot-root.js", () => ({
+  resolveMoltbotPackageRoot,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -398,14 +398,10 @@ describe("doctor command", () => {
     note.mockClear();
     const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/Users/steipete");
     const realExists = fs.existsSync;
-    const legacyPath = path.join("/Users/steipete", "clawdbot");
+    const legacyPath = path.join("/Users/steipete", "moltbot");
     const legacyAgentsPath = path.join(legacyPath, "AGENTS.md");
     const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
-      if (
-        value === "/Users/steipete/clawdbot" ||
-        value === legacyPath ||
-        value === legacyAgentsPath
-      )
+      if (value === "/Users/steipete/moltbot" || value === legacyPath || value === legacyAgentsPath)
         return true;
       return realExists(value as never);
     });
@@ -422,9 +418,7 @@ describe("doctor command", () => {
     expect(
       note.mock.calls.some(
         ([message, title]) =>
-          title === "Extra workspace" &&
-          typeof message === "string" &&
-          message.includes("clawdbot"),
+          title === "Extra workspace" && typeof message === "string" && message.includes("moltbot"),
       ),
     ).toBe(true);
 

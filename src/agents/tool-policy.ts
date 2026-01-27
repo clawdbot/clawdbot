@@ -34,8 +34,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   "group:messaging": ["message"],
   // Nodes + device tools
   "group:nodes": ["nodes"],
-  // All Clawdbot native tools (excludes provider plugins).
-  "group:clawdbot": [
+  // All Moltbot native tools (excludes provider plugins).
+  "group:moltbot": [
     "browser",
     "canvas",
     "nodes",
@@ -209,6 +209,12 @@ export function stripPluginOnlyAllowlist(
     if (!isCoreEntry && !isPluginEntry) unknownAllowlist.push(entry);
   }
   const strippedAllowlist = !hasCoreEntry;
+  // When an allowlist contains only plugin tools, we strip it to avoid accidentally
+  // disabling core tools. Users who want additive behavior should prefer `tools.alsoAllow`.
+  if (strippedAllowlist) {
+    // Note: logging happens in the caller (pi-tools/tools-invoke) after this function returns.
+    // We keep this note here for future maintainers.
+  }
   return {
     policy: strippedAllowlist ? { ...policy, allow: undefined } : policy,
     unknownAllowlist: Array.from(new Set(unknownAllowlist)),

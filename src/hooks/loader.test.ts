@@ -9,7 +9,7 @@ import {
   triggerInternalHook,
   createInternalHookEvent,
 } from "./internal-hooks.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
 describe("loader", () => {
   let tmpDir: string;
@@ -18,7 +18,7 @@ describe("loader", () => {
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
-    tmpDir = path.join(os.tmpdir(), `clawdbot-test-${Date.now()}`);
+    tmpDir = path.join(os.tmpdir(), `moltbot-test-${Date.now()}`);
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
@@ -44,7 +44,7 @@ describe("loader", () => {
 
   describe("loadInternalHooks", () => {
     it("should return 0 when hooks are not enabled", async () => {
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: false,
@@ -57,7 +57,7 @@ describe("loader", () => {
     });
 
     it("should return 0 when hooks config is missing", async () => {
-      const cfg: ClawdbotConfig = {};
+      const cfg: MoltbotConfig = {};
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
     });
@@ -72,7 +72,7 @@ describe("loader", () => {
       `;
       await fs.writeFile(handlerPath, handlerCode, "utf-8");
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,
@@ -101,7 +101,7 @@ describe("loader", () => {
       await fs.writeFile(handler1Path, "export default async function() {}", "utf-8");
       await fs.writeFile(handler2Path, "export default async function() {}", "utf-8");
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,
@@ -131,7 +131,7 @@ describe("loader", () => {
       `;
       await fs.writeFile(handlerPath, handlerCode, "utf-8");
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,
@@ -153,7 +153,7 @@ describe("loader", () => {
     it("should handle module loading errors gracefully", async () => {
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,
@@ -184,7 +184,7 @@ describe("loader", () => {
       const handlerPath = path.join(tmpDir, "bad-export.js");
       await fs.writeFile(handlerPath, 'export default "not a function";', "utf-8");
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,
@@ -213,7 +213,7 @@ describe("loader", () => {
       // Get relative path from cwd
       const relativePath = path.relative(process.cwd(), handlerPath);
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,
@@ -245,7 +245,7 @@ describe("loader", () => {
       `;
       await fs.writeFile(handlerPath, handlerCode, "utf-8");
 
-      const cfg: ClawdbotConfig = {
+      const cfg: MoltbotConfig = {
         hooks: {
           internal: {
             enabled: true,

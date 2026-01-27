@@ -214,7 +214,7 @@ describe("gateway server health/presence", () => {
   });
 
   test("presence includes client fingerprint", async () => {
-    const identityPath = path.join(os.tmpdir(), `clawdbot-device-${randomUUID()}.json`);
+    const identityPath = path.join(os.tmpdir(), `moltbot-device-${randomUUID()}.json`);
     const identity = loadOrCreateDeviceIdentity(identityPath);
     const role = "operator";
     const scopes: string[] = [];

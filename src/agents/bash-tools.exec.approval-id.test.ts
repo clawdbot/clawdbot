@@ -21,7 +21,7 @@ describe("exec approvals", () => {
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-test-"));
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
@@ -80,7 +80,7 @@ describe("exec approvals", () => {
 
   it("skips approval when node allowlist is satisfied", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-bin-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-test-bin-"));
     const binDir = path.join(tempDir, "bin");
     await fs.mkdir(binDir, { recursive: true });
     const exeName = process.platform === "win32" ? "tool.cmd" : "tool";

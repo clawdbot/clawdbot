@@ -1,5 +1,5 @@
 import XCTest
-@testable import ClawdbotKit
+@testable import MoltbotKit
 
 final class TalkPromptBuilderTests: XCTestCase {
     func testBuildIncludesTranscript() {

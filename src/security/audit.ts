@@ -1,8 +1,8 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { resolveBrowserConfig } from "../browser/config.js";
+import type { MoltbotConfig } from "../config/config.js";
+import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -62,7 +62,7 @@ export type SecurityAuditReport = {
 };
 
 export type SecurityAuditOptions = {
-  config: ClawdbotConfig;
+  config: MoltbotConfig;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deep?: boolean;
@@ -145,7 +145,7 @@ async function collectFilesystemFindings(params: {
         checkId: "fs.state_dir.perms_world_writable",
         severity: "critical",
         title: "State dir is world-writable",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; other users can write into your Clawdbot state.`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; other users can write into your Moltbot state.`,
         remediation: formatPermissionRemediation({
           targetPath: params.stateDir,
           perms: stateDirPerms,
@@ -159,7 +159,7 @@ async function collectFilesystemFindings(params: {
         checkId: "fs.state_dir.perms_group_writable",
         severity: "warn",
         title: "State dir is group-writable",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; group users can write into your Clawdbot state.`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; group users can write into your Moltbot state.`,
         remediation: formatPermissionRemediation({
           targetPath: params.stateDir,
           perms: stateDirPerms,
@@ -247,12 +247,15 @@ async function collectFilesystemFindings(params: {
   return findings;
 }
 
-function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+function collectGatewayConfigFindings(
+  cfg: MoltbotConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
+  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
@@ -353,82 +356,41 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
   return findings;
 }
 
-function isLoopbackClientHost(hostname: string): boolean {
-  const h = hostname.trim().toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "::1";
-}
-
-function collectBrowserControlFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+function collectBrowserControlFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
   let resolved: ReturnType<typeof resolveBrowserConfig>;
   try {
-    resolved = resolveBrowserConfig(cfg.browser);
+    resolved = resolveBrowserConfig(cfg.browser, cfg);
   } catch (err) {
     findings.push({
       checkId: "browser.control_invalid_config",
       severity: "warn",
       title: "Browser control config looks invalid",
       detail: String(err),
-      remediation: `Fix browser.controlUrl/browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("clawdbot security audit --deep")}".`,
+      remediation: `Fix browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("moltbot security audit --deep")}".`,
     });
     return findings;
   }
 
   if (!resolved.enabled) return findings;
 
-  const url = new URL(resolved.controlUrl);
-  const isLoopback = isLoopbackClientHost(url.hostname);
-  const envToken = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim();
-  const controlToken = (envToken || resolved.controlToken)?.trim() || null;
-
-  if (!isLoopback) {
-    if (!controlToken) {
-      findings.push({
-        checkId: "browser.control_remote_no_token",
-        severity: "critical",
-        title: "Remote browser control is missing an auth token",
-        detail: `browser.controlUrl is non-loopback (${resolved.controlUrl}) but no browser.controlToken (or CLAWDBOT_BROWSER_CONTROL_TOKEN) is configured.`,
-        remediation:
-          "Set browser.controlToken (or export CLAWDBOT_BROWSER_CONTROL_TOKEN) and prefer serving over Tailscale Serve or HTTPS reverse proxy.",
-      });
+  for (const name of Object.keys(resolved.profiles)) {
+    const profile = resolveProfile(resolved, name);
+    if (!profile || profile.cdpIsLoopback) continue;
+    let url: URL;
+    try {
+      url = new URL(profile.cdpUrl);
+    } catch {
+      continue;
     }
-
     if (url.protocol === "http:") {
       findings.push({
-        checkId: "browser.control_remote_http",
+        checkId: "browser.remote_cdp_http",
         severity: "warn",
-        title: "Remote browser control uses HTTP",
-        detail: `browser.controlUrl=${resolved.controlUrl} is http; this is OK only if it's tailnet-only (Tailscale) or behind another encrypted tunnel.`,
-        remediation: `Prefer HTTPS termination (Tailscale Serve) and keep the endpoint tailnet-only.`,
-      });
-    }
-
-    if (controlToken && controlToken.length < 24) {
-      findings.push({
-        checkId: "browser.control_token_too_short",
-        severity: "warn",
-        title: "Browser control token looks short",
-        detail: `browser control token is ${controlToken.length} chars; prefer a long random token.`,
-      });
-    }
-
-    const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-    const gatewayAuth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
-    const gatewayToken =
-      gatewayAuth.mode === "token" &&
-      typeof gatewayAuth.token === "string" &&
-      gatewayAuth.token.trim()
-        ? gatewayAuth.token.trim()
-        : null;
-
-    if (controlToken && gatewayToken && controlToken === gatewayToken) {
-      findings.push({
-        checkId: "browser.control_token_reuse_gateway_token",
-        severity: "warn",
-        title: "Browser control token reuses the Gateway token",
-        detail: `browser.controlToken matches gateway.auth token; compromise of browser control expands blast radius to the Gateway API.`,
-        remediation: `Use a separate browser.controlToken dedicated to browser control.`,
+        title: "Remote CDP uses HTTP",
+        detail: `browser profile "${name}" uses http CDP (${profile.cdpUrl}); this is OK only if it's tailnet-only or behind an encrypted tunnel.`,
+        remediation: `Prefer HTTPS/TLS or a tailnet-only endpoint for remote CDP.`,
       });
     }
   }
@@ -436,7 +398,7 @@ function collectBrowserControlFindings(cfg: ClawdbotConfig): SecurityAuditFindin
   return findings;
 }
 
-function collectLoggingFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+function collectLoggingFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const redact = cfg.logging?.redactSensitive;
   if (redact !== "off") return [];
   return [
@@ -450,7 +412,7 @@ function collectLoggingFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
   ];
 }
 
-function collectElevatedFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+function collectElevatedFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
   const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
@@ -482,7 +444,7 @@ function collectElevatedFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
 }
 
 async function collectChannelSecurityFindings(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   plugins: ReturnType<typeof listChannelPlugins>;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
@@ -835,7 +797,7 @@ async function collectChannelSecurityFindings(params: {
 }
 
 async function maybeProbeGateway(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   timeoutMs: number;
   probe: typeof probeGateway;
 }): Promise<SecurityAuditReport["deep"]> {
@@ -905,7 +867,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg));
+  findings.push(...collectGatewayConfigFindings(cfg, env));
   findings.push(...collectBrowserControlFindings(cfg));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
@@ -961,7 +923,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       severity: "warn",
       title: "Gateway probe failed (deep)",
       detail: deep.gateway.error ?? "gateway unreachable",
-      remediation: `Run "${formatCliCommand("clawdbot status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("clawdbot security audit --deep")}".`,
+      remediation: `Run "${formatCliCommand("moltbot status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("moltbot security audit --deep")}".`,
     });
   }
 

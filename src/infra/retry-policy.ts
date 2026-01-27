@@ -72,16 +72,21 @@ export function createTelegramRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
+  shouldRetry?: (err: unknown) => boolean;
 }): RetryRunner {
   const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
+  const shouldRetry = params.shouldRetry
+    ? (err: unknown) => params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
+    : (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+
   return <T>(fn: () => Promise<T>, label?: string) =>
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err)),
+      shouldRetry,
       retryAfterMs: getTelegramRetryAfterMs,
       onRetry: params.verbose
         ? (info) => {

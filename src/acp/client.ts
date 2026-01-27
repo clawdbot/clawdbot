@@ -10,7 +10,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 
-import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
+import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
 
 export type AcpClientOptions = {
   cwd?: string;
@@ -75,8 +75,8 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureClawdbotCliOnPath({ cwd });
-  const serverCommand = opts.serverCommand ?? "clawdbot";
+  ensureMoltbotCliOnPath({ cwd });
+  const serverCommand = opts.serverCommand ?? "moltbot";
   const serverArgs = buildServerArgs(opts);
 
   log(`spawning: ${serverCommand} ${serverArgs.join(" ")}`);
@@ -122,7 +122,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
       fs: { readTextFile: true, writeTextFile: true },
       terminal: true,
     },
-    clientInfo: { name: "clawdbot-acp-client", version: "1.0.0" },
+    clientInfo: { name: "moltbot-acp-client", version: "1.0.0" },
   });
 
   log("creating session");
@@ -146,7 +146,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
     output: process.stdout,
   });
 
-  console.log("Clawdbot ACP client");
+  console.log("Moltbot ACP client");
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 

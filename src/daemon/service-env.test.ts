@@ -225,10 +225,10 @@ describe("buildServiceEnvironment", () => {
     }
     expect(env.CLAWDBOT_GATEWAY_PORT).toBe("18789");
     expect(env.CLAWDBOT_GATEWAY_TOKEN).toBe("secret");
-    expect(env.CLAWDBOT_SERVICE_MARKER).toBe("clawdbot");
+    expect(env.CLAWDBOT_SERVICE_MARKER).toBe("moltbot");
     expect(env.CLAWDBOT_SERVICE_KIND).toBe("gateway");
     expect(typeof env.CLAWDBOT_SERVICE_VERSION).toBe("string");
-    expect(env.CLAWDBOT_SYSTEMD_UNIT).toBe("clawdbot-gateway.service");
+    expect(env.CLAWDBOT_SYSTEMD_UNIT).toBe("moltbot-gateway.service");
     if (process.platform === "darwin") {
       expect(env.CLAWDBOT_LAUNCHD_LABEL).toBe("com.clawdbot.gateway");
     }
@@ -239,7 +239,7 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/home/user", CLAWDBOT_PROFILE: "work" },
       port: 18789,
     });
-    expect(env.CLAWDBOT_SYSTEMD_UNIT).toBe("clawdbot-gateway-work.service");
+    expect(env.CLAWDBOT_SYSTEMD_UNIT).toBe("moltbot-gateway-work.service");
     if (process.platform === "darwin") {
       expect(env.CLAWDBOT_LAUNCHD_LABEL).toBe("com.clawdbot.work");
     }

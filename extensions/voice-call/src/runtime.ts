@@ -33,7 +33,19 @@ type Logger = {
   debug: (message: string) => void;
 };
 
+function isLoopbackBind(bind: string | undefined): boolean {
+  if (!bind) return false;
+  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
+}
+
 function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
+  const allowNgrokFreeTierLoopbackBypass =
+    config.tunnel?.provider === "ngrok" &&
+    isLoopbackBind(config.serve?.bind) &&
+    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ||
+      config.tunnel?.allowNgrokFreeTier ||
+      false);
+
   switch (config.provider) {
     case "telnyx":
       return new TelnyxProvider({
@@ -48,7 +60,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           authToken: config.twilio?.authToken,
         },
         {
-          allowNgrokFreeTier: config.tunnel?.allowNgrokFreeTier ?? false,
+          allowNgrokFreeTierLoopbackBypass,
           publicUrl: config.publicUrl,
           skipVerification: config.skipSignatureVerification,
           streamPath: config.streaming?.enabled

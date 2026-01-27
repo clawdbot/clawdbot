@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
@@ -16,7 +16,7 @@ function resolveProfileUnusableUntil(stats: {
 }
 
 export function resolveAuthProfileOrder(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   store: AuthProfileStore;
   provider: string;
   preferredProfile?: string;

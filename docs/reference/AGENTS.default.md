@@ -1,14 +1,14 @@
 ---
-summary: "Default Clawdbot agent instructions and skills roster for the personal assistant setup"
+summary: "Default Moltbot agent instructions and skills roster for the personal assistant setup"
 read_when:
-  - Starting a new Clawdbot agent session
+  - Starting a new Moltbot agent session
   - Enabling or auditing default skills
 ---
-# AGENTS.md — Clawdbot Personal Assistant (default)
+# AGENTS.md — Moltbot Personal Assistant (default)
 
 ## First run (recommended)
 
-Clawdbot uses a dedicated workspace directory for the agent. Default: `~/clawd` (configurable via `agents.defaults.workspace`).
+Moltbot uses a dedicated workspace directory for the agent. Default: `~/clawd` (configurable via `agents.defaults.workspace`).
 
 1) Create the workspace (if it doesn’t already exist):
 
@@ -78,9 +78,9 @@ git commit -m "Add Clawd workspace"
 # Optional: add a private remote + push
 ```
 
-## What Clawdbot Does
+## What Moltbot Does
 - Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run skills via the host Mac.
-- macOS app manages permissions (screen recording, notifications, microphone) and exposes the `clawdbot` CLI via its bundled binary.
+- macOS app manages permissions (screen recording, notifications, microphone) and exposes the `moltbot` CLI via its bundled binary.
 - Direct chats collapse into the agent's `main` session by default; groups stay isolated as `agent:<agentId>:<channel>:group:<id>` (rooms/channels: `agent:<agentId>:<channel>:channel:<id>`); heartbeats keep background tasks alive.
 
 ## Core Skills (enable in Settings → Skills)
@@ -104,10 +104,10 @@ git commit -m "Add Clawd workspace"
 - **agent-tools** — Utility toolkit for automations and helper scripts.
 
 ## Usage Notes
-- Prefer the `clawdbot` CLI for scripting; mac app handles permissions.
+- Prefer the `moltbot` CLI for scripting; mac app handles permissions.
 - Run installs from the Skills tab; it hides the button if a binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
 - Canvas UI runs full-screen with native overlays. Avoid placing critical controls in the top-left/top-right/bottom edges; add explicit gutters in the layout and don’t rely on safe-area insets.
-- For browser-driven verification, use `clawdbot browser` (tabs/status/screenshot) with the clawd-managed Chrome profile.
-- For DOM inspection, use `clawdbot browser eval|query|dom|snapshot` (and `--json`/`--out` when you need machine output).
-- For interactions, use `clawdbot browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (click/type require snapshot refs; use `evaluate` for CSS selectors).
+- For browser-driven verification, use `moltbot browser` (tabs/status/screenshot) with the clawd-managed Chrome profile.
+- For DOM inspection, use `moltbot browser eval|query|dom|snapshot` (and `--json`/`--out` when you need machine output).
+- For interactions, use `moltbot browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (click/type require snapshot refs; use `evaluate` for CSS selectors).

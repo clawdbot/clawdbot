@@ -1,5 +1,5 @@
 import Testing
-@testable import ClawdbotChatUI
+@testable import MoltbotChatUI
 
 @Suite("ChatMarkdownPreprocessor")
 struct ChatMarkdownPreprocessorTests {

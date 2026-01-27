@@ -1,13 +1,11 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
   resolveAuthProfileDisplayLabel,
 } from "./auth-profiles.js";
 
-export type AuthProfileSource = "claude-cli" | "codex-cli" | "store";
+export type AuthProfileSource = "store";
 
 export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
 
@@ -41,9 +39,7 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-export function resolveAuthProfileSource(profileId: string): AuthProfileSource {
-  if (profileId === CLAUDE_CLI_PROFILE_ID) return "claude-cli";
-  if (profileId === CODEX_CLI_PROFILE_ID) return "codex-cli";
+export function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
   return "store";
 }
 
@@ -80,7 +76,7 @@ function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
   store: AuthProfileStore;
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   now: number;
   warnAfterMs: number;
 }): AuthProfileHealth {
@@ -142,7 +138,7 @@ function buildProfileHealth(params: {
 
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
-  cfg?: ClawdbotConfig;
+  cfg?: MoltbotConfig;
   warnAfterMs?: number;
   providers?: string[];
 }): AuthHealthSummary {

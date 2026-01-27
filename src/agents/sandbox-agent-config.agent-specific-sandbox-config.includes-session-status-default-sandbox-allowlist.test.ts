@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
 // We need to test the internal defaultSandboxConfig function, but it's not exported.
 // Instead, we test the behavior through resolveSandboxContext which uses it.
@@ -53,7 +53,7 @@ describe("Agent-specific sandbox config", () => {
   it("includes session_status in default sandbox allowlist", async () => {
     const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
 
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -70,7 +70,7 @@ describe("Agent-specific sandbox config", () => {
   it("includes image in default sandbox allowlist", async () => {
     const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
 
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -87,7 +87,7 @@ describe("Agent-specific sandbox config", () => {
   it("injects image into explicit sandbox allowlists", async () => {
     const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
 
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       tools: {
         sandbox: {
           tools: {

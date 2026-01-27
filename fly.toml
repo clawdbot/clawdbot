@@ -1,7 +1,7 @@
-# Clawdbot Fly.io deployment configuration
+# Moltbot Fly.io deployment configuration
 # See https://fly.io/docs/reference/configuration/
 
-app = "clawdbot"
+app = "moltbot"
 primary_region = "iad"  # change to your closest region
 
 [build]
@@ -30,5 +30,5 @@ primary_region = "iad"  # change to your closest region
   memory = "2048mb"
 
 [mounts]
-  source = "clawdbot_data"
+  source = "moltbot_data"
   destination = "/data"

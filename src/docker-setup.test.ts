@@ -40,7 +40,7 @@ describe("docker-setup.sh", () => {
       return;
     }
 
-    const rootDir = await mkdtemp(join(tmpdir(), "clawdbot-docker-setup-"));
+    const rootDir = await mkdtemp(join(tmpdir(), "moltbot-docker-setup-"));
     const scriptPath = join(rootDir, "docker-setup.sh");
     const dockerfilePath = join(rootDir, "Dockerfile");
     const composePath = join(rootDir, "docker-compose.yml");
@@ -52,7 +52,7 @@ describe("docker-setup.sh", () => {
     await writeFile(dockerfilePath, "FROM scratch\n");
     await writeFile(
       composePath,
-      "services:\n  clawdbot-gateway:\n    image: noop\n  clawdbot-cli:\n    image: noop\n",
+      "services:\n  moltbot-gateway:\n    image: noop\n  moltbot-cli:\n    image: noop\n",
     );
     await writeDockerStub(binDir, logPath);
 
@@ -90,7 +90,7 @@ describe("docker-setup.sh", () => {
       return;
     }
 
-    const rootDir = await mkdtemp(join(tmpdir(), "clawdbot-docker-setup-"));
+    const rootDir = await mkdtemp(join(tmpdir(), "moltbot-docker-setup-"));
     const scriptPath = join(rootDir, "docker-setup.sh");
     const dockerfilePath = join(rootDir, "Dockerfile");
     const composePath = join(rootDir, "docker-compose.yml");
@@ -102,7 +102,7 @@ describe("docker-setup.sh", () => {
     await writeFile(dockerfilePath, "FROM scratch\n");
     await writeFile(
       composePath,
-      "services:\n  clawdbot-gateway:\n    image: noop\n  clawdbot-cli:\n    image: noop\n",
+      "services:\n  moltbot-gateway:\n    image: noop\n  moltbot-cli:\n    image: noop\n",
     );
     await writeDockerStub(binDir, logPath);
 

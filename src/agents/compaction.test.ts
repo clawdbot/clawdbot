@@ -103,5 +103,47 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedChunks).toBe(0);
     expect(pruned.messages.length).toBe(messages.length);
     expect(pruned.keptTokens).toBe(estimateMessagesTokens(messages));
+    expect(pruned.droppedMessagesList).toEqual([]);
+  });
+
+  it("returns droppedMessagesList containing dropped messages", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeMessage(2, 4000),
+      makeMessage(3, 4000),
+      makeMessage(4, 4000),
+    ];
+    const maxContextTokens = 2000; // budget is 1000 tokens (50%)
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens,
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(pruned.droppedChunks).toBeGreaterThan(0);
+    expect(pruned.droppedMessagesList.length).toBe(pruned.droppedMessages);
+
+    // All messages accounted for: kept + dropped = original
+    const allIds = [
+      ...pruned.droppedMessagesList.map((m) => m.timestamp),
+      ...pruned.messages.map((m) => m.timestamp),
+    ].sort((a, b) => a - b);
+    const originalIds = messages.map((m) => m.timestamp).sort((a, b) => a - b);
+    expect(allIds).toEqual(originalIds);
+  });
+
+  it("returns empty droppedMessagesList when no pruning needed", () => {
+    const messages: AgentMessage[] = [makeMessage(1, 100)];
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: 100_000,
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(pruned.droppedChunks).toBe(0);
+    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.messages.length).toBe(1);
   });
 });

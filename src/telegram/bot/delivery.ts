@@ -4,6 +4,7 @@ import {
   markdownToTelegramHtml,
   renderTelegramHtmlText,
 } from "../format.js";
+import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { splitTelegramCaption } from "../caption.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -20,7 +21,8 @@ import { loadWebMedia } from "../../web/media.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
-import type { TelegramContext } from "./types.js";
+import type { StickerMetadata, TelegramContext } from "./types.js";
+import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
@@ -146,16 +148,22 @@ export async function deliverReplies(params: {
         mediaParams.message_thread_id = threadParams.message_thread_id;
       }
       if (isGif) {
-        await bot.api.sendAnimation(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendAnimation",
+          runtime,
+          fn: () => bot.api.sendAnimation(chatId, file, { ...mediaParams }),
         });
       } else if (kind === "image") {
-        await bot.api.sendPhoto(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendPhoto",
+          runtime,
+          fn: () => bot.api.sendPhoto(chatId, file, { ...mediaParams }),
         });
       } else if (kind === "video") {
-        await bot.api.sendVideo(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendVideo",
+          runtime,
+          fn: () => bot.api.sendVideo(chatId, file, { ...mediaParams }),
         });
       } else if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
@@ -169,8 +177,11 @@ export async function deliverReplies(params: {
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
           try {
-            await bot.api.sendVoice(chatId, file, {
-              ...mediaParams,
+            await withTelegramApiErrorLogging({
+              operation: "sendVoice",
+              runtime,
+              shouldLog: (err) => !isVoiceMessagesForbidden(err),
+              fn: () => bot.api.sendVoice(chatId, file, { ...mediaParams }),
             });
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
@@ -204,13 +215,17 @@ export async function deliverReplies(params: {
           }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
-          await bot.api.sendAudio(chatId, file, {
-            ...mediaParams,
+          await withTelegramApiErrorLogging({
+            operation: "sendAudio",
+            runtime,
+            fn: () => bot.api.sendAudio(chatId, file, { ...mediaParams }),
           });
         }
       } else {
-        await bot.api.sendDocument(chatId, file, {
-          ...mediaParams,
+        await withTelegramApiErrorLogging({
+          operation: "sendDocument",
+          runtime,
+          fn: () => bot.api.sendDocument(chatId, file, { ...mediaParams }),
         });
       }
       if (replyToId && !hasReplied) {
@@ -247,8 +262,91 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
-): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
+): Promise<{
+  path: string;
+  contentType?: string;
+  placeholder: string;
+  stickerMetadata?: StickerMetadata;
+} | null> {
   const msg = ctx.message;
+
+  // Handle stickers separately - only static stickers (WEBP) are supported
+  if (msg.sticker) {
+    const sticker = msg.sticker;
+    // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+    if (sticker.is_animated || sticker.is_video) {
+      logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
+      return null;
+    }
+    if (!sticker.file_id) return null;
+
+    try {
+      const file = await ctx.getFile();
+      if (!file.file_path) {
+        logVerbose("telegram: getFile returned no file_path for sticker");
+        return null;
+      }
+      const fetchImpl = proxyFetch ?? globalThis.fetch;
+      if (!fetchImpl) {
+        logVerbose("telegram: fetch not available for sticker download");
+        return null;
+      }
+      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+      const fetched = await fetchRemoteMedia({
+        url,
+        fetchImpl,
+        filePathHint: file.file_path,
+      });
+      const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
+
+      // Check sticker cache for existing description
+      const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+      if (cached) {
+        logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
+        const fileId = sticker.file_id ?? cached.fileId;
+        const emoji = sticker.emoji ?? cached.emoji;
+        const setName = sticker.set_name ?? cached.setName;
+        if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
+          // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
+          cacheSticker({
+            ...cached,
+            fileId,
+            emoji,
+            setName,
+          });
+        }
+        return {
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: "<media:sticker>",
+          stickerMetadata: {
+            emoji,
+            setName,
+            fileId,
+            fileUniqueId: sticker.file_unique_id,
+            cachedDescription: cached.description,
+          },
+        };
+      }
+
+      // Cache miss - return metadata for vision processing
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji: sticker.emoji ?? undefined,
+          setName: sticker.set_name ?? undefined,
+          fileId: sticker.file_id,
+          fileUniqueId: sticker.file_unique_id,
+        },
+      };
+    } catch (err) {
+      logVerbose(`telegram: failed to process sticker: ${String(err)}`);
+      return null;
+    }
+  }
+
   const m =
     msg.photo?.[msg.photo.length - 1] ?? msg.video ?? msg.document ?? msg.audio ?? msg.voice;
   if (!m?.file_id) return null;
@@ -353,11 +451,17 @@ async function sendTelegramText(
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   try {
-    const res = await bot.api.sendMessage(chatId, htmlText, {
-      parse_mode: "HTML",
-      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-      ...baseParams,
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
+      fn: () =>
+        bot.api.sendMessage(chatId, htmlText, {
+          parse_mode: "HTML",
+          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...baseParams,
+        }),
     });
     return res.message_id;
   } catch (err) {
@@ -365,10 +469,15 @@ async function sendTelegramText(
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const fallbackText = opts?.plainText ?? text;
-      const res = await bot.api.sendMessage(chatId, fallbackText, {
-        ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-        ...baseParams,
+      const res = await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, fallbackText, {
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...baseParams,
+          }),
       });
       return res.message_id;
     }

@@ -1,28 +1,28 @@
 ---
 summary: "PeekabooBridge integration for macOS UI automation"
 read_when:
-  - Hosting PeekabooBridge in Clawdbot.app
+  - Hosting PeekabooBridge in Moltbot.app
   - Integrating Peekaboo via Swift Package Manager
   - Changing PeekabooBridge protocol/paths
 ---
 # Peekaboo Bridge (macOS UI automation)
 
-Clawdbot can host **PeekabooBridge** as a local, permission‑aware UI automation
+Moltbot can host **PeekabooBridge** as a local, permission‑aware UI automation
 broker. This lets the `peekaboo` CLI drive UI automation while reusing the
 macOS app’s TCC permissions.
 
 ## What this is (and isn’t)
 
-- **Host**: Clawdbot.app can act as a PeekabooBridge host.
-- **Client**: use the `peekaboo` CLI (no separate `clawdbot ui ...` surface).
-- **UI**: visual overlays stay in Peekaboo.app; Clawdbot is a thin broker host.
+- **Host**: Moltbot.app can act as a PeekabooBridge host.
+- **Client**: use the `peekaboo` CLI (no separate `moltbot ui ...` surface).
+- **UI**: visual overlays stay in Peekaboo.app; Moltbot is a thin broker host.
 
 ## Enable the bridge
 
 In the macOS app:
 - Settings → **Enable Peekaboo Bridge**
 
-When enabled, Clawdbot starts a local UNIX socket server. If disabled, the host
+When enabled, Moltbot starts a local UNIX socket server. If disabled, the host
 is stopped and `peekaboo` will fall back to other available hosts.
 
 ## Client discovery order
@@ -31,7 +31,7 @@ Peekaboo clients typically try hosts in this order:
 
 1. Peekaboo.app (full UX)
 2. Claude.app (if installed)
-3. Clawdbot.app (thin broker)
+3. Moltbot.app (thin broker)
 
 Use `peekaboo bridge status --verbose` to see which host is active and which
 socket path is in use. You can override with:
@@ -43,7 +43,7 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 ## Security & permissions
 
 - The bridge validates **caller code signatures**; an allowlist of TeamIDs is
-  enforced (Peekaboo host TeamID + Clawdbot app TeamID).
+  enforced (Peekaboo host TeamID + Moltbot app TeamID).
 - Requests time out after ~10 seconds.
 - If required permissions are missing, the bridge returns a clear error message
   rather than launching System Settings.
@@ -58,5 +58,5 @@ If you need longer retention, re‑capture from the client.
 - If `peekaboo` reports “bridge client is not authorized”, ensure the client is
   properly signed or run the host with `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1`
   in **debug** mode only.
-- If no hosts are found, open one of the host apps (Peekaboo.app or Clawdbot.app)
+- If no hosts are found, open one of the host apps (Peekaboo.app or Moltbot.app)
   and confirm permissions are granted.

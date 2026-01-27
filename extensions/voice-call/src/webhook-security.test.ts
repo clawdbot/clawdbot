@@ -221,13 +221,40 @@ describe("verifyTwilioWebhook", () => {
         rawBody: postBody,
         url: "http://127.0.0.1:3334/voice/webhook",
         method: "POST",
+        remoteAddress: "203.0.113.10",
       },
       authToken,
-      { allowNgrokFreeTier: true },
+      { allowNgrokFreeTierLoopbackBypass: true },
     );
 
     expect(result.ok).toBe(false);
     expect(result.isNgrokFreeTier).toBe(true);
     expect(result.reason).toMatch(/Invalid signature/);
+  });
+
+  it("allows invalid signatures for ngrok free tier only on loopback", () => {
+    const authToken = "test-auth-token";
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "127.0.0.1:3334",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "local.ngrok-free.app",
+          "x-twilio-signature": "invalid",
+        },
+        rawBody: postBody,
+        url: "http://127.0.0.1:3334/voice/webhook",
+        method: "POST",
+        remoteAddress: "127.0.0.1",
+      },
+      authToken,
+      { allowNgrokFreeTierLoopbackBypass: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.isNgrokFreeTier).toBe(true);
+    expect(result.reason).toMatch(/compatibility mode/);
   });
 });

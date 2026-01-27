@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
@@ -8,7 +8,7 @@ import {
 
 describe("applyOpenAICodexModelDefault", () => {
   it("sets openai-codex default when model is unset", () => {
-    const cfg: ClawdbotConfig = { agents: { defaults: {} } };
+    const cfg: MoltbotConfig = { agents: { defaults: {} } };
     const applied = applyOpenAICodexModelDefault(cfg);
     expect(applied.changed).toBe(true);
     expect(applied.next.agents?.defaults?.model).toEqual({
@@ -17,7 +17,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("sets openai-codex default when model is openai/*", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: { defaults: { model: "openai/gpt-5.2" } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -28,7 +28,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("does not override openai-codex/*", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: { defaults: { model: "openai-codex/gpt-5.2" } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -37,7 +37,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("does not override non-openai models", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);

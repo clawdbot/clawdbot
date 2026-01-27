@@ -16,16 +16,16 @@ describe("logs.tail", () => {
   });
 
   it("falls back to latest rolling log file when today is missing", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-logs-"));
-    const older = path.join(tempDir, "clawdbot-2026-01-20.log");
-    const newer = path.join(tempDir, "clawdbot-2026-01-21.log");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-logs-"));
+    const older = path.join(tempDir, "moltbot-2026-01-20.log");
+    const newer = path.join(tempDir, "moltbot-2026-01-21.log");
 
     await fs.writeFile(older, '{"msg":"old"}\n');
     await fs.writeFile(newer, '{"msg":"new"}\n');
     await fs.utimes(older, new Date(0), new Date(0));
     await fs.utimes(newer, new Date(), new Date());
 
-    setLoggerOverride({ file: path.join(tempDir, "clawdbot-2026-01-22.log") });
+    setLoggerOverride({ file: path.join(tempDir, "moltbot-2026-01-22.log") });
 
     const respond = vi.fn();
     await logsHandlers["logs.tail"]({

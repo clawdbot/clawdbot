@@ -1,11 +1,11 @@
 ---
-summary: "SSH tunnel setup for Clawdbot.app connecting to a remote gateway"
+summary: "SSH tunnel setup for Moltbot.app connecting to a remote gateway"
 read_when: "Connecting the macOS app to a remote gateway over SSH"
 ---
 
-# Running Clawdbot.app with a Remote Gateway
+# Running Moltbot.app with a Remote Gateway
 
-Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
+Moltbot.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
 
 ## Overview
 
@@ -13,7 +13,7 @@ Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows
 ┌─────────────────────────────────────────────────────────────┐
 │                        Client Machine                          │
 │                                                              │
-│  Clawdbot.app ──► ws://127.0.0.1:18789 (local port)           │
+│  Moltbot.app ──► ws://127.0.0.1:18789 (local port)           │
 │                     │                                        │
 │                     ▼                                        │
 │  SSH Tunnel ────────────────────────────────────────────────│
@@ -65,11 +65,11 @@ launchctl setenv CLAWDBOT_GATEWAY_TOKEN "<your-token>"
 ssh -N remote-gateway &
 ```
 
-### Step 5: Restart Clawdbot.app
+### Step 5: Restart Moltbot.app
 
 ```bash
-# Quit Clawdbot.app (⌘Q), then reopen:
-open /path/to/Clawdbot.app
+# Quit Moltbot.app (⌘Q), then reopen:
+open /path/to/Moltbot.app
 ```
 
 The app will now connect to the remote gateway through the SSH tunnel.
@@ -150,4 +150,4 @@ launchctl bootout gui/$UID/com.clawdbot.ssh-tunnel
 | `KeepAlive` | Automatically restarts tunnel if it crashes |
 | `RunAtLoad` | Starts tunnel when the agent loads |
 
-Clawdbot.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
+Moltbot.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.

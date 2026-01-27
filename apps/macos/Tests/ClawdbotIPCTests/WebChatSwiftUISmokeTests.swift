@@ -1,18 +1,18 @@
 import AppKit
-import ClawdbotChatUI
+import MoltbotChatUI
 import Foundation
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized)
 @MainActor
 struct WebChatSwiftUISmokeTests {
-    private struct TestTransport: ClawdbotChatTransport, Sendable {
-        func requestHistory(sessionKey: String) async throws -> ClawdbotChatHistoryPayload {
+    private struct TestTransport: MoltbotChatTransport, Sendable {
+        func requestHistory(sessionKey: String) async throws -> MoltbotChatHistoryPayload {
             let json = """
             {"sessionKey":"\(sessionKey)","sessionId":null,"messages":[],"thinkingLevel":"off"}
             """
-            return try JSONDecoder().decode(ClawdbotChatHistoryPayload.self, from: Data(json.utf8))
+            return try JSONDecoder().decode(MoltbotChatHistoryPayload.self, from: Data(json.utf8))
         }
 
         func sendMessage(
@@ -20,17 +20,17 @@ struct WebChatSwiftUISmokeTests {
             message _: String,
             thinking _: String,
             idempotencyKey _: String,
-            attachments _: [ClawdbotChatAttachmentPayload]) async throws -> ClawdbotChatSendResponse
+            attachments _: [MoltbotChatAttachmentPayload]) async throws -> MoltbotChatSendResponse
         {
             let json = """
             {"runId":"\(UUID().uuidString)","status":"ok"}
             """
-            return try JSONDecoder().decode(ClawdbotChatSendResponse.self, from: Data(json.utf8))
+            return try JSONDecoder().decode(MoltbotChatSendResponse.self, from: Data(json.utf8))
         }
 
         func requestHealth(timeoutMs _: Int) async throws -> Bool { true }
 
-        func events() -> AsyncStream<ClawdbotChatTransportEvent> {
+        func events() -> AsyncStream<MoltbotChatTransportEvent> {
             AsyncStream { continuation in
                 continuation.finish()
             }

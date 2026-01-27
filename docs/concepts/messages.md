@@ -7,7 +7,7 @@ read_when:
 ---
 # Messages
 
-This page ties together how Clawdbot handles inbound messages, sessions, queueing,
+This page ties together how Moltbot handles inbound messages, sessions, queueing,
 streaming, and reasoning visibility.
 
 ## Message flow (high level)
@@ -29,7 +29,7 @@ See [Configuration](/gateway/configuration) for full schema.
 
 ## Inbound dedupe
 
-Channels can redeliver the same message after reconnects. Clawdbot keeps a
+Channels can redeliver the same message after reconnects. Moltbot keeps a
 short-lived cache keyed by channel/account/peer/session/message id so duplicate
 deliveries do not trigger another agent run.
 
@@ -75,7 +75,7 @@ Details: [Session management](/concepts/session).
 
 ## Inbound bodies and history context
 
-Clawdbot separates the **prompt body** from the **command body**:
+Moltbot separates the **prompt body** from the **command body**:
 - `Body`: prompt text sent to the agent. This may include channel envelopes and
   optional history wrappers.
 - `CommandBody`: raw user text for directive/command parsing.
@@ -127,7 +127,7 @@ Details: [Streaming + chunking](/concepts/streaming).
 
 ## Reasoning visibility and tokens
 
-Clawdbot can expose or hide model reasoning:
+Moltbot can expose or hide model reasoning:
 - `/reasoning on|off|stream` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
 - Telegram supports reasoning stream into the draft bubble.

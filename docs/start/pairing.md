@@ -3,12 +3,12 @@ summary: "Pairing overview: approve who can DM you + which nodes can join"
 read_when:
   - Setting up DM access control
   - Pairing a new iOS/Android node
-  - Reviewing Clawdbot security posture
+  - Reviewing Moltbot security posture
 ---
 
 # Pairing
 
-“Pairing” is Clawdbot’s explicit **owner approval** step.
+“Pairing” is Moltbot’s explicit **owner approval** step.
 It is used in two places:
 
 1) **DM pairing** (who is allowed to talk to the bot)
@@ -30,8 +30,8 @@ Pairing codes:
 ### Approve a sender
 
 ```bash
-clawdbot pairing list telegram
-clawdbot pairing approve telegram <CODE>
+moltbot pairing list telegram
+moltbot pairing approve telegram <CODE>
 ```
 
 Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
@@ -53,9 +53,9 @@ creates a device pairing request that must be approved.
 ### Approve a node device
 
 ```bash
-clawdbot devices list
-clawdbot devices approve <requestId>
-clawdbot devices reject <requestId>
+moltbot devices list
+moltbot devices approve <requestId>
+moltbot devices reject <requestId>
 ```
 
 ### Where the state lives
@@ -66,7 +66,7 @@ Stored under `~/.clawdbot/devices/`:
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `clawdbot nodes pending/approve`) is a
+- The legacy `node.pair.*` API (CLI: `moltbot nodes pending/approve`) is a
   separate gateway-owned pairing store. WS nodes still require device pairing.
 
 

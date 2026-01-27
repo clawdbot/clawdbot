@@ -41,13 +41,13 @@ final class AppState {
     }
 
     var onboardingSeen: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.onboardingSeen, forKey: "clawdbot.onboardingSeen") }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.onboardingSeen, forKey: "moltbot.onboardingSeen") }
         }
     }
 
     var debugPaneEnabled: Bool {
         didSet {
-            self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "clawdbot.debugPaneEnabled") }
+            self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "moltbot.debugPaneEnabled") }
             CanvasManager.shared.refreshDebugStatus()
         }
     }
@@ -229,11 +229,11 @@ final class AppState {
 
     init(preview: Bool = false) {
         self.isPreview = preview || ProcessInfo.processInfo.isRunningTests
-        let onboardingSeen = UserDefaults.standard.bool(forKey: "clawdbot.onboardingSeen")
+        let onboardingSeen = UserDefaults.standard.bool(forKey: "moltbot.onboardingSeen")
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
-        self.debugPaneEnabled = UserDefaults.standard.bool(forKey: "clawdbot.debugPaneEnabled")
+        self.debugPaneEnabled = UserDefaults.standard.bool(forKey: "moltbot.debugPaneEnabled")
         let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
@@ -275,7 +275,7 @@ final class AppState {
             UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let configRoot = ClawdbotConfigFile.loadDict()
+        let configRoot = MoltbotConfigFile.loadDict()
         let configRemoteUrl = GatewayRemoteConfig.resolveUrlString(root: configRoot)
         let configRemoteTransport = GatewayRemoteConfig.resolveTransport(root: configRoot)
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
@@ -353,7 +353,7 @@ final class AppState {
     }
 
     private func startConfigWatcher() {
-        let configUrl = ClawdbotConfigFile.url()
+        let configUrl = MoltbotConfigFile.url()
         self.configWatcher = ConfigFileWatcher(url: configUrl) { [weak self] in
             Task { @MainActor in
                 self?.applyConfigFromDisk()
@@ -363,7 +363,7 @@ final class AppState {
     }
 
     private func applyConfigFromDisk() {
-        let root = ClawdbotConfigFile.loadDict()
+        let root = MoltbotConfigFile.loadDict()
         self.applyConfigOverrides(root)
     }
 
@@ -451,7 +451,7 @@ final class AppState {
 
         Task { @MainActor in
             // Keep app-only connection settings local to avoid overwriting remote gateway config.
-            var root = ClawdbotConfigFile.loadDict()
+            var root = MoltbotConfigFile.loadDict()
             var gateway = root["gateway"] as? [String: Any] ?? [:]
             var changed = false
 
@@ -541,7 +541,7 @@ final class AppState {
             } else {
                 root["gateway"] = gateway
             }
-            ClawdbotConfigFile.saveDict(root)
+            MoltbotConfigFile.saveDict(root)
         }
     }
 
@@ -685,7 +685,7 @@ extension AppState {
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteIdentity = "~/.ssh/id_ed25519"
-        state.remoteProjectRoot = "~/Projects/clawdbot"
+        state.remoteProjectRoot = "~/Projects/moltbot"
         state.remoteCliPath = ""
         return state
     }

@@ -41,7 +41,7 @@ import { deliverSlackSlashReplies } from "./replies.js";
 
 type SlackBlock = { type: string; [key: string]: unknown };
 
-const SLACK_COMMAND_ARG_ACTION_ID = "clawdbot_cmdarg";
+const SLACK_COMMAND_ARG_ACTION_ID = "moltbot_cmdarg";
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
 
 function chunkItems<T>(items: T[], size: number): T[][] {
@@ -103,7 +103,7 @@ function buildSlackCommandArgMenuBlocks(params: {
   title: string;
   command: string;
   arg: string;
-  choices: string[];
+  choices: Array<{ value: string; label: string }>;
   userId: string;
 }) {
   const rows = chunkItems(params.choices, 5).map((choices) => ({
@@ -111,11 +111,11 @@ function buildSlackCommandArgMenuBlocks(params: {
     elements: choices.map((choice) => ({
       type: "button",
       action_id: SLACK_COMMAND_ARG_ACTION_ID,
-      text: { type: "plain_text", text: choice },
+      text: { type: "plain_text", text: choice.label },
       value: encodeSlackCommandArgValue({
         command: params.command,
         arg: params.arg,
-        value: choice,
+        value: choice.value,
         userId: params.userId,
       }),
     })),

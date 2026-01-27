@@ -27,7 +27,7 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
-export const ClawdbotSchema = z
+export const MoltbotSchema = z
   .object({
     meta: z
       .object({
@@ -134,8 +134,7 @@ export const ClawdbotSchema = z
     browser: z
       .object({
         enabled: z.boolean().optional(),
-        controlUrl: z.string().optional(),
-        controlToken: z.string().optional(),
+        evaluateEnabled: z.boolean().optional(),
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),

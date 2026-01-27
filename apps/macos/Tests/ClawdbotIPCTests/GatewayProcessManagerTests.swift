@@ -1,8 +1,8 @@
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 import os
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite(.serialized)
 @MainActor

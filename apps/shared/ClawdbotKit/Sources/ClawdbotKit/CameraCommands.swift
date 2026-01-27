@@ -1,38 +1,38 @@
 import Foundation
 
-public enum ClawdbotCameraCommand: String, Codable, Sendable {
+public enum MoltbotCameraCommand: String, Codable, Sendable {
     case list = "camera.list"
     case snap = "camera.snap"
     case clip = "camera.clip"
 }
 
-public enum ClawdbotCameraFacing: String, Codable, Sendable {
+public enum MoltbotCameraFacing: String, Codable, Sendable {
     case back
     case front
 }
 
-public enum ClawdbotCameraImageFormat: String, Codable, Sendable {
+public enum MoltbotCameraImageFormat: String, Codable, Sendable {
     case jpg
     case jpeg
 }
 
-public enum ClawdbotCameraVideoFormat: String, Codable, Sendable {
+public enum MoltbotCameraVideoFormat: String, Codable, Sendable {
     case mp4
 }
 
-public struct ClawdbotCameraSnapParams: Codable, Sendable, Equatable {
-    public var facing: ClawdbotCameraFacing?
+public struct MoltbotCameraSnapParams: Codable, Sendable, Equatable {
+    public var facing: MoltbotCameraFacing?
     public var maxWidth: Int?
     public var quality: Double?
-    public var format: ClawdbotCameraImageFormat?
+    public var format: MoltbotCameraImageFormat?
     public var deviceId: String?
     public var delayMs: Int?
 
     public init(
-        facing: ClawdbotCameraFacing? = nil,
+        facing: MoltbotCameraFacing? = nil,
         maxWidth: Int? = nil,
         quality: Double? = nil,
-        format: ClawdbotCameraImageFormat? = nil,
+        format: MoltbotCameraImageFormat? = nil,
         deviceId: String? = nil,
         delayMs: Int? = nil)
     {
@@ -45,18 +45,18 @@ public struct ClawdbotCameraSnapParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct ClawdbotCameraClipParams: Codable, Sendable, Equatable {
-    public var facing: ClawdbotCameraFacing?
+public struct MoltbotCameraClipParams: Codable, Sendable, Equatable {
+    public var facing: MoltbotCameraFacing?
     public var durationMs: Int?
     public var includeAudio: Bool?
-    public var format: ClawdbotCameraVideoFormat?
+    public var format: MoltbotCameraVideoFormat?
     public var deviceId: String?
 
     public init(
-        facing: ClawdbotCameraFacing? = nil,
+        facing: MoltbotCameraFacing? = nil,
         durationMs: Int? = nil,
         includeAudio: Bool? = nil,
-        format: ClawdbotCameraVideoFormat? = nil,
+        format: MoltbotCameraVideoFormat? = nil,
         deviceId: String? = nil)
     {
         self.facing = facing

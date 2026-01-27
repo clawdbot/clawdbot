@@ -68,7 +68,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
       vi.mocked(abortEmbeddedPiRun).mockClear();
       return await fn(home);
     },
-    { prefix: "clawdbot-triggers-" },
+    { prefix: "moltbot-triggers-" },
   );
 }
 
@@ -125,7 +125,7 @@ describe("trigger handling", () => {
             },
           },
           session: {
-            store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
+            store: join(tmpdir(), `moltbot-session-test-${Date.now()}.json`),
           },
         },
       );
@@ -159,7 +159,7 @@ describe("trigger handling", () => {
             },
           },
           session: {
-            store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
+            store: join(tmpdir(), `moltbot-session-test-${Date.now()}.json`),
           },
         },
       );
@@ -190,7 +190,7 @@ describe("trigger handling", () => {
             },
           },
           session: {
-            store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
+            store: join(tmpdir(), `moltbot-session-test-${Date.now()}.json`),
           },
         },
       );

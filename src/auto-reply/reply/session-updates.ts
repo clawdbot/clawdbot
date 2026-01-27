@@ -3,14 +3,14 @@ import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
 export async function prependSystemEvents(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
@@ -21,7 +21,11 @@ export async function prependSystemEvents(params: {
     if (!trimmed) return null;
     const lower = trimmed.toLowerCase();
     if (lower.includes("reason periodic")) return null;
-    if (lower.includes("heartbeat")) return null;
+    // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat"
+    // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this
+    if (lower.startsWith("read heartbeat.md")) return null;
+    // Also filter heartbeat poll/wake noise
+    if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) return null;
     if (trimmed.startsWith("Node:")) {
       return trimmed.replace(/ · last input [^·]+/i, "").trim();
     }
@@ -37,7 +41,7 @@ export async function prependSystemEvents(params: {
     }
   };
 
-  const resolveSystemEventTimezone = (cfg: ClawdbotConfig) => {
+  const resolveSystemEventTimezone = (cfg: MoltbotConfig) => {
     const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
     if (!raw) return { mode: "local" as const };
     const lowered = raw.toLowerCase();
@@ -90,7 +94,7 @@ export async function prependSystemEvents(params: {
     return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ""}`;
   };
 
-  const formatSystemEventTimestamp = (ts: number, cfg: ClawdbotConfig) => {
+  const formatSystemEventTimestamp = (ts: number, cfg: MoltbotConfig) => {
     const date = new Date(ts);
     if (Number.isNaN(date.getTime())) return "unknown-time";
     const zone = resolveSystemEventTimezone(cfg);
@@ -128,7 +132,7 @@ export async function ensureSkillSnapshot(params: {
   sessionId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
 }): Promise<{

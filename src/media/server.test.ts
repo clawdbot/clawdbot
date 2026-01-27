@@ -7,12 +7,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 const MEDIA_DIR = path.join(process.cwd(), "tmp-media-test");
 const cleanOldMedia = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("./store.js", () => ({
-  getMediaDir: () => MEDIA_DIR,
-  cleanOldMedia,
-}));
+vi.mock("./store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./store.js")>();
+  return {
+    ...actual,
+    getMediaDir: () => MEDIA_DIR,
+    cleanOldMedia,
+  };
+});
 
 const { startMediaServer } = await import("./server.js");
+const { MEDIA_MAX_BYTES } = await import("./store.js");
 
 const waitForFileRemoval = async (file: string, timeoutMs = 200) => {
   const start = Date.now();
@@ -82,6 +87,29 @@ describe("media server", () => {
     const res = await fetch(`http://localhost:${port}/media/link-out`);
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
+    await new Promise((r) => server.close(r));
+  });
+
+  it("rejects invalid media ids", async () => {
+    const file = path.join(MEDIA_DIR, "file2");
+    await fs.writeFile(file, "hello");
+    const server = await startMediaServer(0, 5_000);
+    const port = (server.address() as AddressInfo).port;
+    const res = await fetch(`http://localhost:${port}/media/invalid%20id`);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
+    await new Promise((r) => server.close(r));
+  });
+
+  it("rejects oversized media files", async () => {
+    const file = path.join(MEDIA_DIR, "big");
+    await fs.writeFile(file, "");
+    await fs.truncate(file, MEDIA_MAX_BYTES + 1);
+    const server = await startMediaServer(0, 5_000);
+    const port = (server.address() as AddressInfo).port;
+    const res = await fetch(`http://localhost:${port}/media/big`);
+    expect(res.status).toBe(413);
+    expect(await res.text()).toBe("too large");
     await new Promise((r) => server.close(r));
   });
 });

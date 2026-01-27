@@ -51,7 +51,7 @@ export function formatElevatedUnavailableText(params: {
   }
   if (params.sessionKey) {
     lines.push(
-      `See: ${formatCliCommand(`clawdbot sandbox explain --session ${params.sessionKey}`)}`,
+      `See: ${formatCliCommand(`moltbot sandbox explain --session ${params.sessionKey}`)}`,
     );
   }
   return lines.join("\n");

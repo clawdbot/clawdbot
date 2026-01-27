@@ -1,6 +1,6 @@
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
@@ -29,7 +29,7 @@ type ProviderBlockStreamingConfig = {
 };
 
 function resolveProviderBlockStreamingCoalesce(params: {
-  cfg: ClawdbotConfig | undefined;
+  cfg: MoltbotConfig | undefined;
   providerKey?: TextChunkProvider;
   accountId?: string | null;
 }): BlockStreamingCoalesceConfig | undefined {
@@ -51,7 +51,7 @@ export type BlockStreamingCoalescing = {
 };
 
 export function resolveBlockStreamingChunking(
-  cfg: ClawdbotConfig | undefined,
+  cfg: MoltbotConfig | undefined,
   provider?: string,
   accountId?: string | null,
 ): {
@@ -88,7 +88,7 @@ export function resolveBlockStreamingChunking(
 }
 
 export function resolveBlockStreamingCoalescing(
-  cfg: ClawdbotConfig | undefined,
+  cfg: MoltbotConfig | undefined,
   provider?: string,
   accountId?: string | null,
   chunking?: {

@@ -1,12 +1,12 @@
 ---
-summary: "End-to-end guide for running Clawdbot as a personal assistant with safety cautions"
+summary: "End-to-end guide for running Moltbot as a personal assistant with safety cautions"
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
 ---
-# Building a personal assistant with Clawdbot (Clawd-style)
+# Building a personal assistant with Moltbot (Clawd-style)
 
-Clawdbot is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents. Plugins add Mattermost. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
+Moltbot is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents. Plugins add Mattermost. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
 
 ## ⚠️ Safety first
 
@@ -23,19 +23,19 @@ Start conservative:
 ## Prerequisites
 
 - Node **22+**
-- Clawdbot available on PATH (recommended: global install)
+- Moltbot available on PATH (recommended: global install)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ```bash
-npm install -g clawdbot@latest
-# or: pnpm add -g clawdbot@latest
+npm install -g moltbot@latest
+# or: pnpm add -g moltbot@latest
 ```
 
 From source (development):
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/moltbot/moltbot.git
+cd moltbot
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
@@ -56,28 +56,28 @@ Your Phone (personal)          Second Phone (assistant)
                                        ▼
                               ┌─────────────────┐
                               │  Your Mac       │
-                              │  (clawdbot)      │
+                              │  (moltbot)      │
                               │    Pi agent     │
                               └─────────────────┘
 ```
 
-If you link your personal WhatsApp to Clawdbot, every message to you becomes “agent input”. That’s rarely what you want.
+If you link your personal WhatsApp to Moltbot, every message to you becomes “agent input”. That’s rarely what you want.
 
 ## 5-minute quick start
 
 1) Pair WhatsApp Web (shows QR; scan with the assistant phone):
 
 ```bash
-clawdbot channels login
+moltbot channels login
 ```
 
 2) Start the Gateway (leave it running):
 
 ```bash
-clawdbot gateway --port 18789
+moltbot gateway --port 18789
 ```
 
-3) Put a minimal config in `~/.clawdbot/clawdbot.json`:
+3) Put a minimal config in `~/.clawdbot/moltbot.json`:
 
 ```json5
 {
@@ -87,18 +87,18 @@ clawdbot gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, we auto-open the dashboard with your gateway token and print the tokenized link. To reopen later: `clawdbot dashboard`.
+When onboarding finishes, we auto-open the dashboard with your gateway token and print the tokenized link. To reopen later: `moltbot dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
 Clawd reads operating instructions and “memory” from its workspace directory.
 
-By default, Clawdbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it).
+By default, Moltbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it).
 
 Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up. If git is installed, brand-new workspaces are auto-initialized.
 
 ```bash
-clawdbot setup
+moltbot setup
 ```
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
@@ -126,7 +126,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 ## The config that turns it into “an assistant”
 
-Clawdbot defaults to a good assistant setup, but you’ll usually want to tune:
+Moltbot defaults to a good assistant setup, but you’ll usually want to tune:
 - persona/instructions in `SOUL.md`
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
@@ -178,13 +178,13 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-By default, Clawdbot runs a heartbeat every 30 minutes with the prompt:
+By default, Moltbot runs a heartbeat every 30 minutes with the prompt:
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
-- If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), Clawdbot skips the heartbeat run to save API calls.
+- If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), Moltbot skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), Clawdbot suppresses outbound delivery for that heartbeat.
+- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), Moltbot suppresses outbound delivery for that heartbeat.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
 ```json5
@@ -209,25 +209,25 @@ Here’s the screenshot.
 MEDIA:/tmp/screenshot.png
 ```
 
-Clawdbot extracts these and sends them as media alongside the text.
+Moltbot extracts these and sends them as media alongside the text.
 
 ## Operations checklist
 
 ```bash
-clawdbot status          # local status (creds, sessions, queued events)
-clawdbot status --all    # full diagnosis (read-only, pasteable)
-clawdbot status --deep   # adds gateway health probes (Telegram + Discord)
-clawdbot health --json   # gateway health snapshot (WS)
+moltbot status          # local status (creds, sessions, queued events)
+moltbot status --all    # full diagnosis (read-only, pasteable)
+moltbot status --deep   # adds gateway health probes (Telegram + Discord)
+moltbot health --json   # gateway health snapshot (WS)
 ```
 
-Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
+Logs live under `/tmp/moltbot/` (default: `moltbot-YYYY-MM-DD.log`).
 
 ## Next steps
 
 - WebChat: [WebChat](/web/webchat)
 - Gateway ops: [Gateway runbook](/gateway)
 - Cron + wakeups: [Cron jobs](/automation/cron-jobs)
-- macOS menu bar companion: [Clawdbot macOS app](/platforms/macos)
+- macOS menu bar companion: [Moltbot macOS app](/platforms/macos)
 - iOS node app: [iOS app](/platforms/ios)
 - Android node app: [Android app](/platforms/android)
 - Windows status: [Windows (WSL2)](/platforms/windows)

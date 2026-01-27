@@ -1,5 +1,5 @@
-import { LogService } from "matrix-bot-sdk";
-import type { MatrixClient } from "matrix-bot-sdk";
+import { LogService } from "@vector-im/matrix-bot-sdk";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 
 import type { CoreConfig } from "../types.js";
 import { createMatrixClient } from "./create-client.js";
@@ -157,7 +157,7 @@ export async function waitForMatrixSync(_params: {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  // matrix-bot-sdk handles sync internally in start()
+  // @vector-im/matrix-bot-sdk handles sync internally in start()
   // This is kept for API compatibility but is essentially a no-op now
 }
 

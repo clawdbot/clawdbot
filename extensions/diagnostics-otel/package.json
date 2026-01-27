@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/diagnostics-otel",
-  "version": "2026.1.25",
+  "name": "@moltbot/diagnostics-otel",
+  "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot diagnostics OpenTelemetry exporter",
-  "clawdbot": {
+  "description": "Moltbot diagnostics OpenTelemetry exporter",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

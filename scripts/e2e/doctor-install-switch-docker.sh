@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="clawdbot-doctor-install-switch-e2e"
+IMAGE_NAME="moltbot-doctor-install-switch-e2e"
 
 echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
@@ -17,10 +17,10 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
   export npm_config_audit=false
 
   # Stub systemd/loginctl so doctor + daemon flows work in Docker.
-  export PATH="/tmp/clawdbot-bin:$PATH"
-  mkdir -p /tmp/clawdbot-bin
+  export PATH="/tmp/moltbot-bin:$PATH"
+  mkdir -p /tmp/moltbot-bin
 
-  cat > /tmp/clawdbot-bin/systemctl <<"SYSTEMCTL"
+  cat > /tmp/moltbot-bin/systemctl <<"SYSTEMCTL"
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -54,9 +54,9 @@ case "$cmd" in
     ;;
 esac
 SYSTEMCTL
-  chmod +x /tmp/clawdbot-bin/systemctl
+  chmod +x /tmp/moltbot-bin/systemctl
 
-  cat > /tmp/clawdbot-bin/loginctl <<"LOGINCTL"
+  cat > /tmp/moltbot-bin/loginctl <<"LOGINCTL"
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -69,7 +69,7 @@ if [[ "$*" == *"enable-linger"* ]]; then
 fi
 exit 0
 LOGINCTL
-  chmod +x /tmp/clawdbot-bin/loginctl
+  chmod +x /tmp/moltbot-bin/loginctl
 
   # Install the npm-global variant from the local /app source.
   # `npm pack` can emit script output; keep only the tarball name.
@@ -80,8 +80,8 @@ LOGINCTL
   fi
   npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz"
 
-  npm_bin="/tmp/npm-prefix/bin/clawdbot"
-  npm_entry="/tmp/npm-prefix/lib/node_modules/clawdbot/dist/entry.js"
+  npm_bin="/tmp/npm-prefix/bin/moltbot"
+  npm_entry="/tmp/npm-prefix/lib/node_modules/moltbot/dist/entry.js"
   git_entry="/app/dist/entry.js"
 
   assert_entrypoint() {
@@ -113,13 +113,13 @@ LOGINCTL
     local doctor_expected="$5"
 
     echo "== Flow: $name =="
-    home_dir=$(mktemp -d "/tmp/clawdbot-switch-${name}.XXXXXX")
+    home_dir=$(mktemp -d "/tmp/moltbot-switch-${name}.XXXXXX")
     export HOME="$home_dir"
     export USER="testuser"
 
     eval "$install_cmd"
 
-    unit_path="$HOME/.config/systemd/user/clawdbot-gateway.service"
+    unit_path="$HOME/.config/systemd/user/moltbot-gateway.service"
     if [ ! -f "$unit_path" ]; then
       echo "Missing unit file: $unit_path"
       exit 1

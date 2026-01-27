@@ -124,7 +124,7 @@ function createBaseRun(params: {
 describe("runReplyAgent memory flush", () => {
   it("uses configured prompts for memory flush runs", async () => {
     runEmbeddedPiAgentMock.mockReset();
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-flush-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-flush-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -201,7 +201,7 @@ describe("runReplyAgent memory flush", () => {
   });
   it("skips memory flush after a prior flush in the same compaction cycle", async () => {
     runEmbeddedPiAgentMock.mockReset();
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-flush-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-flush-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {

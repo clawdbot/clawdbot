@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -12,7 +12,7 @@ type LineRuntimeMocks = {
 
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   const writeConfigFile = vi.fn(async () => {});
-  const resolveLineAccount = vi.fn(({ cfg, accountId }: { cfg: ClawdbotConfig; accountId?: string }) => {
+  const resolveLineAccount = vi.fn(({ cfg, accountId }: { cfg: MoltbotConfig; accountId?: string }) => {
     const lineConfig = (cfg.channels?.line ?? {}) as {
       tokenFile?: string;
       secretFile?: string;
@@ -48,7 +48,7 @@ describe("linePlugin gateway.logoutAccount", () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
 
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       channels: {
         line: {
           tokenFile: "/tmp/token",
@@ -71,7 +71,7 @@ describe("linePlugin gateway.logoutAccount", () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
 
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       channels: {
         line: {
           accounts: {

@@ -5,21 +5,21 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>Clawdbot</string>
+    <string>Moltbot</string>
     <key>CFBundleIdentifier</key>
     <string>com.clawdbot.mac</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Clawdbot</string>
+    <string>Moltbot</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.1.25</string>
+    <string>2026.1.26</string>
     <key>CFBundleVersion</key>
-    <string>202601250</string>
+    <string>202601260</string>
     <key>CFBundleIconFile</key>
-    <string>Clawdbot</string>
+    <string>Moltbot</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -27,7 +27,7 @@
             <string>com.clawdbot.mac.deeplink</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>clawdbot</string>
+                <string>moltbot</string>
             </array>
         </dict>
     </array>
@@ -36,29 +36,29 @@
     <key>LSUIElement</key>
     <true/>
 
-    <key>ClawdbotBuildTimestamp</key>
+    <key>MoltbotBuildTimestamp</key>
     <string></string>
-    <key>ClawdbotGitCommit</key>
+    <key>MoltbotGitCommit</key>
     <string></string>
 
     <key>NSUserNotificationUsageDescription</key>
-    <string>Clawdbot needs notification permission to show alerts for agent actions.</string>
+    <string>Moltbot needs notification permission to show alerts for agent actions.</string>
     <key>NSScreenCaptureDescription</key>
-    <string>Clawdbot captures the screen when the agent needs screenshots for context.</string>
+    <string>Moltbot captures the screen when the agent needs screenshots for context.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Clawdbot can capture photos or short video clips when requested by the agent.</string>
+    <string>Moltbot can capture photos or short video clips when requested by the agent.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Clawdbot can share your location when requested by the agent.</string>
+	<string>Moltbot can share your location when requested by the agent.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Clawdbot can share your location when requested by the agent.</string>
+	<string>Moltbot can share your location when requested by the agent.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Clawdbot can share your location when requested by the agent.</string>
+	<string>Moltbot can share your location when requested by the agent.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clawdbot needs the mic for Voice Wake tests and agent audio capture.</string>
+	<string>Moltbot needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Clawdbot uses speech recognition to detect your Voice Wake trigger phrase.</string>
+    <string>Moltbot uses speech recognition to detect your Voice Wake trigger phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Clawdbot needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <string>Moltbot needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>

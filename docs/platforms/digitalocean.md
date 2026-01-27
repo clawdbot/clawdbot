@@ -1,32 +1,32 @@
 ---
-summary: "Clawdbot on DigitalOcean (cheapest paid VPS option)"
+summary: "Moltbot on DigitalOcean (simple paid VPS option)"
 read_when:
-  - Setting up Clawdbot on DigitalOcean
-  - Looking for cheap VPS hosting for Clawdbot
+  - Setting up Moltbot on DigitalOcean
+  - Looking for cheap VPS hosting for Moltbot
 ---
 
-# Clawdbot on DigitalOcean
+# Moltbot on DigitalOcean
 
 ## Goal
 
-Run a persistent Clawdbot Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
+Run a persistent Moltbot Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
-If you want something even cheaper, see [Oracle Cloud (Free Tier)](#oracle-cloud-free-alternative) at the bottom — it's **actually free forever**.
+If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
 
 ## Cost Comparison (2026)
 
 | Provider | Plan | Specs | Price/mo | Notes |
 |----------|------|-------|----------|-------|
-| **Oracle Cloud** | Always Free ARM | 4 OCPU, 24GB RAM | **$0** | Best value, requires ARM-compatible setup |
-| **Hetzner** | CX22 | 2 vCPU, 4GB RAM | €3.79 (~$4) | Cheapest paid, EU datacenters |
-| **DigitalOcean** | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
-| **Vultr** | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
-| **Linode** | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity / signup quirks |
+| Hetzner | CX22 | 2 vCPU, 4GB RAM | €3.79 (~$4) | Cheapest paid option |
+| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
+| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
+| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
 
-**Recommendation:** 
-- **Free:** Oracle Cloud ARM (if you can handle the signup process)
-- **Paid:** Hetzner CX22 (best specs per dollar) — see [Hetzner guide](/platforms/hetzner)
-- **Easy:** DigitalOcean (this guide) — beginner-friendly UI
+**Picking a provider:**
+- DigitalOcean: simplest UX + predictable setup (this guide)
+- Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
+- Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
 
 ---
 
@@ -54,7 +54,7 @@ If you want something even cheaper, see [Oracle Cloud (Free Tier)](#oracle-cloud
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Install Clawdbot
+## 3) Install Moltbot
 
 ```bash
 # Update system
@@ -64,17 +64,17 @@ apt update && apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt install -y nodejs
 
-# Install Clawdbot
-curl -fsSL https://clawd.bot/install.sh | bash
+# Install Moltbot
+curl -fsSL https://molt.bot/install.sh | bash
 
 # Verify
-clawdbot --version
+moltbot --version
 ```
 
 ## 4) Run Onboarding
 
 ```bash
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 The wizard will walk you through:
@@ -87,13 +87,13 @@ The wizard will walk you through:
 
 ```bash
 # Check status
-clawdbot status
+moltbot status
 
 # Check service
-systemctl --user status clawdbot-gateway.service
+systemctl --user status moltbot-gateway.service
 
 # View logs
-journalctl --user -u clawdbot-gateway.service -f
+journalctl --user -u moltbot-gateway.service -f
 ```
 
 ## 6) Access the Dashboard
@@ -115,8 +115,8 @@ curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
 # Configure Gateway to use Tailscale Serve
-clawdbot config set gateway.tailscale.mode serve
-clawdbot gateway restart
+moltbot config set gateway.tailscale.mode serve
+moltbot gateway restart
 ```
 
 Open: `https://<magicdns>/`
@@ -127,8 +127,8 @@ Notes:
 
 **Option C: Tailnet bind (no Serve)**
 ```bash
-clawdbot config set gateway.bind tailnet
-clawdbot gateway restart
+moltbot config set gateway.bind tailnet
+moltbot gateway restart
 ```
 
 Open: `http://<tailscale-ip>:18789` (token required).
@@ -137,13 +137,13 @@ Open: `http://<tailscale-ip>:18789` (token required).
 
 ### Telegram
 ```bash
-clawdbot pairing list telegram
-clawdbot pairing approve telegram <CODE>
+moltbot pairing list telegram
+moltbot pairing approve telegram <CODE>
 ```
 
 ### WhatsApp
 ```bash
-clawdbot channels login whatsapp
+moltbot channels login whatsapp
 # Scan QR code
 ```
 
@@ -185,14 +185,14 @@ All state lives in:
 
 These survive reboots. Back them up periodically:
 ```bash
-tar -czvf clawdbot-backup.tar.gz ~/.clawdbot ~/clawd
+tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
 ```
 
 ---
 
 ## Oracle Cloud Free Alternative
 
-Oracle Cloud offers **Always Free** ARM instances that are significantly more powerful:
+Oracle Cloud offers **Always Free** ARM instances that are significantly more powerful than any paid option here — for $0/month.
 
 | What you get | Specs |
 |--------------|-------|
@@ -201,19 +201,11 @@ Oracle Cloud offers **Always Free** ARM instances that are significantly more po
 | **200GB storage** | Block volume |
 | **Forever free** | No credit card charges |
 
-### Quick setup:
-1. Sign up at [oracle.com/cloud/free](https://www.oracle.com/cloud/free/)
-2. Create a VM.Standard.A1.Flex instance (ARM)
-3. Choose Oracle Linux or Ubuntu
-4. Allocate up to 4 OCPU / 24GB RAM within free tier
-5. Follow the same Clawdbot install steps above
-
 **Caveats:**
 - Signup can be finicky (retry if it fails)
 - ARM architecture — most things work, but some binaries need ARM builds
-- Oracle may reclaim idle instances (keep them active)
 
-For the full Oracle guide, see the [community docs](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
+For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips and troubleshooting the enrollment process, see this [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
 
 ---
 
@@ -221,9 +213,9 @@ For the full Oracle guide, see the [community docs](https://gist.github.com/rssn
 
 ### Gateway won't start
 ```bash
-clawdbot gateway status
-clawdbot doctor --non-interactive
-journalctl -u clawdbot --no-pager -n 50
+moltbot gateway status
+moltbot doctor --non-interactive
+journalctl -u moltbot --no-pager -n 50
 ```
 
 ### Port already in use

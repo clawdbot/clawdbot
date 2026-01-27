@@ -16,7 +16,7 @@ describe("browser client", () => {
     vi.unstubAllGlobals();
   });
 
-  it("wraps connection failures with a gateway hint", async () => {
+  it("wraps connection failures with a sandbox hint", async () => {
     const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1"), {
       code: "ECONNREFUSED",
     });
@@ -26,47 +26,12 @@ describe("browser client", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(fetchFailed));
 
-    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/Start .*gateway/i);
+    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/sandboxed session/i);
   });
 
   it("adds useful timeout messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
-  });
-
-  it("adds Authorization when CLAWDBOT_BROWSER_CONTROL_TOKEN is set", async () => {
-    const prev = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
-    process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN = "t1";
-
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ url, init });
-        return {
-          ok: true,
-          json: async () => ({
-            enabled: true,
-            controlUrl: "http://127.0.0.1:18791",
-            running: false,
-            pid: null,
-            cdpPort: 18792,
-            chosenBrowser: null,
-            userDataDir: null,
-            color: "#FF0000",
-            headless: true,
-            attachOnly: false,
-          }),
-        } as unknown as Response;
-      }),
-    );
-
-    await browserStatus("http://127.0.0.1:18791");
-    const init = calls[0]?.init;
-    const auth = new Headers(init?.headers ?? {}).get("Authorization");
-    expect(auth).toBe("Bearer t1");
-
-    process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN = prev;
   });
 
   it("surfaces non-2xx responses with body text", async () => {
@@ -81,7 +46,7 @@ describe("browser client", () => {
 
     await expect(
       browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
-    ).rejects.toThrow(/409: conflict/i);
+    ).rejects.toThrow(/conflict/i);
   });
 
   it("adds labels + efficient mode query params to snapshots", async () => {
@@ -255,7 +220,6 @@ describe("browser client", () => {
           ok: true,
           json: async () => ({
             enabled: true,
-            controlUrl: "http://127.0.0.1:18791",
             running: true,
             pid: 1,
             cdpPort: 18792,

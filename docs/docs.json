@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "Clawdbot",
+  "name": "Moltbot",
   "theme": "mint",
   "logo": {
     "light": "/assets/pixel-lobster.svg",
@@ -13,11 +13,11 @@
   "topbarLinks": [
     {
       "name": "GitHub",
-      "url": "https://github.com/clawdbot/clawdbot"
+      "url": "https://github.com/moltbot/moltbot"
     },
     {
       "name": "Releases",
-      "url": "https://github.com/clawdbot/clawdbot/releases"
+      "url": "https://github.com/moltbot/moltbot/releases"
     }
   ],
   "redirects": [
@@ -344,10 +344,6 @@
     {
       "source": "/auth-monitoring",
       "destination": "/automation/auth-monitoring"
-    },
-    {
-      "source": "/scripts",
-      "destination": "/scripts"
     },
     {
       "source": "/camera",
@@ -806,6 +802,10 @@
       "destination": "/railway"
     },
     {
+      "source": "/install/northflank/",
+      "destination": "/northflank"
+    },
+    {
       "source": "/gcp",
       "destination": "/platforms/gcp"
     },
@@ -852,6 +852,7 @@
           "install/docker",
           "railway",
           "render",
+          "northflank",
           "install/bun"
         ]
       },
@@ -955,6 +956,7 @@
           "gateway/doctor",
           "gateway/logging",
           "gateway/security",
+          "security/formal-verification",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
           "gateway/troubleshooting",

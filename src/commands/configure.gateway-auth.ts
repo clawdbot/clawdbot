@@ -1,5 +1,5 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import type { ClawdbotConfig, GatewayAuthConfig } from "../config/config.js";
+import type { MoltbotConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -37,17 +37,16 @@ export function buildGatewayAuthConfig(params: {
 }
 
 export async function promptAuthConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-): Promise<ClawdbotConfig> {
+): Promise<MoltbotConfig> {
   const authChoice = await promptAuthChoiceGrouped({
     prompter,
     store: ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
     }),
     includeSkip: true,
-    includeClaudeCliIfMissing: true,
   });
 
   let next = cfg;
@@ -74,10 +73,7 @@ export async function promptAuthConfig(
   }
 
   const anthropicOAuth =
-    authChoice === "claude-cli" ||
-    authChoice === "setup-token" ||
-    authChoice === "token" ||
-    authChoice === "oauth";
+    authChoice === "setup-token" || authChoice === "token" || authChoice === "oauth";
 
   const allowlistSelection = await promptModelAllowlist({
     config: next,

@@ -1,9 +1,9 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Foundation
 
 public enum GatewayPayloadDecoding {
     public static func decode<T: Decodable>(
-        _ payload: ClawdbotProtocol.AnyCodable,
+        _ payload: MoltbotProtocol.AnyCodable,
         as _: T.Type = T.self) throws -> T
     {
         let data = try JSONEncoder().encode(payload)
@@ -19,7 +19,7 @@ public enum GatewayPayloadDecoding {
     }
 
     public static func decodeIfPresent<T: Decodable>(
-        _ payload: ClawdbotProtocol.AnyCodable?,
+        _ payload: MoltbotProtocol.AnyCodable?,
         as _: T.Type = T.self) throws -> T?
     {
         guard let payload else { return nil }

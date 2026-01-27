@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import type { ClawdbotConfig } from "./types.js";
+import type { MoltbotConfig } from "./types.js";
 
 /**
  * Nix mode detection: When CLAWDBOT_NIX_MODE=1, the gateway is running under Nix.
@@ -51,8 +51,6 @@ function resolveUserPath(input: string): string {
   return path.resolve(trimmed);
 }
 
-/** @deprecated Use STATE_DIR. Kept for compatibility during migration. */
-export const STATE_DIR_MOLTBOT = resolveStateDir();
 export const STATE_DIR = resolveStateDir();
 
 /**
@@ -69,8 +67,6 @@ export function resolveConfigPath(
   return path.join(stateDir, CONFIG_FILENAME);
 }
 
-/** @deprecated Use CONFIG_PATH. Kept for compatibility during migration. */
-export const CONFIG_PATH_MOLTBOT = resolveConfigPath();
 export const CONFIG_PATH = resolveConfigPath();
 
 /**
@@ -139,7 +135,7 @@ export function resolveOAuthPath(
 }
 
 export function resolveGatewayPort(
-  cfg?: ClawdbotConfig,
+  cfg?: MoltbotConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
   const envRaw = env.CLAWDBOT_GATEWAY_PORT?.trim();

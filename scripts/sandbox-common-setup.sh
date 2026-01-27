@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_IMAGE="${BASE_IMAGE:-clawdbot-sandbox:bookworm-slim}"
-TARGET_IMAGE="${TARGET_IMAGE:-clawdbot-sandbox-common:bookworm-slim}"
+BASE_IMAGE="${BASE_IMAGE:-moltbot-sandbox:bookworm-slim}"
+TARGET_IMAGE="${TARGET_IMAGE:-moltbot-sandbox-common:bookworm-slim}"
 PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
 INSTALL_PNPM="${INSTALL_PNPM:-1}"
 INSTALL_BUN="${INSTALL_BUN:-1}"
@@ -61,5 +61,5 @@ cat <<NOTE
 Built ${TARGET_IMAGE}.
 To use it, set agents.defaults.sandbox.docker.image to "${TARGET_IMAGE}" and restart.
 If you want a clean re-create, remove old sandbox containers:
-  docker rm -f \$(docker ps -aq --filter label=clawdbot.sandbox=1)
+  docker rm -f \$(docker ps -aq --filter label=moltbot.sandbox=1)
 NOTE

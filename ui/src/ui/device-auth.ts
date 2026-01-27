@@ -11,7 +11,7 @@ type DeviceAuthStore = {
   tokens: Record<string, DeviceAuthEntry>;
 };
 
-const STORAGE_KEY = "clawdbot.device.auth.v1";
+const STORAGE_KEY = "moltbot.device.auth.v1";
 
 function normalizeRole(role: string): string {
   return role.trim();

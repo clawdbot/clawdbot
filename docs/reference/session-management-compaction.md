@@ -7,7 +7,7 @@ read_when:
 ---
 # Session Management & Compaction (Deep Dive)
 
-This document explains how Clawdbot manages sessions end-to-end:
+This document explains how Moltbot manages sessions end-to-end:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
@@ -27,7 +27,7 @@ If you want a higher-level overview first, start with:
 
 ## Source of truth: the Gateway
 
-Clawdbot is designed around a single **Gateway process** that owns session state.
+Moltbot is designed around a single **Gateway process** that owns session state.
 
 - UIs (macOS app, web Control UI, TUI) should query the Gateway for session lists and token counts.
 - In remote mode, session files are on the remote host; “checking your local Mac files” won’t reflect what the Gateway is using.
@@ -36,7 +36,7 @@ Clawdbot is designed around a single **Gateway process** that owns session state
 
 ## Two persistence layers
 
-Clawdbot persists sessions in two layers:
+Moltbot persists sessions in two layers:
 
 1) **Session store (`sessions.json`)**
    - Key/value map: `sessionKey -> SessionEntry`
@@ -58,7 +58,7 @@ Per agent, on the Gateway host:
 - Transcripts: `~/.clawdbot/agents/<agentId>/sessions/<sessionId>.jsonl`
   - Telegram topic sessions: `.../<sessionId>-topic-<threadId>.jsonl`
 
-Clawdbot resolves these via `src/config/sessions.ts`.
+Moltbot resolves these via `src/config/sessions.ts`.
 
 ---
 
@@ -132,7 +132,7 @@ Notable entry types:
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
 - `branch_summary`: persisted summary when navigating a tree branch
 
-Clawdbot intentionally does **not** “fix up” transcripts; the Gateway uses `SessionManager` to read/write them.
+Moltbot intentionally does **not** “fix up” transcripts; the Gateway uses `SessionManager` to read/write them.
 
 ---
 
@@ -176,7 +176,7 @@ Where:
 - `contextWindow` is the model’s context window
 - `reserveTokens` is headroom reserved for prompts + the next model output
 
-These are Pi runtime semantics (Clawdbot consumes the events, but Pi decides when to compact).
+These are Pi runtime semantics (Moltbot consumes the events, but Pi decides when to compact).
 
 ---
 
@@ -194,12 +194,12 @@ Pi’s compaction settings live in Pi settings:
 }
 ```
 
-Clawdbot also enforces a safety floor for embedded runs:
+Moltbot also enforces a safety floor for embedded runs:
 
-- If `compaction.reserveTokens < reserveTokensFloor`, Clawdbot bumps it.
+- If `compaction.reserveTokens < reserveTokensFloor`, Moltbot bumps it.
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
-- If it’s already higher, Clawdbot leaves it alone.
+- If it’s already higher, Moltbot leaves it alone.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
@@ -213,21 +213,21 @@ Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.t
 You can observe compaction and session state via:
 
 - `/status` (in any chat session)
-- `clawdbot status` (CLI)
-- `clawdbot sessions` / `sessions --json`
+- `moltbot status` (CLI)
+- `moltbot sessions` / `sessions --json`
 - Verbose mode: `🧹 Auto-compaction complete` + compaction count
 
 ---
 
 ## Silent housekeeping (`NO_REPLY`)
 
-Clawdbot supports “silent” turns for background tasks where the user should not see intermediate output.
+Moltbot supports “silent” turns for background tasks where the user should not see intermediate output.
 
 Convention:
 - The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
-- Clawdbot strips/suppresses this in the delivery layer.
+- Moltbot strips/suppresses this in the delivery layer.
 
-As of `2026.1.10`, Clawdbot also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
+As of `2026.1.10`, Moltbot also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
 
 ---
 
@@ -237,7 +237,7 @@ Goal: before auto-compaction happens, run a silent agentic turn that writes dura
 state to disk (e.g. `memory/YYYY-MM-DD.md` in the agent workspace) so compaction can’t
 erase critical context.
 
-Clawdbot uses the **pre-threshold flush** approach:
+Moltbot uses the **pre-threshold flush** approach:
 
 1) Monitor session context usage.
 2) When it crosses a “soft threshold” (below Pi’s compaction threshold), run a silent
@@ -257,7 +257,7 @@ Notes:
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-Pi also exposes a `session_before_compact` hook in the extension API, but Clawdbot’s
+Pi also exposes a `session_before_compact` hook in the extension API, but Moltbot’s
 flush logic lives on the Gateway side today.
 
 ---
@@ -265,7 +265,7 @@ flush logic lives on the Gateway side today.
 ## Troubleshooting checklist
 
 - Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
-- Store vs transcript mismatch? Confirm the Gateway host and the store path from `clawdbot status`.
+- Store vs transcript mismatch? Confirm the Gateway host and the store path from `moltbot status`.
 - Compaction spam? Check:
   - model context window (too small)
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)

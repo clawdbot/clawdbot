@@ -12,16 +12,40 @@ import type { OnboardOptions } from "./onboard-types.js";
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
   const authChoice = opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
+  const normalizedAuthChoice =
+    authChoice === "claude-cli"
+      ? ("setup-token" as const)
+      : authChoice === "codex-cli"
+        ? ("openai-codex" as const)
+        : authChoice;
+  if (opts.nonInteractive && (authChoice === "claude-cli" || authChoice === "codex-cli")) {
+    runtime.error(
+      [
+        `Auth choice "${authChoice}" is deprecated.`,
+        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (authChoice === "claude-cli") {
+    runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
+  }
+  if (authChoice === "codex-cli") {
+    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
+  }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
-    authChoice === opts.authChoice && flow === opts.flow ? opts : { ...opts, authChoice, flow };
+    normalizedAuthChoice === opts.authChoice && flow === opts.flow
+      ? opts
+      : { ...opts, authChoice: normalizedAuthChoice, flow };
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     runtime.error(
       [
         "Non-interactive onboarding requires explicit risk acknowledgement.",
-        "Read: https://docs.clawd.bot/security",
-        `Re-run with: ${formatCliCommand("clawdbot onboard --non-interactive --accept-risk ...")}`,
+        "Read: https://docs.molt.bot/security",
+        `Re-run with: ${formatCliCommand("moltbot onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
     runtime.exit(1);
@@ -41,7 +65,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
       [
         "Windows detected.",
         "WSL2 is strongly recommended; native Windows is untested and more problematic.",
-        "Guide: https://docs.clawd.bot/windows",
+        "Guide: https://docs.molt.bot/windows",
       ].join("\n"),
     );
   }

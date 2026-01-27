@@ -131,6 +131,13 @@ function getHeader(
   return value;
 }
 
+function isLoopbackAddress(address?: string): boolean {
+  if (!address) return false;
+  if (address === "127.0.0.1" || address === "::1") return true;
+  if (address.startsWith("::ffff:127.")) return true;
+  return false;
+}
+
 /**
  * Result of Twilio webhook verification with detailed info.
  */
@@ -155,8 +162,8 @@ export function verifyTwilioWebhook(
   options?: {
     /** Override the public URL (e.g., from config) */
     publicUrl?: string;
-    /** Allow ngrok free tier compatibility mode (less secure) */
-    allowNgrokFreeTier?: boolean;
+    /** Allow ngrok free tier compatibility mode (loopback only, less secure) */
+    allowNgrokFreeTierLoopbackBypass?: boolean;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
   },
@@ -194,6 +201,22 @@ export function verifyTwilioWebhook(
   const isNgrokFreeTier =
     verificationUrl.includes(".ngrok-free.app") ||
     verificationUrl.includes(".ngrok.io");
+
+  if (
+    isNgrokFreeTier &&
+    options?.allowNgrokFreeTierLoopbackBypass &&
+    isLoopbackAddress(ctx.remoteAddress)
+  ) {
+    console.warn(
+      "[voice-call] Twilio signature validation failed (ngrok free tier compatibility, loopback only)",
+    );
+    return {
+      ok: true,
+      reason: "ngrok free tier compatibility mode (loopback only)",
+      verificationUrl,
+      isNgrokFreeTier: true,
+    };
+  }
 
   return {
     ok: false,

@@ -9,6 +9,10 @@ import {
   resolveDefaultAgentIdFromRaw,
 } from "./legacy.shared.js";
 
+// NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
+
+// tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
     id: "auth.anthropic-claude-cli-mode-oauth",
@@ -24,6 +28,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       changes.push('Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".');
     },
   },
+  // tools.alsoAllow migration removed (field not shipped in prod; enforce via schema instead).
   {
     id: "tools.bash->tools.exec",
     describe: "Move tools.bash to tools.exec",

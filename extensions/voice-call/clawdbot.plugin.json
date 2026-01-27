@@ -78,8 +78,8 @@
       "label": "ngrok Domain",
       "advanced": true
     },
-    "tunnel.allowNgrokFreeTier": {
-      "label": "Allow ngrok Free Tier",
+    "tunnel.allowNgrokFreeTierLoopbackBypass": {
+      "label": "Allow ngrok Free Tier (Loopback Bypass)",
       "advanced": true
     },
     "streaming.enabled": {
@@ -330,7 +330,7 @@
           "ngrokDomain": {
             "type": "string"
           },
-          "allowNgrokFreeTier": {
+          "allowNgrokFreeTierLoopbackBypass": {
             "type": "boolean"
           }
         }

@@ -1,5 +1,5 @@
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotKit
+import MoltbotProtocol
 
-typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
-typealias KitAnyCodable = ClawdbotKit.AnyCodable
+typealias ProtoAnyCodable = MoltbotProtocol.AnyCodable
+typealias KitAnyCodable = MoltbotKit.AnyCodable

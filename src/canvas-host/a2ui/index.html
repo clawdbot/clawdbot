@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Clawdbot Canvas</title>
+    <title>Moltbot Canvas</title>
     <script>
       (() => {
         try {
@@ -81,7 +81,7 @@
         backface-visibility: hidden;
         opacity: 0.45;
         pointer-events: none;
-        animation: clawdbot-grid-drift 140s ease-in-out infinite alternate;
+        animation: moltbot-grid-drift 140s ease-in-out infinite alternate;
       }
       :root[data-platform="android"] body::before {
         opacity: 0.8;
@@ -101,7 +101,7 @@
         backface-visibility: hidden;
         transform: translate3d(0, 0, 0);
         pointer-events: none;
-        animation: clawdbot-glow-drift 110s ease-in-out infinite alternate;
+        animation: moltbot-glow-drift 110s ease-in-out infinite alternate;
       }
       :root[data-platform="android"] body::after {
         opacity: 0.85;
@@ -116,7 +116,7 @@
           opacity: 0.7;
         }
       }
-      @keyframes clawdbot-grid-drift {
+      @keyframes moltbot-grid-drift {
         0% {
           transform: translate3d(-12px, 8px, 0) rotate(-7deg);
           opacity: 0.4;
@@ -130,7 +130,7 @@
           opacity: 0.42;
         }
       }
-      @keyframes clawdbot-glow-drift {
+      @keyframes moltbot-glow-drift {
         0% {
           transform: translate3d(-18px, 12px, 0) scale(1.02);
           opacity: 0.4;
@@ -153,14 +153,14 @@
         touch-action: none;
         z-index: 1;
       }
-      :root[data-platform="android"] #clawdbot-canvas {
+      :root[data-platform="android"] #moltbot-canvas {
         background:
           radial-gradient(1100px 800px at 20% 15%, rgba(42, 113, 255, 0.78), rgba(0, 0, 0, 0) 58%),
           radial-gradient(900px 650px at 82% 28%, rgba(255, 0, 138, 0.66), rgba(0, 0, 0, 0) 62%),
           radial-gradient(1000px 900px at 60% 88%, rgba(0, 209, 255, 0.58), rgba(0, 0, 0, 0) 62%),
           #141c33;
       }
-      #clawdbot-status {
+      #moltbot-status {
         position: fixed;
         inset: 0;
         display: none;
@@ -172,7 +172,7 @@
         pointer-events: none;
         z-index: 3;
       }
-      #clawdbot-status .card {
+      #moltbot-status .card {
         width: min(560px, 88vw);
         text-align: left;
         padding: 14px 16px 12px;
@@ -185,7 +185,7 @@
         -webkit-backdrop-filter: blur(18px) saturate(140%);
         backdrop-filter: blur(18px) saturate(140%);
       }
-      #clawdbot-status .title {
+      #moltbot-status .title {
         font:
           600 12px/1.2 -apple-system,
           BlinkMacSystemFont,
@@ -196,7 +196,7 @@
         text-transform: uppercase;
         color: rgba(255, 255, 255, 0.7);
       }
-      #clawdbot-status .subtitle {
+      #moltbot-status .subtitle {
         margin-top: 8px;
         font:
           500 13px/1.45 -apple-system,
@@ -208,39 +208,39 @@
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
-      clawdbot-a2ui-host {
+      moltbot-a2ui-host {
         display: block;
         height: 100%;
         position: fixed;
         inset: 0;
         z-index: 4;
-        --clawdbot-a2ui-inset-top: 28px;
-        --clawdbot-a2ui-inset-right: 0px;
-        --clawdbot-a2ui-inset-bottom: 0px;
-        --clawdbot-a2ui-inset-left: 0px;
-        --clawdbot-a2ui-scroll-pad-bottom: 0px;
-        --clawdbot-a2ui-status-top: calc(50% - 18px);
-        --clawdbot-a2ui-empty-top: 18px;
+        --moltbot-a2ui-inset-top: 28px;
+        --moltbot-a2ui-inset-right: 0px;
+        --moltbot-a2ui-inset-bottom: 0px;
+        --moltbot-a2ui-inset-left: 0px;
+        --moltbot-a2ui-scroll-pad-bottom: 0px;
+        --moltbot-a2ui-status-top: calc(50% - 18px);
+        --moltbot-a2ui-empty-top: 18px;
       }
     </style>
   </head>
   <body>
-    <canvas id="clawdbot-canvas"></canvas>
-    <div id="clawdbot-status">
+    <canvas id="moltbot-canvas"></canvas>
+    <div id="moltbot-status">
       <div class="card">
-        <div class="title" id="clawdbot-status-title">Ready</div>
-        <div class="subtitle" id="clawdbot-status-subtitle">Waiting for agent</div>
+        <div class="title" id="moltbot-status-title">Ready</div>
+        <div class="subtitle" id="moltbot-status-subtitle">Waiting for agent</div>
       </div>
     </div>
-    <clawdbot-a2ui-host></clawdbot-a2ui-host>
+    <moltbot-a2ui-host></moltbot-a2ui-host>
     <script src="a2ui.bundle.js"></script>
     <script>
       (() => {
-        const canvas = document.getElementById("clawdbot-canvas");
+        const canvas = document.getElementById("moltbot-canvas");
         const ctx = canvas.getContext("2d");
-        const statusEl = document.getElementById("clawdbot-status");
-        const titleEl = document.getElementById("clawdbot-status-title");
-        const subtitleEl = document.getElementById("clawdbot-status-subtitle");
+        const statusEl = document.getElementById("moltbot-status");
+        const titleEl = document.getElementById("moltbot-status-title");
+        const subtitleEl = document.getElementById("moltbot-status-subtitle");
         const debugStatusEnabledByQuery = (() => {
           try {
             const params = new URLSearchParams(window.location.search);
@@ -278,7 +278,7 @@
           statusEl.style.display = "none";
         }
 
-        window.__clawdbot = {
+        window.__moltbot = {
           canvas,
           ctx,
           setDebugStatusEnabled,

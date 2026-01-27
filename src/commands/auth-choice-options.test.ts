@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type AuthProfileStore, CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 
 describe("buildAuthChoiceOptions", () => {
@@ -9,60 +9,18 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: false,
-      platform: "linux",
     });
 
     expect(options.find((opt) => opt.value === "github-copilot")).toBeDefined();
   });
-  it("includes Claude Code CLI option on macOS even when missing", () => {
+  it("includes setup-token option for Anthropic", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
-    const claudeCli = options.find((opt) => opt.value === "claude-cli");
-    expect(claudeCli).toBeDefined();
-    expect(claudeCli?.hint).toBe("reuses existing Claude Code auth · requires Keychain access");
-  });
-
-  it("skips missing Claude Code CLI option off macOS", () => {
-    const store: AuthProfileStore = { version: 1, profiles: {} };
-    const options = buildAuthChoiceOptions({
-      store,
-      includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "linux",
-    });
-
-    expect(options.find((opt) => opt.value === "claude-cli")).toBeUndefined();
-  });
-
-  it("uses token hint when Claude Code CLI credentials exist", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [CLAUDE_CLI_PROFILE_ID]: {
-          type: "token",
-          provider: "anthropic",
-          token: "token",
-          expires: Date.now() + 60 * 60 * 1000,
-        },
-      },
-    };
-
-    const options = buildAuthChoiceOptions({
-      store,
-      includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
-    });
-
-    const claudeCli = options.find((opt) => opt.value === "claude-cli");
-    expect(claudeCli?.hint).toContain("token ok");
+    expect(options.some((opt) => opt.value === "token")).toBe(true);
   });
 
   it("includes Z.AI (GLM) auth choice", () => {
@@ -70,8 +28,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "zai-api-key")).toBe(true);
@@ -82,8 +38,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "minimax-api")).toBe(true);
@@ -95,8 +49,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "moonshot-api-key")).toBe(true);
@@ -108,8 +60,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "ai-gateway-api-key")).toBe(true);
@@ -120,8 +70,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "synthetic-api-key")).toBe(true);
@@ -132,8 +80,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "chutes")).toBe(true);
@@ -144,8 +90,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = buildAuthChoiceOptions({
       store,
       includeSkip: false,
-      includeClaudeCliIfMissing: true,
-      platform: "darwin",
     });
 
     expect(options.some((opt) => opt.value === "qwen-portal")).toBe(true);

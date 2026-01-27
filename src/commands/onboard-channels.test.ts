@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -76,7 +76,7 @@ describe("setupChannels", () => {
       }),
     };
 
-    await setupChannels({} as ClawdbotConfig, runtime, prompter, {
+    await setupChannels({} as MoltbotConfig, runtime, prompter, {
       skipConfirm: true,
       quickstartDefaults: true,
       forceAllowFromChannels: ["whatsapp"],
@@ -127,7 +127,7 @@ describe("setupChannels", () => {
             botToken: "token",
           },
         },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       runtime,
       prompter,
       {
@@ -189,7 +189,7 @@ describe("setupChannels", () => {
             enabled: false,
           },
         },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       runtime,
       prompter,
       {

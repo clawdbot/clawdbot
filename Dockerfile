@@ -26,7 +26,7 @@ RUN chmod +x scripts/render-start.sh
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm build
+RUN CLAWDBOT_A2UI_SKIP_MISSING=1 pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV MOLTBOT_PREFER_PNPM=1
 RUN pnpm ui:install

@@ -9,7 +9,7 @@ import type {
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -29,7 +29,7 @@ interface MediaRef {
 interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   account: ResolvedLineAccount;
 }
 
@@ -315,7 +315,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
 export async function buildLinePostbackContext(params: {
   event: PostbackEvent;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   account: ResolvedLineAccount;
 }) {
   const { event, cfg, account } = params;

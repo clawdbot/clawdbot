@@ -6,7 +6,7 @@ read_when:
 ---
 # Skills (macOS)
 
-The macOS app surfaces Clawdbot skills via the gateway; it does not parse skills locally.
+The macOS app surfaces Moltbot skills via the gateway; it does not parse skills locally.
 
 ## Data source
 - `skills.status` (gateway) returns all skills plus eligibility and missing requirements
@@ -20,7 +20,7 @@ The macOS app surfaces Clawdbot skills via the gateway; it does not parse skills
   (brew when available, otherwise node manager from `skills.install`, default npm).
 
 ## Env/API keys
-- The app stores keys in `~/.clawdbot/clawdbot.json` under `skills.entries.<skillKey>`.
+- The app stores keys in `~/.clawdbot/moltbot.json` under `skills.entries.<skillKey>`.
 - `skills.update` patches `enabled`, `apiKey`, and `env`.
 
 ## Remote mode

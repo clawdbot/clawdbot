@@ -1,7 +1,7 @@
 import Foundation
 
 enum CanvasScheme {
-    static let scheme = "clawdbot-canvas"
+    static let scheme = "moltbot-canvas"
 
     static func makeURL(session: String, path: String? = nil) -> URL? {
         var comps = URLComponents()

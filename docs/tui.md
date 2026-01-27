@@ -9,17 +9,17 @@ read_when:
 ## Quick start
 1) Start the Gateway.
 ```bash
-clawdbot gateway
+moltbot gateway
 ```
 2) Open the TUI.
 ```bash
-clawdbot tui
+moltbot tui
 ```
 3) Type a message and press Enter.
 
 Remote Gateway:
 ```bash
-clawdbot tui --url ws://<host>:<port> --token <gateway-token>
+moltbot tui --url ws://<host>:<port> --token <gateway-token>
 ```
 Use `--password` if your Gateway uses password auth.
 
@@ -46,7 +46,7 @@ Use `--password` if your Gateway uses password auth.
 - Turn delivery on:
   - `/deliver on`
   - or the Settings panel
-  - or start with `clawdbot tui --deliver`
+  - or start with `moltbot tui --deliver`
 
 ## Pickers + overlays
 - Model picker: list available models and set the session override.
@@ -123,12 +123,12 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 
 No output after sending a message:
 - Run `/status` in the TUI to confirm the Gateway is connected and idle/busy.
-- Check the Gateway logs: `clawdbot logs --follow`.
-- Confirm the agent can run: `clawdbot status` and `clawdbot models status`.
+- Check the Gateway logs: `moltbot logs --follow`.
+- Confirm the agent can run: `moltbot status` and `moltbot models status`.
 - If you expect messages in a chat channel, enable delivery (`/deliver on` or `--deliver`).
 - `--history-limit <n>`: History entries to load (default 200)
 
 ## Troubleshooting
 - `disconnected`: ensure the Gateway is running and your `--url/--token/--password` are correct.
-- No agents in picker: check `clawdbot agents list` and your routing config.
+- No agents in picker: check `moltbot agents list` and your routing config.
 - Empty session picker: you might be in global scope or have no sessions yet.

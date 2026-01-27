@@ -11,7 +11,7 @@ read_when:
 returns structured output (optionally validated against JSON Schema).
 
 This is ideal for workflow engines like Lobster: you can add a single LLM step
-without writing custom Clawdbot code for each workflow.
+without writing custom Moltbot code for each workflow.
 
 ## Enable the plugin
 

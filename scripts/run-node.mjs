@@ -82,7 +82,7 @@ const shouldBuild = () => {
 
 const logRunner = (message) => {
   if (env.CLAWDBOT_RUNNER_LOG === "0") return;
-  process.stderr.write(`[clawdbot] ${message}\n`);
+  process.stderr.write(`[moltbot] ${message}\n`);
 };
 
 const runNode = () => {

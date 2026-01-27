@@ -89,7 +89,7 @@ enum RuntimeLocator {
         switch error {
         case let .notFound(searchPaths):
             [
-                "clawdbot needs Node >=22.0.0 but found no runtime.",
+                "moltbot needs Node >=22.0.0 but found no runtime.",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
                 "Install Node: https://nodejs.org/en/download",
             ].joined(separator: "\n")
@@ -97,7 +97,7 @@ enum RuntimeLocator {
             [
                 "Found \(kind.rawValue) \(found) at \(path) but need >= \(required).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
-                "Upgrade Node and rerun clawdbot.",
+                "Upgrade Node and rerun moltbot.",
             ].joined(separator: "\n")
         case let .versionParse(kind, raw, path, searchPaths):
             [

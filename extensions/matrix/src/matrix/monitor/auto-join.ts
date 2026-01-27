@@ -1,5 +1,5 @@
-import type { MatrixClient } from "matrix-bot-sdk";
-import { AutojoinRoomsMixin } from "matrix-bot-sdk";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { AutojoinRoomsMixin } from "@vector-im/matrix-bot-sdk";
 
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 import type { CoreConfig } from "../../types.js";

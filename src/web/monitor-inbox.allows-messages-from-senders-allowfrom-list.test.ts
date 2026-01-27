@@ -88,7 +88,7 @@ describe("web monitor inbox", () => {
       created: true,
     });
     resetWebInboundDedupe();
-    authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
+    authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-"));
   });
 
   afterEach(() => {

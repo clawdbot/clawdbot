@@ -1,14 +1,14 @@
 ---
 name: command-logger
 description: "Log all command events to a centralized audit file"
-homepage: https://docs.clawd.bot/hooks#command-logger
+homepage: https://docs.molt.bot/hooks#command-logger
 metadata:
   {
-    "clawdbot":
+    "moltbot":
       {
         "emoji": "📝",
         "events": ["command"],
-        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Clawdbot" }],
+        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Moltbot" }],
       },
   }
 ---
@@ -62,7 +62,7 @@ No configuration needed. The hook automatically:
 To disable this hook:
 
 ```bash
-clawdbot hooks disable command-logger
+moltbot hooks disable command-logger
 ```
 
 Or via config:
@@ -90,7 +90,7 @@ The hook does not automatically rotate logs. To manage log size, you can:
    ```
 
 2. **Use logrotate** (Linux):
-   Create `/etc/logrotate.d/clawdbot`:
+   Create `/etc/logrotate.d/moltbot`:
    ```
    /home/username/.clawdbot/logs/commands.log {
        weekly

@@ -25,7 +25,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "clawdbot-stream-" });
+  return withTempHomeBase(fn, { prefix: "moltbot-stream-" });
 }
 
 describe("block streaming", () => {

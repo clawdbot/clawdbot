@@ -34,6 +34,9 @@ Notes:
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
+- Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
+  the gateway host (no container) and **does not require approvals**. To require approvals, run with
+  `host=gateway` and configure exec approvals (or enable sandboxing).
 
 ## Config
 
@@ -64,7 +67,8 @@ Example:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
-  Clawdbot prepends `env.PATH` after profile sourcing; `tools.exec.pathPrepend` applies here too.
+  Moltbot prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
+  `tools.exec.pathPrepend` applies here too.
 - `host=node`: only env overrides you pass are sent to the node. `tools.exec.pathPrepend` only applies
   if the exec call already sets `env.PATH`. Headless node hosts accept `PATH` only when it prepends
   the node host PATH (no replacement). macOS nodes drop `PATH` overrides entirely.
@@ -72,8 +76,8 @@ Example:
 Per-agent node binding (use the agent list index in config):
 
 ```bash
-clawdbot config get agents.list
-clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
+moltbot config get agents.list
+moltbot config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 Control UI: the Nodes tab includes a small “Exec node binding” panel for the same settings.
@@ -87,6 +91,13 @@ Example:
 ```
 /exec host=gateway security=allowlist ask=on-miss node=mac-1
 ```
+
+## Authorization model
+
+`/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
+policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
+`security=full` and `ask=off`.
 
 ## Exec approvals (companion app / node host)
 

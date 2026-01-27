@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SMOKE_IMAGE="${CLAWDBOT_INSTALL_SMOKE_IMAGE:-clawdbot-install-smoke:local}"
-NONROOT_IMAGE="${CLAWDBOT_INSTALL_NONROOT_IMAGE:-clawdbot-install-nonroot:local}"
-INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
-CLI_INSTALL_URL="${CLAWDBOT_INSTALL_CLI_URL:-https://clawd.bot/install-cli.sh}"
+SMOKE_IMAGE="${CLAWDBOT_INSTALL_SMOKE_IMAGE:-moltbot-install-smoke:local}"
+NONROOT_IMAGE="${CLAWDBOT_INSTALL_NONROOT_IMAGE:-moltbot-install-nonroot:local}"
+INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://molt.bot/install.sh}"
+CLI_INSTALL_URL="${CLAWDBOT_INSTALL_CLI_URL:-https://molt.bot/install-cli.sh}"
 SKIP_NONROOT="${CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT:-0}"
 LATEST_DIR="$(mktemp -d)"
 LATEST_FILE="${LATEST_DIR}/latest"

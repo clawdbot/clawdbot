@@ -10,6 +10,8 @@ import {
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
+const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
 export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -41,6 +43,7 @@ export const WhatsAppAccountSchema = z
           .object({
             requireMention: z.boolean().optional(),
             tools: ToolPolicySchema,
+            toolsBySender: ToolPolicyBySenderSchema,
           })
           .strict()
           .optional(),
@@ -105,6 +108,7 @@ export const WhatsAppConfigSchema = z
           .object({
             requireMention: z.boolean().optional(),
             tools: ToolPolicySchema,
+            toolsBySender: ToolPolicyBySenderSchema,
           })
           .strict()
           .optional(),

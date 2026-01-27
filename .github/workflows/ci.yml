@@ -76,7 +76,7 @@ jobs:
             command: pnpm lint
           - runtime: node
             task: test
-            command: pnpm test
+            command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: build
             command: pnpm build
@@ -88,7 +88,7 @@ jobs:
             command: pnpm format
           - runtime: bun
             task: test
-            command: bunx vitest run
+            command: pnpm canvas:a2ui:bundle && bunx vitest run
           - runtime: bun
             task: build
             command: bunx tsc -p tsconfig.json
@@ -188,6 +188,7 @@ jobs:
     runs-on: blacksmith-4vcpu-windows-2025
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      CLAWDBOT_TEST_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -200,7 +201,7 @@ jobs:
             command: pnpm lint
           - runtime: node
             task: test
-            command: pnpm test
+            command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: build
             command: pnpm build

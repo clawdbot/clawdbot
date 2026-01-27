@@ -8,12 +8,12 @@ read_when:
 The WhatsApp channel runs via **Baileys Web**. This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Goals
-- Send media with optional captions via `clawdbot message send --media`.
+- Send media with optional captions via `moltbot message send --media`.
 - Allow auto-replies from the web inbox to include media alongside text.
 - Keep per-type limits sane and predictable.
 
 ## CLI Surface
-- `clawdbot message send --media <path-or-url> [--message <caption>]`
+- `moltbot message send --media <path-or-url> [--message <caption>]`
   - `--media` optional; caption can be empty for media-only sends.
   - `--dry-run` prints the resolved payload; `--json` emits `{ channel, to, messageId, mediaUrl, caption }`.
 
@@ -30,11 +30,11 @@ The WhatsApp channel runs via **Baileys Web**. This document captures the curren
 
 ## Auto-Reply Pipeline
 - `getReplyFromConfig` returns `{ text?, mediaUrl?, mediaUrls? }`.
-- When media is present, the web sender resolves local paths or URLs using the same pipeline as `clawdbot message send`.
+- When media is present, the web sender resolves local paths or URLs using the same pipeline as `moltbot message send`.
 - Multiple media entries are sent sequentially if provided.
 
 ## Inbound Media to Commands (Pi)
-- When inbound web messages include media, Clawdbot downloads to a temp file and exposes templating variables:
+- When inbound web messages include media, Moltbot downloads to a temp file and exposes templating variables:
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
 - When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a relative path like `media/inbound/<filename>`.

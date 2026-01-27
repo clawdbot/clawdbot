@@ -18,7 +18,7 @@ Session pruning trims **old tool results** from the in-memory context right befo
 ## Smart defaults (Anthropic)
 - **OAuth or setup-token** profiles: enable `cache-ttl` pruning and set heartbeat to `1h`.
 - **API key** profiles: enable `cache-ttl` pruning, set heartbeat to `30m`, and default `cacheControlTtl` to `1h` on Anthropic models.
-- If you set any of these values explicitly, Clawdbot does **not** override them.
+- If you set any of these values explicitly, Moltbot does **not** override them.
 
 ## What this improves (cost + cache behavior)
 - **Why prune:** Anthropic prompt caching only applies within the TTL. If a session goes idle past the TTL, the next request re-caches the full prompt unless you trim it first.

@@ -26,6 +26,8 @@ export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
+export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
+export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
 
 const TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -61,7 +63,9 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
   | typeof DEFAULT_HEARTBEAT_FILENAME
-  | typeof DEFAULT_BOOTSTRAP_FILENAME;
+  | typeof DEFAULT_BOOTSTRAP_FILENAME
+  | typeof DEFAULT_MEMORY_FILENAME
+  | typeof DEFAULT_MEMORY_ALT_FILENAME;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -184,6 +188,39 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
+async function resolveMemoryBootstrapEntries(
+  resolvedDir: string,
+): Promise<Array<{ name: WorkspaceBootstrapFileName; filePath: string }>> {
+  const candidates: WorkspaceBootstrapFileName[] = [
+    DEFAULT_MEMORY_FILENAME,
+    DEFAULT_MEMORY_ALT_FILENAME,
+  ];
+  const entries: Array<{ name: WorkspaceBootstrapFileName; filePath: string }> = [];
+  for (const name of candidates) {
+    const filePath = path.join(resolvedDir, name);
+    try {
+      await fs.access(filePath);
+      entries.push({ name, filePath });
+    } catch {
+      // optional
+    }
+  }
+  if (entries.length <= 1) return entries;
+
+  const seen = new Set<string>();
+  const deduped: Array<{ name: WorkspaceBootstrapFileName; filePath: string }> = [];
+  for (const entry of entries) {
+    let key = entry.filePath;
+    try {
+      key = await fs.realpath(entry.filePath);
+    } catch {}
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(entry);
+  }
+  return deduped;
+}
+
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
@@ -220,6 +257,8 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
     },
   ];
+
+  entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {

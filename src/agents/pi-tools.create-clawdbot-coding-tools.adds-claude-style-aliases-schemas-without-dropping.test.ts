@@ -4,14 +4,14 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
-import { createClawdbotTools } from "./clawdbot-tools.js";
-import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
+import { createMoltbotTools } from "./moltbot-tools.js";
+import { __testing, createMoltbotCodingTools } from "./pi-tools.js";
 import { createSandboxedReadTool } from "./pi-tools.read.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
-const defaultTools = createClawdbotCodingTools();
+const defaultTools = createMoltbotCodingTools();
 
-describe("createClawdbotCodingTools", () => {
+describe("createMoltbotCodingTools", () => {
   describe("Claude/Gemini alias support", () => {
     it("adds Claude-style aliases to schemas without dropping metadata", () => {
       const base: AgentTool = {
@@ -96,7 +96,6 @@ describe("createClawdbotCodingTools", () => {
     };
     expect(parameters.properties?.action).toBeDefined();
     expect(parameters.properties?.target).toBeDefined();
-    expect(parameters.properties?.controlUrl).toBeDefined();
     expect(parameters.properties?.targetUrl).toBeDefined();
     expect(parameters.properties?.request).toBeDefined();
     expect(parameters.required ?? []).toContain("action");
@@ -247,7 +246,7 @@ describe("createClawdbotCodingTools", () => {
     expect(offenders).toEqual([]);
   });
   it("keeps raw core tool schemas union-free", () => {
-    const tools = createClawdbotTools();
+    const tools = createMoltbotTools();
     const coreTools = new Set([
       "browser",
       "canvas",
@@ -297,7 +296,7 @@ describe("createClawdbotCodingTools", () => {
     expect(offenders).toEqual([]);
   });
   it("does not expose provider-specific message tools", () => {
-    const tools = createClawdbotCodingTools({ messageProvider: "discord" });
+    const tools = createMoltbotCodingTools({ messageProvider: "discord" });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("discord")).toBe(false);
     expect(names.has("slack")).toBe(false);
@@ -305,7 +304,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("whatsapp")).toBe(false);
   });
   it("filters session tools for sub-agent sessions by default", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       sessionKey: "agent:main:subagent:test",
     });
     const names = new Set(tools.map((tool) => tool.name));
@@ -320,7 +319,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("apply_patch")).toBe(false);
   });
   it("supports allow-only sub-agent tool policy", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       sessionKey: "agent:main:subagent:test",
       // Intentionally partial config; only fields used by pi-tools are provided.
       config: {
@@ -338,7 +337,7 @@ describe("createClawdbotCodingTools", () => {
   });
 
   it("applies tool profiles before allow/deny policies", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       config: { tools: { profile: "messaging" } },
     });
     const names = new Set(tools.map((tool) => tool.name));
@@ -349,7 +348,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
   it("expands group shorthands in global tool policy", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       config: { tools: { allow: ["group:fs"] } },
     });
     const names = new Set(tools.map((tool) => tool.name));
@@ -360,7 +359,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
   it("expands group shorthands in global tool deny policy", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       config: { tools: { deny: ["group:fs"] } },
     });
     const names = new Set(tools.map((tool) => tool.name));
@@ -370,7 +369,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("exec")).toBe(true);
   });
   it("lets agent profiles override global profiles", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       sessionKey: "agent:work:main",
       config: {
         tools: { profile: "coding" },
@@ -450,8 +449,8 @@ describe("createClawdbotCodingTools", () => {
     }
   });
   it("applies sandbox path guards to file_path alias", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sbx-"));
-    const outsidePath = path.join(os.tmpdir(), "clawdbot-outside.txt");
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sbx-"));
+    const outsidePath = path.join(os.tmpdir(), "moltbot-outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");
     try {
       const readTool = createSandboxedReadTool(tmpDir);

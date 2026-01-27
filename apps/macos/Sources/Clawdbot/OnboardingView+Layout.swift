@@ -4,7 +4,7 @@ import SwiftUI
 extension OnboardingView {
     var body: some View {
         VStack(spacing: 0) {
-            GlowingClawdbotIcon(size: 130, glowIntensity: 0.28)
+            GlowingMoltbotIcon(size: 130, glowIntensity: 0.28)
                 .offset(y: 10)
                 .frame(height: 145)
 

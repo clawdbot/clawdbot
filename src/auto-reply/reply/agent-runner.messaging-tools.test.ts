@@ -154,7 +154,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-session-store-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-session-store-")),
       "sessions.json",
     );
     const sessionKey = "main";

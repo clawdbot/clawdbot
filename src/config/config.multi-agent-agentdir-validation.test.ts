@@ -8,7 +8,7 @@ describe("multi-agent agentDir validation", () => {
   it("rejects shared agents.list agentDir", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const shared = path.join(tmpdir(), "clawdbot-shared-agentdir");
+    const shared = path.join(tmpdir(), "moltbot-shared-agentdir");
     const res = validateConfigObject({
       agents: {
         list: [
@@ -29,7 +29,7 @@ describe("multi-agent agentDir validation", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             agents: {

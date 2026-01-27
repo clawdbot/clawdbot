@@ -21,7 +21,7 @@ export function registerAcpCli(program: Command) {
     .option("--verbose, -v", "Verbose logging to stderr", false)
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.clawd.bot/cli/acp")}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.molt.bot/cli/acp")}\n`,
     )
     .action((opts) => {
       try {
@@ -46,7 +46,7 @@ export function registerAcpCli(program: Command) {
     .command("client")
     .description("Run an interactive ACP client against the local ACP bridge")
     .option("--cwd <dir>", "Working directory for the ACP session")
-    .option("--server <command>", "ACP server command (default: clawdbot)")
+    .option("--server <command>", "ACP server command (default: moltbot)")
     .option("--server-args <args...>", "Extra arguments for the ACP server")
     .option("--server-verbose", "Enable verbose logging on the ACP server", false)
     .option("--verbose, -v", "Verbose client logging", false)

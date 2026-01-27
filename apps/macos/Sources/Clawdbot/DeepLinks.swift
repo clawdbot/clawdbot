@@ -1,5 +1,5 @@
 import AppKit
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 import OSLog
 import Security
@@ -23,7 +23,7 @@ final class DeepLinkHandler {
             return
         }
         guard !AppStateStore.shared.isPaused else {
-            self.presentAlert(title: "Clawdbot is paused", message: "Unpause Clawdbot to run agent actions.")
+            self.presentAlert(title: "Moltbot is paused", message: "Unpause Moltbot to run agent actions.")
             return
         }
 
@@ -51,7 +51,7 @@ final class DeepLinkHandler {
             let trimmed = messagePreview.count > 240 ? "\(messagePreview.prefix(240))…" : messagePreview
             let body =
                 "Run the agent with this message?\n\n\(trimmed)\n\nURL:\n\(originalURL.absoluteString)"
-            guard self.confirm(title: "Run Clawdbot agent?", message: body) else { return }
+            guard self.confirm(title: "Run Moltbot agent?", message: body) else { return }
         }
 
         if AppStateStore.shared.connectionMode == .local {

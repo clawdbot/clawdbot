@@ -1,9 +1,16 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
+import type { AuthProfileStore } from "./auth-profiles.js";
+import { saveAuthProfileStore } from "./auth-profiles.js";
+import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { runWithModelFallback } from "./model-fallback.js";
 
-function makeCfg(overrides: Partial<ClawdbotConfig> = {}): ClawdbotConfig {
+function makeCfg(overrides: Partial<MoltbotConfig> = {}): MoltbotConfig {
   return {
     agents: {
       defaults: {
@@ -14,7 +21,7 @@ function makeCfg(overrides: Partial<ClawdbotConfig> = {}): ClawdbotConfig {
       },
     },
     ...overrides,
-  } as ClawdbotConfig;
+  } as MoltbotConfig;
 }
 
 describe("runWithModelFallback", () => {
@@ -101,7 +108,7 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
-      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:claude-cli".'))
+      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:default".'))
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -115,6 +122,122 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]?.[0]).toBe("anthropic");
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("skips providers when all profiles are in cooldown", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const provider = `cooldown-test-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "fallback") return "ok";
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not skip when any profile is available", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const provider = `cooldown-mixed-${crypto.randomUUID()}`;
+    const profileA = `${provider}:a`;
+    const profileB = `${provider}:b`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileA]: {
+          type: "api_key",
+          provider,
+          key: "key-a",
+        },
+        [profileB]: {
+          type: "api_key",
+          provider,
+          key: "key-b",
+        },
+      },
+      usageStats: {
+        [profileA]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId) => {
+      if (providerId === provider) return "ok";
+      return "unexpected";
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([[provider, "m1"]]);
+      expect(result.attempts).toEqual([]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("does not append configured primary when fallbacksOverride is set", async () => {
@@ -156,7 +279,7 @@ describe("runWithModelFallback", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const calls: Array<{ provider: string; model: string }> = [];
 
@@ -193,7 +316,7 @@ describe("runWithModelFallback", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
 
     const calls: Array<{ provider: string; model: string }> = [];
 

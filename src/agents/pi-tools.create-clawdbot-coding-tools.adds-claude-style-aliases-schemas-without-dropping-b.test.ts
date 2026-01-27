@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
-import { createClawdbotCodingTools } from "./pi-tools.js";
+import { createMoltbotCodingTools } from "./pi-tools.js";
 
-const defaultTools = createClawdbotCodingTools();
+const defaultTools = createMoltbotCodingTools();
 
-describe("createClawdbotCodingTools", () => {
+describe("createMoltbotCodingTools", () => {
   it("preserves action enums in normalized schemas", () => {
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
 
@@ -51,21 +51,21 @@ describe("createClawdbotCodingTools", () => {
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("gates apply_patch behind tools.exec.applyPatch for OpenAI models", () => {
-    const config: ClawdbotConfig = {
+    const config: MoltbotConfig = {
       tools: {
         exec: {
           applyPatch: { enabled: true },
         },
       },
     };
-    const openAiTools = createClawdbotCodingTools({
+    const openAiTools = createMoltbotCodingTools({
       config,
       modelProvider: "openai",
       modelId: "gpt-5.2",
     });
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
-    const anthropicTools = createClawdbotCodingTools({
+    const anthropicTools = createMoltbotCodingTools({
       config,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-5",
@@ -73,21 +73,21 @@ describe("createClawdbotCodingTools", () => {
     expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("respects apply_patch allowModels", () => {
-    const config: ClawdbotConfig = {
+    const config: MoltbotConfig = {
       tools: {
         exec: {
           applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
         },
       },
     };
-    const allowed = createClawdbotCodingTools({
+    const allowed = createMoltbotCodingTools({
       config,
       modelProvider: "openai",
       modelId: "gpt-5.2",
     });
     expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
 
-    const denied = createClawdbotCodingTools({
+    const denied = createMoltbotCodingTools({
       config,
       modelProvider: "openai",
       modelId: "gpt-5-mini",
@@ -95,7 +95,7 @@ describe("createClawdbotCodingTools", () => {
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("keeps canonical tool names for Anthropic OAuth (pi-ai remaps on the wire)", () => {
-    const tools = createClawdbotCodingTools({
+    const tools = createMoltbotCodingTools({
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
     });
@@ -107,7 +107,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("apply_patch")).toBe(false);
   });
   it("provides top-level object schemas for all tools", () => {
-    const tools = createClawdbotCodingTools();
+    const tools = createMoltbotCodingTools();
     const offenders = tools
       .map((tool) => {
         const schema =

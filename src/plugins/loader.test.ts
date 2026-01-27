@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadClawdbotPlugins } from "./loader.js";
+import { loadMoltbotPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -13,7 +13,7 @@ const prevBundledDir = process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `clawdbot-plugin-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `moltbot-plugin-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
@@ -30,7 +30,7 @@ function writePlugin(params: {
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
-    path.join(dir, "clawdbot.plugin.json"),
+    path.join(dir, "moltbot.plugin.json"),
     JSON.stringify(
       {
         id: params.id,
@@ -59,7 +59,7 @@ afterEach(() => {
   }
 });
 
-describe("loadClawdbotPlugins", () => {
+describe("loadMoltbotPlugins", () => {
   it("disables bundled plugins by default", () => {
     const bundledDir = makeTempDir();
     writePlugin({
@@ -70,7 +70,7 @@ describe("loadClawdbotPlugins", () => {
     });
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -82,7 +82,7 @@ describe("loadClawdbotPlugins", () => {
     const bundled = registry.plugins.find((entry) => entry.id === "bundled");
     expect(bundled?.status).toBe("disabled");
 
-    const enabledRegistry = loadClawdbotPlugins({
+    const enabledRegistry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -127,7 +127,7 @@ describe("loadClawdbotPlugins", () => {
     });
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -154,7 +154,7 @@ describe("loadClawdbotPlugins", () => {
     });
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -177,10 +177,10 @@ describe("loadClawdbotPlugins", () => {
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
-        name: "@clawdbot/memory-core",
+        name: "@moltbot/memory-core",
         version: "1.2.3",
         description: "Memory plugin package",
-        clawdbot: { extensions: ["./index.ts"] },
+        moltbot: { extensions: ["./index.ts"] },
       }),
       "utf-8",
     );
@@ -193,7 +193,7 @@ describe("loadClawdbotPlugins", () => {
 
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -217,7 +217,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "allowed", register(api) { api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true })); } };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -240,7 +240,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "blocked", register() {} };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -263,7 +263,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "configurable", register() {} };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -309,7 +309,7 @@ describe("loadClawdbotPlugins", () => {
 } };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -333,7 +333,7 @@ describe("loadClawdbotPlugins", () => {
 } };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -359,7 +359,7 @@ describe("loadClawdbotPlugins", () => {
 } };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -384,7 +384,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "config-disable", register() {} };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -411,7 +411,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "memory-b", kind: "memory", register() {} };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -434,7 +434,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "memory-off", kind: "memory", register() {} };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {
@@ -463,7 +463,7 @@ describe("loadClawdbotPlugins", () => {
       body: `export default { id: "shadow", register() {} };`,
     });
 
-    const registry = loadClawdbotPlugins({
+    const registry = loadMoltbotPlugins({
       cache: false,
       config: {
         plugins: {

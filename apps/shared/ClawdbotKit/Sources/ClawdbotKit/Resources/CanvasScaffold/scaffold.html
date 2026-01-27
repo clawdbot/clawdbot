@@ -55,7 +55,7 @@
         backface-visibility: hidden;
         opacity: 0.45;
         pointer-events: none;
-        animation: clawdbot-grid-drift 140s ease-in-out infinite alternate;
+        animation: moltbot-grid-drift 140s ease-in-out infinite alternate;
       }
       :root[data-platform="android"] body::before { opacity: 0.80; }
       body::after {
@@ -73,7 +73,7 @@
         backface-visibility: hidden;
         transform: translate3d(0,0,0);
         pointer-events: none;
-        animation: clawdbot-glow-drift 110s ease-in-out infinite alternate;
+        animation: moltbot-glow-drift 110s ease-in-out infinite alternate;
       }
       :root[data-platform="android"] body::after { opacity: 0.85; }
       @supports (mix-blend-mode: screen) {
@@ -82,12 +82,12 @@
       @supports not (mix-blend-mode: screen) {
         body::after { opacity: 0.70; }
       }
-      @keyframes clawdbot-grid-drift {
+      @keyframes moltbot-grid-drift {
         0%   { transform: translate3d(-12px, 8px, 0) rotate(-7deg); opacity: 0.40; }
         50%  { transform: translate3d( 10px,-7px, 0) rotate(-6.6deg); opacity: 0.56; }
         100% { transform: translate3d(-8px,  6px, 0) rotate(-7.2deg); opacity: 0.42; }
       }
-      @keyframes clawdbot-glow-drift {
+      @keyframes moltbot-glow-drift {
         0%   { transform: translate3d(-18px, 12px, 0) scale(1.02); opacity: 0.40; }
         50%  { transform: translate3d( 14px,-10px, 0) scale(1.05); opacity: 0.52; }
         100% { transform: translate3d(-10px,  8px, 0) scale(1.03); opacity: 0.43; }
@@ -101,14 +101,14 @@
         touch-action: none;
         z-index: 1;
       }
-      :root[data-platform="android"] #clawdbot-canvas {
+      :root[data-platform="android"] #moltbot-canvas {
         background:
           radial-gradient(1100px 800px at 20% 15%, rgba(42, 113, 255, 0.78), rgba(0,0,0,0) 58%),
           radial-gradient(900px 650px at 82% 28%, rgba(255, 0, 138, 0.66), rgba(0,0,0,0) 62%),
           radial-gradient(1000px 900px at 60% 88%, rgba(0, 209, 255, 0.58), rgba(0,0,0,0) 62%),
           #141c33;
       }
-      #clawdbot-status {
+      #moltbot-status {
         position: fixed;
         inset: 0;
         display: none;
@@ -119,7 +119,7 @@
         pointer-events: none;
         z-index: 3;
       }
-      #clawdbot-status .card {
+      #moltbot-status .card {
         text-align: center;
         padding: 16px 18px;
         border-radius: 14px;
@@ -129,13 +129,13 @@
         -webkit-backdrop-filter: blur(14px);
         backdrop-filter: blur(14px);
       }
-      #clawdbot-status .title {
+      #moltbot-status .title {
         font: 600 20px -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
         letter-spacing: 0.2px;
         color: rgba(255,255,255,0.92);
         text-shadow: 0 0 22px rgba(42, 113, 255, 0.35);
       }
-      #clawdbot-status .subtitle {
+      #moltbot-status .subtitle {
         margin-top: 6px;
         font: 500 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
         color: rgba(255,255,255,0.58);
@@ -143,20 +143,20 @@
     </style>
   </head>
   <body>
-    <canvas id="clawdbot-canvas"></canvas>
-    <div id="clawdbot-status">
+    <canvas id="moltbot-canvas"></canvas>
+    <div id="moltbot-status">
       <div class="card">
-        <div class="title" id="clawdbot-status-title">Ready</div>
-        <div class="subtitle" id="clawdbot-status-subtitle">Waiting for agent</div>
+        <div class="title" id="moltbot-status-title">Ready</div>
+        <div class="subtitle" id="moltbot-status-subtitle">Waiting for agent</div>
       </div>
     </div>
     <script>
       (() => {
-        const canvas = document.getElementById('clawdbot-canvas');
+        const canvas = document.getElementById('moltbot-canvas');
         const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('clawdbot-status');
-        const titleEl = document.getElementById('clawdbot-status-title');
-        const subtitleEl = document.getElementById('clawdbot-status-subtitle');
+        const statusEl = document.getElementById('moltbot-status');
+        const titleEl = document.getElementById('moltbot-status-title');
+        const subtitleEl = document.getElementById('moltbot-status-subtitle');
         const debugStatusEnabledByQuery = (() => {
           try {
             const params = new URLSearchParams(window.location.search);
@@ -194,7 +194,7 @@
           statusEl.style.display = 'none';
         }
 
-        window.__clawdbot = {
+        window.__moltbot = {
           canvas,
           ctx,
           setDebugStatusEnabled,

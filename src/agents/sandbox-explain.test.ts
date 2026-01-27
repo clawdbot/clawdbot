@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
   resolveSandboxConfigForAgent,
@@ -8,7 +8,7 @@ import {
 
 describe("sandbox explain helpers", () => {
   it("prefers agent overrides > global > defaults (sandbox tool policy)", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
@@ -36,7 +36,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("expands group tool shorthands inside sandbox tool policy", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
@@ -66,7 +66,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("denies still win after group expansion", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
@@ -89,7 +89,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("includes config key paths + main-session hint for non-main mode", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "non-main", scope: "agent" },

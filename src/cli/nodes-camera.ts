@@ -3,6 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { resolveCliName } from "./cli-name.js";
+
 export type CameraFacing = "front" | "back";
 
 export type CameraSnapPayload = {
@@ -70,7 +72,8 @@ export function cameraTempPath(opts: {
   const id = opts.id ?? randomUUID();
   const facingPart = opts.facing ? `-${opts.facing}` : "";
   const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(tmpDir, `clawdbot-camera-${opts.kind}${facingPart}-${id}${ext}`);
+  const cliName = resolveCliName();
+  return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
 export async function writeBase64ToFile(filePath: string, base64: string) {

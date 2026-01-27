@@ -1,13 +1,13 @@
 import Foundation
 
 enum CommandResolver {
-    private static let projectRootDefaultsKey = "clawdbot.gatewayProjectRootPath"
-    private static let helperName = "clawdbot"
+    private static let projectRootDefaultsKey = "moltbot.gatewayProjectRootPath"
+    private static let helperName = "moltbot"
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
         if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
-        let binEntry = root.appendingPathComponent("bin/clawdbot.js").path
+        let binEntry = root.appendingPathComponent("bin/moltbot.js").path
         if FileManager().isReadableFile(atPath: binEntry) { return binEntry }
         return nil
     }
@@ -52,7 +52,7 @@ enum CommandResolver {
             return url
         }
         let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/clawdbot")
+            .appendingPathComponent("Projects/moltbot")
         if FileManager().fileExists(atPath: fallback.path) {
             return fallback
         }
@@ -83,18 +83,21 @@ enum CommandResolver {
             "/usr/bin",
             "/bin",
         ]
+        #if DEBUG
+        // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
         extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
-        let clawdbotPaths = self.clawdbotManagedPaths(home: home)
-        if !clawdbotPaths.isEmpty {
-            extras.insert(contentsOf: clawdbotPaths, at: 1)
+        #endif
+        let moltbotPaths = self.clawdbotManagedPaths(home: home)
+        if !moltbotPaths.isEmpty {
+            extras.insert(contentsOf: moltbotPaths, at: 1)
         }
-        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + clawdbotPaths.count)
+        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + moltbotPaths.count)
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
     }
 
-    private static func clawdbotManagedPaths(home: URL) -> [String] {
+    private static func moltbotManagedPaths(home: URL) -> [String] {
         let base = home.appendingPathComponent(".clawdbot")
         let bin = base.appendingPathComponent("bin")
         let nodeBin = base.appendingPathComponent("tools/node/bin")
@@ -184,22 +187,26 @@ enum CommandResolver {
         return nil
     }
 
-    static func clawdbotExecutable(searchPaths: [String]? = nil) -> String? {
+    static func moltbotExecutable(searchPaths: [String]? = nil) -> String? {
         self.findExecutable(named: self.helperName, searchPaths: searchPaths)
     }
 
-    static func projectClawdbotExecutable(projectRoot: URL? = nil) -> String? {
+    static func projectMoltbotExecutable(projectRoot: URL? = nil) -> String? {
+        #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
         return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        #else
+        return nil
+        #endif
     }
 
     static func nodeCliPath() -> String? {
-        let candidate = self.projectRoot().appendingPathComponent("bin/clawdbot.js").path
+        let candidate = self.projectRoot().appendingPathComponent("bin/moltbot.js").path
         return FileManager().isReadableFile(atPath: candidate) ? candidate : nil
     }
 
-    static func hasAnyClawdbotInvoker(searchPaths: [String]? = nil) -> Bool {
+    static func hasAnyMoltbotInvoker(searchPaths: [String]? = nil) -> Bool {
         if self.clawdbotExecutable(searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
@@ -210,7 +217,7 @@ enum CommandResolver {
         return false
     }
 
-    static func clawdbotNodeCommand(
+    static func moltbotNodeCommand(
         subcommand: String,
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
@@ -231,8 +238,8 @@ enum CommandResolver {
         switch runtimeResult {
         case let .success(runtime):
             let root = self.projectRoot()
-            if let clawdbotPath = self.projectClawdbotExecutable(projectRoot: root) {
-                return [clawdbotPath, subcommand] + extraArgs
+            if let moltbotPath = self.projectMoltbotExecutable(projectRoot: root) {
+                return [moltbotPath, subcommand] + extraArgs
             }
 
             if let entry = self.gatewayEntrypoint(in: root) {
@@ -244,14 +251,14 @@ enum CommandResolver {
             }
             if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
                 // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
-                return [pnpm, "--silent", "clawdbot", subcommand] + extraArgs
+                return [pnpm, "--silent", "moltbot", subcommand] + extraArgs
             }
-            if let clawdbotPath = self.clawdbotExecutable(searchPaths: searchPaths) {
-                return [clawdbotPath, subcommand] + extraArgs
+            if let moltbotPath = self.clawdbotExecutable(searchPaths: searchPaths) {
+                return [moltbotPath, subcommand] + extraArgs
             }
 
             let missingEntry = """
-            clawdbot entrypoint missing (looked for dist/index.js or bin/clawdbot.js); run pnpm build.
+            moltbot entrypoint missing (looked for dist/index.js or bin/moltbot.js); run pnpm build.
             """
             return self.errorCommand(with: missingEntry)
 
@@ -260,8 +267,8 @@ enum CommandResolver {
         }
     }
 
-    // Existing callers still refer to clawdbotCommand; keep it as node alias.
-    static func clawdbotCommand(
+    // Existing callers still refer to moltbotCommand; keep it as node alias.
+    static func moltbotCommand(
         subcommand: String,
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
@@ -282,23 +289,7 @@ enum CommandResolver {
         guard !settings.target.isEmpty else { return nil }
         guard let parsed = self.parseSSHTarget(settings.target) else { return nil }
 
-        var args: [String] = [
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
-        ]
-        if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
-        let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !identity.isEmpty {
-            // Only use IdentitiesOnly when an explicit identity file is provided.
-            // This allows 1Password SSH agent and other SSH agents to provide keys.
-            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
-            args.append(contentsOf: ["-i", identity])
-        }
-        let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
-        args.append(userHost)
-
-        // Run the real clawdbot CLI on the remote host.
+        // Run the real moltbot CLI on the remote host.
         let exportedPath = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -315,7 +306,7 @@ enum CommandResolver {
 
         let projectSection = if userPRJ.isEmpty {
             """
-            DEFAULT_PRJ="$HOME/Projects/clawdbot"
+            DEFAULT_PRJ="$HOME/Projects/moltbot"
             if [ -d "$DEFAULT_PRJ" ]; then
               PRJ="$DEFAULT_PRJ"
               cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
@@ -324,7 +315,7 @@ enum CommandResolver {
         } else {
             """
             PRJ=\(self.shellQuote(userPRJ))
-            cd \(self.shellQuote(userPRJ)) || { echo "Project root not found: \(userPRJ)"; exit 127; }
+            cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
             """
         }
 
@@ -354,9 +345,9 @@ enum CommandResolver {
         CLI="";
         \(cliSection)
         \(projectSection)
-        if command -v clawdbot >/dev/null 2>&1; then
-          CLI="$(command -v clawdbot)"
-          clawdbot \(quotedArgs);
+        if command -v moltbot >/dev/null 2>&1; then
+          CLI="$(command -v moltbot)"
+          moltbot \(quotedArgs);
         elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/dist/index.js" ]; then
           if command -v node >/dev/null 2>&1; then
             CLI="node $PRJ/dist/index.js"
@@ -364,21 +355,30 @@ enum CommandResolver {
           else
             echo "Node >=22 required on remote host"; exit 127;
           fi
-        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/clawdbot.js" ]; then
+        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/moltbot.js" ]; then
           if command -v node >/dev/null 2>&1; then
-            CLI="node $PRJ/bin/clawdbot.js"
-            node "$PRJ/bin/clawdbot.js" \(quotedArgs);
+            CLI="node $PRJ/bin/moltbot.js"
+            node "$PRJ/bin/moltbot.js" \(quotedArgs);
           else
             echo "Node >=22 required on remote host"; exit 127;
           fi
         elif command -v pnpm >/dev/null 2>&1; then
-          CLI="pnpm --silent clawdbot"
-          pnpm --silent clawdbot \(quotedArgs);
+          CLI="pnpm --silent moltbot"
+          pnpm --silent moltbot \(quotedArgs);
         else
-          echo "clawdbot CLI missing on remote host"; exit 127;
+          echo "moltbot CLI missing on remote host"; exit 127;
         fi
         """
-        args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
+        let options: [String] = [
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UpdateHostKeys=yes",
+        ]
+        let args = self.sshArguments(
+            target: parsed,
+            identity: settings.identity,
+            options: options,
+            remoteCommand: ["/bin/sh", "-c", scriptBody])
         return ["/usr/bin/ssh"] + args
     }
 
@@ -394,7 +394,7 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil) -> RemoteSettings
     {
-        let root = configRoot ?? ClawdbotConfigFile.loadDict()
+        let root = configRoot ?? MoltbotConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
         let target = defaults.string(forKey: remoteTargetKey) ?? ""
         let identity = defaults.string(forKey: remoteIdentityKey) ?? ""
@@ -427,8 +427,11 @@ enum CommandResolver {
     }
 
     static func parseSSHTarget(_ target: String) -> SSHParsedTarget? {
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = self.normalizeSSHTargetInput(target)
         guard !trimmed.isEmpty else { return nil }
+        if trimmed.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
+            return nil
+        }
         let userHostPort: String
         let user: String?
         if let atRange = trimmed.range(of: "@") {
@@ -444,13 +447,31 @@ enum CommandResolver {
         if let colon = userHostPort.lastIndex(of: ":"), colon != userHostPort.startIndex {
             host = String(userHostPort[..<colon])
             let portStr = String(userHostPort[userHostPort.index(after: colon)...])
-            port = Int(portStr) ?? 22
+            guard let parsedPort = Int(portStr), parsedPort > 0, parsedPort <= 65535 else {
+                return nil
+            }
+            port = parsedPort
         } else {
             host = userHostPort
             port = 22
         }
 
-        return SSHParsedTarget(user: user, host: host, port: port)
+        return self.makeSSHTarget(user: user, host: host, port: port)
+    }
+
+    static func sshTargetValidationMessage(_ target: String) -> String? {
+        let trimmed = self.normalizeSSHTargetInput(target)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("-") {
+            return "SSH target cannot start with '-'"
+        }
+        if trimmed.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
+            return "SSH target cannot contain spaces"
+        }
+        if self.parseSSHTarget(trimmed) == nil {
+            return "SSH target must look like user@host[:port]"
+        }
+        return nil
     }
 
     private static func shellQuote(_ text: String) -> String {
@@ -466,6 +487,64 @@ enum CommandResolver {
             expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
         }
         return URL(fileURLWithPath: expanded)
+    }
+
+    private static func normalizeSSHTargetInput(_ target: String) -> String {
+        var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("ssh ") {
+            trimmed = trimmed.replacingOccurrences(of: "ssh ", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
+    private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {
+        if value.isEmpty { return false }
+        if !allowLeadingDash, value.hasPrefix("-") { return false }
+        let invalid = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        return value.rangeOfCharacter(from: invalid) == nil
+    }
+
+    static func makeSSHTarget(user: String?, host: String, port: Int) -> SSHParsedTarget? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.isValidSSHComponent(trimmedHost) else { return nil }
+        let trimmedUser = user?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUser: String?
+        if let trimmedUser {
+            guard self.isValidSSHComponent(trimmedUser) else { return nil }
+            normalizedUser = trimmedUser.isEmpty ? nil : trimmedUser
+        } else {
+            normalizedUser = nil
+        }
+        guard port > 0, port <= 65535 else { return nil }
+        return SSHParsedTarget(user: normalizedUser, host: trimmedHost, port: port)
+    }
+
+    private static func sshTargetString(_ target: SSHParsedTarget) -> String {
+        target.user.map { "\($0)@\(target.host)" } ?? target.host
+    }
+
+    static func sshArguments(
+        target: SSHParsedTarget,
+        identity: String,
+        options: [String],
+        remoteCommand: [String] = []) -> [String]
+    {
+        var args = options
+        if target.port > 0 {
+            args.append(contentsOf: ["-p", String(target.port)])
+        }
+        let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedIdentity.isEmpty {
+            // Only use IdentitiesOnly when an explicit identity file is provided.
+            // This allows 1Password SSH agent and other SSH agents to provide keys.
+            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
+            args.append(contentsOf: ["-i", trimmedIdentity])
+        }
+        args.append("--")
+        args.append(self.sshTargetString(target))
+        args.append(contentsOf: remoteCommand)
+        return args
     }
 
     #if SWIFT_PACKAGE

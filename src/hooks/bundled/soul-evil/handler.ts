@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
@@ -11,7 +11,7 @@ const soulEvilHook: HookHandler = async (event) => {
 
   const context = event.context;
   if (context.sessionKey && isSubagentSessionKey(context.sessionKey)) return;
-  const cfg = context.cfg as ClawdbotConfig | undefined;
+  const cfg = context.cfg as MoltbotConfig | undefined;
   const hookConfig = resolveHookConfig(cfg, HOOK_KEY);
   if (!hookConfig || hookConfig.enabled === false) return;
 

@@ -9,7 +9,7 @@ describe("config env vars", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             env: { vars: { OPENROUTER_API_KEY: "config-key" } },
@@ -33,7 +33,7 @@ describe("config env vars", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             env: { vars: { OPENROUTER_API_KEY: "config-key" } },
@@ -57,7 +57,7 @@ describe("config env vars", () => {
       const configDir = path.join(home, ".clawdbot");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "clawdbot.json"),
+        path.join(configDir, "moltbot.json"),
         JSON.stringify(
           {
             env: { vars: { GROQ_API_KEY: "gsk-config" } },

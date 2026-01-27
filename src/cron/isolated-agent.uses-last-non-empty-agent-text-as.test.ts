@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -22,7 +22,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "clawdbot-cron-" });
+  return withTempHomeBase(fn, { prefix: "moltbot-cron-" });
 }
 
 async function writeSessionStore(home: string) {
@@ -57,9 +57,9 @@ async function readSessionEntry(storePath: string, key: string) {
 function makeCfg(
   home: string,
   storePath: string,
-  overrides: Partial<ClawdbotConfig> = {},
-): ClawdbotConfig {
-  const base: ClawdbotConfig = {
+  overrides: Partial<MoltbotConfig> = {},
+): MoltbotConfig {
+  const base: MoltbotConfig = {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
@@ -67,7 +67,7 @@ function makeCfg(
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } as ClawdbotConfig;
+  } as MoltbotConfig;
   return { ...base, ...overrides };
 }
 

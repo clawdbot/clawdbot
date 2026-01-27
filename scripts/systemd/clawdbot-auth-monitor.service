@@ -1,14 +1,14 @@
 [Unit]
-Description=Clawdbot Auth Expiry Monitor
+Description=Moltbot Auth Expiry Monitor
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/home/admin/clawdbot/scripts/auth-monitor.sh
+ExecStart=/home/admin/moltbot/scripts/auth-monitor.sh
 # Configure notification channels via environment
 Environment=WARN_HOURS=2
 # Environment=NOTIFY_PHONE=+1234567890
-# Environment=NOTIFY_NTFY=clawdbot-alerts
+# Environment=NOTIFY_NTFY=moltbot-alerts
 
 [Install]
 WantedBy=default.target

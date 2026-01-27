@@ -1,7 +1,7 @@
 ---
 name: session-logs
 description: Search and analyze your own session logs (older/parent conversations) using jq.
-metadata: {"clawdbot":{"emoji":"📜","requires":{"bins":["jq","rg"]}}}
+metadata: {"moltbot":{"emoji":"📜","requires":{"bins":["jq","rg"]}}}
 ---
 
 # session-logs

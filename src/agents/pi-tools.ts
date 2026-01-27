@@ -5,7 +5,7 @@ import {
   createWriteTool,
   readTool,
 } from "@mariozechner/pi-coding-agent";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -16,7 +16,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
-import { createClawdbotTools } from "./clawdbot-tools.js";
+import { createMoltbotTools } from "./moltbot-tools.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import {
@@ -29,7 +29,7 @@ import {
 import {
   assertRequiredParams,
   CLAUDE_PARAM_GROUPS,
-  createClawdbotReadTool,
+  createMoltbotReadTool,
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
@@ -78,7 +78,7 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
-function resolveExecConfig(cfg: ClawdbotConfig | undefined) {
+function resolveExecConfig(cfg: MoltbotConfig | undefined) {
   const globalExec = cfg?.tools?.exec;
   return {
     host: globalExec?.host,
@@ -104,7 +104,7 @@ export const __testing = {
   assertRequiredParams,
 } as const;
 
-export function createClawdbotCodingTools(options?: {
+export function createMoltbotCodingTools(options?: {
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
@@ -114,7 +114,7 @@ export function createClawdbotCodingTools(options?: {
   sessionKey?: string;
   agentDir?: string;
   workspaceDir?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   abortSignal?: AbortSignal;
   /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
@@ -140,6 +140,10 @@ export function createClawdbotCodingTools(options?: {
   groupSpace?: string | null;
   /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -157,6 +161,8 @@ export function createClawdbotCodingTools(options?: {
     agentProviderPolicy,
     profile,
     providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
   } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
@@ -172,17 +178,32 @@ export function createClawdbotCodingTools(options?: {
     groupChannel: options?.groupChannel,
     groupSpace: options?.groupSpace,
     accountId: options?.agentAccountId,
+    senderId: options?.senderId,
+    senderName: options?.senderName,
+    senderUsername: options?.senderUsername,
+    senderE164: options?.senderE164,
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+
+  const mergeAlsoAllow = (policy: typeof profilePolicy, alsoAllow?: string[]) => {
+    if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) return policy;
+    return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
+  };
+
+  const profilePolicyWithAlsoAllow = mergeAlsoAllow(profilePolicy, profileAlsoAllow);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllow(
+    providerProfilePolicy,
+    providerProfileAlsoAllow,
+  );
   const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(options.config)
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicy,
-    providerProfilePolicy,
+    profilePolicyWithAlsoAllow,
+    providerProfilePolicyWithAlsoAllow,
     globalPolicy,
     globalProviderPolicy,
     agentPolicy,
@@ -211,7 +232,7 @@ export function createClawdbotCodingTools(options?: {
         return [createSandboxedReadTool(sandboxRoot)];
       }
       const freshReadTool = createReadTool(workspaceRoot);
-      return [createClawdbotReadTool(freshReadTool)];
+      return [createMoltbotReadTool(freshReadTool)];
     }
     if (tool.name === "bash" || tool.name === execToolName) return [];
     if (tool.name === "write") {
@@ -280,12 +301,9 @@ export function createClawdbotCodingTools(options?: {
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
-    ...createClawdbotTools({
-      browserControlUrl: sandbox?.browser?.controlUrl,
+    ...createMoltbotTools({
+      sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-      allowedControlUrls: sandbox?.browserAllowedControlUrls,
-      allowedControlHosts: sandbox?.browserAllowedControlHosts,
-      allowedControlPorts: sandbox?.browserAllowedControlPorts,
       agentSessionKey: options?.sessionKey,
       agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
       agentAccountId: options?.agentAccountId,
@@ -333,18 +351,18 @@ export function createClawdbotCodingTools(options?: {
     if (resolved.unknownAllowlist.length > 0) {
       const entries = resolved.unknownAllowlist.join(", ");
       const suffix = resolved.strippedAllowlist
-        ? "Ignoring allowlist so core tools remain available."
+        ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
         : "These entries won't match any tool unless the plugin is enabled.";
       logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
     }
     return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
   };
   const profilePolicyExpanded = resolvePolicy(
-    profilePolicy,
+    profilePolicyWithAlsoAllow,
     profile ? `tools.profile (${profile})` : "tools.profile",
   );
   const providerProfileExpanded = resolvePolicy(
-    providerProfilePolicy,
+    providerProfilePolicyWithAlsoAllow,
     providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
   );
   const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");

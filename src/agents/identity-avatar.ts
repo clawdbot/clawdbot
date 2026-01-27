@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
@@ -20,7 +20,7 @@ function normalizeAvatarValue(value: string | undefined | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-function resolveAvatarSource(cfg: ClawdbotConfig, agentId: string): string | null {
+function resolveAvatarSource(cfg: MoltbotConfig, agentId: string): string | null {
   const fromConfig = normalizeAvatarValue(resolveAgentIdentity(cfg, agentId)?.avatar);
   if (fromConfig) return fromConfig;
   const workspace = resolveAgentWorkspaceDir(cfg, agentId);
@@ -79,7 +79,7 @@ function resolveLocalAvatarPath(params: {
   return { ok: true, filePath: realPath };
 }
 
-export function resolveAgentAvatar(cfg: ClawdbotConfig, agentId: string): AgentAvatarResolution {
+export function resolveAgentAvatar(cfg: MoltbotConfig, agentId: string): AgentAvatarResolution {
   const source = resolveAvatarSource(cfg, agentId);
   if (!source) {
     return { kind: "none", reason: "missing" };

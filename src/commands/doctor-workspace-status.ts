@@ -1,11 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { loadClawdbotPlugins } from "../plugins/loader.js";
+import type { MoltbotConfig } from "../config/config.js";
+import { loadMoltbotPlugins } from "../plugins/loader.js";
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
-export function noteWorkspaceStatus(cfg: ClawdbotConfig) {
+export function noteWorkspaceStatus(cfg: MoltbotConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
@@ -25,7 +25,7 @@ export function noteWorkspaceStatus(cfg: ClawdbotConfig) {
     "Skills status",
   );
 
-  const pluginRegistry = loadClawdbotPlugins({
+  const pluginRegistry = loadMoltbotPlugins({
     config: cfg,
     workspaceDir,
     logger: {

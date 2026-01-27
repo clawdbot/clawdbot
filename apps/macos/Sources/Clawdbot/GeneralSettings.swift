@@ -1,7 +1,7 @@
 import AppKit
-import ClawdbotDiscovery
-import ClawdbotIPC
-import ClawdbotKit
+import MoltbotDiscovery
+import MoltbotIPC
+import MoltbotKit
 import Observation
 import SwiftUI
 
@@ -24,8 +24,8 @@ struct GeneralSettings: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 12) {
                     SettingsToggleRow(
-                        title: "Clawdbot active",
-                        subtitle: "Pause to stop the Clawdbot gateway; no messages will be processed.",
+                        title: "Moltbot active",
+                        subtitle: "Pause to stop the Moltbot gateway; no messages will be processed.",
                         binding: self.activeBinding)
 
                     self.connectionSection
@@ -34,12 +34,12 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Launch at login",
-                        subtitle: "Automatically start Clawdbot after you sign in.",
+                        subtitle: "Automatically start Moltbot after you sign in.",
                         binding: self.$state.launchAtLogin)
 
                     SettingsToggleRow(
                         title: "Show Dock icon",
-                        subtitle: "Keep Clawdbot visible in the Dock instead of menu-bar-only mode.",
+                        subtitle: "Keep Moltbot visible in the Dock instead of menu-bar-only mode.",
                         binding: self.$state.showDockIcon)
 
                     SettingsToggleRow(
@@ -71,7 +71,7 @@ struct GeneralSettings: View {
                 Spacer(minLength: 12)
                 HStack {
                     Spacer()
-                    Button("Quit Clawdbot") { NSApp.terminate(nil) }
+                    Button("Quit Moltbot") { NSApp.terminate(nil) }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -98,7 +98,7 @@ struct GeneralSettings: View {
 
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Clawdbot runs")
+            Text("Moltbot runs")
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -167,12 +167,12 @@ struct GeneralSettings: View {
                                 .frame(width: 280)
                         }
                         LabeledContent("Project root") {
-                            TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
+                            TextField("/home/you/Projects/moltbot", text: self.$state.remoteProjectRoot)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 280)
                         }
                         LabeledContent("CLI path") {
-                            TextField("/Applications/Clawdbot.app/.../clawdbot", text: self.$state.remoteCliPath)
+                            TextField("/Applications/Moltbot.app/.../moltbot", text: self.$state.remoteCliPath)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 280)
                         }
@@ -243,25 +243,36 @@ struct GeneralSettings: View {
     }
 
     private var remoteSshRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text("SSH target")
-                .font(.callout.weight(.semibold))
-                .frame(width: self.remoteLabelWidth, alignment: .leading)
-            TextField("user@host[:22]", text: self.$state.remoteTarget)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: .infinity)
-            Button {
-                Task { await self.testRemote() }
-            } label: {
-                if self.remoteStatus == .checking {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Test remote")
+        let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let validationMessage = CommandResolver.sshTargetValidationMessage(trimmedTarget)
+        let canTest = !trimmedTarget.isEmpty && validationMessage == nil
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("SSH target")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                TextField("user@host[:22]", text: self.$state.remoteTarget)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Button {
+                    Task { await self.testRemote() }
+                } label: {
+                    if self.remoteStatus == .checking {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Test remote")
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.remoteStatus == .checking || !canTest)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(self.remoteStatus == .checking || self.state.remoteTarget
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            }
         }
     }
 
@@ -540,8 +551,15 @@ extension GeneralSettings {
             }
 
             // Step 1: basic SSH reachability check
+            guard let sshCommand = Self.sshCheckCommand(
+                target: settings.target,
+                identity: settings.identity)
+            else {
+                self.remoteStatus = .failed("SSH target is invalid")
+                return
+            }
             let sshResult = await ShellExecutor.run(
-                command: Self.sshCheckCommand(target: settings.target, identity: settings.identity),
+                command: sshCommand,
                 cwd: nil,
                 env: nil,
                 timeout: 8)
@@ -587,20 +605,20 @@ extension GeneralSettings {
         return !host.isEmpty
     }
 
-    private static func sshCheckCommand(target: String, identity: String) -> [String] {
-        var args: [String] = [
-            "/usr/bin/ssh",
+    private static func sshCheckCommand(target: String, identity: String) -> [String]? {
+        guard let parsed = CommandResolver.parseSSHTarget(target) else { return nil }
+        let options = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "UpdateHostKeys=yes",
         ]
-        if !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            args.append(contentsOf: ["-i", identity])
-        }
-        args.append(target)
-        args.append("echo ok")
-        return args
+        let args = CommandResolver.sshArguments(
+            target: parsed,
+            identity: identity,
+            options: options,
+            remoteCommand: ["echo", "ok"])
+        return ["/usr/bin/ssh"] + args
     }
 
     private func formatSSHFailure(_ response: Response, target: String) -> String {
@@ -641,7 +659,7 @@ extension GeneralSettings {
         let alert = NSAlert()
         alert.messageText = "Log file not found"
         alert.informativeText = """
-        Looked for clawdbot logs in /tmp/clawdbot/.
+        Looked for moltbot logs in /tmp/moltbot/.
         Run a health check or send a message to generate activity, then try again.
         """
         alert.alertStyle = .informational
@@ -665,7 +683,7 @@ extension GeneralSettings {
                 host: host,
                 port: gateway.sshPort)
             self.state.remoteCliPath = gateway.cliPath ?? ""
-            ClawdbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
+            MoltbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
         }
     }
 }
@@ -693,8 +711,8 @@ extension GeneralSettings {
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteIdentity = "/tmp/id_ed25519"
-        state.remoteProjectRoot = "/tmp/clawdbot"
-        state.remoteCliPath = "/tmp/clawdbot"
+        state.remoteProjectRoot = "/tmp/moltbot"
+        state.remoteCliPath = "/tmp/moltbot"
 
         let view = GeneralSettings(state: state)
         view.gatewayStatus = GatewayEnvironmentStatus(

@@ -1,5 +1,5 @@
 import Testing
-@testable import Clawdbot
+@testable import Moltbot
 
 struct VoiceWakeHelpersTests {
     @Test func sanitizeTriggersTrimsAndDropsEmpty() {
