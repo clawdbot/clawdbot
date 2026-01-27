@@ -1,4 +1,12 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
+import {
+  OVHCLOUD_BASE_URL,
+  OVHCLOUD_DEFAULT_COST,
+  OVHCLOUD_DEFAULT_CONTEXT_WINDOW,
+  OVHCLOUD_DEFAULT_MAX_TOKENS,
+  OVHCLOUD_DEFAULT_MODEL_ID,
+  OVHCLOUD_DEFAULT_MODEL_REF,
+} from "../agents/ovhcloud-models.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
@@ -50,6 +58,16 @@ export const KIMI_CODE_DEFAULT_COST = {
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+};
+
+// Re-export OVHcloud constants from ovhcloud-models.ts
+export {
+  OVHCLOUD_BASE_URL,
+  OVHCLOUD_DEFAULT_COST,
+  OVHCLOUD_DEFAULT_CONTEXT_WINDOW,
+  OVHCLOUD_DEFAULT_MAX_TOKENS,
+  OVHCLOUD_DEFAULT_MODEL_ID,
+  OVHCLOUD_DEFAULT_MODEL_REF,
 };
 
 const MINIMAX_MODEL_CATALOG = {
@@ -114,5 +132,17 @@ export function buildKimiCodeModelDefinition(): ModelDefinitionConfig {
     maxTokens: KIMI_CODE_MAX_TOKENS,
     headers: KIMI_CODE_HEADERS,
     compat: KIMI_CODE_COMPAT,
+  };
+}
+
+export function buildOvhcloudModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: OVHCLOUD_DEFAULT_MODEL_ID,
+    name: "gpt-oss-120b",
+    reasoning: false,
+    input: ["text"],
+    cost: OVHCLOUD_DEFAULT_COST,
+    contextWindow: OVHCLOUD_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: OVHCLOUD_DEFAULT_MAX_TOKENS,
   };
 }

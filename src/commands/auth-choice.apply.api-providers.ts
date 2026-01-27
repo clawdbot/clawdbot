@@ -21,6 +21,8 @@ import {
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyOvhcloudConfig,
+  applyOvhcloudProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyVeniceConfig,
@@ -31,6 +33,7 @@ import {
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  OVHCLOUD_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -39,6 +42,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setOvhcloudApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
@@ -83,6 +87,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "ovhcloud") {
+      authChoice = "ovhcloud-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     }
@@ -513,6 +519,65 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "ovhcloud-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "ovhcloud") {
+      await setOvhcloudApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Access the control panel at https://www.ovhcloud.com/ and navigate to",
+          "Public Cloud > AI & Machine Learning > AI Endpoints > API Keys",
+          "Recommended model: gpt-oss-120b",
+        ].join("\n"),
+        "OVHcloud AI Endpoints",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("ovhcloud");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OVHCLOUD_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setOvhcloudApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter OVHcloud AI Endpoints API key",
+        validate: validateApiKeyInput,
+      });
+      await setOvhcloudApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "ovhcloud:default",
+      provider: "ovhcloud",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: OVHCLOUD_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyOvhcloudConfig,
+        applyProviderConfig: applyOvhcloudProviderConfig,
+        noteDefault: OVHCLOUD_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });
