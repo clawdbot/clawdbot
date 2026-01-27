@@ -38,6 +38,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { logVerbose } from "../../globals.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
@@ -656,6 +657,14 @@ async function dispatchDiscordCommandInteraction(params: {
       modeWhenAccessGroupsOff: "configured",
     });
     if (!commandAuthorized) {
+      // Log warning when no allowlist is configured to help users debug
+      const anyAuthorizerConfigured = authorizers.some((entry) => entry.configured);
+      if (!anyAuthorizerConfigured) {
+        logVerbose(
+          `discord: slash command rejected for user ${user.id} - no allowlist configured. ` +
+            `Configure channels.discord.guilds.<id>.users or channels.discord.dm.allowFrom to allow users.`,
+        );
+      }
       await respond("You are not authorized to use this command.", { ephemeral: true });
       return;
     }
