@@ -220,3 +220,15 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qwen-portal-auth/**"
+
+"kubernetes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "charts/**"
+          - "docs/install/kubernetes.md"
+          - ".github/workflows/helm-test.yml"
+
+"helm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "charts/**"

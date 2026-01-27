@@ -1,0 +1,33 @@
+# Basic configuration for local testing or development
+
+image:
+  repository: clawdbot
+  tag: local
+  pullPolicy: Never
+
+gateway:
+  bind: lan
+  port: 18789
+  allowUnconfigured: false
+
+secrets:
+  create: true
+  data:
+    # Set via --set or environment variables
+    anthropicApiKey: ""
+    gatewayToken: ""
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+ingress:
+  enabled: false
+
+resources:
+  limits:
+    memory: 2Gi
+    cpu: 1000m
+  requests:
+    memory: 512Mi
+    cpu: 250m

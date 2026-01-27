@@ -101,6 +101,7 @@ Tip: if you don’t have a global install yet, run repo commands via `pnpm moltb
 ### 4) Other install options
 
 - Docker: [Docker](/install/docker)
+- Kubernetes: [Kubernetes (Helm)](/install/kubernetes)
 - Nix: [Nix](/install/nix)
 - Ansible: [Ansible](/install/ansible)
 - Bun (CLI only): [Bun](/install/bun)

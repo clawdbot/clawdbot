@@ -1,0 +1,58 @@
+# Configuration similar to Fly.io deployment
+# Mimics fly.toml settings
+
+image:
+  repository: ghcr.io/clawdbot/clawdbot
+  tag: "2026.1.25"
+  pullPolicy: IfNotPresent
+
+gateway:
+  bind: lan
+  port: 3000  # Fly.io uses port 3000
+  allowUnconfigured: true
+  extraArgs: []
+
+env:
+  NODE_ENV: production
+  CLAWDBOT_STATE_DIR: /home/node/.clawdbot
+  CLAWDBOT_WORKSPACE_DIR: /home/node/clawd
+  NODE_OPTIONS: "--max-old-space-size=1536"  # Fly.io recommendation
+
+secrets:
+  create: false
+  existingSecret: clawdbot-secrets
+
+persistence:
+  enabled: true
+  size: 1Gi  # Similar to Fly.io volume size
+
+resources:
+  limits:
+    memory: 2Gi  # shared-cpu-2x on Fly.io
+    cpu: 1000m
+  requests:
+    memory: 512Mi
+    cpu: 250m
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "clawdbot"
+  hosts:
+    - host: my-clawdbot.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: clawdbot-tls
+      hosts:
+        - my-clawdbot.example.com

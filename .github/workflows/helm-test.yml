@@ -1,0 +1,125 @@
+name: Helm Chart Tests
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'Dockerfile'
+      - '.github/workflows/helm-test.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/**'
+      - 'Dockerfile'
+
+jobs:
+  lint-test:
+    name: Lint and Test Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+
+      - name: Lint Helm chart
+        run: |
+          helm lint charts/clawdbot
+          helm lint charts/clawdbot --values charts/clawdbot/examples/values-basic.yaml
+          helm lint charts/clawdbot --values charts/clawdbot/examples/values-production.yaml
+
+      - name: Template validation
+        run: |
+          helm template test charts/clawdbot \
+            --values charts/clawdbot/examples/values-basic.yaml \
+            --set secrets.data.anthropicApiKey=test-key \
+            > /tmp/manifests.yaml
+          cat /tmp/manifests.yaml
+
+  kind-test:
+    name: Test on Kind
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: clawdbot:test
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1.8.0
+        with:
+          cluster_name: clawdbot-test
+          config: |
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            nodes:
+            - role: control-plane
+
+      - name: Load image into Kind
+        run: |
+          kind load docker-image clawdbot:test --name clawdbot-test
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+
+      - name: Install Helm chart
+        run: |
+          helm install test-clawdbot charts/clawdbot \
+            --values charts/clawdbot/examples/values-basic.yaml \
+            --set image.repository=clawdbot \
+            --set image.tag=test \
+            --set image.pullPolicy=Never \
+            --set secrets.data.anthropicApiKey=test-key \
+            --set secrets.data.gatewayToken=$(openssl rand -hex 32) \
+            --wait --timeout=3m
+
+      - name: Verify deployment
+        run: |
+          kubectl get all -l app.kubernetes.io/name=clawdbot
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=clawdbot --timeout=120s
+          kubectl get pvc -l app.kubernetes.io/name=clawdbot
+
+      - name: Check pod logs
+        if: always()
+        run: |
+          POD_NAME=$(kubectl get pod -l app.kubernetes.io/name=clawdbot -o jsonpath='{.items[0].metadata.name}')
+          kubectl logs $POD_NAME --tail=100
+
+      - name: Run Helm tests
+        run: |
+          helm test test-clawdbot
+
+      - name: Test health command
+        run: |
+          POD_NAME=$(kubectl get pod -l app.kubernetes.io/name=clawdbot -o jsonpath='{.items[0].metadata.name}')
+          GATEWAY_TOKEN=$(kubectl get secret test-clawdbot -o jsonpath='{.data.gatewayToken}' | base64 -d)
+          kubectl exec $POD_NAME -- node dist/index.js health --token "$GATEWAY_TOKEN" || true
+
+      - name: Verify persistence
+        run: |
+          POD_NAME=$(kubectl get pod -l app.kubernetes.io/name=clawdbot -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec $POD_NAME -- ls -la /home/node/.clawdbot
+          kubectl exec $POD_NAME -- ls -la /home/node/clawd
+
+      - name: Cleanup
+        if: always()
+        run: |
+          helm uninstall test-clawdbot || true
+          kubectl delete pvc -l app.kubernetes.io/name=clawdbot || true

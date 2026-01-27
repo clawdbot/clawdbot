@@ -1,0 +1,124 @@
+name: Release Helm Chart
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Validate chart on all triggers
+  validate:
+    name: Validate Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+
+      - name: Lint chart
+        run: helm lint charts/clawdbot
+
+      - name: Lint with production values
+        run: helm lint charts/clawdbot -f charts/clawdbot/values.yaml
+
+      - name: Template validation
+        run: helm template test charts/clawdbot --debug
+
+  # Release chart only on tag push
+  release:
+    name: Release Helm Chart
+    runs-on: ubuntu-latest
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+
+      - name: Install yq
+        uses: mikefarah/yq@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Update Chart.yaml with version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Updating Chart.yaml with version: $VERSION"
+          yq e '.version = strenv(VERSION)' -i charts/clawdbot/Chart.yaml
+          yq e '.appVersion = strenv(VERSION)' -i charts/clawdbot/Chart.yaml
+          cat charts/clawdbot/Chart.yaml
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Update values.yaml with image repository
+        run: |
+          echo "Updating image repository to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          yq e '.image.registry = "${{ env.REGISTRY }}"' -i charts/clawdbot/values.yaml
+          yq e '.image.repository = "${{ env.IMAGE_NAME }}"' -i charts/clawdbot/values.yaml
+          cat charts/clawdbot/values.yaml | head -20
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p .cr-release-packages
+          helm package charts/clawdbot -d .cr-release-packages
+          ls -la .cr-release-packages
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: charts
+          skip_existing: true
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+  # Update GitHub Pages index
+  publish-pages:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: Verify index updated
+        run: |
+          echo "Chart published successfully"
+          echo "Helm repo: https://clawdbot.github.io/clawdbot"
+          echo "Install with: helm repo add clawdbot https://clawdbot.github.io/clawdbot"

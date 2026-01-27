@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clawdbot.fullname" . }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: gateway
+      protocol: TCP
+      name: gateway
+  selector:
+    {{- include "clawdbot.selectorLabels" . | nindent 4 }}

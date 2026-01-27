@@ -1,0 +1,227 @@
+# Default values for clawdbot.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Image configuration
+image:
+  registry: ghcr.io
+  repository: clawdbot/clawdbot
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Replica count - MUST be 1 for single-user architecture
+replicaCount: 1
+
+# Service account
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false  # Node needs write access to /tmp
+
+# Gateway configuration
+gateway:
+  # Binding mode: loopback, lan, auto
+  bind: lan
+  # Gateway port
+  port: 18789
+  # Allow unconfigured startup (creates minimal config)
+  allowUnconfigured: false
+  # Additional CLI arguments
+  extraArgs: []
+
+# Environment variables (non-sensitive)
+env:
+  NODE_ENV: production
+  CLAWDBOT_STATE_DIR: /home/node/.clawdbot
+  CLAWDBOT_WORKSPACE_DIR: /home/node/clawd
+  NODE_OPTIONS: "--max-old-space-size=2048"
+
+# Secrets configuration
+secrets:
+  # Create secret from values (dev/testing only - use existingSecret in production)
+  create: true
+  # Use existing secret (production)
+  existingSecret: ""
+  # Secret data (only used if create is true)
+  data:
+    anthropicApiKey: ""
+    openaiApiKey: ""
+    discordBotToken: ""
+    telegramBotToken: ""
+    gatewayToken: ""  # Auto-generated if empty
+
+# Config file (clawdbot.json)
+config:
+  # Create ConfigMap from inline config
+  create: true
+  # Use existing ConfigMap
+  existingConfigMap: ""
+  # Config data (JSON5 format)
+  data:
+    agents:
+      defaults:
+        model:
+          primary: "anthropic/claude-opus-4-5"
+          fallbacks:
+            - "anthropic/claude-sonnet-4-5"
+            - "openai/gpt-4o"
+        maxConcurrent: 4
+        sandbox:
+          mode: "off"  # Disable Docker-in-Docker for Kubernetes
+      list:
+        - id: main
+          default: true
+    auth:
+      profiles:
+        "anthropic:default":
+          mode: token
+          provider: anthropic
+        "openai:default":
+          mode: token
+          provider: openai
+    gateway:
+      mode: local
+      bind: auto
+      auth:
+        mode: token
+      controlUi:
+        enabled: true
+    channels: {}
+    meta:
+      lastTouchedVersion: "2026.1.25"
+
+# Persistence
+persistence:
+  enabled: true
+  # Storage class (use cluster default if empty)
+  storageClass: ""
+  # Access mode
+  accessMode: ReadWriteOnce
+  # Volume size
+  size: 10Gi
+  # Annotations
+  annotations: {}
+  # Selector
+  selector: {}
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 18789
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # nginx.ingress.kubernetes.io/websocket-services: "{{ include \"clawdbot.fullname\" . }}"
+  hosts:
+    - host: clawdbot.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: clawdbot-tls
+  #    hosts:
+  #      - clawdbot.example.com
+
+# Resource limits/requests
+resources:
+  limits:
+    memory: 2Gi
+    cpu: 1000m
+  requests:
+    memory: 512Mi
+    cpu: 250m
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity rules
+affinity: {}
+
+# Init containers (for setup tasks)
+initContainers: []
+
+# Extra containers (sidecars)
+extraContainers: []
+
+# Lifecycle hooks
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - sh
+        - -c
+        - rm -f /home/node/.clawdbot/gateway.*.lock; sleep 10
+
+# Probes
+livenessProbe:
+  enabled: true
+  exec:
+    command:
+      - node
+      - dist/index.js
+      - health
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  exec:
+    command:
+      - node
+      - dist/index.js
+      - health
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+startupProbe:
+  enabled: true
+  exec:
+    command:
+      - node
+      - dist/index.js
+      - health
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 12  # 60 seconds max startup time

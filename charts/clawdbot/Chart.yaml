@@ -1,0 +1,21 @@
+apiVersion: v2
+name: clawdbot
+description: Personal AI assistant with multi-channel support
+type: application
+version: 1.0.0
+appVersion: "2026.1.25"
+keywords:
+  - ai
+  - assistant
+  - whatsapp
+  - telegram
+  - discord
+  - claude
+  - chatgpt
+home: https://github.com/clawdbot/clawdbot
+sources:
+  - https://github.com/clawdbot/clawdbot
+maintainers:
+  - name: Clawdbot Team
+    url: https://docs.clawd.bot
+icon: https://github.com/clawdbot/clawdbot/raw/main/README-header.png

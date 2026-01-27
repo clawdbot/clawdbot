@@ -1,0 +1,92 @@
+# Production configuration with Ingress and external secrets
+
+image:
+  repository: ghcr.io/clawdbot/clawdbot
+  tag: "2026.1.25"
+  pullPolicy: IfNotPresent
+
+gateway:
+  bind: lan
+  port: 18789
+  allowUnconfigured: false
+
+# Use external secret in production
+secrets:
+  create: false
+  existingSecret: clawdbot-secrets
+
+config:
+  create: true
+  data:
+    agents:
+      defaults:
+        model:
+          primary: "anthropic/claude-opus-4-5"
+          fallbacks:
+            - "anthropic/claude-sonnet-4-5"
+        maxConcurrent: 4
+        sandbox:
+          mode: "off"
+      list:
+        - id: main
+          default: true
+    auth:
+      profiles:
+        "anthropic:default":
+          mode: token
+          provider: anthropic
+    gateway:
+      mode: local
+      bind: auto
+      auth:
+        mode: token
+      controlUi:
+        enabled: true
+    channels:
+      discord:
+        enabled: true
+    meta:
+      lastTouchedVersion: "2026.1.25"
+
+persistence:
+  enabled: true
+  storageClass: fast-ssd
+  size: 20Gi
+  accessMode: ReadWriteOnce
+
+resources:
+  limits:
+    memory: 4Gi
+    cpu: 2000m
+  requests:
+    memory: 1Gi
+    cpu: 500m
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "clawdbot"
+  hosts:
+    - host: assistant.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: clawdbot-tls
+      hosts:
+        - assistant.example.com
+
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: workload-type
+              operator: In
+              values:
+                - stateful

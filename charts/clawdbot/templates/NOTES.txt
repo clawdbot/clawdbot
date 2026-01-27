@@ -1,0 +1,46 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your Clawdbot gateway is starting up. This may take 1-2 minutes.
+
+1. Check the gateway status:
+
+   kubectl get statefulset {{ include "clawdbot.fullname" . }} -n {{ .Release.Namespace }}
+   kubectl logs -f {{ include "clawdbot.fullname" . }}-0 -n {{ .Release.Namespace }}
+
+2. Access the Control UI:
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   https://{{ .host }}
+{{- end }}
+{{- else }}
+   # Port-forward to access locally:
+   kubectl port-forward {{ include "clawdbot.fullname" . }}-0 {{ .Values.gateway.port }}:{{ .Values.gateway.port }} -n {{ .Release.Namespace }}
+
+   Then visit: http://localhost:{{ .Values.gateway.port }}
+{{- end }}
+
+3. Your gateway token (for authentication):
+
+   kubectl get secret {{ include "clawdbot.secretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.gatewayToken}' | base64 -d && echo
+
+4. Configure channels:
+
+   kubectl exec -it {{ include "clawdbot.fullname" . }}-0 -n {{ .Release.Namespace }} -- node dist/index.js channels add --channel discord --token YOUR_BOT_TOKEN
+
+5. Check health:
+
+   kubectl exec -it {{ include "clawdbot.fullname" . }}-0 -n {{ .Release.Namespace }} -- node dist/index.js health
+
+Documentation: https://docs.clawd.bot
+Support: https://github.com/clawdbot/clawdbot/issues
+
+{{- if not .Values.persistence.enabled }}
+
+WARNING: Persistence is disabled. State will be lost on pod restart.
+{{- end }}
+
+{{- if eq .Values.gateway.bind "loopback" }}
+
+WARNING: Gateway is bound to loopback. External access will not work.
+{{- end }}

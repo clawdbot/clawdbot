@@ -1,0 +1,11 @@
+{{- if .Values.config.create -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clawdbot.configMapName" . }}
+  labels:
+    {{- include "clawdbot.labels" . | nindent 4 }}
+data:
+  clawdbot.json: |
+    {{ .Values.config.data | toJson | nindent 4 }}
+{{- end }}
