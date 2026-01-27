@@ -455,6 +455,12 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/wecom:
+    devDependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/whatsapp: {}
 
   extensions/zalo:
