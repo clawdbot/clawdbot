@@ -11,7 +11,8 @@
     "./cli-entry": "./dist/entry.js"
   },
   "bin": {
-    "moltbot": "dist/entry.js"
+    "moltbot": "dist/entry.js",
+    "clawdbot": "dist/entry.js"
   },
   "files": [
     "dist/acp/**",
@@ -22,6 +23,7 @@
     "dist/cli/**",
     "dist/commands/**",
     "dist/config/**",
+    "dist/compat/**",
     "dist/control-ui/**",
     "dist/cron/**",
     "dist/channels/**",
