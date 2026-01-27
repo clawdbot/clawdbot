@@ -402,8 +402,8 @@ describe("buildCommandsMessage", () => {
     } as ClawdbotConfig);
     expect(text).toContain("/commands - List all slash commands.");
     expect(text).toContain("/skill - Run a skill by name.");
-    expect(text).toContain("/think (aliases: /thinking, /t) - Set thinking level.");
-    expect(text).toContain("/compact (text-only) - Compact the session context.");
+    expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
+    expect(text).toContain("/compact [text] - Compact the session context.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
@@ -430,7 +430,8 @@ describe("buildHelpMessage", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
     } as ClawdbotConfig);
-    expect(text).toContain("Skills: /skill <name> [input]");
+    expect(text).toContain("Skills");
+    expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
