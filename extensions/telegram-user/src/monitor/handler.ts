@@ -304,6 +304,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const sender = await msg.getCompleteSender().catch(() => msg.sender);
       if (sender.type !== "user") return;
       if ("isSelf" in sender && sender.isSelf) return;
+      if (self?.id != null && sender.id === self.id) return;
 
       const senderId = String(sender.id);
       const senderPeer = resolveTelegramUserPeer(senderId);
