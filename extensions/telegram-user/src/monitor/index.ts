@@ -86,6 +86,19 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
   const { Dispatcher, filters } = await loadMtcuteDispatcher();
   const dispatcher = Dispatcher.for(client);
   const self = await client.getMe().catch(() => undefined);
+  const selfName =
+    self && typeof (self as unknown as { displayName?: unknown }).displayName === "string"
+      ? (self as unknown as { displayName: string }).displayName
+      : self && typeof (self as unknown as { firstName?: unknown }).firstName === "string"
+        ? [
+            (self as unknown as { firstName?: string }).firstName,
+            typeof (self as unknown as { lastName?: unknown }).lastName === "string"
+              ? (self as unknown as { lastName: string }).lastName
+              : undefined,
+          ]
+            .filter((entry): entry is string => Boolean(entry && entry.trim()))
+            .join(" ")
+        : undefined;
   const handleMessage = createTelegramUserMessageHandler({
     client,
     cfg,
@@ -94,7 +107,11 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
     accountConfig: account.config,
     abortSignal: opts.abortSignal,
     self: self
-      ? { id: self.id, username: "username" in self ? self.username : undefined }
+      ? {
+          id: self.id,
+          username: "username" in self ? self.username : undefined,
+          name: selfName,
+        }
       : undefined,
   });
 

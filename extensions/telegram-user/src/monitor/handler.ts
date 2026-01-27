@@ -23,7 +23,7 @@ type TelegramUserHandlerParams = {
   accountId: string;
   accountConfig: TelegramUserAccountConfig;
   abortSignal?: AbortSignal;
-  self?: { id: number; username?: string | null };
+  self?: { id: number; username?: string | null; name?: string | null };
 };
 
 function normalizeAllowEntry(raw: string): string {
@@ -82,6 +82,37 @@ function isDestroyedClientError(err: unknown): boolean {
 function isClientDestroyed(client: TelegramClient): boolean {
   const candidate = client as TelegramClient & { destroyed?: boolean };
   return candidate.destroyed === true;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildTelegramUserSelfMentionRegexes(params: {
+  username?: string | null;
+  name?: string | null;
+}): RegExp[] {
+  const patterns: string[] = [];
+  const username = params.username?.trim().replace(/^@/, "");
+  if (username) {
+    patterns.push(String.raw`\b@?${escapeRegExp(username)}\b`);
+  }
+  const name = params.name?.trim();
+  if (name) {
+    const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
+    if (parts.length > 0) {
+      patterns.push(String.raw`\b@?${parts.join(String.raw`\s+`)}\b`);
+    }
+  }
+  return patterns
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern, "i");
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is RegExp => Boolean(entry));
 }
 
 async function safeSendTyping(params: {
@@ -452,7 +483,10 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
           id: isGroup && groupPeerId ? groupPeerId : senderId,
         },
       });
-      const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+      const mentionRegexes = [
+        ...core.channel.mentions.buildMentionRegexes(cfg, route.agentId),
+        ...buildTelegramUserSelfMentionRegexes({ username: self?.username, name: self?.name }),
+      ];
       const hasAnyMention = msg.entities.some(
         (ent) => ent.kind === "mention" || ent.kind === "text_mention",
       );
