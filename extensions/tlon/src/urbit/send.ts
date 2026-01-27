@@ -1,4 +1,5 @@
 import { scot, da } from "@urbit/aura";
+import { markdownToStory, type Story } from "./story.js";
 
 export type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
@@ -12,7 +13,7 @@ type SendTextParams = {
 };
 
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
-  const story = [{ inline: [text] }];
+  const story: Story = markdownToStory(text);
   const sentAt = Date.now();
   const idUd = scot('ud', da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
@@ -60,14 +61,15 @@ export async function sendGroupMessage({
   text,
   replyToId,
 }: SendGroupParams) {
-  const story = [{ inline: [text] }];
+  const story: Story = markdownToStory(text);
   const sentAt = Date.now();
 
   // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
     try {
-      formattedReplyId = formatUd(BigInt(replyToId));
+      // scot('ud', n) formats a number as @ud with dots
+      formattedReplyId = scot('ud', BigInt(replyToId));
     } catch {
       // Fall back to raw ID if formatting fails
     }
