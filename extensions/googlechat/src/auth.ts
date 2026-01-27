@@ -1,6 +1,9 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
+import { DEFAULT_ACCOUNT_ID } from "clawdbot/plugin-sdk";
 
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { readJsonFile, readRefreshTokenFromFile } from "./file-utils.js";
+import { readGogRefreshTokenSync, resolveGogCredentialsFile } from "./gog.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
@@ -10,6 +13,7 @@ const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
 
 const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
+const oauthCache = new Map<string, { key: string; client: OAuth2Client }>();
 const verifyClient = new OAuth2Client();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
@@ -42,7 +46,7 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
   return auth;
 }
 
-export async function getGoogleChatAccessToken(
+export async function getGoogleChatAppAccessToken(
   account: ResolvedGoogleChatAccount,
 ): Promise<string> {
   const auth = getAuthInstance(account);
@@ -51,6 +55,146 @@ export async function getGoogleChatAccessToken(
   const token = typeof access === "string" ? access : access?.token;
   if (!token) {
     throw new Error("Missing Google Chat access token");
+  }
+  return token;
+}
+
+const ENV_OAUTH_CLIENT_ID = "GOOGLE_CHAT_OAUTH_CLIENT_ID";
+const ENV_OAUTH_CLIENT_SECRET = "GOOGLE_CHAT_OAUTH_CLIENT_SECRET";
+const ENV_OAUTH_REDIRECT_URI = "GOOGLE_CHAT_OAUTH_REDIRECT_URI";
+const ENV_OAUTH_CLIENT_FILE = "GOOGLE_CHAT_OAUTH_CLIENT_FILE";
+const ENV_OAUTH_REFRESH_TOKEN = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN";
+const ENV_OAUTH_REFRESH_TOKEN_FILE = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN_FILE";
+const ENV_GOG_ACCOUNT = "GOG_ACCOUNT";
+const ENV_GOG_CLIENT = "GOG_CLIENT";
+
+type OAuthClientConfig = {
+  clientId: string;
+  clientSecret: string;
+  redirectUri?: string;
+};
+
+function parseOAuthClientJson(raw: unknown): OAuthClientConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const container =
+    (record.web as Record<string, unknown> | undefined) ??
+    (record.installed as Record<string, unknown> | undefined) ??
+    record;
+  const clientId = typeof container.client_id === "string" ? container.client_id.trim() : "";
+  const clientSecret =
+    typeof container.client_secret === "string" ? container.client_secret.trim() : "";
+  const redirect =
+    Array.isArray(container.redirect_uris) && typeof container.redirect_uris[0] === "string"
+      ? container.redirect_uris[0].trim()
+      : "";
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret, redirectUri: redirect || undefined };
+}
+
+function resolveOAuthClientConfig(account: ResolvedGoogleChatAccount): OAuthClientConfig | null {
+  const cfg = account.config;
+  const gogAccount = cfg.gogAccount?.trim() || process.env[ENV_GOG_ACCOUNT]?.trim() || undefined;
+  const gogClient = cfg.gogClient?.trim() || process.env[ENV_GOG_CLIENT]?.trim() || undefined;
+  const inlineId = cfg.oauthClientId?.trim();
+  const inlineSecret = cfg.oauthClientSecret?.trim();
+  const inlineRedirect = cfg.oauthRedirectUri?.trim();
+  if (inlineId && inlineSecret) {
+    return {
+      clientId: inlineId,
+      clientSecret: inlineSecret,
+      redirectUri: inlineRedirect || undefined,
+    };
+  }
+
+  const filePath = cfg.oauthClientFile?.trim();
+  if (filePath) {
+    const parsed = parseOAuthClientJson(readJsonFile(filePath));
+    if (parsed) return parsed;
+  }
+
+  if (cfg.oauthFromGog) {
+    const gogCredentials = resolveGogCredentialsFile({ gogClient, gogAccount });
+    if (gogCredentials) {
+      const parsed = parseOAuthClientJson(readJsonFile(gogCredentials));
+      if (parsed) return parsed;
+    }
+  }
+
+  if (account.accountId === DEFAULT_ACCOUNT_ID) {
+    const envId = process.env[ENV_OAUTH_CLIENT_ID]?.trim();
+    const envSecret = process.env[ENV_OAUTH_CLIENT_SECRET]?.trim();
+    const envRedirect = process.env[ENV_OAUTH_REDIRECT_URI]?.trim();
+    if (envId && envSecret) {
+      return { clientId: envId, clientSecret: envSecret, redirectUri: envRedirect || undefined };
+    }
+    const envFile = process.env[ENV_OAUTH_CLIENT_FILE]?.trim();
+    if (envFile) {
+      const parsed = parseOAuthClientJson(readJsonFile(envFile));
+      if (parsed) return parsed;
+    }
+  }
+
+  return null;
+}
+
+function resolveOAuthRefreshToken(account: ResolvedGoogleChatAccount): string | null {
+  const cfg = account.config;
+  const gogAccount = cfg.gogAccount?.trim() || process.env[ENV_GOG_ACCOUNT]?.trim() || undefined;
+  const gogClient = cfg.gogClient?.trim() || process.env[ENV_GOG_CLIENT]?.trim() || undefined;
+  if (cfg.oauthRefreshToken?.trim()) return cfg.oauthRefreshToken.trim();
+
+  const tokenFile = cfg.oauthRefreshTokenFile?.trim();
+  if (tokenFile) {
+    const token = readRefreshTokenFromFile(tokenFile);
+    if (token) return token;
+  }
+
+  if (cfg.oauthFromGog) {
+    const token = readGogRefreshTokenSync({ gogAccount, gogClient });
+    if (token) return token;
+  }
+
+  if (account.accountId === DEFAULT_ACCOUNT_ID) {
+    const envToken = process.env[ENV_OAUTH_REFRESH_TOKEN]?.trim();
+    if (envToken) return envToken;
+    const envFile = process.env[ENV_OAUTH_REFRESH_TOKEN_FILE]?.trim();
+    if (envFile) {
+      const token = readRefreshTokenFromFile(envFile);
+      if (token) return token;
+    }
+  }
+  return null;
+}
+
+function getOAuthClient(account: ResolvedGoogleChatAccount): OAuth2Client {
+  const clientConfig = resolveOAuthClientConfig(account);
+  const refreshToken = resolveOAuthRefreshToken(account);
+  if (!clientConfig || !refreshToken) {
+    throw new Error("Missing Google Chat OAuth client credentials or refresh token");
+  }
+  const key = `${clientConfig.clientId}:${clientConfig.clientSecret}:${clientConfig.redirectUri ?? ""}:${refreshToken}`;
+  const cached = oauthCache.get(account.accountId);
+  if (cached && cached.key === key) return cached.client;
+
+  const client = new OAuth2Client(
+    clientConfig.clientId,
+    clientConfig.clientSecret,
+    clientConfig.redirectUri,
+  );
+  client.setCredentials({ refresh_token: refreshToken });
+  oauthCache.set(account.accountId, { key, client });
+  return client;
+}
+
+export async function getGoogleChatUserAccessToken(
+  account: ResolvedGoogleChatAccount,
+): Promise<string> {
+  const client = getOAuthClient(account);
+  const access = await client.getAccessToken();
+  const token = typeof access === "string" ? access : access?.token;
+  if (!token) {
+    throw new Error("Missing Google Chat OAuth access token");
   }
   return token;
 }
@@ -70,6 +214,25 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
 }
 
 export type GoogleChatAudienceType = "app-url" | "project-number";
+
+export type GoogleChatAuthMode = "auto" | "app" | "user";
+
+export async function getGoogleChatAccessToken(
+  account: ResolvedGoogleChatAccount,
+  options?: { mode?: GoogleChatAuthMode },
+): Promise<string> {
+  const mode = options?.mode ?? "auto";
+  if (mode === "user") {
+    return await getGoogleChatUserAccessToken(account);
+  }
+  if (mode === "app") {
+    return await getGoogleChatAppAccessToken(account);
+  }
+  if (account.appCredentialSource !== "none") {
+    return await getGoogleChatAppAccessToken(account);
+  }
+  return await getGoogleChatUserAccessToken(account);
+}
 
 export async function verifyGoogleChatRequest(params: {
   bearer?: string | null;

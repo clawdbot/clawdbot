@@ -32,6 +32,7 @@ function listEnabledAccounts(cfg: ClawdbotConfig) {
 
 function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: ClawdbotConfig) {
   for (const account of accounts) {
+    if (account.userCredentialSource === "none") continue;
     const gate = createActionGate(
       (account.config.actions ?? (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
         string,
@@ -119,6 +120,9 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
+      if (account.userCredentialSource === "none") {
+        throw new Error("Google Chat reactions require user OAuth credentials.");
+      }
       const messageName = readStringParam(params, "messageId", { required: true });
       const { emoji, remove, isEmpty } = readReactionParams(params, {
         removeErrorMessage: "Emoji is required to remove a Google Chat reaction.",
@@ -147,6 +151,9 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "reactions") {
+      if (account.userCredentialSource === "none") {
+        throw new Error("Google Chat reactions require user OAuth credentials.");
+      }
       const messageName = readStringParam(params, "messageId", { required: true });
       const limit = readNumberParam(params, "limit", { integer: true });
       const reactions = await listGoogleChatReactions({

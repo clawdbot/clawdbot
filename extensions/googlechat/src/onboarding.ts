@@ -21,6 +21,11 @@ const channel = "googlechat" as const;
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
+const ENV_OAUTH_CLIENT_ID = "GOOGLE_CHAT_OAUTH_CLIENT_ID";
+const ENV_OAUTH_CLIENT_SECRET = "GOOGLE_CHAT_OAUTH_CLIENT_SECRET";
+const ENV_OAUTH_CLIENT_FILE = "GOOGLE_CHAT_OAUTH_CLIENT_FILE";
+const ENV_OAUTH_REFRESH_TOKEN = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN";
+const ENV_OAUTH_REFRESH_TOKEN_FILE = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN_FILE";
 
 function setGoogleChatDmPolicy(cfg: ClawdbotConfig, policy: DmPolicy) {
   const allowFrom =
@@ -138,10 +143,15 @@ async function promptCredentials(params: {
   const envReady =
     accountId === DEFAULT_ACCOUNT_ID &&
     (Boolean(process.env[ENV_SERVICE_ACCOUNT]) ||
-      Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
+      Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]) ||
+      Boolean(process.env[ENV_OAUTH_CLIENT_ID]) ||
+      Boolean(process.env[ENV_OAUTH_CLIENT_SECRET]) ||
+      Boolean(process.env[ENV_OAUTH_CLIENT_FILE]) ||
+      Boolean(process.env[ENV_OAUTH_REFRESH_TOKEN]) ||
+      Boolean(process.env[ENV_OAUTH_REFRESH_TOKEN_FILE]));
   if (envReady) {
     const useEnv = await prompter.confirm({
-      message: "Use GOOGLE_CHAT_SERVICE_ACCOUNT env vars?",
+      message: "Use Google Chat env credentials?",
       initialValue: true,
     });
     if (useEnv) {
@@ -183,6 +193,101 @@ async function promptCredentials(params: {
   });
 }
 
+async function promptOAuthCredentials(params: {
+  cfg: ClawdbotConfig;
+  prompter: WizardPrompter;
+  accountId: string;
+}): Promise<ClawdbotConfig> {
+  const { cfg, prompter, accountId } = params;
+  const envReady =
+    accountId === DEFAULT_ACCOUNT_ID &&
+    (Boolean(process.env[ENV_OAUTH_CLIENT_ID]) ||
+      Boolean(process.env[ENV_OAUTH_CLIENT_SECRET]) ||
+      Boolean(process.env[ENV_OAUTH_CLIENT_FILE]) ||
+      Boolean(process.env[ENV_OAUTH_REFRESH_TOKEN]) ||
+      Boolean(process.env[ENV_OAUTH_REFRESH_TOKEN_FILE]));
+  if (envReady) {
+    const useEnv = await prompter.confirm({
+      message: "Use Google Chat OAuth env credentials?",
+      initialValue: true,
+    });
+    if (useEnv) {
+      return applyAccountConfig({ cfg, accountId, patch: {} });
+    }
+  }
+  const method = await prompter.select({
+    message: "OAuth client source",
+    options: [
+      { value: "gog", label: "Reuse gog OAuth (recommended if already set up)" },
+      { value: "file", label: "OAuth client JSON file" },
+      { value: "manual", label: "OAuth client id + secret" },
+    ],
+    initialValue: "gog",
+  });
+
+  let patch: Record<string, unknown> = {};
+  if (method === "gog") {
+    const gogAccount = await prompter.text({
+      message: "gog account email (optional)",
+      placeholder: "you@example.com",
+    });
+    const gogClient = await prompter.text({
+      message: "gog client name (optional)",
+      placeholder: "work",
+    });
+    patch = {
+      oauthFromGog: true,
+      ...(String(gogAccount ?? "").trim() ? { gogAccount: String(gogAccount).trim() } : {}),
+      ...(String(gogClient ?? "").trim() ? { gogClient: String(gogClient).trim() } : {}),
+    };
+  } else if (method === "file") {
+    const path = await prompter.text({
+      message: "OAuth client JSON path",
+      placeholder: "/path/to/oauth-client.json",
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    patch = { oauthClientFile: String(path).trim() };
+  } else {
+    const clientId = await prompter.text({
+      message: "OAuth client id",
+      placeholder: "123456.apps.googleusercontent.com",
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    const clientSecret = await prompter.text({
+      message: "OAuth client secret",
+      placeholder: "GOCSPX-...",
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    const redirectUri = await prompter.text({
+      message: "OAuth redirect URI (optional)",
+      placeholder: "https://your.host/googlechat/oauth/callback",
+    });
+    patch = {
+      oauthClientId: String(clientId).trim(),
+      oauthClientSecret: String(clientSecret).trim(),
+      ...(String(redirectUri ?? "").trim() ? { oauthRedirectUri: String(redirectUri).trim() } : {}),
+    };
+  }
+
+  const refreshToken =
+    method === "gog"
+      ? undefined
+      : await prompter.text({
+          message: "OAuth refresh token",
+          placeholder: "1//0g...",
+          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        });
+
+  return applyAccountConfig({
+    cfg,
+    accountId,
+    patch: {
+      ...patch,
+      ...(refreshToken ? { oauthRefreshToken: String(refreshToken).trim() } : {}),
+    },
+  });
+}
+
 async function promptAudience(params: {
   cfg: ClawdbotConfig;
   prompter: WizardPrompter;
@@ -218,8 +323,10 @@ async function promptAudience(params: {
 async function noteGoogleChatSetup(prompter: WizardPrompter) {
   await prompter.note(
     [
-      "Google Chat apps use service-account auth and an HTTPS webhook.",
+      "Google Chat apps use service-account auth or user OAuth plus an HTTPS webhook.",
       "Set the Chat API scopes in your service account and configure the Chat app URL.",
+      "User OAuth enables reactions and other user-level APIs.",
+      "If gog is configured, you can reuse its OAuth credentials for Chat.",
       "Webhook verification requires audience type + audience value.",
       `Docs: ${formatDocsLink("/channels/googlechat", "channels/googlechat")}`,
     ].join("\n"),
@@ -238,7 +345,7 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
       channel,
       configured,
       statusLines: [
-        `Google Chat: ${configured ? "configured" : "needs service account"}`,
+        `Google Chat: ${configured ? "configured" : "needs auth"}`,
       ],
       selectionHint: configured ? "configured" : "needs auth",
     };
@@ -265,7 +372,19 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
 
     let next = cfg;
     await noteGoogleChatSetup(prompter);
-    next = await promptCredentials({ cfg: next, prompter, accountId });
+    const authMethod = await prompter.select({
+      message: "Configure Google Chat credentials",
+      options: [
+        { value: "service-account", label: "Service account (bot auth)" },
+        { value: "oauth", label: "User OAuth (reactions + user actions)" },
+      ],
+      initialValue: "service-account",
+    });
+    if (authMethod === "oauth") {
+      next = await promptOAuthCredentials({ cfg: next, prompter, accountId });
+    } else {
+      next = await promptCredentials({ cfg: next, prompter, accountId });
+    }
     next = await promptAudience({ cfg: next, prompter, accountId });
 
     const namedConfig = migrateBaseNameToDefaultAccount({

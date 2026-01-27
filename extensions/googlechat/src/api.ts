@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { getGoogleChatAccessToken } from "./auth.js";
+import { getGoogleChatAccessToken, type GoogleChatAuthMode } from "./auth.js";
 import type { GoogleChatReaction } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
@@ -11,8 +11,9 @@ async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
   init: RequestInit,
+  options?: { authMode?: GoogleChatAuthMode },
 ): Promise<T> {
-  const token = await getGoogleChatAccessToken(account);
+  const token = await getGoogleChatAccessToken(account, { mode: options?.authMode });
   const res = await fetch(url, {
     ...init,
     headers: {
@@ -32,8 +33,9 @@ async function fetchOk(
   account: ResolvedGoogleChatAccount,
   url: string,
   init: RequestInit,
+  options?: { authMode?: GoogleChatAuthMode },
 ): Promise<void> {
-  const token = await getGoogleChatAccessToken(account);
+  const token = await getGoogleChatAccessToken(account, { mode: options?.authMode });
   const res = await fetch(url, {
     ...init,
     headers: {
@@ -51,9 +53,9 @@ async function fetchBuffer(
   account: ResolvedGoogleChatAccount,
   url: string,
   init?: RequestInit,
-  options?: { maxBytes?: number },
+  options?: { maxBytes?: number; authMode?: GoogleChatAuthMode },
 ): Promise<{ buffer: Buffer; contentType?: string }> {
-  const token = await getGoogleChatAccessToken(account);
+  const token = await getGoogleChatAccessToken(account, { mode: options?.authMode });
   const res = await fetch(url, {
     ...init,
     headers: {
@@ -115,10 +117,14 @@ export async function sendGoogleChatMessage(params: {
     }));
   }
   const url = `${CHAT_API_BASE}/${space}/messages`;
-  const result = await fetchJson<{ name?: string }>(account, url, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  const result = await fetchJson<{ name?: string }>(
+    account,
+    url,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
   return result ? { messageName: result.name } : null;
 }
 
@@ -129,10 +135,14 @@ export async function updateGoogleChatMessage(params: {
 }): Promise<{ messageName?: string }> {
   const { account, messageName, text } = params;
   const url = `${CHAT_API_BASE}/${messageName}?updateMask=text`;
-  const result = await fetchJson<{ name?: string }>(account, url, {
-    method: "PATCH",
-    body: JSON.stringify({ text }),
-  });
+  const result = await fetchJson<{ name?: string }>(
+    account,
+    url,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ text }),
+    },
+  );
   return { messageName: result.name };
 }
 
@@ -202,10 +212,15 @@ export async function createGoogleChatReaction(params: {
 }): Promise<GoogleChatReaction> {
   const { account, messageName, emoji } = params;
   const url = `${CHAT_API_BASE}/${messageName}/reactions`;
-  return await fetchJson<GoogleChatReaction>(account, url, {
-    method: "POST",
-    body: JSON.stringify({ emoji: { unicode: emoji } }),
-  });
+  return await fetchJson<GoogleChatReaction>(
+    account,
+    url,
+    {
+      method: "POST",
+      body: JSON.stringify({ emoji: { unicode: emoji } }),
+    },
+    { authMode: "user" },
+  );
 }
 
 export async function listGoogleChatReactions(params: {
@@ -216,9 +231,14 @@ export async function listGoogleChatReactions(params: {
   const { account, messageName, limit } = params;
   const url = new URL(`${CHAT_API_BASE}/${messageName}/reactions`);
   if (limit && limit > 0) url.searchParams.set("pageSize", String(limit));
-  const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(account, url.toString(), {
-    method: "GET",
-  });
+  const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(
+    account,
+    url.toString(),
+    {
+      method: "GET",
+    },
+    { authMode: "user" },
+  );
   return result.reactions ?? [];
 }
 
@@ -228,7 +248,7 @@ export async function deleteGoogleChatReaction(params: {
 }): Promise<void> {
   const { account, reactionName } = params;
   const url = `${CHAT_API_BASE}/${reactionName}`;
-  await fetchOk(account, url, { method: "DELETE" });
+  await fetchOk(account, url, { method: "DELETE" }, { authMode: "user" });
 }
 
 export async function findGoogleChatDirectMessage(params: {
