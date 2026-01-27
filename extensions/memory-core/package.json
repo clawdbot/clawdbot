@@ -9,6 +9,6 @@
     ]
   },
   "peerDependencies": {
-    "clawdbot": "*"
+    "clawdbot": ">=2026.1.25"
   }
 }
