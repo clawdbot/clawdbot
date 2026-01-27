@@ -1,21 +1,21 @@
 ---
-summary: "Use Z.AI (GLM models) with Clawdbot"
+summary: "Use Z.AI (GLM models) with Moltbot"
 read_when:
-  - You want Z.AI / GLM models in Clawdbot
+  - You want Z.AI / GLM models in Moltbot
   - You need a simple ZAI_API_KEY setup
 ---
 # Z.AI
 
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and uses API keys
-for authentication. Create your API key in the Z.AI console. Clawdbot uses the `zai` provider
+for authentication. Create your API key in the Z.AI console. Moltbot uses the `zai` provider
 with a Z.AI API key.
 
 ## CLI setup
 
 ```bash
-clawdbot onboard --auth-choice zai-api-key
+moltbot onboard --auth-choice zai-api-key
 # or non-interactive
-clawdbot onboard --zai-api-key "$ZAI_API_KEY"
+moltbot onboard --zai-api-key "$ZAI_API_KEY"
 ```
 
 ## Config snippet

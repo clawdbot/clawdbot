@@ -6,6 +6,7 @@ import { ensureConfigReady } from "./config-guard.js";
 import { ensurePluginRegistryLoaded } from "../plugin-registry.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { setVerbose } from "../../globals.js";
+import { resolveCliName } from "../cli-name.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -13,8 +14,9 @@ function setProcessTitleForCommand(actionCommand: Command) {
     current = current.parent;
   }
   const name = current.name();
-  if (!name || name === "clawdbot") return;
-  process.title = `clawdbot-${name}`;
+  const cliName = resolveCliName();
+  if (!name || name === cliName) return;
+  process.title = `${cliName}-${name}`;
 }
 
 // Commands that need channel plugins loaded

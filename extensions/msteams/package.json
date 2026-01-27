@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/msteams",
-  "version": "2026.1.25",
+  "name": "@moltbot/msteams",
+  "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot Microsoft Teams channel plugin",
-  "clawdbot": {
+  "description": "Moltbot Microsoft Teams channel plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ],
@@ -20,7 +20,7 @@
       "order": 60
     },
     "install": {
-      "npmSpec": "@clawdbot/msteams",
+      "npmSpec": "@moltbot/msteams",
       "localPath": "extensions/msteams",
       "defaultChoice": "npm"
     }
@@ -29,7 +29,7 @@
     "@microsoft/agents-hosting": "^1.2.2",
     "@microsoft/agents-hosting-express": "^1.2.2",
     "@microsoft/agents-hosting-extensions-teams": "^1.2.2",
-    "clawdbot": "workspace:*",
+    "moltbot": "workspace:*",
     "express": "^5.2.1",
     "proper-lockfile": "^4.1.2"
   }

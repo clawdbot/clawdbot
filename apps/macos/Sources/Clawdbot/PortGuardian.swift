@@ -25,7 +25,7 @@ actor PortGuardian {
     private let logger = Logger(subsystem: "com.clawdbot", category: "portguard")
     private nonisolated static let appSupportDir: URL = {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("Clawdbot", isDirectory: true)
+        return base.appendingPathComponent("Moltbot", isDirectory: true)
     }()
 
     private nonisolated static var recordPath: URL {
@@ -263,7 +263,7 @@ actor PortGuardian {
     {
         let expectedDesc: String
         let okPredicate: (Listener) -> Bool
-        let expectedCommands = ["node", "clawdbot", "tsx", "pnpm", "bun"]
+        let expectedCommands = ["node", "moltbot", "tsx", "pnpm", "bun"]
 
         switch mode {
         case .remote:
@@ -357,10 +357,10 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return cmd.contains("ssh") }
             return false
         case .local:
-            // The gateway daemon may listen as `clawdbot` or as its runtime (`node`, `bun`, etc).
+            // The gateway daemon may listen as `moltbot` or as its runtime (`node`, `bun`, etc).
             if full.contains("gateway-daemon") { return true }
-            // If args are unavailable, treat a clawdbot listener as expected.
-            if cmd.contains("clawdbot"), full == cmd { return true }
+            // If args are unavailable, treat a moltbot listener as expected.
+            if cmd.contains("moltbot"), full == cmd { return true }
             return false
         case .unconfigured:
             return false

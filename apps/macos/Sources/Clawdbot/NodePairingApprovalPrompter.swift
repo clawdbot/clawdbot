@@ -1,8 +1,8 @@
 import AppKit
-import ClawdbotDiscovery
-import ClawdbotIPC
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotDiscovery
+import MoltbotIPC
+import MoltbotKit
+import MoltbotProtocol
 import Foundation
 import Observation
 import OSLog

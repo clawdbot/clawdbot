@@ -26,14 +26,14 @@ import com.clawdbot.android.BuildConfig
 import com.clawdbot.android.node.CanvasController
 import com.clawdbot.android.node.ScreenRecordManager
 import com.clawdbot.android.node.SmsManager
-import com.clawdbot.android.protocol.ClawdbotCapability
-import com.clawdbot.android.protocol.ClawdbotCameraCommand
-import com.clawdbot.android.protocol.ClawdbotCanvasA2UIAction
-import com.clawdbot.android.protocol.ClawdbotCanvasA2UICommand
-import com.clawdbot.android.protocol.ClawdbotCanvasCommand
-import com.clawdbot.android.protocol.ClawdbotScreenCommand
-import com.clawdbot.android.protocol.ClawdbotLocationCommand
-import com.clawdbot.android.protocol.ClawdbotSmsCommand
+import com.clawdbot.android.protocol.MoltbotCapability
+import com.clawdbot.android.protocol.MoltbotCameraCommand
+import com.clawdbot.android.protocol.MoltbotCanvasA2UIAction
+import com.clawdbot.android.protocol.MoltbotCanvasA2UICommand
+import com.clawdbot.android.protocol.MoltbotCanvasCommand
+import com.clawdbot.android.protocol.MoltbotScreenCommand
+import com.clawdbot.android.protocol.MoltbotLocationCommand
+import com.clawdbot.android.protocol.MoltbotSmsCommand
 import com.clawdbot.android.voice.TalkModeManager
 import com.clawdbot.android.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
@@ -451,38 +451,38 @@ class NodeRuntime(context: Context) {
 
   private fun buildInvokeCommands(): List<String> =
     buildList {
-      add(ClawdbotCanvasCommand.Present.rawValue)
-      add(ClawdbotCanvasCommand.Hide.rawValue)
-      add(ClawdbotCanvasCommand.Navigate.rawValue)
-      add(ClawdbotCanvasCommand.Eval.rawValue)
-      add(ClawdbotCanvasCommand.Snapshot.rawValue)
-      add(ClawdbotCanvasA2UICommand.Push.rawValue)
-      add(ClawdbotCanvasA2UICommand.PushJSONL.rawValue)
-      add(ClawdbotCanvasA2UICommand.Reset.rawValue)
-      add(ClawdbotScreenCommand.Record.rawValue)
+      add(MoltbotCanvasCommand.Present.rawValue)
+      add(MoltbotCanvasCommand.Hide.rawValue)
+      add(MoltbotCanvasCommand.Navigate.rawValue)
+      add(MoltbotCanvasCommand.Eval.rawValue)
+      add(MoltbotCanvasCommand.Snapshot.rawValue)
+      add(MoltbotCanvasA2UICommand.Push.rawValue)
+      add(MoltbotCanvasA2UICommand.PushJSONL.rawValue)
+      add(MoltbotCanvasA2UICommand.Reset.rawValue)
+      add(MoltbotScreenCommand.Record.rawValue)
       if (cameraEnabled.value) {
-        add(ClawdbotCameraCommand.Snap.rawValue)
-        add(ClawdbotCameraCommand.Clip.rawValue)
+        add(MoltbotCameraCommand.Snap.rawValue)
+        add(MoltbotCameraCommand.Clip.rawValue)
       }
       if (locationMode.value != LocationMode.Off) {
-        add(ClawdbotLocationCommand.Get.rawValue)
+        add(MoltbotLocationCommand.Get.rawValue)
       }
       if (sms.canSendSms()) {
-        add(ClawdbotSmsCommand.Send.rawValue)
+        add(MoltbotSmsCommand.Send.rawValue)
       }
     }
 
   private fun buildCapabilities(): List<String> =
     buildList {
-      add(ClawdbotCapability.Canvas.rawValue)
-      add(ClawdbotCapability.Screen.rawValue)
-      if (cameraEnabled.value) add(ClawdbotCapability.Camera.rawValue)
-      if (sms.canSendSms()) add(ClawdbotCapability.Sms.rawValue)
+      add(MoltbotCapability.Canvas.rawValue)
+      add(MoltbotCapability.Screen.rawValue)
+      if (cameraEnabled.value) add(MoltbotCapability.Camera.rawValue)
+      if (sms.canSendSms()) add(MoltbotCapability.Sms.rawValue)
       if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
-        add(ClawdbotCapability.VoiceWake.rawValue)
+        add(MoltbotCapability.VoiceWake.rawValue)
       }
       if (locationMode.value != LocationMode.Off) {
-        add(ClawdbotCapability.Location.rawValue)
+        add(MoltbotCapability.Location.rawValue)
       }
     }
 
@@ -506,7 +506,7 @@ class NodeRuntime(context: Context) {
     val version = resolvedVersionName()
     val release = Build.VERSION.RELEASE?.trim().orEmpty()
     val releaseLabel = if (release.isEmpty()) "unknown" else release
-    return "ClawdbotAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
+    return "MoltbotAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
   }
 
   private fun buildClientInfo(clientId: String, clientMode: String): GatewayClientInfo {
@@ -529,7 +529,7 @@ class NodeRuntime(context: Context) {
       caps = buildCapabilities(),
       commands = buildInvokeCommands(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "clawdbot-android", clientMode = "node"),
+      client = buildClientInfo(clientId = "moltbot-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
   }
@@ -541,7 +541,7 @@ class NodeRuntime(context: Context) {
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "clawdbot-control-ui", clientMode = "ui"),
+      client = buildClientInfo(clientId = "moltbot-control-ui", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }
@@ -665,7 +665,7 @@ class NodeRuntime(context: Context) {
       val actionId = (userActionObj["id"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty {
         java.util.UUID.randomUUID().toString()
       }
-      val name = ClawdbotCanvasA2UIAction.extractActionName(userActionObj) ?: return@launch
+      val name = MoltbotCanvasA2UIAction.extractActionName(userActionObj) ?: return@launch
 
       val surfaceId =
         (userActionObj["surfaceId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "main" }
@@ -675,7 +675,7 @@ class NodeRuntime(context: Context) {
 
       val sessionKey = resolveMainSessionKey()
       val message =
-        ClawdbotCanvasA2UIAction.formatAgentMessage(
+        MoltbotCanvasA2UIAction.formatAgentMessage(
           actionName = name,
           sessionKey = sessionKey,
           surfaceId = surfaceId,
@@ -709,7 +709,7 @@ class NodeRuntime(context: Context) {
 
       try {
         canvas.eval(
-          ClawdbotCanvasA2UIAction.jsDispatchA2UIActionStatus(
+          MoltbotCanvasA2UIAction.jsDispatchA2UIActionStatus(
             actionId = actionId,
             ok = connected && error == null,
             error = error,
@@ -827,10 +827,10 @@ class NodeRuntime(context: Context) {
 
   private suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     if (
-      command.startsWith(ClawdbotCanvasCommand.NamespacePrefix) ||
-        command.startsWith(ClawdbotCanvasA2UICommand.NamespacePrefix) ||
-        command.startsWith(ClawdbotCameraCommand.NamespacePrefix) ||
-        command.startsWith(ClawdbotScreenCommand.NamespacePrefix)
+      command.startsWith(MoltbotCanvasCommand.NamespacePrefix) ||
+        command.startsWith(MoltbotCanvasA2UICommand.NamespacePrefix) ||
+        command.startsWith(MoltbotCameraCommand.NamespacePrefix) ||
+        command.startsWith(MoltbotScreenCommand.NamespacePrefix)
       ) {
       if (!isForeground.value) {
         return GatewaySession.InvokeResult.error(
@@ -839,13 +839,13 @@ class NodeRuntime(context: Context) {
         )
       }
     }
-    if (command.startsWith(ClawdbotCameraCommand.NamespacePrefix) && !cameraEnabled.value) {
+    if (command.startsWith(MoltbotCameraCommand.NamespacePrefix) && !cameraEnabled.value) {
       return GatewaySession.InvokeResult.error(
         code = "CAMERA_DISABLED",
         message = "CAMERA_DISABLED: enable Camera in Settings",
       )
     }
-    if (command.startsWith(ClawdbotLocationCommand.NamespacePrefix) &&
+    if (command.startsWith(MoltbotLocationCommand.NamespacePrefix) &&
       locationMode.value == LocationMode.Off
     ) {
       return GatewaySession.InvokeResult.error(
@@ -855,18 +855,18 @@ class NodeRuntime(context: Context) {
     }
 
     return when (command) {
-      ClawdbotCanvasCommand.Present.rawValue -> {
+      MoltbotCanvasCommand.Present.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
         canvas.navigate(url)
         GatewaySession.InvokeResult.ok(null)
       }
-      ClawdbotCanvasCommand.Hide.rawValue -> GatewaySession.InvokeResult.ok(null)
-      ClawdbotCanvasCommand.Navigate.rawValue -> {
+      MoltbotCanvasCommand.Hide.rawValue -> GatewaySession.InvokeResult.ok(null)
+      MoltbotCanvasCommand.Navigate.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
         canvas.navigate(url)
         GatewaySession.InvokeResult.ok(null)
       }
-      ClawdbotCanvasCommand.Eval.rawValue -> {
+      MoltbotCanvasCommand.Eval.rawValue -> {
         val js =
           CanvasController.parseEvalJs(paramsJson)
             ?: return GatewaySession.InvokeResult.error(
@@ -884,7 +884,7 @@ class NodeRuntime(context: Context) {
           }
         GatewaySession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
       }
-      ClawdbotCanvasCommand.Snapshot.rawValue -> {
+      MoltbotCanvasCommand.Snapshot.rawValue -> {
         val snapshotParams = CanvasController.parseSnapshotParams(paramsJson)
         val base64 =
           try {
@@ -901,7 +901,7 @@ class NodeRuntime(context: Context) {
           }
         GatewaySession.InvokeResult.ok("""{"format":"${snapshotParams.format.rawValue}","base64":"$base64"}""")
       }
-      ClawdbotCanvasA2UICommand.Reset.rawValue -> {
+      MoltbotCanvasA2UICommand.Reset.rawValue -> {
         val a2uiUrl = resolveA2uiHostUrl()
           ?: return GatewaySession.InvokeResult.error(
             code = "A2UI_HOST_NOT_CONFIGURED",
@@ -917,7 +917,7 @@ class NodeRuntime(context: Context) {
         val res = canvas.eval(a2uiResetJS)
         GatewaySession.InvokeResult.ok(res)
       }
-      ClawdbotCanvasA2UICommand.Push.rawValue, ClawdbotCanvasA2UICommand.PushJSONL.rawValue -> {
+      MoltbotCanvasA2UICommand.Push.rawValue, MoltbotCanvasA2UICommand.PushJSONL.rawValue -> {
         val messages =
           try {
             decodeA2uiMessages(command, paramsJson)
@@ -940,7 +940,7 @@ class NodeRuntime(context: Context) {
         val res = canvas.eval(js)
         GatewaySession.InvokeResult.ok(res)
       }
-      ClawdbotCameraCommand.Snap.rawValue -> {
+      MoltbotCameraCommand.Snap.rawValue -> {
         showCameraHud(message = "Taking photo…", kind = CameraHudKind.Photo)
         triggerCameraFlash()
         val res =
@@ -954,7 +954,7 @@ class NodeRuntime(context: Context) {
         showCameraHud(message = "Photo captured", kind = CameraHudKind.Success, autoHideMs = 1600)
         GatewaySession.InvokeResult.ok(res.payloadJson)
       }
-      ClawdbotCameraCommand.Clip.rawValue -> {
+      MoltbotCameraCommand.Clip.rawValue -> {
         val includeAudio = paramsJson?.contains("\"includeAudio\":true") != false
         if (includeAudio) externalAudioCaptureActive.value = true
         try {
@@ -973,7 +973,7 @@ class NodeRuntime(context: Context) {
           if (includeAudio) externalAudioCaptureActive.value = false
         }
       }
-      ClawdbotLocationCommand.Get.rawValue -> {
+      MoltbotLocationCommand.Get.rawValue -> {
         val mode = locationMode.value
         if (!isForeground.value && mode != LocationMode.Always) {
           return GatewaySession.InvokeResult.error(
@@ -1026,7 +1026,7 @@ class NodeRuntime(context: Context) {
           GatewaySession.InvokeResult.error(code = "LOCATION_UNAVAILABLE", message = message)
         }
       }
-      ClawdbotScreenCommand.Record.rawValue -> {
+      MoltbotScreenCommand.Record.rawValue -> {
         // Status pill mirrors screen recording state so it stays visible without overlay stacking.
         _screenRecordActive.value = true
         try {
@@ -1042,7 +1042,7 @@ class NodeRuntime(context: Context) {
           _screenRecordActive.value = false
         }
       }
-      ClawdbotSmsCommand.Send.rawValue -> {
+      MoltbotSmsCommand.Send.rawValue -> {
         val res = sms.send(paramsJson)
         if (res.ok) {
           GatewaySession.InvokeResult.ok(res.payloadJson)
@@ -1115,7 +1115,7 @@ class NodeRuntime(context: Context) {
     val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
     if (raw.isBlank()) return null
     val base = raw.trimEnd('/')
-    return "${base}/__clawdbot__/a2ui/?platform=android"
+    return "${base}/__moltbot__/a2ui/?platform=android"
   }
 
   private suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
@@ -1150,7 +1150,7 @@ class NodeRuntime(context: Context) {
     val jsonlField = (obj["jsonl"] as? JsonPrimitive)?.content?.trim().orEmpty()
     val hasMessagesArray = obj["messages"] is JsonArray
 
-    if (command == ClawdbotCanvasA2UICommand.PushJSONL.rawValue || (!hasMessagesArray && jsonlField.isNotBlank())) {
+    if (command == MoltbotCanvasA2UICommand.PushJSONL.rawValue || (!hasMessagesArray && jsonlField.isNotBlank())) {
       val jsonl = jsonlField
       if (jsonl.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: jsonl required")
       val messages =
@@ -1218,7 +1218,7 @@ private const val a2uiResetJS: String =
   """
   (() => {
     try {
-      if (!globalThis.clawdbotA2UI) return { ok: false, error: "missing clawdbotA2UI" };
+      if (!globalThis.clawdbotA2UI) return { ok: false, error: "missing moltbotA2UI" };
       return globalThis.clawdbotA2UI.reset();
     } catch (e) {
       return { ok: false, error: String(e?.message ?? e) };
@@ -1230,7 +1230,7 @@ private fun a2uiApplyMessagesJS(messagesJson: String): String {
   return """
     (() => {
       try {
-        if (!globalThis.clawdbotA2UI) return { ok: false, error: "missing clawdbotA2UI" };
+        if (!globalThis.clawdbotA2UI) return { ok: false, error: "missing moltbotA2UI" };
         const messages = $messagesJson;
         return globalThis.clawdbotA2UI.applyMessages(messages);
       } catch (e) {

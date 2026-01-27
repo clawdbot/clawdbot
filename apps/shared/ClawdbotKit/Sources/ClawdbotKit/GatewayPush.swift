@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 
 /// Server-push messages from the gateway websocket.
 ///

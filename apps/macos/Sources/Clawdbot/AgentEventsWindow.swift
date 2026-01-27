@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import SwiftUI
 
 @MainActor
@@ -81,7 +81,7 @@ private struct EventRow: View {
         return f.string(from: date)
     }
 
-    private func prettyJSON(_ dict: [String: ClawdbotProtocol.AnyCodable]) -> String? {
+    private func prettyJSON(_ dict: [String: MoltbotProtocol.AnyCodable]) -> String? {
         let normalized = dict.mapValues { $0.value }
         guard JSONSerialization.isValidJSONObject(normalized),
               let data = try? JSONSerialization.data(withJSONObject: normalized, options: [.prettyPrinted]),
@@ -99,8 +99,8 @@ struct AgentEventsWindow_Previews: PreviewProvider {
             stream: "tool",
             ts: Date().timeIntervalSince1970 * 1000,
             data: [
-                "phase": ClawdbotProtocol.AnyCodable("start"),
-                "name": ClawdbotProtocol.AnyCodable("bash"),
+                "phase": MoltbotProtocol.AnyCodable("start"),
+                "name": MoltbotProtocol.AnyCodable("bash"),
             ],
             summary: nil)
         AgentEventStore.shared.append(sample)

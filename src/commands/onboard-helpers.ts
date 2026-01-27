@@ -6,8 +6,8 @@ import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
+import { CONFIG_PATH } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
@@ -36,7 +36,7 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   return value as T;
 }
 
-export function summarizeExistingConfig(config: ClawdbotConfig): string {
+export function summarizeExistingConfig(config: MoltbotConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
   if (defaults?.workspace) rows.push(shortenHomeInString(`workspace: ${defaults.workspace}`));
@@ -75,9 +75,9 @@ export function printWizardHeader(runtime: RuntimeEnv) {
 }
 
 export function applyWizardMetadata(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   params: { command: string; mode: OnboardMode },
-): ClawdbotConfig {
+): MoltbotConfig {
   const commit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
   return {
     ...cfg,
@@ -177,8 +177,8 @@ export function formatControlUiSshHint(params: {
     localUrl,
     authedUrl,
     "Docs:",
-    "https://docs.clawd.bot/gateway/remote",
-    "https://docs.clawd.bot/web/control-ui",
+    "https://docs.molt.bot/gateway/remote",
+    "https://docs.molt.bot/web/control-ui",
   ]
     .filter(Boolean)
     .join("\n");
@@ -274,7 +274,7 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
-  await moveToTrash(CONFIG_PATH_CLAWDBOT, runtime);
+  await moveToTrash(CONFIG_PATH, runtime);
   if (scope === "config") return;
   await moveToTrash(path.join(CONFIG_DIR, "credentials"), runtime);
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);

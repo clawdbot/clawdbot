@@ -7,7 +7,7 @@ read_when:
 
 # Channel location parsing
 
-Clawdbot normalizes shared locations from chat channels into:
+Moltbot normalizes shared locations from chat channels into:
 - human-readable text appended to the inbound body, and
 - structured fields in the auto-reply context payload.
 

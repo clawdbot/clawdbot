@@ -16,7 +16,7 @@ describe("getApiKeyForModel", () => {
     const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
     const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
     const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-oauth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-oauth-"));
 
     try {
       process.env.CLAWDBOT_STATE_DIR = tempDir;
@@ -99,7 +99,7 @@ describe("getApiKeyForModel", () => {
     const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
     const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
 
     try {
       delete process.env.OPENAI_API_KEY;

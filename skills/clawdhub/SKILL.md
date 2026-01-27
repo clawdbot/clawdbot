@@ -1,7 +1,7 @@
 ---
 name: clawdhub
 description: Use the ClawdHub CLI to search, install, update, and publish agent skills from clawdhub.com. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawdhub CLI.
-metadata: {"clawdbot":{"requires":{"bins":["clawdhub"]},"install":[{"id":"node","kind":"node","package":"clawdhub","bins":["clawdhub"],"label":"Install ClawdHub CLI (npm)"}]}}
+metadata: {"moltbot":{"requires":{"bins":["clawdhub"]},"install":[{"id":"node","kind":"node","package":"clawdhub","bins":["clawdhub"],"label":"Install ClawdHub CLI (npm)"}]}}
 ---
 
 # ClawdHub CLI
@@ -49,5 +49,5 @@ clawdhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.2.0 --
 
 Notes
 - Default registry: https://clawdhub.com (override with CLAWDHUB_REGISTRY or --registry)
-- Default workdir: cwd (falls back to Clawdbot workspace); install dir: ./skills (override with --workdir / --dir / CLAWDHUB_WORKDIR)
+- Default workdir: cwd (falls back to Moltbot workspace); install dir: ./skills (override with --workdir / --dir / CLAWDHUB_WORKDIR)
 - Update command hashes local files, resolves matching version, and upgrades to latest unless --version is set

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE_NAME="${CLAWDBOT_IMAGE:-clawdbot:local}"
+IMAGE_NAME="${CLAWDBOT_IMAGE:-moltbot:local}"
 CONFIG_DIR="${CLAWDBOT_CONFIG_DIR:-$HOME/.clawdbot}"
 WORKSPACE_DIR="${CLAWDBOT_WORKSPACE_DIR:-$HOME/clawd}"
 PROFILE_FILE="${CLAWDBOT_PROFILE_FILE:-$HOME/.profile}"

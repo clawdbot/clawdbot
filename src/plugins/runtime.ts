@@ -16,7 +16,7 @@ const createEmptyRegistry = (): PluginRegistry => ({
   diagnostics: [],
 });
 
-const REGISTRY_STATE = Symbol.for("clawdbot.pluginRegistryState");
+const REGISTRY_STATE = Symbol.for("moltbot.pluginRegistryState");
 
 type RegistryState = {
   registry: PluginRegistry | null;

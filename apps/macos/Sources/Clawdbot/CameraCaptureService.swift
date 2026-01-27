@@ -1,6 +1,6 @@
 import AVFoundation
-import ClawdbotIPC
-import ClawdbotKit
+import MoltbotIPC
+import MoltbotKit
 import CoreGraphics
 import Foundation
 import OSLog
@@ -168,7 +168,7 @@ actor CameraCaptureService {
         await Self.warmUpCaptureSession()
 
         let tmpMovURL = FileManager().temporaryDirectory
-            .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mov")
+            .appendingPathComponent("moltbot-camera-\(UUID().uuidString).mov")
         defer { try? FileManager().removeItem(at: tmpMovURL) }
 
         let outputURL: URL = {
@@ -176,7 +176,7 @@ actor CameraCaptureService {
                 return URL(fileURLWithPath: outPath)
             }
             return FileManager().temporaryDirectory
-                .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mp4")
+                .appendingPathComponent("moltbot-camera-\(UUID().uuidString).mp4")
         }()
 
         // Ensure we don't fail exporting due to an existing file.

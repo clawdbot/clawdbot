@@ -12,7 +12,7 @@ A **node** is a companion device (macOS/iOS/Android/headless) that connects to t
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `clawdbot nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `moltbot nodes …` works against this Mac).
 
 Notes:
 - Nodes are **peripherals**, not gateways. They don’t run the gateway service.
@@ -26,16 +26,16 @@ creates a device pairing request for `role: node`. Approve via the devices CLI (
 Quick CLI:
 
 ```bash
-clawdbot devices list
-clawdbot devices approve <requestId>
-clawdbot devices reject <requestId>
-clawdbot nodes status
-clawdbot nodes describe --node <idOrNameOrIp>
+moltbot devices list
+moltbot devices approve <requestId>
+moltbot devices reject <requestId>
+moltbot nodes status
+moltbot nodes describe --node <idOrNameOrIp>
 ```
 
 Notes:
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `clawdbot nodes pending/approve/reject`) is a separate gateway-owned
+- `node.pair.*` (CLI: `moltbot nodes pending/approve/reject`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
 
 ## Remote node host (system.run)
@@ -54,14 +54,14 @@ forwards `exec` calls to the **node host** when `host=node` is selected.
 On the node machine:
 
 ```bash
-clawdbot node run --host <gateway-host> --port 18789 --display-name "Build Node"
+moltbot node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
 ### Start a node host (service)
 
 ```bash
-clawdbot node install --host <gateway-host> --port 18789 --display-name "Build Node"
-clawdbot node restart
+moltbot node install --host <gateway-host> --port 18789 --display-name "Build Node"
+moltbot node restart
 ```
 
 ### Pair + name
@@ -69,22 +69,22 @@ clawdbot node restart
 On the gateway host:
 
 ```bash
-clawdbot nodes pending
-clawdbot nodes approve <requestId>
-clawdbot nodes list
+moltbot nodes pending
+moltbot nodes approve <requestId>
+moltbot nodes list
 ```
 
 Naming options:
-- `--display-name` on `clawdbot node run` / `clawdbot node install` (persists in `~/.clawdbot/node.json` on the node).
-- `clawdbot nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
+- `--display-name` on `moltbot node run` / `moltbot node install` (persists in `~/.clawdbot/node.json` on the node).
+- `moltbot nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Allowlist the commands
 
 Exec approvals are **per node host**. Add allowlist entries from the gateway:
 
 ```bash
-clawdbot approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
-clawdbot approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
+moltbot approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
+moltbot approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 ```
 
 Approvals live on the node host at `~/.clawdbot/exec-approvals.json`.
@@ -94,9 +94,9 @@ Approvals live on the node host at `~/.clawdbot/exec-approvals.json`.
 Configure defaults (gateway config):
 
 ```bash
-clawdbot config set tools.exec.host node
-clawdbot config set tools.exec.security allowlist
-clawdbot config set tools.exec.node "<id-or-name>"
+moltbot config set tools.exec.host node
+moltbot config set tools.exec.security allowlist
+moltbot config set tools.exec.node "<id-or-name>"
 ```
 
 Or per session:
@@ -118,7 +118,7 @@ Related:
 Low-level (raw RPC):
 
 ```bash
-clawdbot nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+moltbot nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
@@ -130,17 +130,17 @@ If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format
 CLI helper (writes to a temp file and prints `MEDIA:<path>`):
 
 ```bash
-clawdbot nodes canvas snapshot --node <idOrNameOrIp> --format png
-clawdbot nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
+moltbot nodes canvas snapshot --node <idOrNameOrIp> --format png
+moltbot nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
 ### Canvas controls
 
 ```bash
-clawdbot nodes canvas present --node <idOrNameOrIp> --target https://example.com
-clawdbot nodes canvas hide --node <idOrNameOrIp>
-clawdbot nodes canvas navigate https://example.com --node <idOrNameOrIp>
-clawdbot nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+moltbot nodes canvas present --node <idOrNameOrIp> --target https://example.com
+moltbot nodes canvas hide --node <idOrNameOrIp>
+moltbot nodes canvas navigate https://example.com --node <idOrNameOrIp>
+moltbot nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 ```
 
 Notes:
@@ -150,9 +150,9 @@ Notes:
 ### A2UI (Canvas)
 
 ```bash
-clawdbot nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-clawdbot nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-clawdbot nodes canvas a2ui reset --node <idOrNameOrIp>
+moltbot nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
+moltbot nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
+moltbot nodes canvas a2ui reset --node <idOrNameOrIp>
 ```
 
 Notes:
@@ -163,16 +163,16 @@ Notes:
 Photos (`jpg`):
 
 ```bash
-clawdbot nodes camera list --node <idOrNameOrIp>
-clawdbot nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
-clawdbot nodes camera snap --node <idOrNameOrIp> --facing front
+moltbot nodes camera list --node <idOrNameOrIp>
+moltbot nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
+moltbot nodes camera snap --node <idOrNameOrIp> --facing front
 ```
 
 Video clips (`mp4`):
 
 ```bash
-clawdbot nodes camera clip --node <idOrNameOrIp> --duration 10s
-clawdbot nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
+moltbot nodes camera clip --node <idOrNameOrIp> --duration 10s
+moltbot nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 ```
 
 Notes:
@@ -185,8 +185,8 @@ Notes:
 Nodes expose `screen.record` (mp4). Example:
 
 ```bash
-clawdbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
-clawdbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
+moltbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
+moltbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
 ```
 
 Notes:
@@ -203,8 +203,8 @@ Nodes expose `location.get` when Location is enabled in settings.
 CLI helper:
 
 ```bash
-clawdbot nodes location get --node <idOrNameOrIp>
-clawdbot nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+moltbot nodes location get --node <idOrNameOrIp>
+moltbot nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
 ```
 
 Notes:
@@ -219,7 +219,7 @@ Android nodes can expose `sms.send` when the user grants **SMS** permission and 
 Low-level invoke:
 
 ```bash
-clawdbot nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from Clawdbot"}'
+moltbot nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from Moltbot"}'
 ```
 
 Notes:
@@ -234,8 +234,8 @@ The headless node host exposes `system.run`, `system.which`, and `system.execApp
 Examples:
 
 ```bash
-clawdbot nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-clawdbot nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+moltbot nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
+moltbot nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
 ```
 
 Notes:
@@ -256,21 +256,21 @@ This sets the default node for `exec host=node` (and can be overridden per agent
 Global default:
 
 ```bash
-clawdbot config set tools.exec.node "node-id-or-name"
+moltbot config set tools.exec.node "node-id-or-name"
 ```
 
 Per-agent override:
 
 ```bash
-clawdbot config get agents.list
-clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
+moltbot config get agents.list
+moltbot config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 Unset to allow any node:
 
 ```bash
-clawdbot config unset tools.exec.node
-clawdbot config unset agents.list[0].tools.exec.node
+moltbot config unset tools.exec.node
+moltbot config unset agents.list[0].tools.exec.node
 ```
 
 ## Permissions map
@@ -279,14 +279,14 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 
 ## Headless node host (cross-platform)
 
-Clawdbot can run a **headless node host** (no UI) that connects to the Gateway
+Moltbot can run a **headless node host** (no UI) that connects to the Gateway
 WebSocket and exposes `system.run` / `system.which`. This is useful on Linux/Windows
 or for running a minimal node alongside a server.
 
 Start it:
 
 ```bash
-clawdbot node run --host <gateway-host> --port 18789
+moltbot node run --host <gateway-host> --port 18789
 ```
 
 Notes:
@@ -301,5 +301,5 @@ Notes:
 
 ## Mac node mode
 
-- The macOS menubar app connects to the Gateway WS server as a node (so `clawdbot nodes …` works against this Mac).
+- The macOS menubar app connects to the Gateway WS server as a node (so `moltbot nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.

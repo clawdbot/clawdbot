@@ -24,7 +24,7 @@ function fallbackHostName() {
     os
       .hostname()
       .replace(/\.local$/i, "")
-      .trim() || "clawdbot"
+      .trim() || "moltbot"
   );
 }
 

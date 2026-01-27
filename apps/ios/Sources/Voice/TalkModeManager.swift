@@ -1,6 +1,6 @@
 import AVFAudio
-import ClawdbotKit
-import ClawdbotProtocol
+import MoltbotKit
+import MoltbotProtocol
 import Foundation
 import Observation
 import OSLog

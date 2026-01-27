@@ -12,7 +12,7 @@ import {
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig } from "clawdbot/plugin-sdk";
 
 const channel = "twitch" as const;
 
@@ -20,9 +20,9 @@ const channel = "twitch" as const;
  * Set Twitch account configuration
  */
 function setTwitchAccount(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   account: Partial<TwitchAccountConfig>,
-): ClawdbotConfig {
+): MoltbotConfig {
   const existing = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
@@ -205,13 +205,13 @@ async function promptRefreshTokenSetup(
  * Configure with env token path (returns early if user chooses env token).
  */
 async function configureWithEnvToken(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
   envToken: string,
   forceAllowFrom: boolean,
   dmPolicy: ChannelOnboardingDmPolicy,
-): Promise<{ cfg: ClawdbotConfig } | null> {
+): Promise<{ cfg: MoltbotConfig } | null> {
   const useEnv = await prompter.confirm({
     message: "Twitch env var CLAWDBOT_TWITCH_ACCESS_TOKEN detected. Use env token?",
     initialValue: true,
@@ -241,10 +241,10 @@ async function configureWithEnvToken(
  * Set Twitch access control (role-based)
  */
 function setTwitchAccessControl(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   allowedRoles: TwitchRole[],
   requireMention: boolean,
-): ClawdbotConfig {
+): MoltbotConfig {
   const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
   if (!account) {
     return cfg;
@@ -272,7 +272,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   setPolicy: (cfg, policy) => {
     const allowedRoles: TwitchRole[] =
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
-    return setTwitchAccessControl(cfg as ClawdbotConfig, allowedRoles, true);
+    return setTwitchAccessControl(cfg as MoltbotConfig, allowedRoles, true);
   },
   promptAllowFrom: async ({ cfg, prompter }) => {
     const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
@@ -289,7 +289,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    return setTwitchAccount(cfg as ClawdbotConfig, {
+    return setTwitchAccount(cfg as MoltbotConfig, {
       ...(account ?? undefined),
       allowFrom,
     });

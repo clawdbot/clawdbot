@@ -1,6 +1,6 @@
 import Foundation
 
-enum ClawdbotEnv {
+enum MoltbotEnv {
     static func path(_ key: String) -> String? {
         // Normalize env overrides once so UI + file IO stay consistent.
         guard let raw = getenv(key) else { return nil }
@@ -13,12 +13,12 @@ enum ClawdbotEnv {
     }
 }
 
-enum ClawdbotPaths {
+enum MoltbotPaths {
     private static let configPathEnv = "CLAWDBOT_CONFIG_PATH"
     private static let stateDirEnv = "CLAWDBOT_STATE_DIR"
 
     static var stateDirURL: URL {
-        if let override = ClawdbotEnv.path(self.stateDirEnv) {
+        if let override = MoltbotEnv.path(self.stateDirEnv) {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return FileManager().homeDirectoryForCurrentUser
@@ -26,10 +26,10 @@ enum ClawdbotPaths {
     }
 
     static var configURL: URL {
-        if let override = ClawdbotEnv.path(self.configPathEnv) {
+        if let override = MoltbotEnv.path(self.configPathEnv) {
             return URL(fileURLWithPath: override)
         }
-        return self.stateDirURL.appendingPathComponent("clawdbot.json")
+        return self.stateDirURL.appendingPathComponent("moltbot.json")
     }
 
     static var workspaceURL: URL {

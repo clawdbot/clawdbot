@@ -40,7 +40,7 @@ describe("resolveSkillsPromptForRun", () => {
         description: "Demo",
         filePath: "/app/skills/demo-skill/SKILL.md",
         baseDir: "/app/skills/demo-skill",
-        source: "clawdbot-bundled",
+        source: "moltbot-bundled",
       },
       frontmatter: {},
     };

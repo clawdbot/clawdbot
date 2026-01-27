@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
-import { ensureClawdbotModelsJson } from "./models-config.js";
+import "./test-helpers/fast-coding-tools.js";
+import type { MoltbotConfig } from "../config/config.js";
+import { ensureMoltbotModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -95,7 +96,7 @@ let sessionCounter = 0;
 beforeAll(async () => {
   vi.useRealTimers();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-embedded-agent-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-embedded-agent-"));
   agentDir = path.join(tempRoot, "agent");
   workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -128,9 +129,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies ClawdbotConfig;
+  }) satisfies MoltbotConfig;
 
-const ensureModels = (cfg: ClawdbotConfig) => ensureClawdbotModelsJson(cfg, agentDir) as unknown;
+const ensureModels = (cfg: MoltbotConfig) => ensureMoltbotModelsJson(cfg, agentDir) as unknown;
 
 const nextSessionFile = () => {
   sessionCounter += 1;
@@ -190,7 +191,7 @@ describe("runEmbeddedPiAgent", () => {
           },
         },
       },
-    } satisfies ClawdbotConfig;
+    } satisfies MoltbotConfig;
 
     await expect(
       runEmbeddedPiAgent({

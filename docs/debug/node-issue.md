@@ -2,16 +2,16 @@
 summary: Node + tsx "__name is not a function" crash notes and workarounds
 read_when:
   - Debugging Node-only dev scripts or watch mode failures
-  - Investigating tsx/esbuild loader crashes in Clawdbot
+  - Investigating tsx/esbuild loader crashes in Moltbot
 ---
 
 # Node + tsx "__name is not a function" crash
 
 ## Summary
-Running Clawdbot via Node with `tsx` fails at startup with:
+Running Moltbot via Node with `tsx` fails at startup with:
 
 ```
-[clawdbot] Failed to start CLI: TypeError: __name is not a function
+[moltbot] Failed to start CLI: TypeError: __name is not a function
     at createSubsystemLogger (.../src/logging/subsystem.ts:203:25)
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
@@ -48,7 +48,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Regression history
 - `2871657e` (2026-01-06): scripts changed from Bun to tsx to make Bun optional.
-- Before that (Bun path), `clawdbot status` and `gateway:watch` worked.
+- Before that (Bun path), `moltbot status` and `gateway:watch` worked.
 
 ## Workarounds
 - Use Bun for dev scripts (current temporary revert).

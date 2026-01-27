@@ -8,9 +8,9 @@ import UniformTypeIdentifiers
 #endif
 
 @MainActor
-struct ClawdbotChatComposer: View {
-    @Bindable var viewModel: ClawdbotChatViewModel
-    let style: ClawdbotChatView.Style
+struct MoltbotChatComposer: View {
+    @Bindable var viewModel: MoltbotChatViewModel
+    let style: MoltbotChatView.Style
     let showsSessionSwitcher: Bool
 
     #if !os(macOS)
@@ -54,21 +54,21 @@ struct ClawdbotChatComposer: View {
                         topTrailing: 0),
                     style: .continuous)
                 shape
-                    .fill(ClawdbotChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(ClawdbotChatTheme.composerBorder, lineWidth: 1))
+                    .fill(MoltbotChatTheme.composerBackground)
+                    .overlay(shape.strokeBorder(MoltbotChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             } else {
                 let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 shape
-                    .fill(ClawdbotChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(ClawdbotChatTheme.composerBorder, lineWidth: 1))
+                    .fill(MoltbotChatTheme.composerBackground)
+                    .overlay(shape.strokeBorder(MoltbotChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             }
             #else
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             shape
-                .fill(ClawdbotChatTheme.composerBackground)
-                .overlay(shape.strokeBorder(ClawdbotChatTheme.composerBorder, lineWidth: 1))
+                .fill(MoltbotChatTheme.composerBackground)
+                .overlay(shape.strokeBorder(MoltbotChatTheme.composerBorder, lineWidth: 1))
                 .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             #endif
         }
@@ -144,11 +144,11 @@ struct ClawdbotChatComposer: View {
             HStack(spacing: 6) {
                 ForEach(
                     self.viewModel.attachments,
-                    id: \ClawdbotPendingAttachment.id)
-                { (att: ClawdbotPendingAttachment) in
+                    id: \MoltbotPendingAttachment.id)
+                { (att: MoltbotPendingAttachment) in
                     HStack(spacing: 6) {
                         if let img = att.preview {
-                            ClawdbotPlatformImageFactory.image(img)
+                            MoltbotPlatformImageFactory.image(img)
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
@@ -181,7 +181,7 @@ struct ClawdbotChatComposer: View {
             self.editorOverlay
 
             Rectangle()
-                .fill(ClawdbotChatTheme.divider)
+                .fill(MoltbotChatTheme.divider)
                 .frame(height: 1)
                 .padding(.horizontal, 2)
 
@@ -197,10 +197,10 @@ struct ClawdbotChatComposer: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(ClawdbotChatTheme.composerField)
+                .fill(MoltbotChatTheme.composerField)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(ClawdbotChatTheme.composerBorder)))
+                        .strokeBorder(MoltbotChatTheme.composerBorder)))
         .padding(self.editorPadding)
     }
 
@@ -217,7 +217,7 @@ struct ClawdbotChatComposer: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(ClawdbotChatTheme.subtleCard)
+        .background(MoltbotChatTheme.subtleCard)
         .clipShape(Capsule())
     }
 

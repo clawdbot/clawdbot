@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Clawdbot Browser Relay",
+  "name": "Moltbot Browser Relay",
   "version": "0.1.0",
-  "description": "Attach Clawdbot to your existing Chrome tab via a local CDP relay server.",
+  "description": "Attach Moltbot to your existing Chrome tab via a local CDP relay server.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -13,7 +13,7 @@
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
-    "default_title": "Clawdbot Browser Relay (click to attach/detach)",
+    "default_title": "Moltbot Browser Relay (click to attach/detach)",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

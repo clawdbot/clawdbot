@@ -1,6 +1,6 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
@@ -14,7 +14,7 @@ import {
 } from "../../infra/outbound/targets.js";
 
 export async function resolveDeliveryTarget(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   agentId: string,
   jobPayload: {
     channel?: "last" | ChannelId;

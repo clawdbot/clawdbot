@@ -1,7 +1,7 @@
 import Foundation
 import Testing
-@testable import ClawdbotKit
-import ClawdbotProtocol
+@testable import MoltbotKit
+import MoltbotProtocol
 
 struct GatewayNodeSessionTests {
     @Test

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
-import type { ClawdbotConfig } from "./types.js";
+import type { MoltbotConfig } from "./types.js";
 
 export type DuplicateAgentDir = {
   agentDir: string;
@@ -28,7 +28,7 @@ function canonicalizeAgentDir(agentDir: string): string {
   return resolved;
 }
 
-function collectReferencedAgentIds(cfg: ClawdbotConfig): string[] {
+function collectReferencedAgentIds(cfg: MoltbotConfig): string[] {
   const ids = new Set<string>();
 
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
@@ -54,7 +54,7 @@ function collectReferencedAgentIds(cfg: ClawdbotConfig): string[] {
 }
 
 function resolveEffectiveAgentDir(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   agentId: string,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): string {
@@ -69,7 +69,7 @@ function resolveEffectiveAgentDir(
 }
 
 export function findDuplicateAgentDirs(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): DuplicateAgentDir[] {
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();

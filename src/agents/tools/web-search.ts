@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
@@ -135,7 +135,7 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
   });
 }
 
-type WebSearchConfig = NonNullable<ClawdbotConfig["tools"]>["web"] extends infer Web
+type WebSearchConfig = NonNullable<MoltbotConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
     ? Search
     : undefined
@@ -173,7 +173,7 @@ type PerplexitySearchApiResponse = {
   id?: string;
 };
 
-function resolveSearchConfig(cfg?: ClawdbotConfig): WebSearchConfig {
+function resolveSearchConfig(cfg?: MoltbotConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") return undefined;
   return search as WebSearchConfig;
@@ -198,13 +198,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_perplexity_api_key",
       message:
         "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
-      docs: "https://docs.clawd.bot/tools/web",
+      docs: "https://docs.molt.bot/tools/web",
     };
   }
   return {
     error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("clawdbot configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
-    docs: "https://docs.clawd.bot/tools/web",
+    message: `web_search (brave) needs an API key. Run \`${formatCliCommand("moltbot configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    docs: "https://docs.molt.bot/tools/web",
   };
 }
 
@@ -339,6 +339,8 @@ async function runPerplexitySearchApi(params: {
       "Content-Type": "application/json",
       Accept: "application/json",
       Authorization: `Bearer ${params.apiKey}`,
+      "HTTP-Referer": "https://molt.bot",
+      "X-Title": "Moltbot Web Search",
     },
     body: JSON.stringify(body),
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
@@ -479,7 +481,7 @@ async function runWebSearch(params: {
 }
 
 export function createWebSearchTool(options?: {
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
@@ -520,7 +522,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "invalid_freshness",
           message: "freshness must be day, week, month, or year.",
-          docs: "https://docs.clawd.bot/tools/web",
+          docs: "https://docs.molt.bot/tools/web",
         });
       }
       const rawDateAfter = readStringParam(params, "date_after");
@@ -529,7 +531,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "invalid_date",
           message: "date_after must be YYYY-MM-DD format.",
-          docs: "https://docs.clawd.bot/tools/web",
+          docs: "https://docs.molt.bot/tools/web",
         });
       }
       const rawDateBefore = readStringParam(params, "date_before");
@@ -538,7 +540,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "invalid_date",
           message: "date_before must be YYYY-MM-DD format.",
-          docs: "https://docs.clawd.bot/tools/web",
+          docs: "https://docs.molt.bot/tools/web",
         });
       }
       const domainFilter = readStringArrayParam(params, "domain_filter");

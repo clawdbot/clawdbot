@@ -37,7 +37,7 @@ public struct AgentDeepLink: Codable, Sendable, Equatable {
 
 public enum DeepLinkParser {
     public static func parse(_ url: URL) -> DeepLinkRoute? {
-        guard url.scheme?.lowercased() == "clawdbot" else { return nil }
+        guard url.scheme?.lowercased() == "moltbot" else { return nil }
         guard let host = url.host?.lowercased(), !host.isEmpty else { return nil }
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
 

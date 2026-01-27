@@ -1,4 +1,4 @@
-import ClawdbotIPC
+import MoltbotIPC
 import Foundation
 import OSLog
 
@@ -76,7 +76,7 @@ enum GatewayEnvironment {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if let parsed = Int(trimmed), parsed > 0 { return parsed }
         }
-        if let configPort = ClawdbotConfigFile.gatewayPort(), configPort > 0 {
+        if let configPort = MoltbotConfigFile.gatewayPort(), configPort > 0 {
             return configPort
         }
         let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
@@ -131,7 +131,7 @@ enum GatewayEnvironment {
                     nodeVersion: runtime.version.description,
                     gatewayVersion: nil,
                     requiredGateway: expectedString,
-                    message: "clawdbot CLI not found in PATH; install the CLI.")
+                    message: "moltbot CLI not found in PATH; install the CLI.")
             }
 
             let installed = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
@@ -217,7 +217,7 @@ enum GatewayEnvironment {
             }
         }
 
-        let root = ClawdbotConfigFile.loadDict()
+        let root = MoltbotConfigFile.loadDict()
         if let gateway = root["gateway"] as? [String: Any],
            let bind = gateway["bind"] as? String
         {
@@ -247,16 +247,16 @@ enum GatewayEnvironment {
         let bun = CommandResolver.findExecutable(named: "bun")
         let (label, cmd): (String, [String]) =
             if let npm {
-                ("npm", [npm, "install", "-g", "clawdbot@\(target)"])
+                ("npm", [npm, "install", "-g", "moltbot@\(target)"])
             } else if let pnpm {
-                ("pnpm", [pnpm, "add", "-g", "clawdbot@\(target)"])
+                ("pnpm", [pnpm, "add", "-g", "moltbot@\(target)"])
             } else if let bun {
-                ("bun", [bun, "add", "-g", "clawdbot@\(target)"])
+                ("bun", [bun, "add", "-g", "moltbot@\(target)"])
             } else {
-                ("npm", ["npm", "install", "-g", "clawdbot@\(target)"])
+                ("npm", ["npm", "install", "-g", "moltbot@\(target)"])
             }
 
-        statusHandler("Installing clawdbot@\(target) via \(label)…")
+        statusHandler("Installing moltbot@\(target) via \(label)…")
 
         func summarize(_ text: String) -> String? {
             let lines = text
@@ -270,7 +270,7 @@ enum GatewayEnvironment {
 
         let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: ["PATH": preferred], timeout: 300)
         if response.success {
-            statusHandler("Installed clawdbot@\(target)")
+            statusHandler("Installed moltbot@\(target)")
         } else {
             if response.timedOut {
                 statusHandler("Install failed: timed out. Check your internet connection and try again.")

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ClawdbotApp } from "./app";
+import { MoltbotApp } from "./app";
 import "../styles.css";
 
-const originalConnect = ClawdbotApp.prototype.connect;
+const originalConnect = MoltbotApp.prototype.connect;
 
 function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
-  const app = document.createElement("clawdbot-app") as ClawdbotApp;
+  const app = document.createElement("moltbot-app") as MoltbotApp;
   document.body.append(app);
   return app;
 }
@@ -19,7 +19,7 @@ function nextFrame() {
 }
 
 beforeEach(() => {
-  ClawdbotApp.prototype.connect = () => {
+  MoltbotApp.prototype.connect = () => {
     // no-op: avoid real gateway WS connections in browser tests
   };
   window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  ClawdbotApp.prototype.connect = originalConnect;
+  MoltbotApp.prototype.connect = originalConnect;
   window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
   localStorage.clear();
   document.body.innerHTML = "";
@@ -53,22 +53,22 @@ describe("control UI routing", () => {
   });
 
   it("infers nested base paths", async () => {
-    const app = mountApp("/apps/clawdbot/cron");
+    const app = mountApp("/apps/moltbot/cron");
     await app.updateComplete;
 
-    expect(app.basePath).toBe("/apps/clawdbot");
+    expect(app.basePath).toBe("/apps/moltbot");
     expect(app.tab).toBe("cron");
-    expect(window.location.pathname).toBe("/apps/clawdbot/cron");
+    expect(window.location.pathname).toBe("/apps/moltbot/cron");
   });
 
   it("honors explicit base path overrides", async () => {
-    window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = "/clawdbot";
-    const app = mountApp("/clawdbot/sessions");
+    window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = "/moltbot";
+    const app = mountApp("/moltbot/sessions");
     await app.updateComplete;
 
-    expect(app.basePath).toBe("/clawdbot");
+    expect(app.basePath).toBe("/moltbot");
     expect(app.tab).toBe("sessions");
-    expect(window.location.pathname).toBe("/clawdbot/sessions");
+    expect(window.location.pathname).toBe("/moltbot/sessions");
   });
 
   it("updates the URL when clicking nav items", async () => {
@@ -169,7 +169,7 @@ describe("control UI routing", () => {
 
   it("hydrates token from URL params even when settings already set", async () => {
     localStorage.setItem(
-      "clawdbot.control.settings.v1",
+      "moltbot.control.settings.v1",
       JSON.stringify({ token: "existing-token" }),
     );
     const app = mountApp("/ui/overview?token=abc123");

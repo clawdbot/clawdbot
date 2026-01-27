@@ -1,5 +1,5 @@
 ---
-summary: "Chrome extension: let Clawdbot drive your existing Chrome tab"
+summary: "Chrome extension: let Moltbot drive your existing Chrome tab"
 read_when:
   - You want the agent to drive an existing Chrome tab (toolbar button)
   - You need remote Gateway + local browser automation via Tailscale
@@ -8,31 +8,31 @@ read_when:
 
 # Chrome extension (browser relay)
 
-The Clawdbot Chrome extension lets the agent control your **existing Chrome tabs** (your normal Chrome window) instead of launching a separate clawd-managed Chrome profile.
+The Moltbot Chrome extension lets the agent control your **existing Chrome tabs** (your normal Chrome window) instead of launching a separate clawd-managed Chrome profile.
 
 Attach/detach happens via a **single Chrome toolbar button**.
 
 ## What it is (concept)
 
 There are three parts:
-- **Browser control server** (HTTP): the API the agent/tool calls (`browser.controlUrl`)
+- **Browser control service** (Gateway or node): the API the agent/tool calls (via the Gateway)
 - **Local relay server** (loopback CDP): bridges between the control server and the extension (`http://127.0.0.1:18792` by default)
 - **Chrome MV3 extension**: attaches to the active tab using `chrome.debugger` and pipes CDP messages to the relay
 
-Clawdbot then controls the attached tab through the normal `browser` tool surface (selecting the right profile).
+Moltbot then controls the attached tab through the normal `browser` tool surface (selecting the right profile).
 
 ## Install / load (unpacked)
 
 1) Install the extension to a stable local path:
 
 ```bash
-clawdbot browser extension install
+moltbot browser extension install
 ```
 
 2) Print the installed extension directory path:
 
 ```bash
-clawdbot browser extension path
+moltbot browser extension path
 ```
 
 3) Chrome → `chrome://extensions`
@@ -43,24 +43,24 @@ clawdbot browser extension path
 
 ## Updates (no build step)
 
-The extension ships inside the Clawdbot release (npm package) as static files. There is no separate “build” step.
+The extension ships inside the Moltbot release (npm package) as static files. There is no separate “build” step.
 
-After upgrading Clawdbot:
-- Re-run `clawdbot browser extension install` to refresh the installed files under your Clawdbot state directory.
+After upgrading Moltbot:
+- Re-run `moltbot browser extension install` to refresh the installed files under your Moltbot state directory.
 - Chrome → `chrome://extensions` → click “Reload” on the extension.
 
 ## Use it (no extra config)
 
-Clawdbot ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+Moltbot ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
 
 Use it:
-- CLI: `clawdbot browser --browser-profile chrome tabs`
+- CLI: `moltbot browser --browser-profile chrome tabs`
 - Agent tool: `browser` with `profile="chrome"`
 
 If you want a different name or a different relay port, create your own profile:
 
 ```bash
-clawdbot browser create-profile \
+moltbot browser create-profile \
   --name my-chrome \
   --driver extension \
   --cdp-url http://127.0.0.1:18792 \
@@ -69,7 +69,7 @@ clawdbot browser create-profile \
 
 ## Attach / detach (toolbar button)
 
-- Open the tab you want Clawdbot to control.
+- Open the tab you want Moltbot to control.
 - Click the extension icon.
   - Badge shows `ON` when attached.
 - Click again to detach.
@@ -82,28 +82,27 @@ clawdbot browser create-profile \
 
 ## Badge + common errors
 
-- `ON`: attached; Clawdbot can drive that tab.
+- `ON`: attached; Moltbot can drive that tab.
 - `…`: connecting to the local relay.
 - `!`: relay not reachable (most common: browser relay server isn’t running on this machine).
 
 If you see `!`:
-- Make sure the Gateway is running locally (default setup), or run `clawdbot browser serve` on this machine (remote gateway setup).
+- Make sure the Gateway is running locally (default setup), or run a node host on this machine if the Gateway runs elsewhere.
 - Open the extension Options page; it shows whether the relay is reachable.
 
-## Do I need `clawdbot browser serve`?
+## Remote Gateway (use a node host)
 
-### Local Gateway (same machine as Chrome) — usually **no**
+### Local Gateway (same machine as Chrome) — usually **no extra steps**
 
-If the Gateway is running on the same machine as Chrome and your `browser.controlUrl` is loopback (default),
-you typically **do not** need `clawdbot browser serve`.
+If the Gateway runs on the same machine as Chrome, it starts the browser control service on loopback
+and auto-starts the relay server. The extension talks to the local relay; the CLI/tool calls go to the Gateway.
 
-The Gateway’s built-in browser control server will start on `http://127.0.0.1:18791/` and Clawdbot will
-auto-start the local relay server on `http://127.0.0.1:18792/`.
+### Remote Gateway (Gateway runs elsewhere) — **run a node host**
 
-### Remote Gateway (Gateway runs elsewhere) — **yes**
+If your Gateway runs on another machine, start a node host on the machine that runs Chrome.
+The Gateway will proxy browser actions to that node; the extension + relay stay local to the browser machine.
 
-If your Gateway runs on another machine, run `clawdbot browser serve` on the machine that runs Chrome
-(and publish it via Tailscale Serve / TLS). See the section below.
+If multiple nodes are connected, pin one with `gateway.nodes.browser.node` or set `gateway.nodes.browser.mode`.
 
 ## Sandboxing (tool containers)
 
@@ -132,34 +131,18 @@ Options:
 
 Then ensure the tool isn’t denied by tool policy, and (if needed) call `browser` with `target="host"`.
 
-Debugging: `clawdbot sandbox explain`
+Debugging: `moltbot sandbox explain`
 
-## Remote Gateway (recommended: Tailscale Serve)
+## Remote access tips
 
-Goal: Gateway runs on one machine, but Chrome runs somewhere else.
-
-On the **browser machine**:
-
-```bash
-clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
-tailscale serve https / http://127.0.0.1:18791
-```
-
-On the **Gateway machine**:
-- Set `browser.controlUrl` to the HTTPS Serve URL (MagicDNS/ts.net).
-- Provide the token (prefer env):
-
-```bash
-export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
-```
-
-Then the agent can drive the browser by calling the remote `browser.controlUrl` API, while the extension + relay stay local on the browser machine.
+- Keep the Gateway and node host on the same tailnet; avoid exposing relay ports to LAN or public Internet.
+- Pair nodes intentionally; disable browser proxy routing if you don’t want remote control (`gateway.nodes.browser.mode="off"`).
 
 ## How “extension path” works
 
-`clawdbot browser extension path` prints the **installed** on-disk directory containing the extension files.
+`moltbot browser extension path` prints the **installed** on-disk directory containing the extension files.
 
-The CLI intentionally does **not** print a `node_modules` path. Always run `clawdbot browser extension install` first to copy the extension to a stable location under your Clawdbot state directory.
+The CLI intentionally does **not** print a `node_modules` path. Always run `moltbot browser extension install` first to copy the extension to a stable location under your Moltbot state directory.
 
 If you move or delete that install directory, Chrome will mark the extension as broken until you reload it from a valid path.
 
@@ -176,8 +159,8 @@ This is powerful and risky. Treat it like giving the model “hands on your brow
 
 Recommendations:
 - Prefer a dedicated Chrome profile (separate from your personal browsing) for extension relay usage.
-- Keep the browser control server tailnet-only (Tailscale) and require a token.
-- Avoid exposing browser control over LAN (`0.0.0.0`) and avoid Funnel (public).
+- Keep the Gateway and any node hosts tailnet-only; rely on Gateway auth + node pairing.
+- Avoid exposing relay ports over LAN (`0.0.0.0`) and avoid Funnel (public).
 
 Related:
 - Browser tool overview: [Browser](/tools/browser)

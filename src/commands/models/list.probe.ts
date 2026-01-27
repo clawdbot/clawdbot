@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 
-import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
+import { resolveMoltbotAgentDir } from "../../agents/agent-paths.js";
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -15,7 +15,7 @@ import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-au
 import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
@@ -117,7 +117,7 @@ function selectProbeModel(params: {
 }
 
 function buildProbeTargets(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
@@ -260,7 +260,7 @@ function buildProbeTargets(params: {
 }
 
 async function probeTarget(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentId: string;
   agentDir: string;
   workspaceDir: string;
@@ -335,7 +335,7 @@ async function probeTarget(params: {
 }
 
 async function runTargetsWithConcurrency(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   targets: AuthProbeTarget[];
   timeoutMs: number;
   maxTokens: number;
@@ -346,7 +346,7 @@ async function runTargetsWithConcurrency(params: {
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
 
   const agentId = resolveDefaultAgentId(cfg);
-  const agentDir = resolveClawdbotAgentDir();
+  const agentDir = resolveMoltbotAgentDir();
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
 
@@ -389,7 +389,7 @@ async function runTargetsWithConcurrency(params: {
 }
 
 export async function runAuthProbes(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;

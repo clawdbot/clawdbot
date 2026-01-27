@@ -91,14 +91,14 @@ export function buildParseArgv(params: {
   const normalizedArgv =
     programName && baseArgv[0] === programName
       ? baseArgv.slice(1)
-      : baseArgv[0]?.endsWith("clawdbot")
+      : baseArgv[0]?.endsWith("moltbot")
         ? baseArgv.slice(1)
         : baseArgv;
   const executable = (normalizedArgv[0]?.split(/[/\\]/).pop() ?? "").toLowerCase();
   const looksLikeNode =
     normalizedArgv.length >= 2 && (isNodeExecutable(executable) || isBunExecutable(executable));
   if (looksLikeNode) return normalizedArgv;
-  return ["node", programName || "clawdbot", ...normalizedArgv];
+  return ["node", programName || "moltbot", ...normalizedArgv];
 }
 
 const nodeExecutablePattern = /^node-\d+(?:\.\d+)*(?:\.exe)?$/;

@@ -45,7 +45,7 @@ export function registerVoiceCallCli(params: {
   const root = program
     .command("voicecall")
     .description("Voice call utilities")
-    .addHelpText("after", () => `\nDocs: https://docs.clawd.bot/cli/voicecall\n`);
+    .addHelpText("after", () => `\nDocs: https://docs.molt.bot/cli/voicecall\n`);
 
   root
     .command("call")

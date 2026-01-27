@@ -3,8 +3,21 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { buildCommandsMessage, buildHelpMessage, buildStatusMessage } from "./status.js";
+import type { MoltbotConfig } from "../config/config.js";
+import {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+  buildStatusMessage,
+} from "./status.js";
+
+const { listPluginCommands } = vi.hoisted(() => ({
+  listPluginCommands: vi.fn(() => []),
+}));
+
+vi.mock("../plugins/commands.js", () => ({
+  listPluginCommands,
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -32,7 +45,7 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       agent: {
         model: "anthropic/pi:opus",
         contextTokens: 32_000,
@@ -58,7 +71,7 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Clawdbot");
+    expect(normalized).toContain("Moltbot");
     expect(normalized).toContain("Model: anthropic/pi:opus");
     expect(normalized).toContain("api-key");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
@@ -83,7 +96,7 @@ describe("buildStatusMessage", () => {
             { id: "discord", sandbox: { mode: "all" } },
           ],
         },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       agent: {},
       sessionKey: "agent:discord:discord:channel:1456350065223270435",
       sessionScope: "per-sender",
@@ -320,7 +333,7 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       agent: { model: "anthropic/claude-opus-4-5" },
       sessionEntry: { sessionId: "c1", updatedAt: 0, inputTokens: 10 },
       sessionKey: "agent:main:main",
@@ -390,7 +403,7 @@ describe("buildStatusMessage", () => {
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
       },
-      { prefix: "clawdbot-status-" },
+      { prefix: "moltbot-status-" },
     );
   });
 });
@@ -399,11 +412,13 @@ describe("buildCommandsMessage", () => {
   it("lists commands with aliases and text-only hints", () => {
     const text = buildCommandsMessage({
       commands: { config: false, debug: false },
-    } as ClawdbotConfig);
+    } as MoltbotConfig);
+    expect(text).toContain("ℹ️ Slash commands");
+    expect(text).toContain("Status");
     expect(text).toContain("/commands - List all slash commands.");
     expect(text).toContain("/skill - Run a skill by name.");
-    expect(text).toContain("/think (aliases: /thinking, /t) - Set thinking level.");
-    expect(text).toContain("/compact (text-only) - Compact the session context.");
+    expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
+    expect(text).toContain("/compact [text] - Compact the session context.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
@@ -412,7 +427,7 @@ describe("buildCommandsMessage", () => {
     const text = buildCommandsMessage(
       {
         commands: { config: false, debug: false },
-      } as ClawdbotConfig,
+      } as MoltbotConfig,
       [
         {
           name: "demo_skill",
@@ -429,9 +444,40 @@ describe("buildHelpMessage", () => {
   it("hides config/debug when disabled", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
-    } as ClawdbotConfig);
-    expect(text).toContain("Skills: /skill <name> [input]");
+    } as MoltbotConfig);
+    expect(text).toContain("Skills");
+    expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
+  });
+});
+
+describe("buildCommandsMessagePaginated", () => {
+  it("formats telegram output with pages", () => {
+    const result = buildCommandsMessagePaginated(
+      {
+        commands: { config: false, debug: false },
+      } as MoltbotConfig,
+      undefined,
+      { surface: "telegram", page: 1 },
+    );
+    expect(result.text).toContain("ℹ️ Commands (1/");
+    expect(result.text).toContain("Session");
+    expect(result.text).toContain("/stop - Stop the current run.");
+  });
+
+  it("includes plugin commands in the paginated list", () => {
+    listPluginCommands.mockReturnValue([
+      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
+    ]);
+    const result = buildCommandsMessagePaginated(
+      {
+        commands: { config: false, debug: false },
+      } as MoltbotConfig,
+      undefined,
+      { surface: "telegram", page: 99 },
+    );
+    expect(result.text).toContain("Plugins");
+    expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });

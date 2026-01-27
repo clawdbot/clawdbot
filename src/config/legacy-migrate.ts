@@ -1,9 +1,9 @@
 import { applyLegacyMigrations } from "./legacy.js";
-import type { ClawdbotConfig } from "./types.js";
+import type { MoltbotConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 export function migrateLegacyConfig(raw: unknown): {
-  config: ClawdbotConfig | null;
+  config: MoltbotConfig | null;
   changes: string[];
 } {
   const { next, changes } = applyLegacyMigrations(raw);

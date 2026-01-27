@@ -67,9 +67,9 @@ curl http://localhost:3456/v1/chat/completions \
   }'
 ```
 
-### With Clawdbot
+### With Moltbot
 
-You can point Clawdbot at the proxy as a custom OpenAI-compatible endpoint:
+You can point Moltbot at the proxy as a custom OpenAI-compatible endpoint:
 
 ```json5
 {
@@ -134,12 +134,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## Notes
 
-- This is a **community tool**, not officially supported by Anthropic or Clawdbot
+- This is a **community tool**, not officially supported by Anthropic or Moltbot
 - Requires an active Claude Max/Pro subscription with Claude Code CLI authenticated
 - The proxy runs locally and does not send data to any third-party servers
 - Streaming responses are fully supported
 
 ## See Also
 
-- [Anthropic provider](/providers/anthropic) - Native Clawdbot integration with Claude setup-token or API keys
+- [Anthropic provider](/providers/anthropic) - Native Moltbot integration with Claude setup-token or API keys
 - [OpenAI provider](/providers/openai) - For OpenAI/Codex subscriptions

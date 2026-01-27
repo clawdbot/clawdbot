@@ -1,55 +1,55 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>Clawdbot</title>
+        <title>Moltbot</title>
         <item>
             <title>2026.1.24-1</title>
             <pubDate>Sun, 25 Jan 2026 14:05:25 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/moltbot/moltbot/main/appcast.xml</link>
             <sparkle:version>7952</sparkle:version>
             <sparkle:shortVersionString>2026.1.24-1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.24-1</h2>
+            <description><![CDATA[<h2>Moltbot 2026.1.24-1</h2>
 <h3>Fixes</h3>
 <ul>
 <li>Packaging: include dist/shared output in npm tarball (fixes missing reasoning-tags import on install).</li>
 </ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.24-1/Clawdbot-2026.1.24-1.zip" length="12396699" type="application/octet-stream" sparkle:edSignature="VaEdWIgEJBrZLIp2UmigoQ6vaq4P/jNFXpHYXvXHD5MsATS0CqBl6ugyyxRq+/GbpUqmdgdlht4dTUVbLRw6BA=="/>
+            <enclosure url="https://github.com/moltbot/moltbot/releases/download/v2026.1.24-1/Moltbot-2026.1.24-1.zip" length="12396699" type="application/octet-stream" sparkle:edSignature="VaEdWIgEJBrZLIp2UmigoQ6vaq4P/jNFXpHYXvXHD5MsATS0CqBl6ugyyxRq+/GbpUqmdgdlht4dTUVbLRw6BA=="/>
         </item>
         <item>
             <title>2026.1.24</title>
             <pubDate>Sun, 25 Jan 2026 13:31:05 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/moltbot/moltbot/main/appcast.xml</link>
             <sparkle:version>7944</sparkle:version>
             <sparkle:shortVersionString>2026.1.24</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.24</h2>
+            <description><![CDATA[<h2>Moltbot 2026.1.24</h2>
 <h3>Highlights</h3>
 <ul>
-<li>Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.clawd.bot/providers/ollama https://docs.clawd.bot/providers/venice</li>
+<li>Providers: Ollama discovery + docs; Venice guide upgrades + cross-links. (#1606) Thanks @abhaymundhara. https://docs.molt.bot/providers/ollama https://docs.molt.bot/providers/venice</li>
 <li>Channels: LINE plugin (Messaging API) with rich replies + quick replies. (#1630) Thanks @plum-dawg.</li>
-<li>TTS: Edge fallback (keyless) + <code>/tts</code> auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.clawd.bot/tts</li>
-<li>Exec approvals: approve in-chat via <code>/approve</code> across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands</li>
-<li>Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.clawd.bot/channels/telegram</li>
+<li>TTS: Edge fallback (keyless) + <code>/tts</code> auto modes. (#1668, #1667) Thanks @steipete, @sebslight. https://docs.molt.bot/tts</li>
+<li>Exec approvals: approve in-chat via <code>/approve</code> across all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands</li>
+<li>Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.molt.bot/channels/telegram</li>
 </ul>
 <h3>Changes</h3>
 <ul>
 <li>Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.</li>
-<li>TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.clawd.bot/tts</li>
-<li>TTS: add auto mode enum (off/always/inbound/tagged) with per-session <code>/tts</code> override. (#1667) Thanks @sebslight. https://docs.clawd.bot/tts</li>
+<li>TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.molt.bot/tts</li>
+<li>TTS: add auto mode enum (off/always/inbound/tagged) with per-session <code>/tts</code> override. (#1667) Thanks @sebslight. https://docs.molt.bot/tts</li>
 <li>Telegram: treat DM topics as separate sessions and keep DM history limits stable with thread suffixes. (#1597) Thanks @rohannagpal.</li>
-<li>Telegram: add <code>channels.telegram.linkPreview</code> to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.clawd.bot/channels/telegram</li>
-<li>Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.clawd.bot/tools/web</li>
+<li>Telegram: add <code>channels.telegram.linkPreview</code> to toggle outbound link previews. (#1700) Thanks @zerone0x. https://docs.molt.bot/channels/telegram</li>
+<li>Web search: add Brave freshness filter parameter for time-scoped results. (#1688) Thanks @JonUleis. https://docs.molt.bot/tools/web</li>
 <li>UI: refresh Control UI dashboard design system (typography, colors, spacing). (#1786) Thanks @mousberg.</li>
-<li>Exec approvals: forward approval prompts to chat with <code>/approve</code> for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.clawd.bot/tools/exec-approvals https://docs.clawd.bot/tools/slash-commands</li>
+<li>Exec approvals: forward approval prompts to chat with <code>/approve</code> for all channels (including plugins). (#1621) Thanks @czekaj. https://docs.molt.bot/tools/exec-approvals https://docs.molt.bot/tools/slash-commands</li>
 <li>Gateway: expose config.patch in the gateway tool with safe partial updates + restart sentinel. (#1653) Thanks @Glucksberg.</li>
-<li>Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.clawd.bot/diagnostics/flags</li>
+<li>Diagnostics: add diagnostic flags for targeted debug logs (config + env override). https://docs.molt.bot/diagnostics/flags</li>
 <li>Docs: expand FAQ (migration, scheduling, concurrency, model recommendations, OpenAI subscription auth, Pi sizing, hackable install, docs SSL workaround).</li>
 <li>Docs: add verbose installer troubleshooting guidance.</li>
 <li>Docs: add macOS VM guide with local/hosted options + VPS/nodes guidance. (#1693) Thanks @f-trycua.</li>
-<li>Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.clawd.bot/bedrock</li>
+<li>Docs: add Bedrock EC2 instance role setup + IAM steps. (#1625) Thanks @sergical. https://docs.molt.bot/bedrock</li>
 <li>Docs: update Fly.io guide notes.</li>
 <li>Dev: add prek pre-commit hooks + dependabot config for weekly updates. (#1720) Thanks @dguido.</li>
 </ul>
@@ -61,10 +61,10 @@
 <li>Web UI: hide internal <code>message_id</code> hints in chat bubbles.</li>
 <li>Gateway: allow Control UI token-only auth to skip device pairing even when device identity is present (<code>gateway.controlUi.allowInsecureAuth</code>). (#1679) Thanks @steipete.</li>
 <li>Matrix: decrypt E2EE media attachments with preflight size guard. (#1744) Thanks @araa47.</li>
-<li>BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.clawd.bot/channels/bluebubbles</li>
+<li>BlueBubbles: route phone-number targets to DMs, avoid leaking routing IDs, and auto-create missing DMs (Private API required). (#1751) Thanks @tyler6204. https://docs.molt.bot/channels/bluebubbles</li>
 <li>BlueBubbles: keep part-index GUIDs in reply tags when short IDs are missing.</li>
 <li>Signal: repair reaction sends (group/UUID targets + CLI author flags). (#1651) Thanks @vilkasdev.</li>
-<li>Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.clawd.bot/channels/signal</li>
+<li>Signal: add configurable signal-cli startup timeout + external daemon mode docs. (#1677) https://docs.molt.bot/channels/signal</li>
 <li>Telegram: set fetch duplex="half" for uploads on Node 22 to avoid sendPhoto failures. (#1684) Thanks @commdata2338.</li>
 <li>Telegram: use wrapped fetch for long-polling on Node to normalize AbortSignal handling. (#1639)</li>
 <li>Telegram: honor per-account proxy for outbound API calls. (#1774) Thanks @radek-paclt.</li>
@@ -93,18 +93,18 @@
 <li>Tests: avoid fake-timer dependency in embedded runner stream mock to reduce CI flakes. (#1597) Thanks @rohannagpal.</li>
 <li>Tests: increase embedded runner ordering test timeout to reduce CI flakes. (#1597) Thanks @rohannagpal.</li>
 </ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.24/Clawdbot-2026.1.24.zip" length="12396700" type="application/octet-stream" sparkle:edSignature="u+XzKD3YwV8s79gIr7LK4OtDCcmp/b+cjNC6SHav3/1CVJegh02SsBKatrampox32XGx8P2+8c/+fHV+qpkHCA=="/>
+            <enclosure url="https://github.com/moltbot/moltbot/releases/download/v2026.1.24/Moltbot-2026.1.24.zip" length="12396700" type="application/octet-stream" sparkle:edSignature="u+XzKD3YwV8s79gIr7LK4OtDCcmp/b+cjNC6SHav3/1CVJegh02SsBKatrampox32XGx8P2+8c/+fHV+qpkHCA=="/>
         </item>
         <item>
             <title>2026.1.23</title>
             <pubDate>Sat, 24 Jan 2026 13:02:18 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/moltbot/moltbot/main/appcast.xml</link>
             <sparkle:version>7750</sparkle:version>
             <sparkle:shortVersionString>2026.1.23</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.23</h2>
+            <description><![CDATA[<h2>Moltbot 2026.1.23</h2>
 <h3>Highlights</h3>
 <ul>
 <li>TTS: allow model-driven TTS tags by default for expressive audio replies (laughter, singing cues, etc.).</li>
@@ -117,9 +117,9 @@
 <li>Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).</li>
 <li>Heartbeat: add per-channel visibility controls (OK/alerts/indicator). (#1452) Thanks @dlauer.</li>
 <li>Plugins: add optional llm-task JSON-only tool for workflows. (#1498) Thanks @vignesh07.</li>
-<li>CLI: restart the gateway by default after <code>clawdbot update</code>; add <code>--no-restart</code> to skip it.</li>
-<li>CLI: add live auth probes to <code>clawdbot models status</code> for per-profile verification.</li>
-<li>CLI: add <code>clawdbot system</code> for system events + heartbeat controls; remove standalone <code>wake</code>.</li>
+<li>CLI: restart the gateway by default after <code>moltbot update</code>; add <code>--no-restart</code> to skip it.</li>
+<li>CLI: add live auth probes to <code>moltbot models status</code> for per-profile verification.</li>
+<li>CLI: add <code>moltbot system</code> for system events + heartbeat controls; remove standalone <code>wake</code>.</li>
 <li>Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3.</li>
 <li>Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc.</li>
 <li>Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc.</li>
@@ -154,10 +154,10 @@
 <li>Exec: honor tools.exec ask/security defaults for elevated approvals (avoid unwanted prompts).</li>
 <li>TUI: forward unknown slash commands (for example, <code>/context</code>) to the Gateway.</li>
 <li>TUI: include Gateway slash commands in autocomplete and <code>/help</code>.</li>
-<li>CLI: skip usage lines in <code>clawdbot models status</code> when provider usage is unavailable.</li>
+<li>CLI: skip usage lines in <code>moltbot models status</code> when provider usage is unavailable.</li>
 <li>CLI: suppress diagnostic session/run noise during auth probes.</li>
 <li>CLI: hide auth probe timeout warnings from embedded runs.</li>
-<li>CLI: render auth probe results as a table in <code>clawdbot models status</code>.</li>
+<li>CLI: render auth probe results as a table in <code>moltbot models status</code>.</li>
 <li>CLI: suppress probe-only embedded logs unless <code>--verbose</code> is set.</li>
 <li>CLI: move auth probe errors below the table to reduce wrapping.</li>
 <li>CLI: prevent ANSI color bleed when table cells wrap.</li>
@@ -180,9 +180,9 @@
 <li>Browser: keep extension relay tabs controllable when the extension reuses a session id after switching tabs. (#1160)</li>
 <li>Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)</li>
 </ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/moltbot/moltbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.23/Clawdbot-2026.1.23.zip" length="22326233" type="application/octet-stream" sparkle:edSignature="p40dFczUfmMpsif4BrEUYVqUPG2WiBXleWgefwu4WiqjuyXbw7CAaH5CpQKig/k2qRLlE59kX7AR/qJqmy+yCA=="/>
+            <enclosure url="https://github.com/moltbot/moltbot/releases/download/v2026.1.23/Moltbot-2026.1.23.zip" length="22326233" type="application/octet-stream" sparkle:edSignature="p40dFczUfmMpsif4BrEUYVqUPG2WiBXleWgefwu4WiqjuyXbw7CAaH5CpQKig/k2qRLlE59kX7AR/qJqmy+yCA=="/>
         </item>
     </channel>
 </rss>

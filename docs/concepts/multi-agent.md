@@ -39,7 +39,7 @@ reach other host locations unless sandboxing is enabled. See
 
 ## Paths (quick map)
 
-- Config: `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`)
+- Config: `~/.clawdbot/moltbot.json` (or `CLAWDBOT_CONFIG_PATH`)
 - State dir: `~/.clawdbot` (or `CLAWDBOT_STATE_DIR`)
 - Workspace: `~/clawd` (or `~/clawd-<agentId>`)
 - Agent dir: `~/.clawdbot/agents/<agentId>/agent` (or `agents.list[].agentDir`)
@@ -47,7 +47,7 @@ reach other host locations unless sandboxing is enabled. See
 
 ### Single-agent mode (default)
 
-If you do nothing, Clawdbot runs a single agent:
+If you do nothing, Moltbot runs a single agent:
 
 - `agentId` defaults to **`main`**.
 - Sessions are keyed as `agent:main:<mainKey>`.
@@ -59,7 +59,7 @@ If you do nothing, Clawdbot runs a single agent:
 Use the agent wizard to add a new isolated agent:
 
 ```bash
-clawdbot agents add work
+moltbot agents add work
 ```
 
 Then add `bindings` (or let the wizard do it) to route inbound messages.
@@ -67,7 +67,7 @@ Then add `bindings` (or let the wizard do it) to route inbound messages.
 Verify with:
 
 ```bash
-clawdbot agents list --bindings
+moltbot agents list --bindings
 ```
 
 ## Multiple agents = multiple people, multiple personalities
@@ -139,7 +139,7 @@ multiple phone numbers without mixing sessions.
 
 ## Example: two WhatsApps → two agents
 
-`~/.clawdbot/clawdbot.json` (JSON5):
+`~/.clawdbot/moltbot.json` (JSON5):
 
 ```js
 {

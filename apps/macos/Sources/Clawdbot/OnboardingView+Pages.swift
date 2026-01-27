@@ -1,7 +1,7 @@
 import AppKit
-import ClawdbotChatUI
-import ClawdbotDiscovery
-import ClawdbotIPC
+import MoltbotChatUI
+import MoltbotDiscovery
+import MoltbotIPC
 import SwiftUI
 
 extension OnboardingView {
@@ -32,9 +32,9 @@ extension OnboardingView {
     func welcomePage() -> some View {
         self.onboardingPage {
             VStack(spacing: 22) {
-                Text("Welcome to Clawdbot")
+                Text("Welcome to Moltbot")
                     .font(.largeTitle.weight(.semibold))
-                Text("Clawdbot is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
+                Text("Moltbot is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -57,7 +57,7 @@ extension OnboardingView {
                                 "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, " +
                                     "including running commands, reading/writing files, and capturing screenshots — " +
                                     "depending on the permissions you grant.\n\n" +
-                                    "Only enable Clawdbot if you understand the risks and trust the prompts and " +
+                                    "Only enable Moltbot if you understand the risks and trust the prompts and " +
                                     "integrations you use.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
@@ -76,7 +76,7 @@ extension OnboardingView {
             Text("Choose your Gateway")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "Clawdbot uses a single Gateway that stays running. Pick this Mac, " +
+                "Moltbot uses a single Gateway that stays running. Pick this Mac, " +
                     "connect to a discovered gateway nearby, or configure later.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -228,7 +228,7 @@ extension OnboardingView {
                                         Text("Project root")
                                             .font(.callout.weight(.semibold))
                                             .frame(width: labelWidth, alignment: .leading)
-                                        TextField("/home/you/Projects/clawdbot", text: self.$state.remoteProjectRoot)
+                                        TextField("/home/you/Projects/moltbot", text: self.$state.remoteProjectRoot)
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: fieldWidth)
                                     }
@@ -237,7 +237,7 @@ extension OnboardingView {
                                             .font(.callout.weight(.semibold))
                                             .frame(width: labelWidth, alignment: .leading)
                                         TextField(
-                                            "/Applications/Clawdbot.app/.../clawdbot",
+                                            "/Applications/Moltbot.app/.../moltbot",
                                             text: self.$state.remoteCliPath)
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: fieldWidth)
@@ -335,7 +335,7 @@ extension OnboardingView {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Clawdbot supports any model — we strongly recommend Opus 4.5 for the best experience.")
+            Text("Moltbot supports any model — we strongly recommend Opus 4.5 for the best experience.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -375,14 +375,14 @@ extension OnboardingView {
                 }
 
                 Text(
-                    "This lets Clawdbot use Claude immediately. Credentials are stored at " +
+                    "This lets Moltbot use Claude immediately. Credentials are stored at " +
                         "`~/.clawdbot/credentials/oauth.json` (owner-only).")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
-                    Text(ClawdbotOAuthStore.oauthURL().path)
+                    Text(MoltbotOAuthStore.oauthURL().path)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -391,7 +391,7 @@ extension OnboardingView {
                     Spacer()
 
                     Button("Reveal") {
-                        NSWorkspace.shared.activateFileViewerSelecting([ClawdbotOAuthStore.oauthURL()])
+                        NSWorkspace.shared.activateFileViewerSelecting([MoltbotOAuthStore.oauthURL()])
                     }
                     .buttonStyle(.bordered)
 
@@ -493,7 +493,7 @@ extension OnboardingView {
         self.onboardingPage {
             Text("Grant permissions")
                 .font(.largeTitle.weight(.semibold))
-            Text("These macOS permissions let Clawdbot automate apps and capture context on this Mac.")
+            Text("These macOS permissions let Moltbot automate apps and capture context on this Mac.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -534,7 +534,7 @@ extension OnboardingView {
         self.onboardingPage {
             Text("Install the CLI")
                 .font(.largeTitle.weight(.semibold))
-            Text("Required for local mode: installs `clawdbot` so launchd can run the gateway.")
+            Text("Required for local mode: installs `moltbot` so launchd can run the gateway.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -594,7 +594,7 @@ extension OnboardingView {
             Text("Agent workspace")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "Clawdbot runs the agent from a dedicated workspace so it can load `AGENTS.md` " +
+                "Moltbot runs the agent from a dedicated workspace so it can load `AGENTS.md` " +
                     "and write files there without mixing into your other projects.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -621,7 +621,7 @@ extension OnboardingView {
                         Text("Workspace folder")
                             .font(.headline)
                         TextField(
-                            AgentWorkspace.displayPath(for: ClawdbotConfigFile.defaultWorkspaceURL()),
+                            AgentWorkspace.displayPath(for: MoltbotConfigFile.defaultWorkspaceURL()),
                             text: self.$workspacePath)
                             .textFieldStyle(.roundedBorder)
 
@@ -651,7 +651,7 @@ extension OnboardingView {
                                     let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                                     if saved {
                                         self.workspaceStatus =
-                                            "Saved to ~/.clawdbot/clawdbot.json (agents.defaults.workspace)"
+                                            "Saved to ~/.clawdbot/moltbot.json (agents.defaults.workspace)"
                                     }
                                 }
                             }
@@ -693,7 +693,7 @@ extension OnboardingView {
                 .fixedSize(horizontal: false, vertical: true)
 
             self.onboardingGlassCard(padding: 8) {
-                ClawdbotChatView(viewModel: self.onboardingChatModel, style: .onboarding)
+                MoltbotChatView(viewModel: self.onboardingChatModel, style: .onboarding)
                     .frame(maxHeight: .infinity)
             }
             .frame(maxHeight: .infinity)
@@ -719,7 +719,7 @@ extension OnboardingView {
                     self.featureRow(
                         title: "Remote gateway checklist",
                         subtitle: """
-                        On your gateway host: install/update the `clawdbot` package and make sure credentials exist
+                        On your gateway host: install/update the `moltbot` package and make sure credentials exist
                         (typically `~/.clawdbot/credentials/oauth.json`). Then connect again if needed.
                         """,
                         systemImage: "network")
@@ -728,7 +728,7 @@ extension OnboardingView {
                 }
                 self.featureRow(
                     title: "Open the menu bar panel",
-                    subtitle: "Click the Clawdbot menu bar icon for quick chat and status.",
+                    subtitle: "Click the Moltbot menu bar icon for quick chat and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
                     title: "Connect WhatsApp or Telegram",

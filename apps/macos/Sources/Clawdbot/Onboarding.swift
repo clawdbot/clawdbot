@@ -1,13 +1,13 @@
 import AppKit
-import ClawdbotChatUI
-import ClawdbotDiscovery
-import ClawdbotIPC
+import MoltbotChatUI
+import MoltbotDiscovery
+import MoltbotIPC
 import Combine
 import Observation
 import SwiftUI
 
 enum UIStrings {
-    static let welcomeTitle = "Welcome to Clawdbot"
+    static let welcomeTitle = "Welcome to Moltbot"
 }
 
 @MainActor
@@ -18,7 +18,7 @@ final class OnboardingController {
     func show() {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
-            UserDefaults.standard.set(true, forKey: "clawdbot.onboardingSeen")
+            UserDefaults.standard.set(true, forKey: "moltbot.onboardingSeen")
             UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
             AppStateStore.shared.onboardingSeen = true
             return
@@ -79,7 +79,7 @@ struct OnboardingView: View {
     @State var anthropicAuthVerificationAttempted = false
     @State var anthropicAuthVerificationFailed = false
     @State var anthropicAuthVerifiedAt: Date?
-    @State var anthropicAuthDetectedStatus: ClawdbotOAuthStore.AnthropicOAuthStatus = .missingFile
+    @State var anthropicAuthDetectedStatus: MoltbotOAuthStore.AnthropicOAuthStatus = .missingFile
     @State var anthropicAuthAutoDetectClipboard = true
     @State var anthropicAuthAutoConnectClipboard = true
     @State var anthropicAuthLastPasteboardChangeCount = NSPasteboard.general.changeCount
@@ -90,7 +90,7 @@ struct OnboardingView: View {
     @State var showAdvancedConnection = false
     @State var preferredGatewayID: String?
     @State var gatewayDiscovery: GatewayDiscoveryModel
-    @State var onboardingChatModel: ClawdbotChatViewModel
+    @State var onboardingChatModel: MoltbotChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
@@ -156,7 +156,7 @@ struct OnboardingView: View {
     var canAdvance: Bool { !self.isWizardBlocking }
     var devLinkCommand: String {
         let version = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
-        return "npm install -g clawdbot@\(version)"
+        return "npm install -g moltbot@\(version)"
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -177,7 +177,7 @@ struct OnboardingView: View {
         self.permissionMonitor = permissionMonitor
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._onboardingChatModel = State(
-            initialValue: ClawdbotChatViewModel(
+            initialValue: MoltbotChatViewModel(
                 sessionKey: "onboarding",
                 transport: MacGatewayChatTransport()))
     }

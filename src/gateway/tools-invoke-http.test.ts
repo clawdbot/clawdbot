@@ -7,7 +7,7 @@ import path from "node:path";
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
+import { CONFIG_PATH } from "../config/config.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -91,9 +91,9 @@ describe("POST /tools/invoke", () => {
       list: [{ id: "main" }],
     } as any;
 
-    await fs.mkdir(path.dirname(CONFIG_PATH_CLAWDBOT), { recursive: true });
+    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
     await fs.writeFile(
-      CONFIG_PATH_CLAWDBOT,
+      CONFIG_PATH,
       JSON.stringify({ tools: { alsoAllow: ["sessions_list"] } }, null, 2),
       "utf-8",
     );

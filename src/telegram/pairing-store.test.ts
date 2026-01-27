@@ -13,7 +13,7 @@ import {
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const previous = process.env.CLAWDBOT_STATE_DIR;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-pairing-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-pairing-"));
   process.env.CLAWDBOT_STATE_DIR = dir;
   try {
     return await fn(dir);

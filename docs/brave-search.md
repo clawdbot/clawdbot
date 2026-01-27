@@ -7,7 +7,7 @@ read_when:
 
 # Brave Search API
 
-Clawdbot supports Brave Search as a web search provider for `web_search`.
+Moltbot supports Brave Search as a web search provider for `web_search`.
 
 ## Get an API key
 

@@ -16,7 +16,7 @@ export type SkillInstallSpec = {
   targetDir?: string;
 };
 
-export type ClawdbotSkillMetadata = {
+export type MoltbotSkillMetadata = {
   always?: boolean;
   skillKey?: string;
   primaryEnv?: string;
@@ -66,7 +66,7 @@ export type ParsedSkillFrontmatter = Record<string, string>;
 export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
-  clawdbot?: ClawdbotSkillMetadata;
+  metadata?: MoltbotSkillMetadata;
   invocation?: SkillInvocationPolicy;
 };
 

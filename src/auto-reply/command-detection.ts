@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/types.js";
+import type { MoltbotConfig } from "../config/types.js";
 import {
   type CommandNormalizeOptions,
   listChatCommands,
@@ -9,7 +9,7 @@ import { isAbortTrigger } from "./reply/abort.js";
 
 export function hasControlCommand(
   text?: string,
-  cfg?: ClawdbotConfig,
+  cfg?: MoltbotConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
   if (!text) return false;
@@ -35,7 +35,7 @@ export function hasControlCommand(
 
 export function isControlCommandMessage(
   text?: string,
-  cfg?: ClawdbotConfig,
+  cfg?: MoltbotConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
   if (!text) return false;
@@ -61,7 +61,7 @@ export function hasInlineCommandTokens(text?: string): boolean {
 
 export function shouldComputeCommandAuthorized(
   text?: string,
-  cfg?: ClawdbotConfig,
+  cfg?: MoltbotConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
   return isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text);

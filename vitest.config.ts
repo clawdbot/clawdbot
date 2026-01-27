@@ -32,7 +32,7 @@ export default defineConfig({
       "apps/macos/.build/**",
       "**/node_modules/**",
       "**/vendor/**",
-      "dist/Clawdbot.app/**",
+      "dist/Moltbot.app/**",
       "**/*.live.test.ts",
       "**/*.e2e.test.ts",
     ],

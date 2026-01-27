@@ -7,7 +7,7 @@ read_when:
 
 # Web tools
 
-Clawdbot ships two lightweight web tools:
+Moltbot ships two lightweight web tools:
 
 - `web_search` — Search the web using Perplexity Search API or Brave Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
@@ -29,7 +29,7 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 
 | Provider                  | Pros                                                                                         | Cons                          | API Key                                        |
 |---------------------------|----------------------------------------------------------------------------------------------|-------------------------------|------------------------------------------------|
-| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction options; free credits for Clawdbot users | —                             | Requires Perplexity API key `PERPLEXITY_API_KEY` |
+| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction options; free credits for Moltbot users | —                             | Requires Perplexity API key `PERPLEXITY_API_KEY` |
 | **Brave Search API**      | Fast, structured results; free tier available                                                | Fewer filtering options       | Requires Brave API key `BRAVE_API_KEY`         |
 
 
@@ -49,15 +49,15 @@ Set the provider in config:
 
 ## Setting up web search
 
-Use `clawdbot configure --section web` to set up your API key and choose a provider.
+Use `moltbot configure --section web` to set up your API key and choose a provider.
 
 ### Perplexity Search
 
 1) Create a Perplexity account at https://www.perplexity.ai/settings/api
 2) Generate an API key in the dashboard
-3) Run `clawdbot configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
+3) Run `moltbot configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
 
-Perplexity provides $5 in API credits on a monthly rolling basis to Perplexity Pro subscribers. Additionally, Perplexity provides complementary credits for Clawdbot users.
+Perplexity provides $5 in API credits on a monthly rolling basis to Perplexity Pro subscribers. Additionally, Perplexity provides complementary credits for Moltbot users.
 
 See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
 
@@ -65,15 +65,15 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 
 1) Create a Brave Search API account at https://brave.com/search/api/
 2) In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
-3) Run `clawdbot configure --section web` to store the key in config, or set `BRAVE_API_KEY` in your environment.
+3) Run `moltbot configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
 Brave provides a free tier plus paid plans; check the Brave API portal for the current limits and pricing.
 
 ### Where to store the key
 
-**Via config (recommended):** run `clawdbot configure --section web`. It stores the key under `tools.web.search.perplexity.apiKey` or `tools.web.search.apiKey`.
+**Via config (recommended):** run `moltbot configure --section web`. It stores the key under `tools.web.search.perplexity.apiKey` or `tools.web.search.apiKey`.
 
-**Via environment:** set `PERPLEXITY_API_KEY` or `BRAVE_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.clawdbot/.env` (or your service environment). See [Env vars](/help/faq#how-does-clawdbot-load-environment-variables).
+**Via environment:** set `PERPLEXITY_API_KEY` or `BRAVE_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.clawdbot/.env` (or your service environment). See [Env vars](/help/faq#how-does-moltbot-load-environment-variables).
 
 ### Config examples
 

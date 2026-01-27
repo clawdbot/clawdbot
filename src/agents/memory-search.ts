@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import type { ClawdbotConfig, MemorySearchConfig } from "../config/config.js";
+import type { MoltbotConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -119,9 +119,16 @@ function mergeConfig(
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
-  const hasRemote = Boolean(defaultRemote || overrideRemote);
+  const hasRemoteConfig = Boolean(
+    overrideRemote?.baseUrl ||
+    overrideRemote?.apiKey ||
+    overrideRemote?.headers ||
+    defaultRemote?.baseUrl ||
+    defaultRemote?.apiKey ||
+    defaultRemote?.headers,
+  );
   const includeRemote =
-    hasRemote || provider === "openai" || provider === "gemini" || provider === "auto";
+    hasRemoteConfig || provider === "openai" || provider === "gemini" || provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? true,
     wait: overrideRemote?.batch?.wait ?? defaultRemote?.batch?.wait ?? true,
@@ -267,7 +274,7 @@ function mergeConfig(
 }
 
 export function resolveMemorySearchConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;

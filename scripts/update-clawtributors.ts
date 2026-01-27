@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
-const REPO = "clawdbot/clawdbot";
+const REPO = "moltbot/moltbot";
 const PER_LINE = 10;
 
 const mapPath = resolve("scripts/clawtributors-map.json");

@@ -13,7 +13,7 @@ enum CLIInstaller {
         fileManager: FileManager) -> String?
     {
         for basePath in searchPaths {
-            let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("clawdbot").path
+            let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("moltbot").path
             var isDirectory: ObjCBool = false
 
             guard fileManager.fileExists(atPath: candidate, isDirectory: &isDirectory),
@@ -37,14 +37,14 @@ enum CLIInstaller {
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
         let expected = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
         let prefix = Self.installPrefix()
-        await statusHandler("Installing clawdbot CLI…")
+        await statusHandler("Installing moltbot CLI…")
         let cmd = self.installScriptCommand(version: expected, prefix: prefix)
         let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: nil, timeout: 900)
 
         if response.success {
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
-            let summary = installedVersion.map { "Installed clawdbot \($0)." } ?? "Installed clawdbot."
+            let summary = installedVersion.map { "Installed moltbot \($0)." } ?? "Installed moltbot."
             await statusHandler(summary)
             return
         }
@@ -70,7 +70,7 @@ enum CLIInstaller {
         let escapedVersion = self.shellEscape(version)
         let escapedPrefix = self.shellEscape(prefix)
         let script = """
-        curl -fsSL https://clawd.bot/install-cli.sh | \
+        curl -fsSL https://molt.bot/install-cli.sh | \
         bash -s -- --json --no-onboard --prefix \(escapedPrefix) --version \(escapedVersion)
         """
         return ["/bin/bash", "-lc", script]

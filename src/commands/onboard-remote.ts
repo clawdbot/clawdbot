@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -25,9 +25,9 @@ function ensureWsUrl(value: string): string {
 }
 
 export async function promptRemoteGatewayConfig(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   prompter: WizardPrompter,
-): Promise<ClawdbotConfig> {
+): Promise<MoltbotConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
 
@@ -43,7 +43,7 @@ export async function promptRemoteGatewayConfig(
     await prompter.note(
       [
         "Bonjour discovery requires dns-sd (macOS) or avahi-browse (Linux).",
-        "Docs: https://docs.clawd.bot/gateway/discovery",
+        "Docs: https://docs.molt.bot/gateway/discovery",
       ].join("\n"),
       "Discovery",
     );
@@ -96,7 +96,7 @@ export async function promptRemoteGatewayConfig(
             `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${
               selectedBeacon.sshPort ? ` -p ${selectedBeacon.sshPort}` : ""
             }`,
-            "Docs: https://docs.clawd.bot/gateway/remote",
+            "Docs: https://docs.molt.bot/gateway/remote",
           ].join("\n"),
           "SSH tunnel",
         );

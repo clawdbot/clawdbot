@@ -1,15 +1,15 @@
 ---
-summary: "Clawdbot on DigitalOcean (simple paid VPS option)"
+summary: "Moltbot on DigitalOcean (simple paid VPS option)"
 read_when:
-  - Setting up Clawdbot on DigitalOcean
-  - Looking for cheap VPS hosting for Clawdbot
+  - Setting up Moltbot on DigitalOcean
+  - Looking for cheap VPS hosting for Moltbot
 ---
 
-# Clawdbot on DigitalOcean
+# Moltbot on DigitalOcean
 
 ## Goal
 
-Run a persistent Clawdbot Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
+Run a persistent Moltbot Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
 If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
 
@@ -54,7 +54,7 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Install Clawdbot
+## 3) Install Moltbot
 
 ```bash
 # Update system
@@ -64,17 +64,17 @@ apt update && apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt install -y nodejs
 
-# Install Clawdbot
-curl -fsSL https://clawd.bot/install.sh | bash
+# Install Moltbot
+curl -fsSL https://molt.bot/install.sh | bash
 
 # Verify
-clawdbot --version
+moltbot --version
 ```
 
 ## 4) Run Onboarding
 
 ```bash
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 The wizard will walk you through:
@@ -87,13 +87,13 @@ The wizard will walk you through:
 
 ```bash
 # Check status
-clawdbot status
+moltbot status
 
 # Check service
-systemctl --user status clawdbot-gateway.service
+systemctl --user status moltbot-gateway.service
 
 # View logs
-journalctl --user -u clawdbot-gateway.service -f
+journalctl --user -u moltbot-gateway.service -f
 ```
 
 ## 6) Access the Dashboard
@@ -115,8 +115,8 @@ curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
 # Configure Gateway to use Tailscale Serve
-clawdbot config set gateway.tailscale.mode serve
-clawdbot gateway restart
+moltbot config set gateway.tailscale.mode serve
+moltbot gateway restart
 ```
 
 Open: `https://<magicdns>/`
@@ -127,8 +127,8 @@ Notes:
 
 **Option C: Tailnet bind (no Serve)**
 ```bash
-clawdbot config set gateway.bind tailnet
-clawdbot gateway restart
+moltbot config set gateway.bind tailnet
+moltbot gateway restart
 ```
 
 Open: `http://<tailscale-ip>:18789` (token required).
@@ -137,13 +137,13 @@ Open: `http://<tailscale-ip>:18789` (token required).
 
 ### Telegram
 ```bash
-clawdbot pairing list telegram
-clawdbot pairing approve telegram <CODE>
+moltbot pairing list telegram
+moltbot pairing approve telegram <CODE>
 ```
 
 ### WhatsApp
 ```bash
-clawdbot channels login whatsapp
+moltbot channels login whatsapp
 # Scan QR code
 ```
 
@@ -185,7 +185,7 @@ All state lives in:
 
 These survive reboots. Back them up periodically:
 ```bash
-tar -czvf clawdbot-backup.tar.gz ~/.clawdbot ~/clawd
+tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
 ```
 
 ---
@@ -213,9 +213,9 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 
 ### Gateway won't start
 ```bash
-clawdbot gateway status
-clawdbot doctor --non-interactive
-journalctl -u clawdbot --no-pager -n 50
+moltbot gateway status
+moltbot doctor --non-interactive
+journalctl -u moltbot --no-pager -n 50
 ```
 
 ### Port already in use

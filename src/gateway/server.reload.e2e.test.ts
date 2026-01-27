@@ -206,7 +206,7 @@ describe("gateway hot reload", () => {
       },
       cron: { enabled: true, store: "/tmp/cron.json" },
       agents: { defaults: { heartbeat: { every: "1m" }, maxConcurrent: 2 } },
-      browser: { enabled: true, controlUrl: "http://127.0.0.1:18791" },
+      browser: { enabled: true },
       web: { enabled: true },
       channels: {
         telegram: { botToken: "token" },

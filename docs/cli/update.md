@@ -1,28 +1,28 @@
 ---
-summary: "CLI reference for `clawdbot update` (safe-ish source update + gateway auto-restart)"
+summary: "CLI reference for `moltbot update` (safe-ish source update + gateway auto-restart)"
 read_when:
   - You want to update a source checkout safely
   - You need to understand `--update` shorthand behavior
 ---
 
-# `clawdbot update`
+# `moltbot update`
 
-Safely update Clawdbot and switch between stable/beta/dev channels.
+Safely update Moltbot and switch between stable/beta/dev channels.
 
 If you installed via **npm/pnpm** (global install, no git metadata), updates happen via the package manager flow in [Updating](/install/updating).
 
 ## Usage
 
 ```bash
-clawdbot update
-clawdbot update status
-clawdbot update wizard
-clawdbot update --channel beta
-clawdbot update --channel dev
-clawdbot update --tag beta
-clawdbot update --no-restart
-clawdbot update --json
-clawdbot --update
+moltbot update
+moltbot update status
+moltbot update wizard
+moltbot update --channel beta
+moltbot update --channel dev
+moltbot update --tag beta
+moltbot update --no-restart
+moltbot update --json
+moltbot --update
 ```
 
 ## Options
@@ -40,9 +40,9 @@ Note: downgrades require confirmation because older versions can break configura
 Show the active update channel + git tag/branch/SHA (for source checkouts), plus update availability.
 
 ```bash
-clawdbot update status
-clawdbot update status --json
-clawdbot update status --timeout 10
+moltbot update status
+moltbot update status --json
+moltbot update status --timeout 10
 ```
 
 Options:
@@ -57,10 +57,10 @@ offers to create one.
 
 ## What it does
 
-When you switch channels explicitly (`--channel ...`), Clawdbot also keeps the
+When you switch channels explicitly (`--channel ...`), Moltbot also keeps the
 install method aligned:
 
-- `dev` → ensures a git checkout (default: `~/clawdbot`, override with `CLAWDBOT_GIT_DIR`),
+- `dev` → ensures a git checkout (default: `~/moltbot`, override with `CLAWDBOT_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
 - `stable`/`beta` → installs from npm using the matching dist-tag.
 
@@ -81,16 +81,16 @@ High-level:
 5. Rebases onto the selected commit (dev only).
 6. Installs deps (pnpm preferred; npm fallback).
 7. Builds + builds the Control UI.
-8. Runs `clawdbot doctor` as the final “safe update” check.
+8. Runs `moltbot doctor` as the final “safe update” check.
 9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
 
 ## `--update` shorthand
 
-`clawdbot --update` rewrites to `clawdbot update` (useful for shells and launcher scripts).
+`moltbot --update` rewrites to `moltbot update` (useful for shells and launcher scripts).
 
 ## See also
 
-- `clawdbot doctor` (offers to run update first on git checkouts)
+- `moltbot doctor` (offers to run update first on git checkouts)
 - [Development channels](/install/development-channels)
 - [Updating](/install/updating)
 - [CLI reference](/cli)

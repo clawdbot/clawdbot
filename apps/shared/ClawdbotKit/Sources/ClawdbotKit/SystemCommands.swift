@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ClawdbotSystemCommand: String, Codable, Sendable {
+public enum MoltbotSystemCommand: String, Codable, Sendable {
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
@@ -8,19 +8,19 @@ public enum ClawdbotSystemCommand: String, Codable, Sendable {
     case execApprovalsSet = "system.execApprovals.set"
 }
 
-public enum ClawdbotNotificationPriority: String, Codable, Sendable {
+public enum MoltbotNotificationPriority: String, Codable, Sendable {
     case passive
     case active
     case timeSensitive
 }
 
-public enum ClawdbotNotificationDelivery: String, Codable, Sendable {
+public enum MoltbotNotificationDelivery: String, Codable, Sendable {
     case system
     case overlay
     case auto
 }
 
-public struct ClawdbotSystemRunParams: Codable, Sendable, Equatable {
+public struct MoltbotSystemRunParams: Codable, Sendable, Equatable {
     public var command: [String]
     public var rawCommand: String?
     public var cwd: String?
@@ -57,7 +57,7 @@ public struct ClawdbotSystemRunParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct ClawdbotSystemWhichParams: Codable, Sendable, Equatable {
+public struct MoltbotSystemWhichParams: Codable, Sendable, Equatable {
     public var bins: [String]
 
     public init(bins: [String]) {
@@ -65,19 +65,19 @@ public struct ClawdbotSystemWhichParams: Codable, Sendable, Equatable {
     }
 }
 
-public struct ClawdbotSystemNotifyParams: Codable, Sendable, Equatable {
+public struct MoltbotSystemNotifyParams: Codable, Sendable, Equatable {
     public var title: String
     public var body: String
     public var sound: String?
-    public var priority: ClawdbotNotificationPriority?
-    public var delivery: ClawdbotNotificationDelivery?
+    public var priority: MoltbotNotificationPriority?
+    public var delivery: MoltbotNotificationDelivery?
 
     public init(
         title: String,
         body: String,
         sound: String? = nil,
-        priority: ClawdbotNotificationPriority? = nil,
-        delivery: ClawdbotNotificationDelivery? = nil)
+        priority: MoltbotNotificationPriority? = nil,
+        delivery: MoltbotNotificationDelivery? = nil)
     {
         self.title = title
         self.body = body

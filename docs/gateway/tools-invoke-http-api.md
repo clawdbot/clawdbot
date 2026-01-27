@@ -6,7 +6,7 @@ read_when:
 ---
 # Tools Invoke (HTTP)
 
-Clawdbot’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled, but gated by Gateway auth and tool policy.
+Moltbot’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled, but gated by Gateway auth and tool policy.
 
 - `POST /tools/invoke`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -54,8 +54,8 @@ Tool availability is filtered through the same policy chain used by Gateway agen
 If a tool is not allowed by policy, the endpoint returns **404**.
 
 To help group policies resolve context, you can optionally set:
-- `x-clawdbot-message-channel: <channel>` (example: `slack`, `telegram`)
-- `x-clawdbot-account-id: <accountId>` (when multiple accounts exist)
+- `x-moltbot-message-channel: <channel>` (example: `slack`, `telegram`)
+- `x-moltbot-account-id: <accountId>` (when multiple accounts exist)
 
 ## Responses
 

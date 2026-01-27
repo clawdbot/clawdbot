@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import JSON5 from "json5";
 
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import { type ClawdbotConfig, CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { type MoltbotConfig, CONFIG_PATH, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -12,13 +12,13 @@ import { shortenHomePath } from "../utils.js";
 
 async function readConfigFileRaw(): Promise<{
   exists: boolean;
-  parsed: ClawdbotConfig;
+  parsed: MoltbotConfig;
 }> {
   try {
-    const raw = await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf-8");
+    const raw = await fs.readFile(CONFIG_PATH, "utf-8");
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object") {
-      return { exists: true, parsed: parsed as ClawdbotConfig };
+      return { exists: true, parsed: parsed as MoltbotConfig };
     }
     return { exists: true, parsed: {} };
   } catch {
@@ -41,7 +41,7 @@ export async function setupCommand(
 
   const workspace = desiredWorkspace ?? defaults.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
 
-  const next: ClawdbotConfig = {
+  const next: MoltbotConfig = {
     ...cfg,
     agents: {
       ...cfg.agents,

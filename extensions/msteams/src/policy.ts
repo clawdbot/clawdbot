@@ -11,6 +11,7 @@ import type {
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
+  resolveToolsBySender,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
 } from "clawdbot/plugin-sdk";
@@ -106,9 +107,36 @@ export function resolveMSTeamsGroupToolPolicy(
   });
 
   if (resolved.channelConfig) {
-    return resolved.channelConfig.tools ?? resolved.teamConfig?.tools;
+    const senderPolicy = resolveToolsBySender({
+      toolsBySender: resolved.channelConfig.toolsBySender,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+    if (senderPolicy) return senderPolicy;
+    if (resolved.channelConfig.tools) return resolved.channelConfig.tools;
+    const teamSenderPolicy = resolveToolsBySender({
+      toolsBySender: resolved.teamConfig?.toolsBySender,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+    if (teamSenderPolicy) return teamSenderPolicy;
+    return resolved.teamConfig?.tools;
   }
-  if (resolved.teamConfig?.tools) return resolved.teamConfig.tools;
+  if (resolved.teamConfig) {
+    const teamSenderPolicy = resolveToolsBySender({
+      toolsBySender: resolved.teamConfig.toolsBySender,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+    if (teamSenderPolicy) return teamSenderPolicy;
+    if (resolved.teamConfig.tools) return resolved.teamConfig.tools;
+  }
 
   if (!groupId) return undefined;
 
@@ -125,7 +153,24 @@ export function resolveMSTeamsGroupToolPolicy(
       normalizeKey: normalizeChannelSlug,
     });
     if (match.entry) {
-      return match.entry.tools ?? teamConfig?.tools;
+      const senderPolicy = resolveToolsBySender({
+        toolsBySender: match.entry.toolsBySender,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
+      if (senderPolicy) return senderPolicy;
+      if (match.entry.tools) return match.entry.tools;
+      const teamSenderPolicy = resolveToolsBySender({
+        toolsBySender: teamConfig?.toolsBySender,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
+      if (teamSenderPolicy) return teamSenderPolicy;
+      return teamConfig?.tools;
     }
   }
 

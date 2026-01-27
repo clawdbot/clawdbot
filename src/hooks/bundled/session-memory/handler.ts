@@ -8,7 +8,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import type { ClawdbotConfig } from "../../../config/config.js";
+import type { MoltbotConfig } from "../../../config/config.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import type { HookHandler } from "../../hooks.js";
@@ -67,7 +67,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     console.log("[session-memory] Hook triggered for /new command");
 
     const context = event.context || {};
-    const cfg = context.cfg as ClawdbotConfig | undefined;
+    const cfg = context.cfg as MoltbotConfig | undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
@@ -106,11 +106,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
         // Dynamically import the LLM slug generator (avoids module caching issues)
         // When compiled, handler is at dist/hooks/bundled/session-memory/handler.js
         // Going up ../.. puts us at dist/hooks/, so just add llm-slug-generator.js
-        const clawdbotRoot = path.resolve(
+        const moltbotRoot = path.resolve(
           path.dirname(import.meta.url.replace("file://", "")),
           "../..",
         );
-        const slugGenPath = path.join(clawdbotRoot, "llm-slug-generator.js");
+        const slugGenPath = path.join(moltbotRoot, "llm-slug-generator.js");
         const { generateSlugViaLLM } = await import(slugGenPath);
 
         // Use LLM to generate a descriptive slug

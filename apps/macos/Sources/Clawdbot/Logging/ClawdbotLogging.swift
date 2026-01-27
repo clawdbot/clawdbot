@@ -52,14 +52,14 @@ enum AppLogLevel: String, CaseIterable, Identifiable {
     }
 }
 
-enum ClawdbotLogging {
+enum MoltbotLogging {
     private static let labelSeparator = "::"
 
     private static let didBootstrap: Void = {
         LoggingSystem.bootstrap { label in
             let (subsystem, category) = Self.parseLabel(label)
-            let osHandler = ClawdbotOSLogHandler(subsystem: subsystem, category: category)
-            let fileHandler = ClawdbotFileLogHandler(label: label)
+            let osHandler = MoltbotOSLogHandler(subsystem: subsystem, category: category)
+            let fileHandler = MoltbotFileLogHandler(label: label)
             return MultiplexLogHandler([osHandler, fileHandler])
         }
     }()
@@ -84,8 +84,8 @@ enum ClawdbotLogging {
 
 extension Logging.Logger {
     init(subsystem: String, category: String) {
-        ClawdbotLogging.bootstrapIfNeeded()
-        let label = ClawdbotLogging.makeLabel(subsystem: subsystem, category: category)
+        MoltbotLogging.bootstrapIfNeeded()
+        let label = MoltbotLogging.makeLabel(subsystem: subsystem, category: category)
         self.init(label: label)
     }
 }
@@ -96,7 +96,7 @@ extension Logger.Message.StringInterpolation {
     }
 }
 
-struct ClawdbotOSLogHandler: LogHandler {
+struct MoltbotOSLogHandler: LogHandler {
     private let osLogger: os.Logger
     var metadata: Logger.Metadata = [:]
 
@@ -174,7 +174,7 @@ struct ClawdbotOSLogHandler: LogHandler {
     }
 }
 
-struct ClawdbotFileLogHandler: LogHandler {
+struct MoltbotFileLogHandler: LogHandler {
     let label: String
     var metadata: Logger.Metadata = [:]
 
@@ -198,7 +198,7 @@ struct ClawdbotFileLogHandler: LogHandler {
         line: UInt)
     {
         guard AppLogSettings.fileLoggingEnabled() else { return }
-        let (subsystem, category) = ClawdbotLogging.parseLabel(self.label)
+        let (subsystem, category) = MoltbotLogging.parseLabel(self.label)
         var fields: [String: String] = [
             "subsystem": subsystem,
             "category": category,

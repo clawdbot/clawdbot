@@ -1,7 +1,7 @@
 ---
 summary: "Zalo personal account support via zca-cli (QR login), capabilities, and configuration"
 read_when:
-  - Setting up Zalo Personal for Clawdbot
+  - Setting up Zalo Personal for Moltbot
   - Debugging Zalo Personal login or message flow
 ---
 # Zalo Personal (unofficial)
@@ -12,8 +12,8 @@ Status: experimental. This integration automates a **personal Zalo account** via
 
 ## Plugin required
 Zalo Personal ships as a plugin and is not bundled with the core install.
-- Install via CLI: `clawdbot plugins install @clawdbot/zalouser`
-- Or from a source checkout: `clawdbot plugins install ./extensions/zalouser`
+- Install via CLI: `moltbot plugins install @moltbot/zalouser`
+- Or from a source checkout: `moltbot plugins install ./extensions/zalouser`
 - Details: [Plugins](/plugin)
 
 ## Prerequisite: zca-cli
@@ -25,7 +25,7 @@ The Gateway machine must have the `zca` binary available in `PATH`.
 ## Quick setup (beginner)
 1) Install the plugin (see above).
 2) Login (QR, on the Gateway machine):
-   - `clawdbot channels login --channel zalouser`
+   - `moltbot channels login --channel zalouser`
    - Scan the QR code in the terminal with the Zalo mobile app.
 3) Enable the channel:
 
@@ -55,9 +55,9 @@ Channel id is `zalouser` to make it explicit this automates a **personal Zalo us
 Use the directory CLI to discover peers/groups and their IDs:
 
 ```bash
-clawdbot directory self --channel zalouser
-clawdbot directory peers list --channel zalouser --query "name"
-clawdbot directory groups list --channel zalouser --query "work"
+moltbot directory self --channel zalouser
+moltbot directory peers list --channel zalouser --query "name"
+moltbot directory groups list --channel zalouser --query "work"
 ```
 
 ## Limits
@@ -69,8 +69,8 @@ clawdbot directory groups list --channel zalouser --query "work"
 `channels.zalouser.allowFrom` accepts user IDs or names. The wizard resolves names to IDs via `zca friend find` when available.
 
 Approve via:
-- `clawdbot pairing list zalouser`
-- `clawdbot pairing approve zalouser <code>`
+- `moltbot pairing list zalouser`
+- `moltbot pairing approve zalouser <code>`
 
 ## Group access (optional)
 - Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
@@ -79,7 +79,7 @@ Approve via:
   - `channels.zalouser.groups` (keys are group IDs or names)
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
 - The configure wizard can prompt for group allowlists.
-- On startup, Clawdbot resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- On startup, Moltbot resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
 
 Example:
 ```json5
@@ -119,5 +119,5 @@ Accounts map to zca profiles. Example:
 - Install zca-cli and ensure it’s on `PATH` for the Gateway process.
 
 **Login doesn’t stick:**
-- `clawdbot channels status --probe`
-- Re-login: `clawdbot channels logout --channel zalouser && clawdbot channels login --channel zalouser`
+- `moltbot channels status --probe`
+- Re-login: `moltbot channels logout --channel zalouser && moltbot channels login --channel zalouser`

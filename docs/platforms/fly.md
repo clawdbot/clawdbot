@@ -1,11 +1,11 @@
 ---
 title: Fly.io
-description: Deploy Clawdbot on Fly.io
+description: Deploy Moltbot on Fly.io
 ---
 
 # Fly.io Deployment
 
-**Goal:** Clawdbot Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
+**Goal:** Moltbot Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
 
 ## What you need
 
@@ -25,14 +25,14 @@ description: Deploy Clawdbot on Fly.io
 
 ```bash
 # Clone the repo
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/moltbot/moltbot.git
+cd moltbot
 
 # Create a new Fly app (pick your own name)
-fly apps create my-clawdbot
+fly apps create my-moltbot
 
 # Create a persistent volume (1GB is usually enough)
-fly volumes create clawdbot_data --size 1 --region iad
+fly volumes create moltbot_data --size 1 --region iad
 ```
 
 **Tip:** Choose a region close to you. Common options: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
@@ -44,7 +44,7 @@ Edit `fly.toml` to match your app name and requirements.
 **Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
 
 ```toml
-app = "my-clawdbot"  # Your app name
+app = "my-moltbot"  # Your app name
 primary_region = "iad"
 
 [build]
@@ -72,7 +72,7 @@ primary_region = "iad"
   memory = "2048mb"
 
 [mounts]
-  source = "clawdbot_data"
+  source = "moltbot_data"
   destination = "/data"
 ```
 
@@ -106,7 +106,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 **Notes:**
 - Non-loopback binds (`--bind lan`) require `CLAWDBOT_GATEWAY_TOKEN` for security.
 - Treat these tokens like passwords.
-- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `clawdbot.json` where they could be accidentally exposed or logged.
+- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `moltbot.json` where they could be accidentally exposed or logged.
 
 ## 4) Deploy
 
@@ -139,7 +139,7 @@ fly ssh console
 Create the config directory and file:
 ```bash
 mkdir -p /data
-cat > /data/clawdbot.json << 'EOF'
+cat > /data/moltbot.json << 'EOF'
 {
   "agents": {
     "defaults": {
@@ -185,13 +185,13 @@ cat > /data/clawdbot.json << 'EOF'
     "bind": "auto"
   },
   "meta": {
-    "lastTouchedVersion": "2026.1.25"
+    "lastTouchedVersion": "2026.1.26"
   }
 }
 EOF
 ```
 
-**Note:** With `CLAWDBOT_STATE_DIR=/data`, the config path is `/data/clawdbot.json`.
+**Note:** With `CLAWDBOT_STATE_DIR=/data`, the config path is `/data/moltbot.json`.
 
 **Note:** The Discord token can come from either:
 - Environment variable: `DISCORD_BOT_TOKEN` (recommended for secrets)
@@ -214,7 +214,7 @@ Open in browser:
 fly open
 ```
 
-Or visit `https://my-clawdbot.fly.dev/`
+Or visit `https://my-moltbot.fly.dev/`
 
 Paste your gateway token (the one from `CLAWDBOT_GATEWAY_TOKEN`) to authenticate.
 
@@ -278,11 +278,11 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
-If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/clawdbot.json` should be read on restart.
+If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/moltbot.json` should be read on restart.
 
 Verify the config exists:
 ```bash
-fly ssh console --command "cat /data/clawdbot.json"
+fly ssh console --command "cat /data/moltbot.json"
 ```
 
 ### Writing Config via SSH
@@ -291,16 +291,16 @@ The `fly ssh console -C` command doesn't support shell redirection. To write a c
 
 ```bash
 # Use echo + tee (pipe from local to remote)
-echo '{"your":"config"}' | fly ssh console -C "tee /data/clawdbot.json"
+echo '{"your":"config"}' | fly ssh console -C "tee /data/moltbot.json"
 
 # Or use sftp
 fly sftp shell
-> put /local/path/config.json /data/clawdbot.json
+> put /local/path/config.json /data/moltbot.json
 ```
 
 **Note:** `fly sftp` may fail if the file already exists. Delete first:
 ```bash
-fly ssh console --command "rm /data/clawdbot.json"
+fly ssh console --command "rm /data/moltbot.json"
 ```
 
 ### State Not Persisting
@@ -366,18 +366,18 @@ Or convert an existing deployment:
 
 ```bash
 # List current IPs
-fly ips list -a my-clawdbot
+fly ips list -a my-moltbot
 
 # Release public IPs
-fly ips release <public-ipv4> -a my-clawdbot
-fly ips release <public-ipv6> -a my-clawdbot
+fly ips release <public-ipv4> -a my-moltbot
+fly ips release <public-ipv6> -a my-moltbot
 
 # Switch to private config so future deploys don't re-allocate public IPs
 # (remove [http_service] or deploy with the private template)
 fly deploy -c fly.private.toml
 
 # Allocate private-only IPv6
-fly ips allocate-v6 --private -a my-clawdbot
+fly ips allocate-v6 --private -a my-moltbot
 ```
 
 After this, `fly ips list` should show only a `private` type IP:
@@ -393,7 +393,7 @@ Since there's no public URL, use one of these methods:
 **Option 1: Local proxy (simplest)**
 ```bash
 # Forward local port 3000 to the app
-fly proxy 3000:3000 -a my-clawdbot
+fly proxy 3000:3000 -a my-moltbot
 
 # Then open http://localhost:3000 in browser
 ```
@@ -409,7 +409,7 @@ fly wireguard create
 
 **Option 3: SSH only**
 ```bash
-fly ssh console -a my-clawdbot
+fly ssh console -a my-moltbot
 ```
 
 ### Webhooks with private deployment

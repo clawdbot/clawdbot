@@ -1,6 +1,6 @@
 services:
-  clawdbot-gateway:
-    image: ${CLAWDBOT_IMAGE:-clawdbot:local}
+  moltbot-gateway:
+    image: ${CLAWDBOT_IMAGE:-moltbot:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -27,8 +27,8 @@ services:
         "${CLAWDBOT_GATEWAY_PORT:-18789}"
       ]
 
-  clawdbot-cli:
-    image: ${CLAWDBOT_IMAGE:-clawdbot:local}
+  moltbot-cli:
+    image: ${CLAWDBOT_IMAGE:-moltbot:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color

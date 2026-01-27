@@ -66,7 +66,7 @@ describe("gateway server auth/connect", () => {
     });
 
     test("connect (req) handshake returns hello-ok payload", async () => {
-      const { CONFIG_PATH_CLAWDBOT, STATE_DIR_CLAWDBOT } = await import("../config/config.js");
+      const { CONFIG_PATH, STATE_DIR } = await import("../config/config.js");
       const ws = await openWs(port);
 
       const res = await connectReq(ws);
@@ -78,8 +78,8 @@ describe("gateway server auth/connect", () => {
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
-      expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH_CLAWDBOT);
-      expect(payload?.snapshot?.stateDir).toBe(STATE_DIR_CLAWDBOT);
+      expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH);
+      expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 
       ws.close();
     });
@@ -461,7 +461,7 @@ describe("gateway server auth/connect", () => {
     const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
       await import("../utils/message-channel.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const identityDir = await mkdtemp(join(tmpdir(), "clawdbot-device-scope-"));
+    const identityDir = await mkdtemp(join(tmpdir(), "moltbot-device-scope-"));
     const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
     const client = {
       id: GATEWAY_CLIENT_NAMES.TEST,

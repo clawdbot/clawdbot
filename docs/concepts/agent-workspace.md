@@ -24,7 +24,7 @@ inside a sandbox workspace under `~/.clawdbot/sandboxes`, not your host workspac
 - Default: `~/clawd`
 - If `CLAWDBOT_PROFILE` is set and not `"default"`, the default becomes
   `~/clawd-<profile>`.
-- Override in `~/.clawdbot/clawdbot.json`:
+- Override in `~/.clawdbot/moltbot.json`:
 
 ```json5
 {
@@ -34,7 +34,7 @@ inside a sandbox workspace under `~/.clawdbot/sandboxes`, not your host workspac
 }
 ```
 
-`clawdbot onboard`, `clawdbot configure`, or `clawdbot setup` will create the
+`moltbot onboard`, `moltbot configure`, or `moltbot setup` will create the
 workspace and seed the bootstrap files if they are missing.
 
 If you already manage the workspace files yourself, you can disable bootstrap
@@ -46,20 +46,20 @@ file creation:
 
 ## Extra workspace folders
 
-Older installs may have created `~/clawdbot`. Keeping multiple workspace
+Older installs may have created `~/moltbot`. Keeping multiple workspace
 directories around can cause confusing auth or state drift, because only one
 workspace is active at a time.
 
 **Recommendation:** keep a single active workspace. If you no longer use the
-extra folders, archive or move them to Trash (for example `trash ~/clawdbot`).
+extra folders, archive or move them to Trash (for example `trash ~/moltbot`).
 If you intentionally keep multiple workspaces, make sure
 `agents.defaults.workspace` points to the active one.
 
-`clawdbot doctor` warns when it detects extra workspace directories.
+`moltbot doctor` warns when it detects extra workspace directories.
 
 ## Workspace file map (what each file means)
 
-These are the standard files Clawdbot expects inside the workspace:
+These are the standard files Moltbot expects inside the workspace:
 
 - `AGENTS.md`
   - Operating instructions for the agent and how it should use memory.
@@ -112,17 +112,17 @@ See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 - `canvas/` (optional)
   - Canvas UI files for node displays (for example `canvas/index.html`).
 
-If any bootstrap file is missing, Clawdbot injects a "missing file" marker into
+If any bootstrap file is missing, Moltbot injects a "missing file" marker into
 the session and continues. Large bootstrap files are truncated when injected;
 adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
-`clawdbot setup` can recreate missing defaults without overwriting existing
+`moltbot setup` can recreate missing defaults without overwriting existing
 files.
 
 ## What is NOT in the workspace
 
 These live under `~/.clawdbot/` and should NOT be committed to the workspace repo:
 
-- `~/.clawdbot/clawdbot.json` (config)
+- `~/.clawdbot/moltbot.json` (config)
 - `~/.clawdbot/credentials/` (OAuth tokens, API keys)
 - `~/.clawdbot/agents/<agentId>/sessions/` (session transcripts + metadata)
 - `~/.clawdbot/skills/` (managed skills)
@@ -218,8 +218,8 @@ Suggested `.gitignore` starter:
 ## Moving the workspace to a new machine
 
 1. Clone the repo to the desired path (default `~/clawd`).
-2. Set `agents.defaults.workspace` to that path in `~/.clawdbot/clawdbot.json`.
-3. Run `clawdbot setup --workspace <path>` to seed any missing files.
+2. Set `agents.defaults.workspace` to that path in `~/.clawdbot/moltbot.json`.
+3. Run `moltbot setup --workspace <path>` to seed any missing files.
 4. If you need sessions, copy `~/.clawdbot/agents/<agentId>/sessions/` from the
    old machine separately.
 

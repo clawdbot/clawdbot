@@ -1,5 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
@@ -79,7 +79,7 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
         {
           value: "remove",
           label: "Remove channel config",
-          hint: "Delete channel tokens/settings from clawdbot.json",
+          hint: "Delete channel tokens/settings from moltbot.json",
         },
       ],
       initialValue: "configure",
@@ -89,9 +89,9 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
 }
 
 async function promptWebToolsConfig(
-  nextConfig: ClawdbotConfig,
+  nextConfig: MoltbotConfig,
   runtime: RuntimeEnv,
-): Promise<ClawdbotConfig> {
+): Promise<MoltbotConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
   const existingProvider = existingSearch?.provider ?? "brave";
@@ -106,7 +106,7 @@ async function promptWebToolsConfig(
       "Web search lets your agent look things up online using the `web_search` tool.",
       "Choose a provider: Perplexity Search (recommended) or Brave Search.",
       "Both return structured results (title, URL, snippet) for fast research.",
-      "Docs: https://docs.clawd.bot/tools/web",
+      "Docs: https://docs.molt.bot/tools/web",
     ].join("\n"),
     "Web search",
   );
@@ -168,7 +168,7 @@ async function promptWebToolsConfig(
             "No key stored yet, so web_search will stay unavailable.",
             "Store a key here or set PERPLEXITY_API_KEY in the Gateway environment.",
             "Get your API key at: https://www.perplexity.ai/settings/api",
-            "Docs: https://docs.clawd.bot/tools/web",
+            "Docs: https://docs.molt.bot/tools/web",
           ].join("\n"),
           "Web search",
         );
@@ -193,7 +193,7 @@ async function promptWebToolsConfig(
             "No key stored yet, so web_search will stay unavailable.",
             "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
             "Get your API key at: https://brave.com/search/api/",
-            "Docs: https://docs.clawd.bot/tools/web",
+            "Docs: https://docs.molt.bot/tools/web",
           ].join("\n"),
           "Web search",
         );
@@ -233,11 +233,11 @@ export async function runConfigureWizard(
 ) {
   try {
     printWizardHeader(runtime);
-    intro(opts.command === "update" ? "Clawdbot update wizard" : "Clawdbot configure");
+    intro(opts.command === "update" ? "Moltbot update wizard" : "Moltbot configure");
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
+    const baseConfig: MoltbotConfig = snapshot.valid ? snapshot.config : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -247,14 +247,14 @@ export async function runConfigureWizard(
           [
             ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
             "",
-            "Docs: https://docs.clawd.bot/gateway/configuration",
+            "Docs: https://docs.molt.bot/gateway/configuration",
           ].join("\n"),
           "Config issues",
         );
       }
       if (!snapshot.valid) {
         outro(
-          `Config invalid. Run \`${formatCliCommand("clawdbot doctor")}\` to repair it, then re-run configure.`,
+          `Config invalid. Run \`${formatCliCommand("moltbot doctor")}\` to repair it, then re-run configure.`,
         );
         runtime.exit(1);
         return;
@@ -451,8 +451,8 @@ export async function runConfigureWizard(
           note(
             [
               "Docs:",
-              "https://docs.clawd.bot/gateway/health",
-              "https://docs.clawd.bot/gateway/troubleshooting",
+              "https://docs.molt.bot/gateway/health",
+              "https://docs.molt.bot/gateway/troubleshooting",
             ].join("\n"),
             "Health check help",
           );
@@ -576,8 +576,8 @@ export async function runConfigureWizard(
             note(
               [
                 "Docs:",
-                "https://docs.clawd.bot/gateway/health",
-                "https://docs.clawd.bot/gateway/troubleshooting",
+                "https://docs.molt.bot/gateway/health",
+                "https://docs.molt.bot/gateway/troubleshooting",
               ].join("\n"),
               "Health check help",
             );
@@ -635,7 +635,7 @@ export async function runConfigureWizard(
         `Web UI: ${links.httpUrl}`,
         `Gateway WS: ${links.wsUrl}`,
         gatewayStatusLine,
-        "Docs: https://docs.clawd.bot/web/control-ui",
+        "Docs: https://docs.molt.bot/web/control-ui",
       ].join("\n"),
       "Control UI",
     );

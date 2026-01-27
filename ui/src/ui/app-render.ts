@@ -129,10 +129,10 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="brand">
             <div class="brand-logo">
-              <img src="https://mintcdn.com/clawdhub/4rYvG-uuZrMK_URE/assets/pixel-lobster.svg?fit=max&auto=format&n=4rYvG-uuZrMK_URE&q=85&s=da2032e9eac3b5d9bfe7eb96ca6a8a26" alt="Clawdbot" />
+              <img src="https://mintcdn.com/clawdhub/4rYvG-uuZrMK_URE/assets/pixel-lobster.svg?fit=max&auto=format&n=4rYvG-uuZrMK_URE&q=85&s=da2032e9eac3b5d9bfe7eb96ca6a8a26" alt="Moltbot" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">CLAWDBOT</div>
+              <div class="brand-title">MOLTBOT</div>
               <div class="brand-sub">Gateway Dashboard</div>
             </div>
           </div>
@@ -180,7 +180,7 @@ export function renderApp(state: AppViewState) {
           <div class="nav-group__items">
             <a
               class="nav-item nav-item--external"
-              href="https://docs.clawd.bot"
+              href="https://docs.molt.bot"
               target="_blank"
               rel="noreferrer"
               title="Docs (opens in new tab)"

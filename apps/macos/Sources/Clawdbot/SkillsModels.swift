@@ -1,4 +1,4 @@
-import ClawdbotProtocol
+import MoltbotProtocol
 import Foundation
 
 struct SkillsStatusReport: Codable {

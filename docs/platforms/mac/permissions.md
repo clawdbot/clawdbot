@@ -12,7 +12,7 @@ app's code signature, bundle identifier, and on-disk path. If any of those chang
 macOS treats the app as new and may drop or hide prompts.
 
 ## Requirements for stable permissions
-- Same path: run the app from a fixed location (for Clawdbot, `dist/Clawdbot.app`).
+- Same path: run the app from a fixed location (for Moltbot, `dist/Moltbot.app`).
 - Same bundle identifier: changing the bundle ID creates a new permission identity.
 - Signed app: unsigned or ad-hoc signed builds do not persist permissions.
 - Consistent signature: use a real Apple Development or Developer ID certificate

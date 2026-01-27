@@ -1,6 +1,6 @@
 import Testing
 
-@testable import Clawdbot
+@testable import Moltbot
 
 @Suite struct CameraCaptureServiceTests {
     @Test func normalizeSnapDefaults() {

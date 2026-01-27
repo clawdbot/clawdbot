@@ -1,16 +1,16 @@
 ---
-summary: "Clawdbot on Raspberry Pi (budget self-hosted setup)"
+summary: "Moltbot on Raspberry Pi (budget self-hosted setup)"
 read_when:
-  - Setting up Clawdbot on a Raspberry Pi
-  - Running Clawdbot on ARM devices
+  - Setting up Moltbot on a Raspberry Pi
+  - Running Moltbot on ARM devices
   - Building a cheap always-on personal AI
 ---
 
-# Clawdbot on Raspberry Pi
+# Moltbot on Raspberry Pi
 
 ## Goal
 
-Run a persistent, always-on Clawdbot Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
+Run a persistent, always-on Moltbot Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
 
 Perfect for:
 - 24/7 personal AI assistant
@@ -105,19 +105,19 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Install Clawdbot
+## 6) Install Moltbot
 
 ### Option A: Standard Install (Recommended)
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://molt.bot/install.sh | bash
 ```
 
 ### Option B: Hackable Install (For tinkering)
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/moltbot/moltbot.git
+cd moltbot
 npm install
 npm run build
 npm link
@@ -128,7 +128,7 @@ The hackable install gives you direct access to logs and code — useful for deb
 ## 7) Run Onboarding
 
 ```bash
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 Follow the wizard:
@@ -141,13 +141,13 @@ Follow the wizard:
 
 ```bash
 # Check status
-clawdbot status
+moltbot status
 
 # Check service
-sudo systemctl status clawdbot
+sudo systemctl status moltbot
 
 # View logs
-journalctl -u clawdbot -f
+journalctl -u moltbot -f
 ```
 
 ## 9) Access the Dashboard
@@ -170,8 +170,8 @@ curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 
 # Update config
-clawdbot config set gateway.bind tailnet
-sudo systemctl restart clawdbot
+moltbot config set gateway.bind tailnet
+sudo systemctl restart moltbot
 ```
 
 ---
@@ -218,7 +218,7 @@ htop
 
 ### Binary Compatibility
 
-Most Clawdbot features work on ARM64, but some external binaries may need ARM builds:
+Most Moltbot features work on ARM64, but some external binaries may need ARM builds:
 
 | Tool | ARM64 Status | Notes |
 |------|--------------|-------|
@@ -268,13 +268,13 @@ The onboarding wizard sets this up, but to verify:
 
 ```bash
 # Check service is enabled
-sudo systemctl is-enabled clawdbot
+sudo systemctl is-enabled moltbot
 
 # Enable if not
-sudo systemctl enable clawdbot
+sudo systemctl enable moltbot
 
 # Start on boot
-sudo systemctl start clawdbot
+sudo systemctl start moltbot
 ```
 
 ---
@@ -301,12 +301,12 @@ free -h
 
 ```bash
 # Check logs
-journalctl -u clawdbot --no-pager -n 100
+journalctl -u moltbot --no-pager -n 100
 
 # Common fix: rebuild
-cd ~/clawdbot  # if using hackable install
+cd ~/moltbot  # if using hackable install
 npm run build
-sudo systemctl restart clawdbot
+sudo systemctl restart moltbot
 ```
 
 ### ARM Binary Issues

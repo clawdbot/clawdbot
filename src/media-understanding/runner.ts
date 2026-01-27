@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -329,7 +329,7 @@ async function resolveGeminiCliEntry(
 }
 
 async function resolveKeyEntry(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
@@ -393,7 +393,7 @@ async function resolveKeyEntry(params: {
 }
 
 async function resolveAutoEntries(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
@@ -412,8 +412,41 @@ async function resolveAutoEntries(params: {
   return [];
 }
 
+export async function resolveAutoImageModel(params: {
+  cfg: MoltbotConfig;
+  agentDir?: string;
+  activeModel?: ActiveMediaModel;
+}): Promise<ActiveMediaModel | null> {
+  const providerRegistry = buildProviderRegistry();
+  const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
+    if (!entry || entry.type === "cli") return null;
+    const provider = entry.provider;
+    if (!provider) return null;
+    const model = entry.model ?? DEFAULT_IMAGE_MODELS[provider];
+    if (!model) return null;
+    return { provider, model };
+  };
+  const activeEntry = await resolveActiveModelEntry({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    providerRegistry,
+    capability: "image",
+    activeModel: params.activeModel,
+  });
+  const resolvedActive = toActive(activeEntry);
+  if (resolvedActive) return resolvedActive;
+  const keyEntry = await resolveKeyEntry({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    providerRegistry,
+    capability: "image",
+    activeModel: params.activeModel,
+  });
+  return toActive(keyEntry);
+}
+
 async function resolveActiveModelEntry(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
@@ -630,7 +663,7 @@ function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
 async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
@@ -814,7 +847,7 @@ async function runProviderEntry(params: {
 async function runCliEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
@@ -844,7 +877,7 @@ async function runCliEntry(params: {
     maxBytes,
     timeoutMs,
   });
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-cli-"));
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-cli-"));
   const mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
@@ -890,7 +923,7 @@ async function runCliEntry(params: {
 
 async function runAttachmentEntries(params: {
   capability: MediaUnderstandingCapability;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   ctx: MsgContext;
   attachmentIndex: number;
   agentDir?: string;
@@ -973,7 +1006,7 @@ async function runAttachmentEntries(params: {
 
 export async function runCapability(params: {
   capability: MediaUnderstandingCapability;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   ctx: MsgContext;
   attachments: MediaAttachmentCache;
   media: MediaAttachment[];

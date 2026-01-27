@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -172,8 +172,8 @@ describe("routeReply", () => {
   it("applies responsePrefix when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {
-      messages: { responsePrefix: "[clawdbot]" },
-    } as unknown as ClawdbotConfig;
+      messages: { responsePrefix: "[moltbot]" },
+    } as unknown as MoltbotConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -182,7 +182,7 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      "[clawdbot] hi",
+      "[moltbot] hi",
       expect.any(Object),
     );
   });
@@ -199,7 +199,7 @@ describe("routeReply", () => {
         ],
       },
       messages: {},
-    } as unknown as ClawdbotConfig;
+    } as unknown as MoltbotConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -346,7 +346,7 @@ describe("routeReply", () => {
           enabled: true,
         },
       },
-    } as unknown as ClawdbotConfig;
+    } as unknown as MoltbotConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "msteams",

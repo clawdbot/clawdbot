@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const CORE_PACKAGE_NAMES = new Set(["moltbot", "moltbot"]);
+
 async function readPackageName(dir: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
@@ -16,7 +18,7 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     const name = await readPackageName(current);
-    if (name === "clawdbot") return current;
+    if (name && CORE_PACKAGE_NAMES.has(name)) return current;
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
@@ -37,7 +39,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   return candidates;
 }
 
-export async function resolveClawdbotPackageRoot(opts: {
+export async function resolveMoltbotPackageRoot(opts: {
   cwd?: string;
   argv1?: string;
   moduleUrl?: string;

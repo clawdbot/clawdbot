@@ -96,7 +96,7 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
       if (handler(reason)) return true;
     } catch (err) {
       console.error(
-        "[clawdbot] Unhandled rejection handler failed:",
+        "[moltbot] Unhandled rejection handler failed:",
         err instanceof Error ? (err.stack ?? err.message) : err,
       );
     }
@@ -111,18 +111,18 @@ export function installUnhandledRejectionHandler(): void {
     // AbortError is typically an intentional cancellation (e.g., during shutdown)
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
-      console.warn("[clawdbot] Suppressed AbortError:", formatUncaughtError(reason));
+      console.warn("[moltbot] Suppressed AbortError:", formatUncaughtError(reason));
       return;
     }
 
     // Transient network errors (fetch failed, connection reset, etc.) shouldn't crash
     // These are temporary connectivity issues that will resolve on their own
     if (isTransientNetworkError(reason)) {
-      console.error("[clawdbot] Network error (non-fatal):", formatUncaughtError(reason));
+      console.error("[moltbot] Network error (non-fatal):", formatUncaughtError(reason));
       return;
     }
 
-    console.error("[clawdbot] Unhandled promise rejection:", formatUncaughtError(reason));
+    console.error("[moltbot] Unhandled promise rejection:", formatUncaughtError(reason));
     process.exit(1);
   });
 }

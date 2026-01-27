@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/slack",
-  "version": "2026.1.25",
+  "name": "@moltbot/slack",
+  "version": "2026.1.26",
   "type": "module",
-  "description": "Clawdbot Slack channel plugin",
-  "clawdbot": {
+  "description": "Moltbot Slack channel plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

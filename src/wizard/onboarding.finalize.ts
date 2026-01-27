@@ -20,7 +20,7 @@ import {
 } from "../commands/onboard-helpers.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
@@ -37,8 +37,8 @@ import type { WizardPrompter } from "./prompts.js";
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
   opts: OnboardOptions;
-  baseConfig: ClawdbotConfig;
-  nextConfig: ClawdbotConfig;
+  baseConfig: MoltbotConfig;
+  nextConfig: MoltbotConfig;
   workspaceDir: string;
   settings: GatewayWizardSettings;
   prompter: WizardPrompter;
@@ -214,8 +214,8 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       await prompter.note(
         [
           "Docs:",
-          "https://docs.clawd.bot/gateway/health",
-          "https://docs.clawd.bot/gateway/troubleshooting",
+          "https://docs.molt.bot/gateway/health",
+          "https://docs.molt.bot/gateway/troubleshooting",
         ].join("\n"),
         "Health check help",
       );
@@ -277,7 +277,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
       `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
-      "Docs: https://docs.clawd.bot/web/control-ui",
+      "Docs: https://docs.molt.bot/web/control-ui",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -305,9 +305,9 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     await prompter.note(
       [
         "Gateway token: shared auth for the Gateway + Control UI.",
-        "Stored in: ~/.clawdbot/clawdbot.json (gateway.auth.token) or CLAWDBOT_GATEWAY_TOKEN.",
-        "Web UI stores a copy in this browser's localStorage (clawdbot.control.settings.v1).",
-        `Get the tokenized link anytime: ${formatCliCommand("clawdbot dashboard --no-open")}`,
+        "Stored in: ~/.clawdbot/moltbot.json (gateway.auth.token) or CLAWDBOT_GATEWAY_TOKEN.",
+        "Web UI stores a copy in this browser's localStorage (moltbot.control.settings.v1).",
+        `Get the tokenized link anytime: ${formatCliCommand("moltbot dashboard --no-open")}`,
       ].join("\n"),
       "Token",
     );
@@ -337,7 +337,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       if (seededInBackground) {
         await prompter.note(
           `Web UI seeded in the background. Open later with: ${formatCliCommand(
-            "clawdbot dashboard --no-open",
+            "moltbot dashboard --no-open",
           )}`,
           "Web UI",
         );
@@ -364,8 +364,8 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         [
           `Dashboard link (with token): ${authedUrl}`,
           controlUiOpened
-            ? "Opened in your browser. Keep that tab to control Clawdbot."
-            : "Copy/paste this URL in a browser on this machine to control Clawdbot.",
+            ? "Opened in your browser. Keep that tab to control Moltbot."
+            : "Copy/paste this URL in a browser on this machine to control Moltbot.",
           controlUiOpenHint,
         ]
           .filter(Boolean)
@@ -374,7 +374,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       );
     } else {
       await prompter.note(
-        `When you're ready: ${formatCliCommand("clawdbot dashboard --no-open")}`,
+        `When you're ready: ${formatCliCommand("moltbot dashboard --no-open")}`,
         "Later",
       );
     }
@@ -383,54 +383,16 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
   }
 
   await prompter.note(
-    ["Back up your agent workspace.", "Docs: https://docs.clawd.bot/concepts/agent-workspace"].join(
+    ["Back up your agent workspace.", "Docs: https://docs.molt.bot/concepts/agent-workspace"].join(
       "\n",
     ),
     "Workspace backup",
   );
 
   await prompter.note(
-    "Running agents on your computer is risky — harden your setup: https://docs.clawd.bot/security",
+    "Running agents on your computer is risky — harden your setup: https://docs.molt.bot/security",
     "Security",
   );
-
-  const shouldOpenControlUi =
-    !opts.skipUi &&
-    settings.authMode === "token" &&
-    Boolean(settings.gatewayToken) &&
-    hatchChoice === null;
-  if (shouldOpenControlUi) {
-    const browserSupport = await detectBrowserOpenSupport();
-    if (browserSupport.ok) {
-      controlUiOpened = await openUrl(authedUrl);
-      if (!controlUiOpened) {
-        controlUiOpenHint = formatControlUiSshHint({
-          port: settings.port,
-          basePath: controlUiBasePath,
-          token: settings.gatewayToken,
-        });
-      }
-    } else {
-      controlUiOpenHint = formatControlUiSshHint({
-        port: settings.port,
-        basePath: controlUiBasePath,
-        token: settings.gatewayToken,
-      });
-    }
-
-    await prompter.note(
-      [
-        `Dashboard link (with token): ${authedUrl}`,
-        controlUiOpened
-          ? "Opened in your browser. Keep that tab to control Clawdbot."
-          : "Copy/paste this URL in a browser on this machine to control Clawdbot.",
-        controlUiOpenHint,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      "Dashboard ready",
-    );
-  }
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
   const webSearchKey =
@@ -451,31 +413,31 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           webSearchKey
             ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
             : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
-          "Docs: https://docs.clawd.bot/tools/web",
+          "Docs: https://docs.molt.bot/tools/web",
         ].join("\n")
       : [
           "To enable web search, your agent will need an API key for either Perplexity Search or Brave Search.",
           "",
           "Set it up interactively:",
-          `- Run: ${formatCliCommand("clawdbot configure --section web")}`,
+          `- Run: ${formatCliCommand("moltbot configure --section web")}`,
           "- Choose a provider and paste your API key",
           "",
           "Alternative: set PERPLEXITY_API_KEY or BRAVE_API_KEY in the Gateway environment (no config changes).",
-          "Docs: https://docs.clawd.bot/tools/web",
+          "Docs: https://docs.molt.bot/tools/web",
         ].join("\n"),
     "Web search (optional)",
   );
 
   await prompter.note(
-    'What now: https://clawd.bot/showcase ("What People Are Building").',
+    'What now: https://molt.bot/showcase ("What People Are Building").',
     "What now",
   );
 
   await prompter.outro(
     controlUiOpened
-      ? "Onboarding complete. Dashboard opened with your token; keep that tab to control Clawdbot."
+      ? "Onboarding complete. Dashboard opened with your token; keep that tab to control Moltbot."
       : seededInBackground
         ? "Onboarding complete. Web UI seeded in the background; open it anytime with the tokenized link above."
-        : "Onboarding complete. Use the tokenized dashboard link above to control Clawdbot.",
+        : "Onboarding complete. Use the tokenized dashboard link above to control Moltbot.",
   );
 }

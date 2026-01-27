@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ClawdbotCapability: String, Codable, Sendable {
+public enum MoltbotCapability: String, Codable, Sendable {
     case canvas
     case camera
     case screen

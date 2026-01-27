@@ -1,4 +1,4 @@
-import ClawdbotKit
+import MoltbotKit
 import CoreGraphics
 import ImageIO
 import Testing

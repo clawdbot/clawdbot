@@ -1,10 +1,10 @@
-import ClawdbotKit
+import MoltbotKit
 import Foundation
 import Testing
 
 @Suite struct ToolDisplayRegistryTests {
     @Test func loadsToolDisplayConfigFromBundle() {
-        let url = ClawdbotKitResources.bundle.url(forResource: "tool-display", withExtension: "json")
+        let url = MoltbotKitResources.bundle.url(forResource: "tool-display", withExtension: "json")
         #expect(url != nil)
     }
 

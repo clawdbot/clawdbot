@@ -3,13 +3,13 @@ summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
 ---
-# Agent Loop (Clawdbot)
+# Agent Loop (Moltbot)
 
 An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
 tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
 into actions and a final reply, while keeping session state consistent.
 
-In Clawdbot, a loop is a single, serialized run per session that emits lifecycle and stream events
+In Moltbot, a loop is a single, serialized run per session that emits lifecycle and stream events
 as the model thinks, calls tools, and streams output. This doc explains how that authentic loop is
 wired end-to-end.
 
@@ -30,7 +30,7 @@ wired end-to-end.
    - subscribes to pi events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
    - returns payloads + usage metadata
-4) `subscribeEmbeddedPiSession` bridges pi-agent-core events to Clawdbot `agent` stream:
+4) `subscribeEmbeddedPiSession` bridges pi-agent-core events to Moltbot `agent` stream:
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
@@ -51,12 +51,12 @@ wired end-to-end.
 - A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
 
 ## Prompt assembly + system prompt
-- System prompt is built from Clawdbot’s base prompt, skills prompt, bootstrap context, and per-run overrides.
+- System prompt is built from Moltbot’s base prompt, skills prompt, bootstrap context, and per-run overrides.
 - Model-specific limits and compaction reserve tokens are enforced.
 - See [System prompt](/concepts/system-prompt) for what the model sees.
 
 ## Hook points (where you can intercept)
-Clawdbot has two hook systems:
+Moltbot has two hook systems:
 - **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
 - **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
 
