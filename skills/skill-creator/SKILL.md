@@ -100,13 +100,16 @@ Files not intended to be loaded into context, but rather used within the output 
 
 #### Secrets & Credentials
 
-**NEVER hardcode secrets automatically**—only if user explicitly requests it. Scripts must look up secrets dynamically: config → env → error.
+**NEVER hardcode secrets automatically.** Look up secrets dynamically based on skill type:
 
+**Clawdbot-native skills** (no external CLI): Use config → env → error:
 ```bash
 VALUE=$(jq -r '.skills.entries["skill-name"].apiKey // empty' ~/.clawdbot/clawdbot.json)
 VALUE="${VALUE:-$SKILL_NAME_API_KEY}"
 [[ -z "$VALUE" ]] && echo "Error: Set skills.entries.skill-name.apiKey in config or SKILL_NAME_API_KEY env var" && exit 1
 ```
+
+**Skills wrapping external tools**: Source from `~/.config/<tool>/` (XDG convention). If the tool works standalone without Clawdbot, its credentials belong outside Clawdbot's config.
 
 #### What to Not Include in a Skill
 
