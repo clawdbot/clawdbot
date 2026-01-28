@@ -24,12 +24,25 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            // Labels prefixed with "r:" are auto-response triggers.
             const rules = [
               {
-                label: "skill-clawdhub",
+                label: "r: skill",
                 close: true,
                 message:
                   "Thanks for the contribution! New skills should be published to Clawdhub for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
+              },
+              {
+                label: "r: support",
+                close: true,
+                message:
+                  "Please use our support server https://molt.bot/discord and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.molt.bot/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+              },
+              {
+                label: "r: third-party-extension",
+                close: true,
+                message:
+                  "This would be better made as a third-party extension with our SDK that you maintain yourself. Docs: https://docs.molt.bot/plugin.",
               },
             ];
 

@@ -3,7 +3,33 @@ import {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   normalizeForwardedContext,
+  resolveTelegramForumThreadId,
 } from "./helpers.js";
+
+describe("resolveTelegramForumThreadId", () => {
+  it("returns undefined for non-forum groups even with messageThreadId", () => {
+    // Reply threads in regular groups should not create separate sessions
+    expect(resolveTelegramForumThreadId({ isForum: false, messageThreadId: 42 })).toBeUndefined();
+  });
+
+  it("returns undefined for non-forum groups without messageThreadId", () => {
+    expect(
+      resolveTelegramForumThreadId({ isForum: false, messageThreadId: undefined }),
+    ).toBeUndefined();
+    expect(
+      resolveTelegramForumThreadId({ isForum: undefined, messageThreadId: 99 }),
+    ).toBeUndefined();
+  });
+
+  it("returns General topic (1) for forum groups without messageThreadId", () => {
+    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: undefined })).toBe(1);
+    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: null })).toBe(1);
+  });
+
+  it("returns the topic id for forum groups with messageThreadId", () => {
+    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: 99 })).toBe(99);
+  });
+});
 
 describe("buildTelegramThreadParams", () => {
   it("omits General topic thread id for message sends", () => {

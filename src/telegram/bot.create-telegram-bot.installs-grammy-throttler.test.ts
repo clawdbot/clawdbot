@@ -238,12 +238,17 @@ describe("createTelegramBot", () => {
     expect(getTelegramSequentialKey({ message: { chat: { id: 123 } } })).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, message_thread_id: 9 },
+        message: { chat: { id: 123, type: "private" }, message_thread_id: 9 },
       }),
     ).toBe("telegram:123:topic:9");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, is_forum: true } },
+        message: { chat: { id: 123, type: "supergroup" }, message_thread_id: 9 },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123, type: "supergroup", is_forum: true } },
       }),
     ).toBe("telegram:123:topic:1");
     expect(

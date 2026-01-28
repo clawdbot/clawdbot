@@ -227,3 +227,29 @@ describe("resolveAgentRoute", () => {
     expect(route.sessionKey).toBe("agent:home:main");
   });
 });
+
+test("dmScope=per-account-channel-peer isolates DM sessions per account, channel and sender", () => {
+  const cfg: MoltbotConfig = {
+    session: { dmScope: "per-account-channel-peer" },
+  };
+  const route = resolveAgentRoute({
+    cfg,
+    channel: "telegram",
+    accountId: "tasks",
+    peer: { kind: "dm", id: "7550356539" },
+  });
+  expect(route.sessionKey).toBe("agent:main:telegram:tasks:dm:7550356539");
+});
+
+test("dmScope=per-account-channel-peer uses default accountId when not provided", () => {
+  const cfg: MoltbotConfig = {
+    session: { dmScope: "per-account-channel-peer" },
+  };
+  const route = resolveAgentRoute({
+    cfg,
+    channel: "telegram",
+    accountId: null,
+    peer: { kind: "dm", id: "7550356539" },
+  });
+  expect(route.sessionKey).toBe("agent:main:telegram:default:dm:7550356539");
+});

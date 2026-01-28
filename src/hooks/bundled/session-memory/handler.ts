@@ -8,25 +8,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import type { MoltbotConfig } from "../../../config/config.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 
 /**
  * Read recent messages from session file for slug generation
  */
-async function getRecentSessionContent(sessionFilePath: string): Promise<string | null> {
+async function getRecentSessionContent(
+  sessionFilePath: string,
+  messageCount: number = 15,
+): Promise<string | null> {
   try {
     const content = await fs.readFile(sessionFilePath, "utf-8");
     const lines = content.trim().split("\n");
 
-    // Get last 15 lines (recent conversation)
-    const recentLines = lines.slice(-15);
-
-    // Parse JSONL and extract messages
-    const messages: string[] = [];
-    for (const line of recentLines) {
+    // Parse JSONL and extract user/assistant messages first
+    const allMessages: string[] = [];
+    for (const line of lines) {
       try {
         const entry = JSON.parse(line);
         // Session files have entries with type="message" containing a nested message object
@@ -39,7 +41,7 @@ async function getRecentSessionContent(sessionFilePath: string): Promise<string 
               ? msg.content.find((c: any) => c.type === "text")?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
-              messages.push(`${role}: ${text}`);
+              allMessages.push(`${role}: ${text}`);
             }
           }
         }
@@ -48,7 +50,9 @@ async function getRecentSessionContent(sessionFilePath: string): Promise<string 
       }
     }
 
-    return messages.join("\n");
+    // Then slice to get exactly messageCount messages
+    const recentMessages = allMessages.slice(-messageCount);
+    return recentMessages.join("\n");
   } catch {
     return null;
   }
@@ -93,12 +97,19 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const sessionFile = currentSessionFile || undefined;
 
+    // Read message count from hook config (default: 15)
+    const hookConfig = resolveHookConfig(cfg, "session-memory");
+    const messageCount =
+      typeof hookConfig?.messages === "number" && hookConfig.messages > 0
+        ? hookConfig.messages
+        : 15;
+
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
     if (sessionFile) {
       // Get recent conversation content
-      sessionContent = await getRecentSessionContent(sessionFile);
+      sessionContent = await getRecentSessionContent(sessionFile, messageCount);
       console.log("[session-memory] sessionContent length:", sessionContent?.length || 0);
 
       if (sessionContent && cfg) {
@@ -106,10 +117,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         // Dynamically import the LLM slug generator (avoids module caching issues)
         // When compiled, handler is at dist/hooks/bundled/session-memory/handler.js
         // Going up ../.. puts us at dist/hooks/, so just add llm-slug-generator.js
-        const moltbotRoot = path.resolve(
-          path.dirname(import.meta.url.replace("file://", "")),
-          "../..",
-        );
+        const moltbotRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
         const slugGenPath = path.join(moltbotRoot, "llm-slug-generator.js");
         const { generateSlugViaLLM } = await import(slugGenPath);
 

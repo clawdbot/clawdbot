@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ClawdbotConfig } from "../config/config.js";
 import { normalizeDiscordMessagingTarget } from "../channels/plugins/normalize/discord.js";
-import { parseDiscordTarget, resolveDiscordChannelId } from "./targets.js";
+import { listDiscordDirectoryPeersLive } from "./directory-live.js";
+import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
+
+vi.mock("./directory-live.js", () => ({
+  listDiscordDirectoryPeersLive: vi.fn(),
+}));
 
 describe("parseDiscordTarget", () => {
   it("parses user mention and prefixes", () => {
@@ -65,6 +71,38 @@ describe("resolveDiscordChannelId", () => {
 
   it("rejects user targets", () => {
     expect(() => resolveDiscordChannelId("user:123")).toThrow(/channel id is required/i);
+  });
+});
+
+describe("resolveDiscordTarget", () => {
+  const cfg = { channels: { discord: {} } } as ClawdbotConfig;
+  const listPeers = vi.mocked(listDiscordDirectoryPeersLive);
+
+  beforeEach(() => {
+    listPeers.mockReset();
+  });
+
+  it("returns a resolved user for usernames", async () => {
+    listPeers.mockResolvedValueOnce([{ kind: "user", id: "user:999", name: "Jane" } as const]);
+
+    await expect(
+      resolveDiscordTarget("jane", { cfg, accountId: "default" }),
+    ).resolves.toMatchObject({ kind: "user", id: "999", normalized: "user:999" });
+  });
+
+  it("falls back to parsing when lookup misses", async () => {
+    listPeers.mockResolvedValueOnce([]);
+    await expect(
+      resolveDiscordTarget("general", { cfg, accountId: "default" }),
+    ).resolves.toMatchObject({ kind: "channel", id: "general" });
+  });
+
+  it("does not call directory lookup for explicit user ids", async () => {
+    listPeers.mockResolvedValueOnce([]);
+    await expect(
+      resolveDiscordTarget("user:123", { cfg, accountId: "default" }),
+    ).resolves.toMatchObject({ kind: "user", id: "123" });
+    expect(listPeers).not.toHaveBeenCalled();
   });
 });
 
