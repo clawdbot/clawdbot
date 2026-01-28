@@ -112,7 +112,7 @@ async function submitVoyageBatch(params: {
             model: params.client.model,
           },
           metadata: {
-            source: "clawdbot-memory",
+            source: "moltbot-memory",
             agent: params.agentId,
           },
         }),
