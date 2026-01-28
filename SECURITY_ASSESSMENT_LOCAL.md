@@ -63,9 +63,25 @@ When using external channels, the bot receives untrusted input.
 
 ---
 
+## New: "Strictly Local" Startup Option
+
+Moltbot now includes a `--local-only` flag for the `gateway` command. This flag automatically applies all the hardening steps described in this report at startup, without requiring you to manually edit your configuration file.
+
+To use it, start the gateway with:
+```bash
+moltbot gateway --local-only
+```
+
+This will:
+- Disable update checks on start.
+- Disable diagnostics.
+- Clear all model fallbacks.
+- Deny web tools, browser, and skills-install.
+- Enable Docker sandboxing for non-main sessions.
+
 ## Recommended Configuration for "Strictly Local" Setup
 
-Add/update these keys in your `~/.clawdbot/moltbot.json`:
+If you prefer to make these settings permanent in your configuration, add/update these keys in your `~/.clawdbot/moltbot.json`:
 
 ```json5
 {

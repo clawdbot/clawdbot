@@ -8,6 +8,7 @@ import {
   readConfigFileSnapshot,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { setConfigOverride } from "../../config/runtime-overrides.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -48,6 +49,7 @@ type GatewayRunOpts = {
   rawStreamPath?: unknown;
   dev?: boolean;
   reset?: boolean;
+  localOnly?: boolean;
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
@@ -91,6 +93,15 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
+  }
+
+  if (opts.localOnly) {
+    gatewayLog.info("local-only: hardening configuration for strictly local usage");
+    setConfigOverride("update.checkOnStart", false);
+    setConfigOverride("diagnostics.enabled", false);
+    setConfigOverride("agents.defaults.model.fallbacks", []);
+    setConfigOverride("tools.deny", ["group:web", "browser", "skills-install"]);
+    setConfigOverride("agents.defaults.sandbox.mode", "non-main");
   }
 
   const cfg = loadConfig();
@@ -348,6 +359,11 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
+    .option(
+      "--local-only",
+      "Hardens configuration for strictly local usage (disables updates, diagnostics, and external tools)",
+      false,
+    )
     .action(async (opts) => {
       await runGatewayCommand(opts);
     });
