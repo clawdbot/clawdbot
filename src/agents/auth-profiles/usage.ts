@@ -7,9 +7,14 @@ import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } fr
  * Generate a cooldown key that optionally includes the model.
  * When model is provided, cooldowns are tracked per (profile + model) combination.
  * This allows different models from the same provider to have independent cooldowns.
+ *
+ * @example cooldownKey("openai:default", "gpt-4") => "openai:default:gpt-4"
+ * @example cooldownKey("openai:default") => "openai:default"
  */
 export function cooldownKey(profileId: string, model?: string): string {
-  return model ? `${profileId}:${model}` : profileId;
+  // Treat empty/whitespace-only string as "no model" to avoid trailing colon in key
+  const normalizedModel = model?.trim() || undefined;
+  return normalizedModel ? `${profileId}:${normalizedModel}` : profileId;
 }
 
 function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
@@ -22,15 +27,13 @@ function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
 
 /**
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
- */
-/**
- * Check if a profile is currently in cooldown (due to rate limiting or errors).
- * When model is provided, checks the per-model cooldown key.
- */
-/**
- * Check if a profile is currently in cooldown (due to rate limiting or errors).
- * When model is provided, checks both the per-model cooldown key and the profile-level key.
- * A profile-level cooldown applies to all models (backward compatibility).
+ *
+ * When model is provided, checks both:
+ * 1. The per-model cooldown key (e.g., "openai:default:gpt-4")
+ * 2. The profile-level cooldown key (e.g., "openai:default")
+ *
+ * Profile-level cooldowns apply to all models under that profile, supporting
+ * legacy entries and scenarios where failures affect all models (e.g., auth errors).
  */
 export function isProfileInCooldown(
   store: AuthProfileStore,
@@ -58,10 +61,6 @@ export function isProfileInCooldown(
   return profileUnusableUntil ? now < profileUnusableUntil : false;
 }
 
-/**
- * Mark a profile as successfully used. Resets error count and updates lastUsed.
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
 /**
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
@@ -260,10 +259,6 @@ function computeNextProfileUsageStats(params: {
 /**
  * Mark a profile as failed for a specific reason. Billing failures are treated
  * as "disabled" (longer backoff) vs the regular cooldown window.
- */
-/**
- * Mark a profile as failed for a specific reason. Billing failures are treated
- * as "disabled" (longer backoff) vs the regular cooldown window.
  * When model is provided, cooldown is tracked per (profile + model) combination.
  */
 export async function markAuthProfileFailure(params: {
@@ -325,14 +320,9 @@ export async function markAuthProfileFailure(params: {
 }
 
 /**
- * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
- * Cooldown times: 1min, 5min, 25min, max 1 hour.
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-/**
- * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
- * Cooldown times: 1min, 5min, 25min, max 1 hour.
- * Uses store lock to avoid overwriting concurrent usage updates.
+ * Mark a profile as failed/rate-limited with "unknown" reason.
+ * Convenience wrapper around markAuthProfileFailure() for generic failures.
+ * Applies exponential backoff cooldown: 1min, 5min, 25min, max 1 hour.
  * When model is provided, cooldown is tracked per (profile + model) combination.
  */
 export async function markAuthProfileCooldown(params: {
@@ -350,10 +340,6 @@ export async function markAuthProfileCooldown(params: {
   });
 }
 
-/**
- * Clear cooldown for a profile (e.g., manual reset).
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
 /**
  * Clear cooldown for a profile (e.g., manual reset).
  * Uses store lock to avoid overwriting concurrent usage updates.
