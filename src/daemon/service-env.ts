@@ -140,6 +140,7 @@ export function buildServiceEnvironment(params: {
     HOME: env.HOME,
     PATH: buildMinimalServicePath({ env }),
     CLAWDBOT_PROFILE: profile,
+    MOLTBOT_STATE_DIR: env.MOLTBOT_STATE_DIR,
     CLAWDBOT_STATE_DIR: env.CLAWDBOT_STATE_DIR,
     CLAWDBOT_CONFIG_PATH: env.CLAWDBOT_CONFIG_PATH,
     CLAWDBOT_GATEWAY_PORT: String(port),
@@ -159,6 +160,7 @@ export function buildNodeServiceEnvironment(params: {
   return {
     HOME: env.HOME,
     PATH: buildMinimalServicePath({ env }),
+    MOLTBOT_STATE_DIR: env.MOLTBOT_STATE_DIR,
     CLAWDBOT_STATE_DIR: env.CLAWDBOT_STATE_DIR,
     CLAWDBOT_CONFIG_PATH: env.CLAWDBOT_CONFIG_PATH,
     CLAWDBOT_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
