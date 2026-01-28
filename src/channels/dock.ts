@@ -9,6 +9,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+import { resolveZoomAccount } from "../zoom/config.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -367,6 +368,21 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           hasRepliedRef,
         };
       },
+    },
+  },
+  zoom: {
+    id: "zoom",
+    capabilities: {
+      chatTypes: ["direct"],
+    },
+    outbound: { textChunkLimit: 4000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveZoomAccount({ cfg, accountId }).config.dm?.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
     },
   },
 };

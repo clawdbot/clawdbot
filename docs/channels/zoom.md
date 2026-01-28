@@ -11,12 +11,11 @@ Status: production-ready plugin for Zoom Team Chat direct messages via Team Chat
 ## Quick setup
 
 1) Create a 'General App' in [Zoom App Marketplace](https://marketplace.zoom.us/develop/create)
-2) Enable the Team Chat surface and note your credentials (Client ID, Client Secret, Bot JID, Webhook Secret Token)
-3) Install the plugin: `pnpm install` (the zoom extension is included in the workspace)
-4) Configure URLs (see URL Configuration below):
-   - Webhook URL: `https://gateway-host/webhooks/zoom`
-   - OAuth Redirect URL: `https://gateway-host/api/zoomapp/auth`
-5) Set credentials in config:
+2) Production tab: Add OAuth Redirect URL (`https://gateway-host/api/zoomapp/auth`)
+3) Features tab → Surfaces → Team Chat: Toggle on Team Chat Subscription, add Bot endpoint URL (`https://gateway-host/webhooks/zoom`) and Welcome Message
+4) Note your credentials: Client ID, Client Secret, Bot JID, Secret Token
+5) Install the plugin: `pnpm install` (the zoom extension is included in the workspace)
+6) Set credentials in config:
    ```json5
    {
      channels: {
@@ -43,16 +42,23 @@ Status: production-ready plugin for Zoom Team Chat direct messages via Team Chat
 
 ## Setup (detailed)
 
-### 1. Create Zoom Team Chat App
+### 1. Create Zoom App
 
 1) Go to [Zoom App Marketplace](https://marketplace.zoom.us/develop/create)
-2) Click "Create" and select "Team Chat App"
-3) Enable the **Bot** feature
-4) Note your credentials from the app settings:
-   - **Client ID**
-   - **Client Secret**
-   - **Bot JID** (e.g., `bot@xmppdev.zoom.us`)
-   - **Secret Token** (for webhook verification)
+2) Click "Create" and select "**General App**"
+3) Fill in basic app information (name, description, etc.)
+4) Go to the **Production** tab:
+   - Add **OAuth Redirect URL**: `https://gateway-host/api/zoomapp/auth`
+5) Go to the **Features** tab:
+   - Under **Surfaces**, select "**Team Chat**"
+   - Toggle on "**Team Chat Subscription**"
+   - Add **Bot endpoint URL**: `https://gateway-host/webhooks/zoom`
+   - Set **Welcome Message** for the bot (e.g., "Hello! I'm your AI assistant.")
+6) Note your credentials from the app settings:
+   - **Client ID** (from App Credentials)
+   - **Client Secret** (from App Credentials)
+   - **Bot JID** (from Team Chat section, e.g., `bot@xmppdev.zoom.us`)
+   - **Secret Token** (from Team Chat section, for webhook verification)
 
 ### 2. Configure URLs
 
@@ -83,20 +89,25 @@ Subscribe to these event types:
 
 ### 4. Configure Moltbot
 
-Add to `moltbot.yaml`:
+Add to `~/.clawdbot/moltbot.json`:
 
-```yaml
-channels:
-  zoom:
-    enabled: true
-    clientId: YOUR_CLIENT_ID
-    clientSecret: YOUR_CLIENT_SECRET
-    botJid: YOUR_BOT_JID@xmppdev.zoom.us
-    secretToken: YOUR_SECRET_TOKEN
-    apiHost: https://zoomdev.us          # Use https://api.zoom.us for production
-    oauthHost: https://zoomdev.us        # Use https://zoom.us for production
-    dm:
-      policy: open                        # open | closed | allowlist
+```json5
+{
+  channels: {
+    zoom: {
+      enabled: true,
+      clientId: "YOUR_CLIENT_ID",
+      clientSecret: "YOUR_CLIENT_SECRET",
+      botJid: "YOUR_BOT_JID@xmppdev.zoom.us",
+      secretToken: "YOUR_SECRET_TOKEN",
+      apiHost: "https://zoomdev.us",          // Use https://api.zoom.us for production
+      oauthHost: "https://zoomdev.us",        // Use https://zoom.us for production
+      dm: {
+        policy: "open"                        // open | allowlist | pairing
+      }
+    }
+  }
+}
 ```
 
 ### 5. Start Gateway
@@ -116,47 +127,77 @@ Send a direct message to your bot in Zoom Team Chat. The bot should respond with
 ### DM Policies
 
 **Open** (default):
-```yaml
-dm:
-  policy: open
+```json5
+{
+  channels: {
+    zoom: {
+      dm: {
+        policy: "open"
+      }
+    }
+  }
+}
 ```
 Anyone can message the bot.
 
 **Closed**:
-```yaml
-dm:
-  policy: closed
+```json5
+{
+  channels: {
+    zoom: {
+      dm: {
+        policy: "closed"
+      }
+    }
+  }
+}
 ```
 Bot rejects all DMs.
 
 **Allowlist**:
-```yaml
-dm:
-  policy: allowlist
-  allowFrom:
-    - user1@xmppdev.zoom.us
-    - user2@xmppdev.zoom.us
+```json5
+{
+  channels: {
+    zoom: {
+      dm: {
+        policy: "allowlist",
+        allowFrom: [
+          "user1@xmppdev.zoom.us",
+          "user2@xmppdev.zoom.us"
+        ]
+      }
+    }
+  }
+}
 ```
 Only specified users can message the bot.
 
 ### Development vs Production
 
 **Development (zoomdev.us):**
-```yaml
-channels:
-  zoom:
-    apiHost: https://zoomdev.us
-    oauthHost: https://zoomdev.us
-    botJid: bot@xmppdev.zoom.us
+```json5
+{
+  channels: {
+    zoom: {
+      apiHost: "https://zoomdev.us",
+      oauthHost: "https://zoomdev.us",
+      botJid: "bot@xmppdev.zoom.us"
+    }
+  }
+}
 ```
 
 **Production (zoom.us):**
-```yaml
-channels:
-  zoom:
-    apiHost: https://api.zoom.us
-    oauthHost: https://zoom.us
-    botJid: bot@xmpp.zoom.us
+```json5
+{
+  channels: {
+    zoom: {
+      apiHost: "https://api.zoom.us",
+      oauthHost: "https://zoom.us",
+      botJid: "bot@xmpp.zoom.us"
+    }
+  }
+}
 ```
 
 ## Features
@@ -205,8 +246,8 @@ If you see "port 3000 already in use":
 
 ### Bot Not Responding
 
-1. Verify credentials in `moltbot.yaml` are correct
-2. Check Anthropic API key is valid
+1. Verify credentials in `~/.clawdbot/moltbot.json` are correct
+2. Check LLM provider API key is configured (see `moltbot login`)
 3. Ensure `botJid` matches your app's Bot JID exactly
 4. Confirm app is installed to your Zoom account
 5. Check gateway logs for authentication errors
@@ -233,7 +274,7 @@ For implementation details, see the [plugin source code](https://github.com/molt
 
 **Never commit credentials!**
 
-Store sensitive values in `moltbot.yaml` (gitignored) and use `moltbot-example.yaml` for documentation templates.
+Store sensitive values in `~/.clawdbot/moltbot.json` (user's home directory, not in repo).
 
 Webhook events are verified using the `secretToken` from your Zoom app configuration.
 

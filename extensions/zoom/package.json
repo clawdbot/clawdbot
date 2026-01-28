@@ -1,6 +1,6 @@
 {
   "name": "@moltbot/zoom",
-  "version": "2026.1.27",
+  "version": "2026.1.26",
   "type": "module",
   "description": "Moltbot Zoom Team Chat channel plugin",
   "moltbot": {

@@ -33,13 +33,14 @@ async function noteZoomHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
       "1) Go to Zoom App Marketplace (marketplace.zoom.us/develop/create)",
-      "2) Create a Team Chat App and enable Bot feature",
-      "3) Copy Client ID, Client Secret, Bot JID, and Secret Token",
-      "4) You'll configure webhook and OAuth redirect URLs after setup",
+      "2) Create a General App",
+      "3) Production tab: add OAuth Redirect URL",
+      "4) Features tab > Surfaces > Team Chat: enable subscription + bot endpoint",
+      "5) Copy Client ID, Client Secret, Bot JID, Secret Token",
       `Docs: ${formatDocsLink("/channels/zoom")}`,
       "Website: https://molt.bot",
     ].join("\n"),
-    "Zoom Team Chat setup",
+    "Zoom setup",
   );
 }
 

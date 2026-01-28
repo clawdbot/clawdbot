@@ -12,6 +12,7 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "zoom",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -97,6 +98,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
+  },
+  zoom: {
+    id: "zoom",
+    label: "Zoom",
+    selectionLabel: "Zoom Team Chat",
+    detailLabel: "Zoom Team Chat",
+    docsPath: "/channels/zoom",
+    docsLabel: "zoom",
+    blurb: "Zoom Team Chat via Team Chat Bot API.",
+    systemImage: "video",
   },
 };
 

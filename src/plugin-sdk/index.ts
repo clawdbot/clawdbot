@@ -312,6 +312,10 @@ export { resolveZoomAccount, type ResolvedZoomAccount, type ZoomConfig } from ".
 export { ZoomConfigSchema } from "../zoom/config.js";
 export { monitorZoomProvider, type MonitorZoomOpts } from "../zoom/monitor.js";
 export { zoomOnboardingAdapter } from "../channels/plugins/onboarding/zoom.js";
+export {
+  looksLikeZoomTargetId,
+  normalizeZoomMessagingTarget,
+} from "../channels/plugins/normalize/zoom.js";
 
 // Channel: Signal
 export {

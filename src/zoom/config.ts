@@ -46,7 +46,7 @@ export function resolveZoomAccount(params: {
     clientSecret: config.clientSecret,
     botJid: config.botJid,
     secretToken: config.secretToken,
-    apiHost: config.apiHost || "https://zoom.us",
+    apiHost: config.apiHost || "https://api.zoom.us",
     oauthHost: config.oauthHost || "https://zoom.us",
     config,
   };

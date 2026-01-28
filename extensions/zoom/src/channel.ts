@@ -1,6 +1,9 @@
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  getChatChannelMeta,
+  looksLikeZoomTargetId,
+  normalizeZoomMessagingTarget,
   type ChannelPlugin,
   type ResolvedZoomAccount,
   resolveZoomAccount,
@@ -9,16 +12,7 @@ import {
   zoomOnboardingAdapter,
 } from "clawdbot/plugin-sdk";
 
-const meta = {
-  id: "zoom",
-  label: "Zoom",
-  selectionLabel: "Zoom Team Chat",
-  docsPath: "/channels/zoom",
-  docsLabel: "zoom",
-  blurb: "Zoom Team Chat via Team Chat Bot API.",
-  order: 45,
-  quickstartAllowFrom: true,
-};
+const meta = getChatChannelMeta("zoom");
 
 export const zoomPlugin: ChannelPlugin<ResolvedZoomAccount> = {
   id: "zoom",
@@ -88,9 +82,9 @@ export const zoomPlugin: ChannelPlugin<ResolvedZoomAccount> = {
     collectWarnings: () => [],
   },
   messaging: {
-    normalizeTarget: (target) => String(target ?? "").trim(),
+    normalizeTarget: (target) => normalizeZoomMessagingTarget(String(target ?? "")),
     targetResolver: {
-      looksLikeId: (input) => input.includes("@xmpp") || input.includes("@xmppdev"),
+      looksLikeId: (input) => looksLikeZoomTargetId(input),
       hint: "<userJid>",
     },
   },
