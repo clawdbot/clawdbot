@@ -3,6 +3,29 @@ import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+/*
+ * Per-Model Cooldown Design
+ * ─────────────────────────
+ * Cooldowns can be tracked at two granularities:
+ *
+ * 1. Profile-level keys (e.g., "github-copilot:github")
+ *    - Track success metrics: lastUsed, lastGood, errorCount reset
+ *    - Used by `lastGood` to remember which profile worked for a provider
+ *    - Auth failures (wrong API key) should use profile-level cooldowns
+ *
+ * 2. Per-model keys (e.g., "github-copilot:github:gpt-5.2")
+ *    - Created ONLY on failure to track rate limits
+ *    - Act as ephemeral "penalty boxes" for specific models
+ *    - Naturally disappear when cooldown expires or model recovers
+ *
+ * Key asymmetry:
+ * - Failures → create per-model key (if model provided)
+ * - Successes → update profile-level key + clear per-model key (if it exists)
+ *
+ * This keeps the store clean and allows independent rate limits per model
+ * while maintaining backward compatibility with profile-level cooldowns.
+ */
+
 /**
  * Generate a cooldown key that optionally includes the model.
  * When model is provided, cooldowns are tracked per (profile + model) combination.

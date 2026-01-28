@@ -1,3 +1,16 @@
+/*
+ * Per-Model Cooldown Tests
+ * ────────────────────────
+ * These tests verify the per-model cooldown feature (discussion #3417).
+ *
+ * Key design asymmetry:
+ * - Failures CREATE per-model keys (e.g., "openai:default:gpt-4")
+ * - Successes UPDATE profile-level keys AND clear per-model keys (if they exist)
+ * - Per-model keys are ephemeral "penalty boxes" that only exist during cooldowns
+ *
+ * This allows independent rate limits per model while keeping the store clean.
+ * See: src/agents/auth-profiles/usage.ts for implementation details.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
