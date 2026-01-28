@@ -30,7 +30,11 @@ To build the macOS app and package it into `dist/Moltbot.app`, run:
 ./scripts/package-mac-app.sh
 ```
 
-If you don't have an Apple Developer ID certificate, the script will automatically use **ad-hoc signing** (`-`). 
+If you don't have an Apple Developer ID certificate, run the following command, which will use **ad-hoc signing** (`-`). 
+
+```bash
+ALLOW_ADHOC_SIGNING=1 ./scripts/package-mac-app.sh
+```
 
 For dev run modes, signing flags, and Team ID troubleshooting, see the macOS app README:
 https://github.com/moltbot/moltbot/blob/main/apps/macos/README.md
