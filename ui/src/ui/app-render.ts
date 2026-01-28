@@ -496,6 +496,15 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
+              // Delete session
+              showDeleteConfirm: state.chatDeleteConfirm,
+              onDeleteClick: () => (state.chatDeleteConfirm = true),
+              onDeleteConfirm: async () => {
+                state.chatDeleteConfirm = false;
+                const { deleteSession } = await import("./controllers/sessions");
+                await deleteSession(state as Parameters<typeof deleteSession>[0], state.sessionKey);
+              },
+              onDeleteCancel: () => (state.chatDeleteConfirm = false),
             })
           : nothing}
 

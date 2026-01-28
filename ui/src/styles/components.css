@@ -1484,3 +1484,52 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* Chat delete confirmation modal */
+.chat-delete-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 100;
+  border-radius: var(--radius-lg);
+}
+
+.chat-delete-card {
+  width: min(400px, 100%);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  text-align: center;
+  animation: scale-in 0.15s var(--ease-out);
+}
+
+.chat-delete-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.chat-delete-sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 16px;
+  word-break: break-word;
+}
+
+.chat-delete-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.chat-delete-hint {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}

@@ -128,6 +128,7 @@ export class MoltbotApp extends LitElement {
   @state() compactionStatus: import("./app-tool-stream").CompactionStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatDeleteConfirm = false;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   // Sidebar state for tool output viewing
