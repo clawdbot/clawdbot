@@ -62,17 +62,24 @@ export function isProfileInCooldown(
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
+/**
+ * Mark a profile as successfully used. Resets error count and updates lastUsed.
+ * Uses store lock to avoid overwriting concurrent usage updates.
+ * When model is provided, also clears the per-model cooldown.
+ */
 export async function markAuthProfileUsed(params: {
   store: AuthProfileStore;
   profileId: string;
+  model?: string;
   agentDir?: string;
 }): Promise<void> {
-  const { store, profileId, agentDir } = params;
+  const { store, profileId, model, agentDir } = params;
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) return false;
       freshStore.usageStats = freshStore.usageStats ?? {};
+      // Clear profile-level cooldown
       freshStore.usageStats[profileId] = {
         ...freshStore.usageStats[profileId],
         lastUsed: Date.now(),
@@ -82,6 +89,20 @@ export async function markAuthProfileUsed(params: {
         disabledReason: undefined,
         failureCounts: undefined,
       };
+      // Also clear per-model cooldown if model provided
+      if (model) {
+        const modelKey = cooldownKey(profileId, model);
+        if (freshStore.usageStats[modelKey]) {
+          freshStore.usageStats[modelKey] = {
+            ...freshStore.usageStats[modelKey],
+            errorCount: 0,
+            cooldownUntil: undefined,
+            disabledUntil: undefined,
+            disabledReason: undefined,
+            failureCounts: undefined,
+          };
+        }
+      }
       return true;
     },
   });
@@ -92,6 +113,7 @@ export async function markAuthProfileUsed(params: {
   if (!store.profiles[profileId]) return;
 
   store.usageStats = store.usageStats ?? {};
+  // Clear profile-level cooldown
   store.usageStats[profileId] = {
     ...store.usageStats[profileId],
     lastUsed: Date.now(),
@@ -101,6 +123,20 @@ export async function markAuthProfileUsed(params: {
     disabledReason: undefined,
     failureCounts: undefined,
   };
+  // Also clear per-model cooldown if model provided
+  if (model) {
+    const modelKey = cooldownKey(profileId, model);
+    if (store.usageStats[modelKey]) {
+      store.usageStats[modelKey] = {
+        ...store.usageStats[modelKey],
+        errorCount: 0,
+        cooldownUntil: undefined,
+        disabledUntil: undefined,
+        disabledReason: undefined,
+        failureCounts: undefined,
+      };
+    }
+  }
   saveAuthProfileStore(store, agentDir);
 }
 

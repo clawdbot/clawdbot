@@ -646,6 +646,7 @@ export async function runEmbeddedPiAgent(
             await markAuthProfileUsed({
               store: authStore,
               profileId: lastProfileId,
+              model: modelId,
               agentDir: params.agentDir,
             });
           }
