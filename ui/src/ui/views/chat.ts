@@ -70,6 +70,7 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
   // Delete session
   showDeleteConfirm?: boolean;
+  isMainSession?: boolean;
   onDeleteClick?: () => void;
   onDeleteConfirm?: () => void;
   onDeleteCancel?: () => void;
@@ -407,9 +408,9 @@ export function renderChat(props: ChatProps) {
               ? html`
                   <button
                     class="btn danger"
-                    ?disabled=${!props.connected || isBusy}
+                    ?disabled=${!props.connected || isBusy || props.isMainSession}
                     @click=${props.onDeleteClick}
-                    title="Delete this session"
+                    title=${props.isMainSession ? "Cannot delete main session" : "Delete this session"}
                   >
                     Delete
                   </button>
