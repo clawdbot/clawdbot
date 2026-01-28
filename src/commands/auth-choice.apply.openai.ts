@@ -16,12 +16,93 @@ import {
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
 
+function readConfigEnvValue(cfg: { env?: Record<string, unknown> }, key: string): string | null {
+  const env = cfg.env;
+  if (!env) return null;
+  const direct = env[key];
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const vars = env.vars as Record<string, unknown> | undefined;
+  const fromVars = vars?.[key];
+  if (typeof fromVars === "string" && fromVars.trim()) return fromVars.trim();
+  return null;
+}
+
+function setConfigEnvValue<T extends { env?: Record<string, unknown> }>(
+  cfg: T,
+  key: string,
+  value: string,
+): T {
+  const existing = cfg.env ?? {};
+  const vars =
+    existing.vars && typeof existing.vars === "object"
+      ? { ...(existing.vars as Record<string, string>) }
+      : undefined;
+  if (vars && Object.prototype.hasOwnProperty.call(vars, key)) {
+    vars[key] = value;
+    return { ...cfg, env: { ...existing, vars } } as T;
+  }
+  return { ...cfg, env: { ...existing, [key]: value, ...(vars ? { vars } : {}) } } as T;
+}
+
 export async function applyAuthChoiceOpenAI(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
   let authChoice = params.authChoice;
   if (authChoice === "apiKey" && params.opts?.tokenProvider === "openai") {
     authChoice = "openai-api-key";
+  }
+
+  if (authChoice === "openai-custom-endpoint") {
+    let nextConfig = params.config;
+    const existingBaseUrl =
+      readConfigEnvValue(nextConfig, "OPENAI_BASE_URL") ??
+      process.env.OPENAI_BASE_URL?.trim() ??
+      "";
+    const existingToken =
+      readConfigEnvValue(nextConfig, "OPENAI_API_KEY") ?? process.env.OPENAI_API_KEY?.trim() ?? "";
+
+    let baseUrl = existingBaseUrl;
+    if (existingBaseUrl) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENAI_BASE_URL (${existingBaseUrl})?`,
+        initialValue: true,
+      });
+      if (!useExisting) baseUrl = "";
+    }
+    if (!baseUrl) {
+      const input = await params.prompter.text({
+        message: "OpenAI-compatible base URL",
+        placeholder: "https://api.example.com/v1",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      baseUrl = String(input ?? "").trim();
+    }
+
+    let token = existingToken;
+    if (existingToken) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENAI_API_KEY (${formatApiKeyPreview(existingToken)})?`,
+        initialValue: true,
+      });
+      if (!useExisting) token = "";
+    }
+    if (!token) {
+      const input = await params.prompter.text({
+        message: "Bearer token",
+        validate: validateApiKeyInput,
+      });
+      token = normalizeApiKeyInput(String(input));
+    }
+
+    nextConfig = setConfigEnvValue(nextConfig, "OPENAI_BASE_URL", baseUrl);
+    nextConfig = setConfigEnvValue(nextConfig, "OPENAI_API_KEY", token);
+    process.env.OPENAI_BASE_URL = baseUrl;
+    process.env.OPENAI_API_KEY = token;
+    await params.prompter.note(
+      "Saved OPENAI_BASE_URL and OPENAI_API_KEY in config env.",
+      "OpenAI endpoint",
+    );
+    return { config: nextConfig };
   }
 
   if (authChoice === "openai-api-key") {
