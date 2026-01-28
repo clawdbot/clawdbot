@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/google-antigravity-auth",
-  "version": "2026.1.25",
+  "name": "@moltbot/google-antigravity-auth",
+  "version": "2026.1.27-beta.1",
   "type": "module",
-  "description": "Clawdbot Google Antigravity OAuth provider plugin",
-  "clawdbot": {
+  "description": "Moltbot Google Antigravity OAuth provider plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

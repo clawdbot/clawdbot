@@ -1,12 +1,12 @@
 ---
 summary: "Windows (WSL2) support + companion app status"
 read_when:
-  - Installing Clawdbot on Windows
+  - Installing Moltbot on Windows
   - Looking for Windows companion app status
 ---
 # Windows (WSL2)
 
-Clawdbot on Windows is recommended **via WSL2** (Ubuntu recommended). The
+Moltbot on Windows is recommended **via WSL2** (Ubuntu recommended). The
 CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
 tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Native
 Windows installs are untested and more problematic.
@@ -27,19 +27,19 @@ Native Windows companion apps are planned.
 Inside WSL2:
 
 ```
-clawdbot onboard --install-daemon
+moltbot onboard --install-daemon
 ```
 
 Or:
 
 ```
-clawdbot gateway install
+moltbot gateway install
 ```
 
 Or:
 
 ```
-clawdbot configure
+moltbot configure
 ```
 
 Select **Gateway service** when prompted.
@@ -47,7 +47,7 @@ Select **Gateway service** when prompted.
 Repair/migrate:
 
 ```
-clawdbot doctor
+moltbot doctor
 ```
 
 ## Advanced: expose WSL services over LAN (portproxy)
@@ -89,7 +89,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 Notes:
 - SSH from another machine targets the **Windows host IP** (example: `ssh user@windows-host -p 2222`).
 - Remote nodes must point at a **reachable** Gateway URL (not `127.0.0.1`); use
-  `clawdbot status --all` to confirm.
+  `moltbot status --all` to confirm.
 - Use `listenaddress=0.0.0.0` for LAN access; `127.0.0.1` keeps it local only.
 - If you want this automatic, register a Scheduled Task to run the refresh
   step at login.
@@ -132,17 +132,17 @@ Re-open Ubuntu, then verify:
 systemctl --user status
 ```
 
-### 3) Install Clawdbot (inside WSL)
+### 3) Install Moltbot (inside WSL)
 
 Follow the Linux Getting Started flow inside WSL:
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/moltbot/moltbot.git
+cd moltbot
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-clawdbot onboard
+moltbot onboard
 ```
 
 Full guide: [Getting Started](/start/getting-started)

@@ -1,14 +1,14 @@
 ---
-summary: "What the Clawdbot system prompt contains and how it is assembled"
+summary: "What the Moltbot system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
 ---
 # System Prompt
 
-Clawdbot builds a custom system prompt for every agent run. The prompt is **Clawdbot-owned** and does not use the p-coding-agent default prompt.
+Moltbot builds a custom system prompt for every agent run. The prompt is **Moltbot-owned** and does not use the p-coding-agent default prompt.
 
-The prompt is assembled by Clawdbot and injected into each agent run.
+The prompt is assembled by Moltbot and injected into each agent run.
 
 ## Structure
 
@@ -16,9 +16,9 @@ The prompt is intentionally compact and uses fixed sections:
 
 - **Tooling**: current tool list + short descriptions.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
-- **Clawdbot Self-Update**: how to run `config.apply` and `update.run`.
+- **Moltbot Self-Update**: how to run `config.apply` and `update.run`.
 - **Workspace**: working directory (`agents.defaults.workspace`).
-- **Documentation**: local path to Clawdbot docs (repo or npm package) and when to read them.
+- **Documentation**: local path to Moltbot docs (repo or npm package) and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
 - **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated exec is available.
 - **Current Date & Time**: user-local time, timezone, and time format.
@@ -29,11 +29,11 @@ The prompt is intentionally compact and uses fixed sections:
 
 ## Prompt modes
 
-Clawdbot can render smaller system prompts for sub-agents. The runtime sets a
+Moltbot can render smaller system prompts for sub-agents. The runtime sets a
 `promptMode` for each run (not a user-facing config):
 
 - `full` (default): includes all sections above.
-- `minimal`: used for sub-agents; omits **Skills**, **Memory Recall**, **Clawdbot
+- `minimal`: used for sub-agents; omits **Skills**, **Memory Recall**, **Moltbot
   Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
   **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, Workspace,
   Sandbox, Current Date & Time (when known), Runtime, and injected context stay
@@ -82,7 +82,7 @@ See [Date & Time](/date-time) for full behavior details.
 
 ## Skills
 
-When eligible skills exist, Clawdbot injects a compact **available skills list**
+When eligible skills exist, Moltbot injects a compact **available skills list**
 (`formatSkillsForPrompt`) that includes the **file path** for each skill. The
 prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
@@ -103,8 +103,8 @@ This keeps the base prompt small while still enabling targeted skill usage.
 ## Documentation
 
 When available, the system prompt includes a **Documentation** section that points to the
-local Clawdbot docs directory (either `docs/` in the repo workspace or the bundled npm
+local Moltbot docs directory (either `docs/` in the repo workspace or the bundled npm
 package docs) and also notes the public mirror, source repo, community Discord, and
 ClawdHub (https://clawdhub.com) for skills discovery. The prompt instructs the model to consult local docs first
-for Clawdbot behavior, commands, configuration, or architecture, and to run
-`clawdbot status` itself when possible (asking the user only when it lacks access).
+for Moltbot behavior, commands, configuration, or architecture, and to run
+`moltbot status` itself when possible (asking the user only when it lacks access).

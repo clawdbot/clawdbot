@@ -29,7 +29,7 @@ describe("discord processDiscordMessage inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capturedCtx = undefined;
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-discord-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-discord-"));
     const storePath = path.join(dir, "sessions.json");
 
     await processDiscordMessage({

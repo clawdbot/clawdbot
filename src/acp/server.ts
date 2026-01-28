@@ -122,7 +122,7 @@ function parseArgs(args: string[]): AcpServerOptions {
 }
 
 function printHelp(): void {
-  console.log(`Usage: clawdbot acp [options]
+  console.log(`Usage: moltbot acp [options]
 
 Gateway-backed ACP server for IDE integration.
 

@@ -8,13 +8,13 @@ export function buildPairingReply(params: {
 }): string {
   const { channel, idLine, code } = params;
   return [
-    "Clawdbot: access not configured.",
+    "Moltbot: access not configured.",
     "",
     idLine,
     "",
     `Pairing code: ${code}`,
     "",
     "Ask the bot owner to approve with:",
-    formatCliCommand(`clawdbot pairing approve ${channel} <code>`),
+    formatCliCommand(`moltbot pairing approve ${channel} <code>`),
   ].join("\n");
 }

@@ -67,7 +67,7 @@ Example:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
-  Clawdbot prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
+  Moltbot prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
   `tools.exec.pathPrepend` applies here too.
 - `host=node`: only env overrides you pass are sent to the node. `tools.exec.pathPrepend` only applies
   if the exec call already sets `env.PATH`. Headless node hosts accept `PATH` only when it prepends
@@ -76,8 +76,8 @@ Example:
 Per-agent node binding (use the agent list index in config):
 
 ```bash
-clawdbot config get agents.list
-clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
+moltbot config get agents.list
+moltbot config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 Control UI: the Nodes tab includes a small “Exec node binding” panel for the same settings.

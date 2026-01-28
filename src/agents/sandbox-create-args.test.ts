@@ -5,8 +5,8 @@ import { buildSandboxCreateArgs, type SandboxDockerConfig } from "./sandbox.js";
 describe("buildSandboxCreateArgs", () => {
   it("includes hardening and resource flags", () => {
     const cfg: SandboxDockerConfig = {
-      image: "clawdbot-sandbox:bookworm-slim",
-      containerPrefix: "clawdbot-sbx-",
+      image: "moltbot-sandbox:bookworm-slim",
+      containerPrefix: "moltbot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: true,
       tmpfs: ["/tmp"],
@@ -24,32 +24,32 @@ describe("buildSandboxCreateArgs", () => {
         core: "0",
       },
       seccompProfile: "/tmp/seccomp.json",
-      apparmorProfile: "clawdbot-sandbox",
+      apparmorProfile: "moltbot-sandbox",
       dns: ["1.1.1.1"],
       extraHosts: ["internal.service:10.0.0.5"],
     };
 
     const args = buildSandboxCreateArgs({
-      name: "clawdbot-sbx-test",
+      name: "moltbot-sbx-test",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
-      labels: { "clawdbot.sandboxBrowser": "1" },
+      labels: { "moltbot.sandboxBrowser": "1" },
     });
 
     expect(args).toEqual(
       expect.arrayContaining([
         "create",
         "--name",
-        "clawdbot-sbx-test",
+        "moltbot-sbx-test",
         "--label",
-        "clawdbot.sandbox=1",
+        "moltbot.sandbox=1",
         "--label",
-        "clawdbot.sessionKey=main",
+        "moltbot.sessionKey=main",
         "--label",
-        "clawdbot.createdAtMs=1700000000000",
+        "moltbot.createdAtMs=1700000000000",
         "--label",
-        "clawdbot.sandboxBrowser=1",
+        "moltbot.sandboxBrowser=1",
         "--read-only",
         "--tmpfs",
         "/tmp",
@@ -64,7 +64,7 @@ describe("buildSandboxCreateArgs", () => {
         "--security-opt",
         "seccomp=/tmp/seccomp.json",
         "--security-opt",
-        "apparmor=clawdbot-sandbox",
+        "apparmor=moltbot-sandbox",
         "--dns",
         "1.1.1.1",
         "--add-host",
@@ -94,8 +94,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("emits -v flags for custom binds", () => {
     const cfg: SandboxDockerConfig = {
-      image: "clawdbot-sandbox:bookworm-slim",
-      containerPrefix: "clawdbot-sbx-",
+      image: "moltbot-sandbox:bookworm-slim",
+      containerPrefix: "moltbot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -105,7 +105,7 @@ describe("buildSandboxCreateArgs", () => {
     };
 
     const args = buildSandboxCreateArgs({
-      name: "clawdbot-sbx-binds",
+      name: "moltbot-sbx-binds",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -125,8 +125,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("omits -v flags when binds is empty or undefined", () => {
     const cfg: SandboxDockerConfig = {
-      image: "clawdbot-sandbox:bookworm-slim",
-      containerPrefix: "clawdbot-sbx-",
+      image: "moltbot-sandbox:bookworm-slim",
+      containerPrefix: "moltbot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -136,7 +136,7 @@ describe("buildSandboxCreateArgs", () => {
     };
 
     const args = buildSandboxCreateArgs({
-      name: "clawdbot-sbx-no-binds",
+      name: "moltbot-sbx-no-binds",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,

@@ -5,7 +5,7 @@ read_when:
 ---
 # Matrix (plugin)
 
-Matrix is an open, decentralized messaging protocol. Clawdbot connects as a Matrix **user**
+Matrix is an open, decentralized messaging protocol. Moltbot connects as a Matrix **user**
 on any homeserver, so you need a Matrix account for the bot. Once it is logged in, you can DM
 the bot directly or invite it to rooms (Matrix "groups"). Beeper is a valid client option too,
 but it requires E2EE to be enabled.
@@ -20,25 +20,25 @@ Matrix ships as a plugin and is not bundled with the core install.
 Install via CLI (npm registry):
 
 ```bash
-clawdbot plugins install @clawdbot/matrix
+moltbot plugins install @moltbot/matrix
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-clawdbot plugins install ./extensions/matrix
+moltbot plugins install ./extensions/matrix
 ```
 
 If you choose Matrix during configure/onboarding and a git checkout is detected,
-Clawdbot will offer the local install path automatically.
+Moltbot will offer the local install path automatically.
 
 Details: [Plugins](/plugin)
 
 ## Setup
 
 1) Install the Matrix plugin:
-   - From npm: `clawdbot plugins install @clawdbot/matrix`
-   - From a local checkout: `clawdbot plugins install ./extensions/matrix`
+   - From npm: `moltbot plugins install @moltbot/matrix`
+   - From a local checkout: `moltbot plugins install ./extensions/matrix`
 2) Create a Matrix account on a homeserver:
    - Browse hosting options at [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Or host it yourself.
@@ -60,7 +60,7 @@ Details: [Plugins](/plugin)
    ```
 
    - Replace `matrix.example.org` with your homeserver URL.
-   - Or set `channels.matrix.userId` + `channels.matrix.password`: Clawdbot calls the same
+   - Or set `channels.matrix.userId` + `channels.matrix.password`: Moltbot calls the same
      login endpoint, stores the access token in `~/.clawdbot/credentials/matrix/credentials.json`,
      and reuses it on next start.
 4) Configure credentials:
@@ -113,10 +113,10 @@ Enable with `channels.matrix.encryption: true`:
 
 - If the crypto module loads, encrypted rooms are decrypted automatically.
 - Outbound media is encrypted when sending to encrypted rooms.
-- On first connection, Clawdbot requests device verification from your other sessions.
+- On first connection, Moltbot requests device verification from your other sessions.
 - Verify the device in another Matrix client (Element, etc.) to enable key sharing.
 - If the crypto module cannot be loaded, E2EE is disabled and encrypted rooms will not decrypt;
-  Clawdbot logs a warning.
+  Moltbot logs a warning.
 - If you see missing crypto module errors (for example, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
   allow build scripts for `@matrix-org/matrix-sdk-crypto-nodejs` and run
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` or fetch the binary with
@@ -142,8 +142,8 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 
 - Default: `channels.matrix.dm.policy = "pairing"`. Unknown senders get a pairing code.
 - Approve via:
-  - `clawdbot pairing list matrix`
-  - `clawdbot pairing approve matrix <CODE>`
+  - `moltbot pairing list matrix`
+  - `moltbot pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
 - `channels.matrix.dm.allowFrom` accepts user IDs or display names. The wizard resolves display names to user IDs when directory search is available.
 
@@ -172,7 +172,7 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 - `groupAllowFrom` restricts which senders can trigger the bot in rooms (optional).
 - Per-room `users` allowlists can further restrict senders inside a specific room.
 - The configure wizard prompts for room allowlists (room IDs, aliases, or names) and resolves names when possible.
-- On startup, Clawdbot resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- On startup, Moltbot resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
 - Invites are auto-joined by default; control with `channels.matrix.autoJoin` and `channels.matrix.autoJoinAllowlist`.
 - To allow **no rooms**, set `channels.matrix.groupPolicy: "disabled"` (or keep an empty allowlist).
 - Legacy key: `channels.matrix.rooms` (same shape as `groups`).

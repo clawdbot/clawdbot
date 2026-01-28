@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseFrontmatter,
-  resolveClawdbotMetadata,
+  resolveMoltbotMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
 
@@ -41,7 +41,7 @@ name: session-memory
 description: "Save session context"
 metadata:
   {
-    "clawdbot": {
+    "moltbot": {
       "emoji": "💾",
       "events": ["command:new"]
     }
@@ -58,8 +58,8 @@ metadata:
 
     // Verify the metadata is valid JSON
     const parsed = JSON.parse(result.metadata as string);
-    expect(parsed.clawdbot.emoji).toBe("💾");
-    expect(parsed.clawdbot.events).toEqual(["command:new"]);
+    expect(parsed.moltbot.emoji).toBe("💾");
+    expect(parsed.moltbot.events).toEqual(["command:new"]);
   });
 
   it("parses multi-line metadata with complex nested structure", () => {
@@ -68,7 +68,7 @@ name: command-logger
 description: "Log all command events"
 metadata:
   {
-    "clawdbot":
+    "moltbot":
       {
         "emoji": "📝",
         "events": ["command"],
@@ -83,21 +83,21 @@ metadata:
     expect(result.metadata).toBeDefined();
 
     const parsed = JSON.parse(result.metadata as string);
-    expect(parsed.clawdbot.emoji).toBe("📝");
-    expect(parsed.clawdbot.events).toEqual(["command"]);
-    expect(parsed.clawdbot.requires.config).toEqual(["workspace.dir"]);
-    expect(parsed.clawdbot.install[0].kind).toBe("bundled");
+    expect(parsed.moltbot.emoji).toBe("📝");
+    expect(parsed.moltbot.events).toEqual(["command"]);
+    expect(parsed.moltbot.requires.config).toEqual(["workspace.dir"]);
+    expect(parsed.moltbot.install[0].kind).toBe("bundled");
   });
 
   it("handles single-line metadata (inline JSON)", () => {
     const content = `---
 name: simple-hook
-metadata: {"clawdbot": {"events": ["test"]}}
+metadata: {"moltbot": {"events": ["test"]}}
 ---
 `;
     const result = parseFrontmatter(content);
     expect(result.name).toBe("simple-hook");
-    expect(result.metadata).toBe('{"clawdbot": {"events": ["test"]}}');
+    expect(result.metadata).toBe('{"moltbot": {"events": ["test"]}}');
   });
 
   it("handles mixed single-line and multi-line values", () => {
@@ -107,7 +107,7 @@ description: "A hook with mixed values"
 homepage: https://example.com
 metadata:
   {
-    "clawdbot": {
+    "moltbot": {
       "events": ["command:new"]
     }
   }
@@ -148,12 +148,12 @@ description: 'single-quoted'
   });
 });
 
-describe("resolveClawdbotMetadata", () => {
-  it("extracts clawdbot metadata from parsed frontmatter", () => {
+describe("resolveMoltbotMetadata", () => {
+  it("extracts moltbot metadata from parsed frontmatter", () => {
     const frontmatter = {
       name: "test-hook",
       metadata: JSON.stringify({
-        clawdbot: {
+        moltbot: {
           emoji: "🔥",
           events: ["command:new", "command:reset"],
           requires: {
@@ -164,7 +164,7 @@ describe("resolveClawdbotMetadata", () => {
       }),
     };
 
-    const result = resolveClawdbotMetadata(frontmatter);
+    const result = resolveMoltbotMetadata(frontmatter);
     expect(result).toBeDefined();
     expect(result?.emoji).toBe("🔥");
     expect(result?.events).toEqual(["command:new", "command:reset"]);
@@ -174,15 +174,15 @@ describe("resolveClawdbotMetadata", () => {
 
   it("returns undefined when metadata is missing", () => {
     const frontmatter = { name: "no-metadata" };
-    const result = resolveClawdbotMetadata(frontmatter);
+    const result = resolveMoltbotMetadata(frontmatter);
     expect(result).toBeUndefined();
   });
 
-  it("returns undefined when clawdbot key is missing", () => {
+  it("returns undefined when moltbot key is missing", () => {
     const frontmatter = {
       metadata: JSON.stringify({ other: "data" }),
     };
-    const result = resolveClawdbotMetadata(frontmatter);
+    const result = resolveMoltbotMetadata(frontmatter);
     expect(result).toBeUndefined();
   });
 
@@ -190,41 +190,41 @@ describe("resolveClawdbotMetadata", () => {
     const frontmatter = {
       metadata: "not valid json {",
     };
-    const result = resolveClawdbotMetadata(frontmatter);
+    const result = resolveMoltbotMetadata(frontmatter);
     expect(result).toBeUndefined();
   });
 
   it("handles install specs", () => {
     const frontmatter = {
       metadata: JSON.stringify({
-        clawdbot: {
+        moltbot: {
           events: ["command"],
           install: [
-            { id: "bundled", kind: "bundled", label: "Bundled with Clawdbot" },
-            { id: "npm", kind: "npm", package: "@clawdbot/hook" },
+            { id: "bundled", kind: "bundled", label: "Bundled with Moltbot" },
+            { id: "npm", kind: "npm", package: "@moltbot/hook" },
           ],
         },
       }),
     };
 
-    const result = resolveClawdbotMetadata(frontmatter);
+    const result = resolveMoltbotMetadata(frontmatter);
     expect(result?.install).toHaveLength(2);
     expect(result?.install?.[0].kind).toBe("bundled");
     expect(result?.install?.[1].kind).toBe("npm");
-    expect(result?.install?.[1].package).toBe("@clawdbot/hook");
+    expect(result?.install?.[1].package).toBe("@moltbot/hook");
   });
 
   it("handles os restrictions", () => {
     const frontmatter = {
       metadata: JSON.stringify({
-        clawdbot: {
+        moltbot: {
           events: ["command"],
           os: ["darwin", "linux"],
         },
       }),
     };
 
-    const result = resolveClawdbotMetadata(frontmatter);
+    const result = resolveMoltbotMetadata(frontmatter);
     expect(result?.os).toEqual(["darwin", "linux"]);
   });
 
@@ -233,15 +233,15 @@ describe("resolveClawdbotMetadata", () => {
     const content = `---
 name: session-memory
 description: "Save session context to memory when /new command is issued"
-homepage: https://docs.clawd.bot/hooks#session-memory
+homepage: https://docs.molt.bot/hooks#session-memory
 metadata:
   {
-    "clawdbot":
+    "moltbot":
       {
         "emoji": "💾",
         "events": ["command:new"],
         "requires": { "config": ["workspace.dir"] },
-        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Clawdbot" }],
+        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Moltbot" }],
       },
   }
 ---
@@ -253,28 +253,28 @@ metadata:
     expect(frontmatter.name).toBe("session-memory");
     expect(frontmatter.metadata).toBeDefined();
 
-    const clawdbot = resolveClawdbotMetadata(frontmatter);
-    expect(clawdbot).toBeDefined();
-    expect(clawdbot?.emoji).toBe("💾");
-    expect(clawdbot?.events).toEqual(["command:new"]);
-    expect(clawdbot?.requires?.config).toEqual(["workspace.dir"]);
-    expect(clawdbot?.install?.[0].kind).toBe("bundled");
+    const moltbot = resolveMoltbotMetadata(frontmatter);
+    expect(moltbot).toBeDefined();
+    expect(moltbot?.emoji).toBe("💾");
+    expect(moltbot?.events).toEqual(["command:new"]);
+    expect(moltbot?.requires?.config).toEqual(["workspace.dir"]);
+    expect(moltbot?.install?.[0].kind).toBe("bundled");
   });
 
   it("parses YAML metadata map", () => {
     const content = `---
 name: yaml-metadata
 metadata:
-  clawdbot:
+  moltbot:
     emoji: disk
     events:
       - command:new
 ---
 `;
     const frontmatter = parseFrontmatter(content);
-    const clawdbot = resolveClawdbotMetadata(frontmatter);
-    expect(clawdbot?.emoji).toBe("disk");
-    expect(clawdbot?.events).toEqual(["command:new"]);
+    const moltbot = resolveMoltbotMetadata(frontmatter);
+    expect(moltbot?.emoji).toBe("disk");
+    expect(moltbot?.events).toEqual(["command:new"]);
   });
 });
 

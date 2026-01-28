@@ -1,12 +1,14 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendStickerTelegram,
 } from "../../telegram/send.js";
+import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -67,7 +69,7 @@ export function readTelegramButtons(
 
 export async function handleTelegramAction(
   params: Record<string, unknown>,
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
@@ -163,6 +165,7 @@ export async function handleTelegramAction(
     const messageThreadId = readNumberParam(params, "messageThreadId", {
       integer: true,
     });
+    const quoteText = readStringParam(params, "quoteText");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -176,6 +179,7 @@ export async function handleTelegramAction(
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
+      quoteText: quoteText ?? undefined,
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
       silent: typeof params.silent === "boolean" ? params.silent : undefined,
     });
@@ -253,6 +257,65 @@ export async function handleTelegramAction(
       messageId: result.messageId,
       chatId: result.chatId,
     });
+  }
+
+  if (action === "sendSticker") {
+    if (!isActionEnabled("sticker", false)) {
+      throw new Error(
+        "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.",
+      );
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const fileId = readStringParam(params, "fileId", { required: true });
+    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
+      integer: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await sendStickerTelegram(to, fileId, {
+      token,
+      accountId: accountId ?? undefined,
+      replyToMessageId: replyToMessageId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+    });
+  }
+
+  if (action === "searchSticker") {
+    if (!isActionEnabled("sticker", false)) {
+      throw new Error(
+        "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.",
+      );
+    }
+    const query = readStringParam(params, "query", { required: true });
+    const limit = readNumberParam(params, "limit", { integer: true }) ?? 5;
+    const results = searchStickers(query, limit);
+    return jsonResult({
+      ok: true,
+      count: results.length,
+      stickers: results.map((s) => ({
+        fileId: s.fileId,
+        emoji: s.emoji,
+        description: s.description,
+        setName: s.setName,
+      })),
+    });
+  }
+
+  if (action === "stickerCacheStats") {
+    const stats = getCacheStats();
+    return jsonResult({ ok: true, ...stats });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

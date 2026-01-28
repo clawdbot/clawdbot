@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { AnyAgentTool } from "./common.js";
@@ -15,7 +15,7 @@ const TtsToolSchema = Type.Object({
 });
 
 export function createTtsTool(opts?: {
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   agentChannel?: GatewayMessageChannel;
 }): AnyAgentTool {
   return {

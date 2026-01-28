@@ -1,13 +1,13 @@
 {
-  "name": "@clawdbot/zalouser",
-  "version": "2026.1.25",
+  "name": "@moltbot/zalouser",
+  "version": "2026.1.27-beta.1",
   "type": "module",
-  "description": "Clawdbot Zalo Personal Account plugin via zca-cli",
+  "description": "Moltbot Zalo Personal Account plugin via zca-cli",
   "dependencies": {
-    "clawdbot": "workspace:*",
+    "moltbot": "workspace:*",
     "@sinclair/typebox": "0.34.47"
   },
-  "clawdbot": {
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@clawdbot/zalouser",
+      "npmSpec": "@moltbot/zalouser",
       "localPath": "extensions/zalouser",
       "defaultChoice": "npm"
     }

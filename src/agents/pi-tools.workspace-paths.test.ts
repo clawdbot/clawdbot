@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
-import { createClawdbotCodingTools } from "./pi-tools.js";
+import { createMoltbotCodingTools } from "./pi-tools.js";
 
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -21,8 +21,8 @@ function getTextContent(result?: { content?: Array<{ type: string; text?: string
 
 describe("workspace path resolution", () => {
   it("reads relative paths against workspaceDir even after cwd changes", async () => {
-    await withTempDir("clawdbot-ws-", async (workspaceDir) => {
-      await withTempDir("clawdbot-cwd-", async (otherDir) => {
+    await withTempDir("moltbot-ws-", async (workspaceDir) => {
+      await withTempDir("moltbot-cwd-", async (otherDir) => {
         const prevCwd = process.cwd();
         const testFile = "read.txt";
         const contents = "workspace read ok";
@@ -30,7 +30,7 @@ describe("workspace path resolution", () => {
 
         process.chdir(otherDir);
         try {
-          const tools = createClawdbotCodingTools({ workspaceDir });
+          const tools = createMoltbotCodingTools({ workspaceDir });
           const readTool = tools.find((tool) => tool.name === "read");
           expect(readTool).toBeDefined();
 
@@ -44,15 +44,15 @@ describe("workspace path resolution", () => {
   });
 
   it("writes relative paths against workspaceDir even after cwd changes", async () => {
-    await withTempDir("clawdbot-ws-", async (workspaceDir) => {
-      await withTempDir("clawdbot-cwd-", async (otherDir) => {
+    await withTempDir("moltbot-ws-", async (workspaceDir) => {
+      await withTempDir("moltbot-cwd-", async (otherDir) => {
         const prevCwd = process.cwd();
         const testFile = "write.txt";
         const contents = "workspace write ok";
 
         process.chdir(otherDir);
         try {
-          const tools = createClawdbotCodingTools({ workspaceDir });
+          const tools = createMoltbotCodingTools({ workspaceDir });
           const writeTool = tools.find((tool) => tool.name === "write");
           expect(writeTool).toBeDefined();
 
@@ -71,26 +71,26 @@ describe("workspace path resolution", () => {
   });
 
   it("edits relative paths against workspaceDir even after cwd changes", async () => {
-    await withTempDir("clawdbot-ws-", async (workspaceDir) => {
-      await withTempDir("clawdbot-cwd-", async (otherDir) => {
+    await withTempDir("moltbot-ws-", async (workspaceDir) => {
+      await withTempDir("moltbot-cwd-", async (otherDir) => {
         const prevCwd = process.cwd();
         const testFile = "edit.txt";
         await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
 
         process.chdir(otherDir);
         try {
-          const tools = createClawdbotCodingTools({ workspaceDir });
+          const tools = createMoltbotCodingTools({ workspaceDir });
           const editTool = tools.find((tool) => tool.name === "edit");
           expect(editTool).toBeDefined();
 
           await editTool?.execute("ws-edit", {
             path: testFile,
             oldText: "world",
-            newText: "clawdbot",
+            newText: "moltbot",
           });
 
           const updated = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
-          expect(updated).toBe("hello clawdbot");
+          expect(updated).toBe("hello moltbot");
         } finally {
           process.chdir(prevCwd);
         }
@@ -99,8 +99,8 @@ describe("workspace path resolution", () => {
   });
 
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
-    await withTempDir("clawdbot-ws-", async (workspaceDir) => {
-      const tools = createClawdbotCodingTools({ workspaceDir });
+    await withTempDir("moltbot-ws-", async (workspaceDir) => {
+      const tools = createMoltbotCodingTools({ workspaceDir });
       const execTool = tools.find((tool) => tool.name === "exec");
       expect(execTool).toBeDefined();
 
@@ -121,9 +121,9 @@ describe("workspace path resolution", () => {
   });
 
   it("lets exec workdir override the workspace default", async () => {
-    await withTempDir("clawdbot-ws-", async (workspaceDir) => {
-      await withTempDir("clawdbot-override-", async (overrideDir) => {
-        const tools = createClawdbotCodingTools({ workspaceDir });
+    await withTempDir("moltbot-ws-", async (workspaceDir) => {
+      await withTempDir("moltbot-override-", async (overrideDir) => {
+        const tools = createMoltbotCodingTools({ workspaceDir });
         const execTool = tools.find((tool) => tool.name === "exec");
         expect(execTool).toBeDefined();
 
@@ -148,19 +148,19 @@ describe("workspace path resolution", () => {
 
 describe("sandboxed workspace paths", () => {
   it("uses sandbox workspace for relative read/write/edit", async () => {
-    await withTempDir("clawdbot-sandbox-", async (sandboxDir) => {
-      await withTempDir("clawdbot-workspace-", async (workspaceDir) => {
+    await withTempDir("moltbot-sandbox-", async (sandboxDir) => {
+      await withTempDir("moltbot-workspace-", async (workspaceDir) => {
         const sandbox = {
           enabled: true,
           sessionKey: "sandbox:test",
           workspaceDir: sandboxDir,
           agentWorkspaceDir: workspaceDir,
           workspaceAccess: "rw",
-          containerName: "clawdbot-sbx-test",
+          containerName: "moltbot-sbx-test",
           containerWorkdir: "/workspace",
           docker: {
-            image: "clawdbot-sandbox:bookworm-slim",
-            containerPrefix: "clawdbot-sbx-",
+            image: "moltbot-sandbox:bookworm-slim",
+            containerPrefix: "moltbot-sbx-",
             workdir: "/workspace",
             readOnlyRoot: true,
             tmpfs: [],
@@ -177,7 +177,7 @@ describe("sandboxed workspace paths", () => {
         await fs.writeFile(path.join(sandboxDir, testFile), "sandbox read", "utf8");
         await fs.writeFile(path.join(workspaceDir, testFile), "workspace read", "utf8");
 
-        const tools = createClawdbotCodingTools({ workspaceDir, sandbox });
+        const tools = createMoltbotCodingTools({ workspaceDir, sandbox });
         const readTool = tools.find((tool) => tool.name === "read");
         const writeTool = tools.find((tool) => tool.name === "write");
         const editTool = tools.find((tool) => tool.name === "edit");

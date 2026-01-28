@@ -1,4 +1,4 @@
-import type { ClawdbotPluginApi, LineChannelData, ReplyPayload } from "clawdbot/plugin-sdk";
+import type { MoltbotPluginApi, LineChannelData, ReplyPayload } from "clawdbot/plugin-sdk";
 import {
   createActionCard,
   createImageCard,
@@ -150,7 +150,7 @@ function parseCardArgs(argsStr: string): {
   return result;
 }
 
-export function registerLineCardCommand(api: ClawdbotPluginApi): void {
+export function registerLineCardCommand(api: MoltbotPluginApi): void {
   api.registerCommand({
     name: "card",
     description: "Send a rich card message (LINE).",

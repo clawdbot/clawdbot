@@ -82,11 +82,11 @@ const shouldBuild = () => {
 
 const logRunner = (message) => {
   if (env.CLAWDBOT_RUNNER_LOG === "0") return;
-  process.stderr.write(`[clawdbot] ${message}\n`);
+  process.stderr.write(`[moltbot] ${message}\n`);
 };
 
 const runNode = () => {
-  const nodeProcess = spawn(process.execPath, ["dist/entry.js", ...args], {
+  const nodeProcess = spawn(process.execPath, ["moltbot.mjs", ...args], {
     cwd,
     env,
     stdio: "inherit",
@@ -95,7 +95,6 @@ const runNode = () => {
   nodeProcess.on("exit", (exitCode, exitSignal) => {
     if (exitSignal) {
       process.exit(1);
-      return;
     }
     process.exit(exitCode ?? 1);
   });
@@ -128,11 +127,9 @@ if (!shouldBuild()) {
   build.on("exit", (code, signal) => {
     if (signal) {
       process.exit(1);
-      return;
     }
     if (code !== 0 && code !== null) {
       process.exit(code);
-      return;
     }
     writeBuildStamp();
     runNode();

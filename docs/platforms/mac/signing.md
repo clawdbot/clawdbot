@@ -5,13 +5,13 @@ read_when:
 ---
 # mac signing (debug builds)
 
-This app is usually built from [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh), which now:
+This app is usually built from [`scripts/package-mac-app.sh`](https://github.com/moltbot/moltbot/blob/main/scripts/package-mac-app.sh), which now:
 
-- sets a stable debug bundle identifier: `com.clawdbot.mac.debug`
+- sets a stable debug bundle identifier: `bot.molt.mac.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
-- calls [`scripts/codesign-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/codesign-mac-app.sh) to sign the main binary and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [macOS permissions](/platforms/mac/permissions)).
+- calls [`scripts/codesign-mac-app.sh`](https://github.com/moltbot/moltbot/blob/main/scripts/codesign-mac-app.sh) to sign the main binary and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [macOS permissions](/platforms/mac/permissions)).
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
-- inject build metadata into Info.plist: `ClawdbotBuildTimestamp` (UTC) and `ClawdbotGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
+- inject build metadata into Info.plist: `MoltbotBuildTimestamp` (UTC) and `MoltbotGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
 - **Packaging requires Node 22+**: the script runs TS builds and the Control UI build.
 - reads `SIGN_IDENTITY` from the environment. Add `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (or your Developer ID Application cert) to your shell rc to always sign with your cert. Ad-hoc signing requires explicit opt-in via `ALLOW_ADHOC_SIGNING=1` or `SIGN_IDENTITY="-"` (not recommended for permission testing).
 - runs a Team ID audit after signing and fails if any Mach-O inside the app bundle is signed by a different Team ID. Set `SKIP_TEAM_ID_CHECK=1` to bypass.
@@ -33,11 +33,11 @@ When signing with `SIGN_IDENTITY="-"` (ad-hoc), the script automatically disable
 ## Build metadata for About
 
 `package-mac-app.sh` stamps the bundle with:
-- `ClawdbotBuildTimestamp`: ISO8601 UTC at package time
-- `ClawdbotGitCommit`: short git hash (or `unknown` if unavailable)
+- `MoltbotBuildTimestamp`: ISO8601 UTC at package time
+- `MoltbotGitCommit`: short git hash (or `unknown` if unavailable)
 
 The About tab reads these keys to show version, build date, git commit, and whether it’s a debug build (via `#if DEBUG`). Run the packager to refresh these values after code changes.
 
 ## Why
 
-TCC permissions are tied to the bundle identifier *and* code signature. Unsigned debug builds with changing UUIDs were causing macOS to forget grants after each rebuild. Signing the binaries (ad‑hoc by default) and keeping a fixed bundle id/path (`dist/Clawdbot.app`) preserves the grants between builds, matching the VibeTunnel approach.
+TCC permissions are tied to the bundle identifier *and* code signature. Unsigned debug builds with changing UUIDs were causing macOS to forget grants after each rebuild. Signing the binaries (ad‑hoc by default) and keeping a fixed bundle id/path (`dist/Moltbot.app`) preserves the grants between builds, matching the VibeTunnel approach.

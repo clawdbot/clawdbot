@@ -1,4 +1,4 @@
-import type { ClawdbotConfig, DmPolicy } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig, DmPolicy } from "clawdbot/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -22,7 +22,7 @@ const channel = "googlechat" as const;
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 
-function setGoogleChatDmPolicy(cfg: ClawdbotConfig, policy: DmPolicy) {
+function setGoogleChatDmPolicy(cfg: MoltbotConfig, policy: DmPolicy) {
   const allowFrom =
     policy === "open"
       ? addWildcardAllowFrom(cfg.channels?.["googlechat"]?.dm?.allowFrom)
@@ -51,9 +51,9 @@ function parseAllowFromInput(raw: string): string[] {
 }
 
 async function promptAllowFrom(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   prompter: WizardPrompter;
-}): Promise<ClawdbotConfig> {
+}): Promise<MoltbotConfig> {
   const current = params.cfg.channels?.["googlechat"]?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
     message: "Google Chat allowFrom (user id or email)",
@@ -91,10 +91,10 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 };
 
 function applyAccountConfig(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId: string;
   patch: Record<string, unknown>;
-}): ClawdbotConfig {
+}): MoltbotConfig {
   const { cfg, accountId, patch } = params;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -130,10 +130,10 @@ function applyAccountConfig(params: {
 }
 
 async function promptCredentials(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   prompter: WizardPrompter;
   accountId: string;
-}): Promise<ClawdbotConfig> {
+}): Promise<MoltbotConfig> {
   const { cfg, prompter, accountId } = params;
   const envReady =
     accountId === DEFAULT_ACCOUNT_ID &&
@@ -184,10 +184,10 @@ async function promptCredentials(params: {
 }
 
 async function promptAudience(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   prompter: WizardPrompter;
   accountId: string;
-}): Promise<ClawdbotConfig> {
+}): Promise<MoltbotConfig> {
   const account = resolveGoogleChatAccount({
     cfg: params.cfg,
     accountId: params.accountId,

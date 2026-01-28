@@ -27,7 +27,7 @@ export type WhatsAppConfig = {
   sendReadReceipts?: boolean;
   /**
    * Inbound message prefix (WhatsApp only).
-   * Default: `[{agents.list[].identity.name}]` (or `[clawdbot]`) when allowFrom is empty, else `""`.
+   * Default: `[{agents.list[].identity.name}]` (or `[moltbot]`) when allowFrom is empty, else `""`.
    */
   messagePrefix?: string;
   /** Direct message access policy (default: pairing). */

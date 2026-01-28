@@ -88,8 +88,8 @@ describe("daemon-cli coverage", () => {
   };
 
   beforeEach(() => {
-    process.env.CLAWDBOT_STATE_DIR = "/tmp/clawdbot-cli-state";
-    process.env.CLAWDBOT_CONFIG_PATH = "/tmp/clawdbot-cli-state/clawdbot.json";
+    process.env.CLAWDBOT_STATE_DIR = "/tmp/moltbot-cli-state";
+    process.env.CLAWDBOT_CONFIG_PATH = "/tmp/moltbot-cli-state/moltbot.json";
     delete process.env.CLAWDBOT_GATEWAY_PORT;
     delete process.env.CLAWDBOT_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
@@ -141,11 +141,11 @@ describe("daemon-cli coverage", () => {
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
         CLAWDBOT_PROFILE: "dev",
-        CLAWDBOT_STATE_DIR: "/tmp/clawdbot-daemon-state",
-        CLAWDBOT_CONFIG_PATH: "/tmp/clawdbot-daemon-state/clawdbot.json",
+        CLAWDBOT_STATE_DIR: "/tmp/moltbot-daemon-state",
+        CLAWDBOT_CONFIG_PATH: "/tmp/moltbot-daemon-state/moltbot.json",
         CLAWDBOT_GATEWAY_PORT: "19001",
       },
-      sourcePath: "/tmp/com.clawdbot.gateway.plist",
+      sourcePath: "/tmp/bot.molt.gateway.plist",
     });
 
     const { registerDaemonCli } = await import("./daemon-cli.js");

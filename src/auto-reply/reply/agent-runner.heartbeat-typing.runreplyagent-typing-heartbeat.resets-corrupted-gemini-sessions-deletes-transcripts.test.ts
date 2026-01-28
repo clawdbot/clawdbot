@@ -123,7 +123,7 @@ function createMinimalRun(params?: {
 describe("runReplyAgent typing (heartbeat)", () => {
   it("resets corrupted Gemini sessions and deletes transcripts", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-reset-"));
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "moltbot-session-reset-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
     try {
       const sessionId = "session-corrupt";
@@ -170,7 +170,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
   it("keeps sessions intact on other errors", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-noreset-"));
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "moltbot-session-noreset-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
     try {
       const sessionId = "session-ok";

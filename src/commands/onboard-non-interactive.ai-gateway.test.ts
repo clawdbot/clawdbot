@@ -25,10 +25,10 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
 
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-gateway-"));
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-onboard-gateway-"));
     process.env.HOME = tempHome;
     process.env.CLAWDBOT_STATE_DIR = tempHome;
-    process.env.CLAWDBOT_CONFIG_PATH = path.join(tempHome, "clawdbot.json");
+    process.env.CLAWDBOT_CONFIG_PATH = path.join(tempHome, "moltbot.json");
     vi.resetModules();
 
     const runtime = {
@@ -56,8 +56,8 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
         runtime,
       );
 
-      const { CONFIG_PATH_CLAWDBOT } = await import("../config/config.js");
-      const cfg = JSON.parse(await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf8")) as {
+      const { CONFIG_PATH } = await import("../config/config.js");
+      const cfg = JSON.parse(await fs.readFile(CONFIG_PATH, "utf8")) as {
         auth?: {
           profiles?: Record<string, { provider?: string; mode?: string }>;
         };

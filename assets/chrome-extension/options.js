@@ -31,7 +31,7 @@ async function checkRelayReachable(port) {
   } catch {
     setStatus(
       'error',
-      `Relay not reachable at ${url}. Start Clawdbot’s browser relay on this machine, then click the toolbar button again.`,
+      `Relay not reachable at ${url}. Start Moltbot’s browser relay on this machine, then click the toolbar button again.`,
     )
   } finally {
     clearTimeout(t)

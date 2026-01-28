@@ -126,7 +126,7 @@ describe("Slack native command argument menus", () => {
     const { actions, ctx, account } = createHarness();
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
-    const handler = actions.get("clawdbot_cmdarg");
+    const handler = actions.get("moltbot_cmdarg");
     if (!handler) throw new Error("Missing arg-menu action handler");
 
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -152,7 +152,7 @@ describe("Slack native command argument menus", () => {
     const { actions, ctx, account } = createHarness();
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
-    const handler = actions.get("clawdbot_cmdarg");
+    const handler = actions.get("moltbot_cmdarg");
     if (!handler) throw new Error("Missing arg-menu action handler");
 
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -180,7 +180,7 @@ describe("Slack native command argument menus", () => {
     const { actions, postEphemeral, ctx, account } = createHarness();
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
-    const handler = actions.get("clawdbot_cmdarg");
+    const handler = actions.get("moltbot_cmdarg");
     if (!handler) throw new Error("Missing arg-menu action handler");
 
     await handler({
@@ -202,7 +202,7 @@ describe("Slack native command argument menus", () => {
     const { actions, postEphemeral, ctx, account } = createHarness();
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
-    const handler = actions.get("clawdbot_cmdarg");
+    const handler = actions.get("moltbot_cmdarg");
     if (!handler) throw new Error("Missing arg-menu action handler");
 
     await handler({

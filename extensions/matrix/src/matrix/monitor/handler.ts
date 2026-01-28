@@ -252,12 +252,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   await sendMessageMatrix(
                     `room:${roomId}`,
                     [
-                      "Clawdbot: access not configured.",
+                      "Moltbot: access not configured.",
                       "",
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve matrix <code>",
+                      "moltbot pairing approve matrix <code>",
                     ].join("\n"),
                     { client },
                   );

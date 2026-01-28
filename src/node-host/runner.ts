@@ -41,7 +41,7 @@ import {
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import { detectMime } from "../media/mime.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
+import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
@@ -435,7 +435,7 @@ function resolveEnvPath(env?: Record<string, string>): string[] {
 }
 
 function ensureNodePathEnv(): string {
-  ensureClawdbotCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  ensureMoltbotCliOnPath({ pathEnv: process.env.PATH ?? "" });
   const current = process.env.PATH ?? "";
   if (current.trim()) return current;
   process.env.PATH = DEFAULT_NODE_PATH;

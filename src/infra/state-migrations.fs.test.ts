@@ -7,7 +7,7 @@ import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
 describe("state migrations fs", () => {
   it("treats array session stores as invalid", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-session-store-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-session-store-"));
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(storePath, "[]", "utf-8");
 

@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken, type TwitchTokenSource } from "./token.js";
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig } from "clawdbot/plugin-sdk";
 
 describe("token", () => {
   // Multi-account config for testing non-default accounts
@@ -29,7 +29,7 @@ describe("token", () => {
         },
       },
     },
-  } as unknown as ClawdbotConfig;
+  } as unknown as MoltbotConfig;
 
   // Simplified single-account config
   const mockSimplifiedConfig = {
@@ -39,7 +39,7 @@ describe("token", () => {
         accessToken: "oauth:config-token",
       },
     },
-  } as unknown as ClawdbotConfig;
+  } as unknown as MoltbotConfig;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -85,7 +85,7 @@ describe("token", () => {
             accessToken: "",
           },
         },
-      } as unknown as ClawdbotConfig;
+      } as unknown as MoltbotConfig;
 
       const result = resolveTwitchToken(configWithEmptyToken, { accountId: "default" });
 
@@ -101,7 +101,7 @@ describe("token", () => {
             accessToken: "",
           },
         },
-      } as unknown as ClawdbotConfig;
+      } as unknown as MoltbotConfig;
 
       const result = resolveTwitchToken(configWithoutToken, { accountId: "default" });
 
@@ -123,7 +123,7 @@ describe("token", () => {
             },
           },
         },
-      } as unknown as ClawdbotConfig;
+      } as unknown as MoltbotConfig;
 
       const result = resolveTwitchToken(configWithoutToken, { accountId: "secondary" });
 
@@ -139,7 +139,7 @@ describe("token", () => {
             accounts: {},
           },
         },
-      } as unknown as ClawdbotConfig;
+      } as unknown as MoltbotConfig;
 
       const result = resolveTwitchToken(configWithoutAccount, { accountId: "nonexistent" });
 
@@ -150,7 +150,7 @@ describe("token", () => {
     it("should handle missing Twitch config section", () => {
       const configWithoutSection = {
         channels: {},
-      } as unknown as ClawdbotConfig;
+      } as unknown as MoltbotConfig;
 
       const result = resolveTwitchToken(configWithoutSection, { accountId: "default" });
 

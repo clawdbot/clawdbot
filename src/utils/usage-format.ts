@@ -1,5 +1,5 @@
 import type { NormalizedUsage } from "../agents/usage.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
 export type ModelCostConfig = {
   input: number;
@@ -34,7 +34,7 @@ export function formatUsd(value?: number): string | undefined {
 export function resolveModelCostConfig(params: {
   provider?: string;
   model?: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
 }): ModelCostConfig | undefined {
   const provider = params.provider?.trim();
   const model = params.model?.trim();

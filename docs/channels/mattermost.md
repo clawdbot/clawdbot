@@ -1,5 +1,5 @@
 ---
-summary: "Mattermost bot setup and Clawdbot config"
+summary: "Mattermost bot setup and Moltbot config"
 read_when:
   - Setting up Mattermost
   - Debugging Mattermost routing
@@ -16,16 +16,16 @@ Mattermost ships as a plugin and is not bundled with the core install.
 
 Install via CLI (npm registry):
 ```bash
-clawdbot plugins install @clawdbot/mattermost
+moltbot plugins install @moltbot/mattermost
 ```
 
 Local checkout (when running from a git repo):
 ```bash
-clawdbot plugins install ./extensions/mattermost
+moltbot plugins install ./extensions/mattermost
 ```
 
 If you choose Mattermost during configure/onboarding and a git checkout is detected,
-Clawdbot will offer the local install path automatically.
+Moltbot will offer the local install path automatically.
 
 Details: [Plugins](/plugin)
 
@@ -33,7 +33,7 @@ Details: [Plugins](/plugin)
 1) Install the Mattermost plugin.
 2) Create a Mattermost bot account and copy the **bot token**.
 3) Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
-4) Configure Clawdbot and start the gateway.
+4) Configure Moltbot and start the gateway.
 
 Minimal config:
 ```json5
@@ -83,8 +83,8 @@ Notes:
 ## Access control (DMs)
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code).
 - Approve via:
-  - `clawdbot pairing list mattermost`
-  - `clawdbot pairing approve mattermost <CODE>`
+  - `moltbot pairing list mattermost`
+  - `moltbot pairing approve mattermost <CODE>`
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
 
 ## Channels (groups)
@@ -93,7 +93,7 @@ Notes:
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 
 ## Targets for outbound delivery
-Use these target formats with `clawdbot message send` or cron/webhooks:
+Use these target formats with `moltbot message send` or cron/webhooks:
 
 - `channel:<id>` for a channel
 - `user:<id>` for a DM

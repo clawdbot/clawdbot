@@ -15,119 +15,117 @@ import {
 
 describe("argv helpers", () => {
   it("detects help/version flags", () => {
-    expect(hasHelpOrVersion(["node", "clawdbot", "--help"])).toBe(true);
-    expect(hasHelpOrVersion(["node", "clawdbot", "-V"])).toBe(true);
-    expect(hasHelpOrVersion(["node", "clawdbot", "status"])).toBe(false);
+    expect(hasHelpOrVersion(["node", "moltbot", "--help"])).toBe(true);
+    expect(hasHelpOrVersion(["node", "moltbot", "-V"])).toBe(true);
+    expect(hasHelpOrVersion(["node", "moltbot", "status"])).toBe(false);
   });
 
   it("extracts command path ignoring flags and terminator", () => {
-    expect(getCommandPath(["node", "clawdbot", "status", "--json"], 2)).toEqual(["status"]);
-    expect(getCommandPath(["node", "clawdbot", "agents", "list"], 2)).toEqual(["agents", "list"]);
-    expect(getCommandPath(["node", "clawdbot", "status", "--", "ignored"], 2)).toEqual(["status"]);
+    expect(getCommandPath(["node", "moltbot", "status", "--json"], 2)).toEqual(["status"]);
+    expect(getCommandPath(["node", "moltbot", "agents", "list"], 2)).toEqual(["agents", "list"]);
+    expect(getCommandPath(["node", "moltbot", "status", "--", "ignored"], 2)).toEqual(["status"]);
   });
 
   it("returns primary command", () => {
-    expect(getPrimaryCommand(["node", "clawdbot", "agents", "list"])).toBe("agents");
-    expect(getPrimaryCommand(["node", "clawdbot"])).toBeNull();
+    expect(getPrimaryCommand(["node", "moltbot", "agents", "list"])).toBe("agents");
+    expect(getPrimaryCommand(["node", "moltbot"])).toBeNull();
   });
 
   it("parses boolean flags and ignores terminator", () => {
-    expect(hasFlag(["node", "clawdbot", "status", "--json"], "--json")).toBe(true);
-    expect(hasFlag(["node", "clawdbot", "--", "--json"], "--json")).toBe(false);
+    expect(hasFlag(["node", "moltbot", "status", "--json"], "--json")).toBe(true);
+    expect(hasFlag(["node", "moltbot", "--", "--json"], "--json")).toBe(false);
   });
 
   it("extracts flag values with equals and missing values", () => {
-    expect(getFlagValue(["node", "clawdbot", "status", "--timeout", "5000"], "--timeout")).toBe(
+    expect(getFlagValue(["node", "moltbot", "status", "--timeout", "5000"], "--timeout")).toBe(
       "5000",
     );
-    expect(getFlagValue(["node", "clawdbot", "status", "--timeout=2500"], "--timeout")).toBe(
-      "2500",
-    );
-    expect(getFlagValue(["node", "clawdbot", "status", "--timeout"], "--timeout")).toBeNull();
-    expect(getFlagValue(["node", "clawdbot", "status", "--timeout", "--json"], "--timeout")).toBe(
+    expect(getFlagValue(["node", "moltbot", "status", "--timeout=2500"], "--timeout")).toBe("2500");
+    expect(getFlagValue(["node", "moltbot", "status", "--timeout"], "--timeout")).toBeNull();
+    expect(getFlagValue(["node", "moltbot", "status", "--timeout", "--json"], "--timeout")).toBe(
       null,
     );
-    expect(getFlagValue(["node", "clawdbot", "--", "--timeout=99"], "--timeout")).toBeUndefined();
+    expect(getFlagValue(["node", "moltbot", "--", "--timeout=99"], "--timeout")).toBeUndefined();
   });
 
   it("parses verbose flags", () => {
-    expect(getVerboseFlag(["node", "clawdbot", "status", "--verbose"])).toBe(true);
-    expect(getVerboseFlag(["node", "clawdbot", "status", "--debug"])).toBe(false);
-    expect(getVerboseFlag(["node", "clawdbot", "status", "--debug"], { includeDebug: true })).toBe(
+    expect(getVerboseFlag(["node", "moltbot", "status", "--verbose"])).toBe(true);
+    expect(getVerboseFlag(["node", "moltbot", "status", "--debug"])).toBe(false);
+    expect(getVerboseFlag(["node", "moltbot", "status", "--debug"], { includeDebug: true })).toBe(
       true,
     );
   });
 
   it("parses positive integer flag values", () => {
-    expect(getPositiveIntFlagValue(["node", "clawdbot", "status"], "--timeout")).toBeUndefined();
+    expect(getPositiveIntFlagValue(["node", "moltbot", "status"], "--timeout")).toBeUndefined();
     expect(
-      getPositiveIntFlagValue(["node", "clawdbot", "status", "--timeout"], "--timeout"),
+      getPositiveIntFlagValue(["node", "moltbot", "status", "--timeout"], "--timeout"),
     ).toBeNull();
     expect(
-      getPositiveIntFlagValue(["node", "clawdbot", "status", "--timeout", "5000"], "--timeout"),
+      getPositiveIntFlagValue(["node", "moltbot", "status", "--timeout", "5000"], "--timeout"),
     ).toBe(5000);
     expect(
-      getPositiveIntFlagValue(["node", "clawdbot", "status", "--timeout", "nope"], "--timeout"),
+      getPositiveIntFlagValue(["node", "moltbot", "status", "--timeout", "nope"], "--timeout"),
     ).toBeUndefined();
   });
 
   it("builds parse argv from raw args", () => {
     const nodeArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["node", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["node", "moltbot", "status"],
     });
-    expect(nodeArgv).toEqual(["node", "clawdbot", "status"]);
+    expect(nodeArgv).toEqual(["node", "moltbot", "status"]);
 
     const versionedNodeArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["node-22", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["node-22", "moltbot", "status"],
     });
-    expect(versionedNodeArgv).toEqual(["node-22", "clawdbot", "status"]);
+    expect(versionedNodeArgv).toEqual(["node-22", "moltbot", "status"]);
 
     const versionedNodeWindowsArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["node-22.2.0.exe", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["node-22.2.0.exe", "moltbot", "status"],
     });
-    expect(versionedNodeWindowsArgv).toEqual(["node-22.2.0.exe", "clawdbot", "status"]);
+    expect(versionedNodeWindowsArgv).toEqual(["node-22.2.0.exe", "moltbot", "status"]);
 
     const versionedNodePatchlessArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["node-22.2", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["node-22.2", "moltbot", "status"],
     });
-    expect(versionedNodePatchlessArgv).toEqual(["node-22.2", "clawdbot", "status"]);
+    expect(versionedNodePatchlessArgv).toEqual(["node-22.2", "moltbot", "status"]);
 
     const versionedNodeWindowsPatchlessArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["node-22.2.exe", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["node-22.2.exe", "moltbot", "status"],
     });
-    expect(versionedNodeWindowsPatchlessArgv).toEqual(["node-22.2.exe", "clawdbot", "status"]);
+    expect(versionedNodeWindowsPatchlessArgv).toEqual(["node-22.2.exe", "moltbot", "status"]);
 
     const versionedNodeWithPathArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["/usr/bin/node-22.2.0", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["/usr/bin/node-22.2.0", "moltbot", "status"],
     });
-    expect(versionedNodeWithPathArgv).toEqual(["/usr/bin/node-22.2.0", "clawdbot", "status"]);
+    expect(versionedNodeWithPathArgv).toEqual(["/usr/bin/node-22.2.0", "moltbot", "status"]);
 
     const nodejsArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["nodejs", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["nodejs", "moltbot", "status"],
     });
-    expect(nodejsArgv).toEqual(["nodejs", "clawdbot", "status"]);
+    expect(nodejsArgv).toEqual(["nodejs", "moltbot", "status"]);
 
     const nonVersionedNodeArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["node-dev", "clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["node-dev", "moltbot", "status"],
     });
-    expect(nonVersionedNodeArgv).toEqual(["node", "clawdbot", "node-dev", "clawdbot", "status"]);
+    expect(nonVersionedNodeArgv).toEqual(["node", "moltbot", "node-dev", "moltbot", "status"]);
 
     const directArgv = buildParseArgv({
-      programName: "clawdbot",
-      rawArgs: ["clawdbot", "status"],
+      programName: "moltbot",
+      rawArgs: ["moltbot", "status"],
     });
-    expect(directArgv).toEqual(["node", "clawdbot", "status"]);
+    expect(directArgv).toEqual(["node", "moltbot", "status"]);
 
     const bunArgv = buildParseArgv({
-      programName: "clawdbot",
+      programName: "moltbot",
       rawArgs: ["bun", "src/entry.ts", "status"],
     });
     expect(bunArgv).toEqual(["bun", "src/entry.ts", "status"]);
@@ -135,20 +133,20 @@ describe("argv helpers", () => {
 
   it("builds parse argv from fallback args", () => {
     const fallbackArgv = buildParseArgv({
-      programName: "clawdbot",
+      programName: "moltbot",
       fallbackArgv: ["status"],
     });
-    expect(fallbackArgv).toEqual(["node", "clawdbot", "status"]);
+    expect(fallbackArgv).toEqual(["node", "moltbot", "status"]);
   });
 
   it("decides when to migrate state", () => {
-    expect(shouldMigrateState(["node", "clawdbot", "status"])).toBe(false);
-    expect(shouldMigrateState(["node", "clawdbot", "health"])).toBe(false);
-    expect(shouldMigrateState(["node", "clawdbot", "sessions"])).toBe(false);
-    expect(shouldMigrateState(["node", "clawdbot", "memory", "status"])).toBe(false);
-    expect(shouldMigrateState(["node", "clawdbot", "agent", "--message", "hi"])).toBe(false);
-    expect(shouldMigrateState(["node", "clawdbot", "agents", "list"])).toBe(true);
-    expect(shouldMigrateState(["node", "clawdbot", "message", "send"])).toBe(true);
+    expect(shouldMigrateState(["node", "moltbot", "status"])).toBe(false);
+    expect(shouldMigrateState(["node", "moltbot", "health"])).toBe(false);
+    expect(shouldMigrateState(["node", "moltbot", "sessions"])).toBe(false);
+    expect(shouldMigrateState(["node", "moltbot", "memory", "status"])).toBe(false);
+    expect(shouldMigrateState(["node", "moltbot", "agent", "--message", "hi"])).toBe(false);
+    expect(shouldMigrateState(["node", "moltbot", "agents", "list"])).toBe(true);
+    expect(shouldMigrateState(["node", "moltbot", "message", "send"])).toBe(true);
   });
 
   it("reuses command path for migrate state decisions", () => {

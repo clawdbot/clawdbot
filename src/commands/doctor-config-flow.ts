@@ -1,9 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ZodIssue } from "zod";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import {
-  ClawdbotSchema,
-  CONFIG_PATH_CLAWDBOT,
+  MoltbotSchema,
+  CONFIG_PATH,
   migrateLegacyConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
@@ -12,6 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { note } from "../terminal/note.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -60,16 +63,16 @@ function resolvePathTarget(root: unknown, path: Array<string | number>): unknown
   return current;
 }
 
-function stripUnknownConfigKeys(config: ClawdbotConfig): {
-  config: ClawdbotConfig;
+function stripUnknownConfigKeys(config: MoltbotConfig): {
+  config: MoltbotConfig;
   removed: string[];
 } {
-  const parsed = ClawdbotSchema.safeParse(config);
+  const parsed = MoltbotSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
   }
 
-  const next = structuredClone(config) as ClawdbotConfig;
+  const next = structuredClone(config) as MoltbotConfig;
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
     if (!isUnrecognizedKeysIssue(issue)) continue;
@@ -88,7 +91,7 @@ function stripUnknownConfigKeys(config: ClawdbotConfig): {
   return { config: next, removed };
 }
 
-function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
+function noteOpencodeProviderOverrides(cfg: MoltbotConfig) {
   const providers = cfg.models?.providers;
   if (!providers) return;
 
@@ -117,15 +120,53 @@ function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
   note(lines.join("\n"), "OpenCode Zen");
 }
 
+function hasExplicitConfigPath(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.MOLTBOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim());
+}
+
+function moveLegacyConfigFile(legacyPath: string, canonicalPath: string) {
+  fs.mkdirSync(path.dirname(canonicalPath), { recursive: true, mode: 0o700 });
+  try {
+    fs.renameSync(legacyPath, canonicalPath);
+  } catch {
+    fs.copyFileSync(legacyPath, canonicalPath);
+    fs.chmodSync(canonicalPath, 0o600);
+    try {
+      fs.unlinkSync(legacyPath);
+    } catch {
+      // Best-effort cleanup; we'll warn later if both files exist.
+    }
+  }
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const snapshot = await readConfigFileSnapshot();
+  const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
+  if (stateDirResult.changes.length > 0) {
+    note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
+  if (stateDirResult.warnings.length > 0) {
+    note(stateDirResult.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
+  }
+
+  let snapshot = await readConfigFileSnapshot();
+  if (!hasExplicitConfigPath(process.env) && snapshot.exists) {
+    const basename = path.basename(snapshot.path);
+    if (basename === "clawdbot.json") {
+      const canonicalPath = path.join(path.dirname(snapshot.path), "moltbot.json");
+      if (!fs.existsSync(canonicalPath)) {
+        moveLegacyConfigFile(snapshot.path, canonicalPath);
+        note(`- Config: ${snapshot.path} → ${canonicalPath}`, "Doctor changes");
+        snapshot = await readConfigFileSnapshot();
+      }
+    }
+  }
   const baseCfg = snapshot.config ?? {};
-  let cfg: ClawdbotConfig = baseCfg;
-  let candidate = structuredClone(baseCfg) as ClawdbotConfig;
+  let cfg: MoltbotConfig = baseCfg;
+  let candidate = structuredClone(baseCfg) as MoltbotConfig;
   let pendingChanges = false;
   let shouldWriteConfig = false;
   const fixHints: string[] = [];
@@ -156,7 +197,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (migrated) cfg = migrated;
     } else {
       fixHints.push(
-        `Run "${formatCliCommand("clawdbot doctor --fix")}" to apply legacy migrations.`,
+        `Run "${formatCliCommand("moltbot doctor --fix")}" to apply legacy migrations.`,
       );
     }
   }
@@ -169,7 +210,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (shouldRepair) {
       cfg = normalized.config;
     } else {
-      fixHints.push(`Run "${formatCliCommand("clawdbot doctor --fix")}" to apply these changes.`);
+      fixHints.push(`Run "${formatCliCommand("moltbot doctor --fix")}" to apply these changes.`);
     }
   }
 
@@ -181,7 +222,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (shouldRepair) {
       cfg = autoEnable.config;
     } else {
-      fixHints.push(`Run "${formatCliCommand("clawdbot doctor --fix")}" to apply these changes.`);
+      fixHints.push(`Run "${formatCliCommand("moltbot doctor --fix")}" to apply these changes.`);
     }
   }
 
@@ -195,7 +236,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(lines, "Doctor changes");
     } else {
       note(lines, "Unknown config keys");
-      fixHints.push('Run "clawdbot doctor --fix" to remove these keys.');
+      fixHints.push('Run "moltbot doctor --fix" to remove these keys.');
     }
   }
 
@@ -214,5 +255,5 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   noteOpencodeProviderOverrides(cfg);
 
-  return { cfg, path: snapshot.path ?? CONFIG_PATH_CLAWDBOT, shouldWriteConfig };
+  return { cfg, path: snapshot.path ?? CONFIG_PATH, shouldWriteConfig };
 }

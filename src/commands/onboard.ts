@@ -44,8 +44,8 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     runtime.error(
       [
         "Non-interactive onboarding requires explicit risk acknowledgement.",
-        "Read: https://docs.clawd.bot/security",
-        `Re-run with: ${formatCliCommand("clawdbot onboard --non-interactive --accept-risk ...")}`,
+        "Read: https://docs.molt.bot/security",
+        `Re-run with: ${formatCliCommand("moltbot onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
     runtime.exit(1);
@@ -65,7 +65,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
       [
         "Windows detected.",
         "WSL2 is strongly recommended; native Windows is untested and more problematic.",
-        "Guide: https://docs.clawd.bot/windows",
+        "Guide: https://docs.molt.bot/windows",
       ].join("\n"),
     );
   }

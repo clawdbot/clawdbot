@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import {
@@ -34,7 +34,7 @@ const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "vid
 
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export async function makeTempWorkspace(prefix = "clawdbot-workspace-"): Promise<string> {
+export async function makeTempWorkspace(prefix = "moltbot-workspace-"): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 

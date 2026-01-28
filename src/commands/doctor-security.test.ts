@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -36,7 +36,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   const lastMessage = () => String(note.mock.calls.at(-1)?.[0] ?? "");
 
   it("warns when exposed without auth", async () => {
-    const cfg = { gateway: { bind: "lan" } } as ClawdbotConfig;
+    const cfg = { gateway: { bind: "lan" } } as MoltbotConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("CRITICAL");
@@ -45,7 +45,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   it("uses env token to avoid critical warning", async () => {
     process.env.CLAWDBOT_GATEWAY_TOKEN = "token-123";
-    const cfg = { gateway: { bind: "lan" } } as ClawdbotConfig;
+    const cfg = { gateway: { bind: "lan" } } as MoltbotConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("WARNING");
@@ -55,14 +55,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
   it("treats whitespace token as missing", async () => {
     const cfg = {
       gateway: { bind: "lan", auth: { mode: "token", token: "   " } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("CRITICAL");
   });
 
   it("skips warning for loopback bind", async () => {
-    const cfg = { gateway: { bind: "loopback" } } as ClawdbotConfig;
+    const cfg = { gateway: { bind: "loopback" } } as MoltbotConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("No channel security warnings detected");

@@ -14,7 +14,7 @@ describe("resolveGatewayLaunchAgentLabel", () => {
   it("returns default label when no profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel();
     expect(result).toBe(GATEWAY_LAUNCH_AGENT_LABEL);
-    expect(result).toBe("com.clawdbot.gateway");
+    expect(result).toBe("bot.molt.gateway");
   });
 
   it("returns default label when profile is undefined", () => {
@@ -34,17 +34,17 @@ describe("resolveGatewayLaunchAgentLabel", () => {
 
   it("returns profile-specific label when profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
-    expect(result).toBe("com.clawdbot.dev");
+    expect(result).toBe("bot.molt.dev");
   });
 
   it("returns profile-specific label for custom profile", () => {
     const result = resolveGatewayLaunchAgentLabel("work");
-    expect(result).toBe("com.clawdbot.work");
+    expect(result).toBe("bot.molt.work");
   });
 
   it("trims whitespace from profile", () => {
     const result = resolveGatewayLaunchAgentLabel("  staging  ");
-    expect(result).toBe("com.clawdbot.staging");
+    expect(result).toBe("bot.molt.staging");
   });
 
   it("returns default label for empty string profile", () => {
@@ -62,7 +62,7 @@ describe("resolveGatewaySystemdServiceName", () => {
   it("returns default service name when no profile is set", () => {
     const result = resolveGatewaySystemdServiceName();
     expect(result).toBe(GATEWAY_SYSTEMD_SERVICE_NAME);
-    expect(result).toBe("clawdbot-gateway");
+    expect(result).toBe("moltbot-gateway");
   });
 
   it("returns default service name when profile is undefined", () => {
@@ -82,17 +82,17 @@ describe("resolveGatewaySystemdServiceName", () => {
 
   it("returns profile-specific service name when profile is set", () => {
     const result = resolveGatewaySystemdServiceName("dev");
-    expect(result).toBe("clawdbot-gateway-dev");
+    expect(result).toBe("moltbot-gateway-dev");
   });
 
   it("returns profile-specific service name for custom profile", () => {
     const result = resolveGatewaySystemdServiceName("production");
-    expect(result).toBe("clawdbot-gateway-production");
+    expect(result).toBe("moltbot-gateway-production");
   });
 
   it("trims whitespace from profile", () => {
     const result = resolveGatewaySystemdServiceName("  test  ");
-    expect(result).toBe("clawdbot-gateway-test");
+    expect(result).toBe("moltbot-gateway-test");
   });
 
   it("returns default service name for empty string profile", () => {
@@ -110,7 +110,7 @@ describe("resolveGatewayWindowsTaskName", () => {
   it("returns default task name when no profile is set", () => {
     const result = resolveGatewayWindowsTaskName();
     expect(result).toBe(GATEWAY_WINDOWS_TASK_NAME);
-    expect(result).toBe("Clawdbot Gateway");
+    expect(result).toBe("Moltbot Gateway");
   });
 
   it("returns default task name when profile is undefined", () => {
@@ -130,17 +130,17 @@ describe("resolveGatewayWindowsTaskName", () => {
 
   it("returns profile-specific task name when profile is set", () => {
     const result = resolveGatewayWindowsTaskName("dev");
-    expect(result).toBe("Clawdbot Gateway (dev)");
+    expect(result).toBe("Moltbot Gateway (dev)");
   });
 
   it("returns profile-specific task name for custom profile", () => {
     const result = resolveGatewayWindowsTaskName("work");
-    expect(result).toBe("Clawdbot Gateway (work)");
+    expect(result).toBe("Moltbot Gateway (work)");
   });
 
   it("trims whitespace from profile", () => {
     const result = resolveGatewayWindowsTaskName("  ci  ");
-    expect(result).toBe("Clawdbot Gateway (ci)");
+    expect(result).toBe("Moltbot Gateway (ci)");
   });
 
   it("returns default task name for empty string profile", () => {
@@ -175,24 +175,24 @@ describe("resolveGatewayProfileSuffix", () => {
 
 describe("formatGatewayServiceDescription", () => {
   it("returns default description when no profile/version", () => {
-    expect(formatGatewayServiceDescription()).toBe("Clawdbot Gateway");
+    expect(formatGatewayServiceDescription()).toBe("Moltbot Gateway");
   });
 
   it("includes profile when set", () => {
     expect(formatGatewayServiceDescription({ profile: "work" })).toBe(
-      "Clawdbot Gateway (profile: work)",
+      "Moltbot Gateway (profile: work)",
     );
   });
 
   it("includes version when set", () => {
     expect(formatGatewayServiceDescription({ version: "2026.1.10" })).toBe(
-      "Clawdbot Gateway (v2026.1.10)",
+      "Moltbot Gateway (v2026.1.10)",
     );
   });
 
   it("includes profile and version when set", () => {
     expect(formatGatewayServiceDescription({ profile: "dev", version: "1.2.3" })).toBe(
-      "Clawdbot Gateway (profile: dev, v1.2.3)",
+      "Moltbot Gateway (profile: dev, v1.2.3)",
     );
   });
 });

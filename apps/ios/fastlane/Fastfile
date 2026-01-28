@@ -72,8 +72,8 @@ platform :ios do
     UI.user_error!("Missing IOS_DEVELOPMENT_TEAM (Apple Team ID). Add it to fastlane/.env or export it in your shell.") if team_id.nil? || team_id.strip.empty?
 
     build_app(
-      project: "Clawdbot.xcodeproj",
-      scheme: "Clawdbot",
+      project: "Moltbot.xcodeproj",
+      scheme: "Moltbot",
       export_method: "app-store",
       clean: true,
       xcargs: "DEVELOPMENT_TEAM=#{team_id} -allowProvisioningUpdates",

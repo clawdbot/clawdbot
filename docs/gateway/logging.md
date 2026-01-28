@@ -9,16 +9,16 @@ read_when:
 
 For a user-facing overview (CLI + Control UI + config), see [/logging](/logging).
 
-Clawdbot has two log “surfaces”:
+Moltbot has two log “surfaces”:
 
 - **Console output** (what you see in the terminal / Debug UI).
 - **File logs** (JSON lines) written by the gateway logger.
 
 ## File-based logger
 
-- Default rolling log file is under `/tmp/clawdbot/` (one file per day): `clawdbot-YYYY-MM-DD.log`
+- Default rolling log file is under `/tmp/moltbot/` (one file per day): `moltbot-YYYY-MM-DD.log`
   - Date uses the gateway host's local timezone.
-- The log file path and level can be configured via `~/.clawdbot/clawdbot.json`:
+- The log file path and level can be configured via `~/.clawdbot/moltbot.json`:
   - `logging.file`
   - `logging.level`
 
@@ -28,7 +28,7 @@ The Control UI Logs tab tails this file via the gateway (`logs.tail`).
 CLI can do the same:
 
 ```bash
-clawdbot logs --follow
+moltbot logs --follow
 ```
 
 **Verbose vs. log levels**
@@ -72,7 +72,7 @@ The gateway prints WebSocket protocol logs in two modes:
 
 ### WS log style
 
-`clawdbot gateway` supports a per-gateway style switch:
+`moltbot gateway` supports a per-gateway style switch:
 
 - `--ws-log auto` (default): normal mode is optimized; verbose mode uses compact output
 - `--ws-log compact`: compact output (paired request/response) when verbose
@@ -83,13 +83,13 @@ Examples:
 
 ```bash
 # optimized (only errors/slow)
-clawdbot gateway
+moltbot gateway
 
 # show all WS traffic (paired)
-clawdbot gateway --verbose --ws-log compact
+moltbot gateway --verbose --ws-log compact
 
 # show all WS traffic (full meta)
-clawdbot gateway --verbose --ws-log full
+moltbot gateway --verbose --ws-log full
 ```
 
 ## Console formatting (subsystem logging)

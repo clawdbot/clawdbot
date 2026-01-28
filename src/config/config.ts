@@ -11,4 +11,4 @@ export * from "./paths.js";
 export * from "./runtime-overrides.js";
 export * from "./types.js";
 export { validateConfigObject, validateConfigObjectWithPlugins } from "./validation.js";
-export { ClawdbotSchema } from "./zod-schema.js";
+export { MoltbotSchema } from "./zod-schema.js";

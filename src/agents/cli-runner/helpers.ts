@@ -6,7 +6,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { runExec } from "../../process/exec.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
@@ -86,7 +86,7 @@ function tokenToRegex(token: string): string {
 }
 
 /**
- * Cleanup suspended Clawdbot CLI processes that have accumulated.
+ * Cleanup suspended Moltbot CLI processes that have accumulated.
  * Only cleans up if there are more than the threshold (default: 10).
  */
 export async function cleanupSuspendedCliProcesses(
@@ -148,7 +148,7 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
-function buildModelAliasLines(cfg?: ClawdbotConfig) {
+function buildModelAliasLines(cfg?: MoltbotConfig) {
   const models = cfg?.agents?.defaults?.models ?? {};
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
@@ -165,7 +165,7 @@ function buildModelAliasLines(cfg?: ClawdbotConfig) {
 
 export function buildSystemPrompt(params: {
   workspaceDir: string;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -187,7 +187,7 @@ export function buildSystemPrompt(params: {
     workspaceDir: params.workspaceDir,
     cwd: process.cwd(),
     runtime: {
-      host: "clawdbot",
+      host: "moltbot",
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
@@ -389,7 +389,7 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-cli-images-"));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-cli-images-"));
   const paths: string[] = [];
   for (let i = 0; i < images.length; i += 1) {
     const image = images[i];

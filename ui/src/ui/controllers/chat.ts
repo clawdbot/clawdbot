@@ -163,7 +163,7 @@ export function handleChatEvent(
   if (payload.sessionKey !== state.sessionKey) return null;
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
-  // See https://github.com/clawdbot/clawdbot/issues/1909
+  // See https://github.com/moltbot/moltbot/issues/1909
   if (
     payload.runId &&
     state.chatRunId &&

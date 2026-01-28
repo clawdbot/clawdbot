@@ -3,7 +3,33 @@ import {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   normalizeForwardedContext,
+  resolveTelegramForumThreadId,
 } from "./helpers.js";
+
+describe("resolveTelegramForumThreadId", () => {
+  it("returns undefined for non-forum groups even with messageThreadId", () => {
+    // Reply threads in regular groups should not create separate sessions
+    expect(resolveTelegramForumThreadId({ isForum: false, messageThreadId: 42 })).toBeUndefined();
+  });
+
+  it("returns undefined for non-forum groups without messageThreadId", () => {
+    expect(
+      resolveTelegramForumThreadId({ isForum: false, messageThreadId: undefined }),
+    ).toBeUndefined();
+    expect(
+      resolveTelegramForumThreadId({ isForum: undefined, messageThreadId: 99 }),
+    ).toBeUndefined();
+  });
+
+  it("returns General topic (1) for forum groups without messageThreadId", () => {
+    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: undefined })).toBe(1);
+    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: null })).toBe(1);
+  });
+
+  it("returns the topic id for forum groups with messageThreadId", () => {
+    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: 99 })).toBe(99);
+  });
+});
 
 describe("buildTelegramThreadParams", () => {
   it("omits General topic thread id for message sends", () => {
@@ -65,8 +91,8 @@ describe("normalizeForwardedContext", () => {
   it("handles legacy forwards with signatures", () => {
     const ctx = normalizeForwardedContext({
       forward_from_chat: {
-        title: "Clawdbot Updates",
-        username: "clawdbot",
+        title: "Moltbot Updates",
+        username: "moltbot",
         id: 99,
         type: "channel",
       },
@@ -74,11 +100,11 @@ describe("normalizeForwardedContext", () => {
       forward_date: 789,
     } as any);
     expect(ctx).not.toBeNull();
-    expect(ctx?.from).toBe("Clawdbot Updates (Stan)");
+    expect(ctx?.from).toBe("Moltbot Updates (Stan)");
     expect(ctx?.fromType).toBe("legacy_channel");
     expect(ctx?.fromId).toBe("99");
-    expect(ctx?.fromUsername).toBe("clawdbot");
-    expect(ctx?.fromTitle).toBe("Clawdbot Updates");
+    expect(ctx?.fromUsername).toBe("moltbot");
+    expect(ctx?.fromTitle).toBe("Moltbot Updates");
     expect(ctx?.fromSignature).toBe("Stan");
     expect(ctx?.date).toBe(789);
   });

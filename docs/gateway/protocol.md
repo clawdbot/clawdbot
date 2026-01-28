@@ -9,7 +9,7 @@ read_when:
 # Gateway protocol (WebSocket)
 
 The Gateway WS protocol is the **single control plane + node transport** for
-Clawdbot. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
+Moltbot. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
 nodes) connect over WebSocket and declare their **role** + **scope** at
 handshake time.
 
@@ -53,7 +53,7 @@ Client → Gateway:
     "permissions": {},
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "clawdbot-cli/1.2.3",
+    "userAgent": "moltbot-cli/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -111,7 +111,7 @@ When a device token is issued, `hello-ok` also includes:
     "permissions": { "camera.capture": true, "screen.record": false },
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "clawdbot-ios/1.2.3",
+    "userAgent": "moltbot-ios/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",

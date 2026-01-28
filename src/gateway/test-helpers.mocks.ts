@@ -188,12 +188,12 @@ export const resetTestPluginRegistry = () => {
 };
 
 const testConfigRoot = {
-  value: path.join(os.tmpdir(), `clawdbot-gateway-test-${process.pid}-${crypto.randomUUID()}`),
+  value: path.join(os.tmpdir(), `moltbot-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 };
 
 export const setTestConfigRoot = (root: string) => {
   testConfigRoot.value = root;
-  process.env.CLAWDBOT_CONFIG_PATH = path.join(root, "clawdbot.json");
+  process.env.CLAWDBOT_CONFIG_PATH = path.join(root, "moltbot.json");
 };
 
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
@@ -271,7 +271,7 @@ vi.mock("../config/sessions.js", async () => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const resolveConfigPath = () => path.join(testConfigRoot.value, "clawdbot.json");
+  const resolveConfigPath = () => path.join(testConfigRoot.value, "moltbot.json");
   const hashConfigRaw = (raw: string | null) =>
     crypto
       .createHash("sha256")
@@ -350,10 +350,10 @@ vi.mock("../config/config.js", async () => {
 
   return {
     ...actual,
-    get CONFIG_PATH_CLAWDBOT() {
+    get CONFIG_PATH() {
       return resolveConfigPath();
     },
-    get STATE_DIR_CLAWDBOT() {
+    get STATE_DIR() {
       return path.dirname(resolveConfigPath());
     },
     get isNixMode() {

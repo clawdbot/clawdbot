@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `clawdbot-hook-install-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `moltbot-hook-install-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
@@ -35,9 +35,9 @@ describe("installHooksFromArchive", () => {
     zip.file(
       "package/package.json",
       JSON.stringify({
-        name: "@clawdbot/zip-hooks",
+        name: "@moltbot/zip-hooks",
         version: "0.0.1",
-        clawdbot: { hooks: ["./hooks/zip-hook"] },
+        moltbot: { hooks: ["./hooks/zip-hook"] },
       }),
     );
     zip.file(
@@ -46,7 +46,7 @@ describe("installHooksFromArchive", () => {
         "---",
         "name: zip-hook",
         "description: Zip hook",
-        'metadata: {"clawdbot":{"events":["command:new"]}}',
+        'metadata: {"moltbot":{"events":["command:new"]}}',
         "---",
         "",
         "# Zip Hook",
@@ -78,9 +78,9 @@ describe("installHooksFromArchive", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@clawdbot/tar-hooks",
+        name: "@moltbot/tar-hooks",
         version: "0.0.1",
-        clawdbot: { hooks: ["./hooks/tar-hook"] },
+        moltbot: { hooks: ["./hooks/tar-hook"] },
       }),
       "utf-8",
     );
@@ -90,7 +90,7 @@ describe("installHooksFromArchive", () => {
         "---",
         "name: tar-hook",
         "description: Tar hook",
-        'metadata: {"clawdbot":{"events":["command:new"]}}',
+        'metadata: {"moltbot":{"events":["command:new"]}}',
         "---",
         "",
         "# Tar Hook",
@@ -128,7 +128,7 @@ describe("installHooksFromPath", () => {
         "---",
         "name: my-hook",
         "description: My hook",
-        'metadata: {"clawdbot":{"events":["command:new"]}}',
+        'metadata: {"moltbot":{"events":["command:new"]}}',
         "---",
         "",
         "# My Hook",

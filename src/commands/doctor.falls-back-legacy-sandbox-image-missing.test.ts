@@ -26,7 +26,7 @@ beforeEach(() => {
 
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
-  resolveClawdbotPackageRoot.mockReset().mockResolvedValue(null);
+  resolveMoltbotPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue({
     status: "skipped",
     mode: "unknown",
@@ -34,7 +34,7 @@ beforeEach(() => {
     durationMs: 0,
   });
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/clawdbot.json",
+    path: "/tmp/moltbot.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -55,7 +55,7 @@ beforeEach(() => {
     killed: false,
   });
   ensureAuthProfileStore.mockReset().mockReturnValue({ version: 1, profiles: {} });
-  loadClawdbotPlugins.mockReset().mockReturnValue({ plugins: [], diagnostics: [] });
+  loadMoltbotPlugins.mockReset().mockReturnValue({ plugins: [], diagnostics: [] });
   migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
     config: raw as Record<string, unknown>,
     changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -79,7 +79,7 @@ beforeEach(() => {
   originalStateDir = process.env.CLAWDBOT_STATE_DIR;
   originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
   process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-doctor-state-"));
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-doctor-state-"));
   process.env.CLAWDBOT_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
@@ -110,7 +110,7 @@ const confirm = vi.fn().mockResolvedValue(true);
 const select = vi.fn().mockResolvedValue("node");
 const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
-const resolveClawdbotPackageRoot = vi.fn().mockResolvedValue(null);
+const resolveMoltbotPackageRoot = vi.fn().mockResolvedValue(null);
 const runGatewayUpdate = vi.fn().mockResolvedValue({
   status: "skipped",
   mode: "unknown",
@@ -132,10 +132,10 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
 });
 
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
-const loadClawdbotPlugins = vi.fn().mockReturnValue({ plugins: [], diagnostics: [] });
+const loadMoltbotPlugins = vi.fn().mockReturnValue({ plugins: [], diagnostics: [] });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/clawdbot.json",
+  path: "/tmp/moltbot.json",
   exists: false,
   raw: null,
   parsed: {},
@@ -175,13 +175,13 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadClawdbotPlugins,
+  loadMoltbotPlugins,
 }));
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    CONFIG_PATH_CLAWDBOT: "/tmp/clawdbot.json",
+    CONFIG_PATH: "/tmp/moltbot.json",
     createConfigIO,
     readConfigFileSnapshot,
     writeConfigFile,
@@ -216,8 +216,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
-vi.mock("../infra/clawdbot-root.js", () => ({
-  resolveClawdbotPackageRoot,
+vi.mock("../infra/moltbot-root.js", () => ({
+  resolveMoltbotPackageRoot,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -292,6 +292,12 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyStateDir: vi.fn().mockResolvedValue({
+    migrated: false,
+    skipped: false,
+    changes: [],
+    warnings: [],
+  }),
   detectLegacyStateMigrations: vi.fn().mockResolvedValue({
     targetAgentId: "main",
     targetMainKey: "main",
@@ -327,7 +333,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 describe("doctor command", () => {
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/clawdbot.json",
+      path: "/tmp/moltbot.json",
       exists: true,
       raw: "{}",
       parsed: {},

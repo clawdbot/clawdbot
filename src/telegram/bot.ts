@@ -12,7 +12,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
+import type { MoltbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveChannelGroupPolicy,
@@ -57,7 +57,7 @@ export type TelegramBotOptions = {
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
@@ -94,11 +94,12 @@ export function getTelegramSequentialKey(ctx: {
     if (typeof chatId === "number") return `telegram:${chatId}:control`;
     return "telegram:control";
   }
+  const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
+  const messageThreadId = msg?.message_thread_id;
   const isForum = (msg?.chat as { is_forum?: boolean } | undefined)?.is_forum;
-  const threadId = resolveTelegramForumThreadId({
-    isForum,
-    messageThreadId: msg?.message_thread_id,
-  });
+  const threadId = isGroup
+    ? resolveTelegramForumThreadId({ isForum, messageThreadId })
+    : messageThreadId;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
@@ -427,7 +428,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         peer: { kind: isGroup ? "group" : "dm", id: peerId },
       });
       const baseSessionKey = route.sessionKey;
-      const dmThreadId = !isGroup ? resolvedThreadId : undefined;
+      // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
+      const dmThreadId = !isGroup ? messageThreadId : undefined;
       const threadKeys =
         dmThreadId != null
           ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })

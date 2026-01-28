@@ -2,7 +2,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -14,7 +14,7 @@ describeLive("pi embedded extra params (live)", () => {
   it("applies config maxTokens to openai streamFn", async () => {
     const model = getModel("openai", "gpt-5.2") as Model<"openai-completions">;
 
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       agents: {
         defaults: {
           models: {

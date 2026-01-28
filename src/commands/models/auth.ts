@@ -10,7 +10,7 @@ import {
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { readConfigFileSnapshot, type ClawdbotConfig } from "../../config/config.js";
+import { readConfigFileSnapshot, type MoltbotConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
@@ -283,7 +283,7 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
-function applyDefaultModel(cfg: ClawdbotConfig, model: string): ClawdbotConfig {
+function applyDefaultModel(cfg: MoltbotConfig, model: string): MoltbotConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[model] = models[model] ?? {};
 
@@ -332,7 +332,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
     throw new Error(
-      `No provider plugins found. Install one via \`${formatCliCommand("clawdbot plugins install")}\`.`,
+      `No provider plugins found. Install one via \`${formatCliCommand("moltbot plugins install")}\`.`,
     );
   }
 

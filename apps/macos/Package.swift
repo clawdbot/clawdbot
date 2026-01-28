@@ -1,18 +1,18 @@
 // swift-tools-version: 6.2
-// Package manifest for the Clawdbot macOS companion (menu bar app + IPC library).
+// Package manifest for the Moltbot macOS companion (menu bar app + IPC library).
 
 import PackageDescription
 
 let package = Package(
-    name: "Clawdbot",
+    name: "Moltbot",
     platforms: [
         .macOS(.v15),
     ],
     products: [
-        .library(name: "ClawdbotIPC", targets: ["ClawdbotIPC"]),
-        .library(name: "ClawdbotDiscovery", targets: ["ClawdbotDiscovery"]),
-        .executable(name: "Clawdbot", targets: ["Clawdbot"]),
-        .executable(name: "clawdbot-mac", targets: ["ClawdbotMacCLI"]),
+        .library(name: "MoltbotIPC", targets: ["MoltbotIPC"]),
+        .library(name: "MoltbotDiscovery", targets: ["MoltbotDiscovery"]),
+        .executable(name: "Moltbot", targets: ["Moltbot"]),
+        .executable(name: "moltbot-mac", targets: ["MoltbotMacCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
@@ -20,33 +20,33 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.8.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
         .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
-        .package(path: "../shared/ClawdbotKit"),
+        .package(path: "../shared/MoltbotKit"),
         .package(path: "../../Swabble"),
     ],
     targets: [
         .target(
-            name: "ClawdbotIPC",
+            name: "MoltbotIPC",
             dependencies: [],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
-            name: "ClawdbotDiscovery",
+            name: "MoltbotDiscovery",
             dependencies: [
-                .product(name: "ClawdbotKit", package: "ClawdbotKit"),
+                .product(name: "MoltbotKit", package: "MoltbotKit"),
             ],
-            path: "Sources/ClawdbotDiscovery",
+            path: "Sources/MoltbotDiscovery",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .executableTarget(
-            name: "Clawdbot",
+            name: "Moltbot",
             dependencies: [
-                "ClawdbotIPC",
-                "ClawdbotDiscovery",
-                .product(name: "ClawdbotKit", package: "ClawdbotKit"),
-                .product(name: "ClawdbotChatUI", package: "ClawdbotKit"),
-                .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
+                "MoltbotIPC",
+                "MoltbotDiscovery",
+                .product(name: "MoltbotKit", package: "MoltbotKit"),
+                .product(name: "MoltbotChatUI", package: "MoltbotKit"),
+                .product(name: "MoltbotProtocol", package: "MoltbotKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
@@ -59,30 +59,30 @@ let package = Package(
                 "Resources/Info.plist",
             ],
             resources: [
-                .copy("Resources/Clawdbot.icns"),
+                .copy("Resources/Moltbot.icns"),
                 .copy("Resources/DeviceModels"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .executableTarget(
-            name: "ClawdbotMacCLI",
+            name: "MoltbotMacCLI",
             dependencies: [
-                "ClawdbotDiscovery",
-                .product(name: "ClawdbotKit", package: "ClawdbotKit"),
-                .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
+                "MoltbotDiscovery",
+                .product(name: "MoltbotKit", package: "MoltbotKit"),
+                .product(name: "MoltbotProtocol", package: "MoltbotKit"),
             ],
-            path: "Sources/ClawdbotMacCLI",
+            path: "Sources/MoltbotMacCLI",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .testTarget(
-            name: "ClawdbotIPCTests",
+            name: "MoltbotIPCTests",
             dependencies: [
-                "ClawdbotIPC",
-                "Clawdbot",
-                "ClawdbotDiscovery",
-                .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
+                "MoltbotIPC",
+                "Moltbot",
+                "MoltbotDiscovery",
+                .product(name: "MoltbotProtocol", package: "MoltbotKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
             ],
             swiftSettings: [

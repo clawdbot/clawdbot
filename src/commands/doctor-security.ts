@@ -1,16 +1,16 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ClawdbotConfig, GatewayBindMode } from "../config/config.js";
+import type { MoltbotConfig, GatewayBindMode } from "../config/config.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { note } from "../terminal/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 
-export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
+export async function noteSecurityWarnings(cfg: MoltbotConfig) {
   const warnings: string[] = [];
-  const auditHint = `- Run: ${formatCliCommand("clawdbot security audit --deep")}`;
+  const auditHint = `- Run: ${formatCliCommand("moltbot security audit --deep")}`;
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -48,19 +48,19 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
-              `  Fix: ${formatCliCommand("clawdbot configure")} to set a password`,
-              `  Or switch to token: ${formatCliCommand("clawdbot config set gateway.auth.mode token")}`,
+              `  Fix: ${formatCliCommand("moltbot configure")} to set a password`,
+              `  Or switch to token: ${formatCliCommand("moltbot config set gateway.auth.mode token")}`,
             ]
           : [
-              `  Fix: ${formatCliCommand("clawdbot doctor --fix")} to generate a token`,
+              `  Fix: ${formatCliCommand("moltbot doctor --fix")} to generate a token`,
               `  Or set token directly: ${formatCliCommand(
-                "clawdbot config set gateway.auth.mode token",
+                "moltbot config set gateway.auth.mode token",
               )}`,
             ];
       warnings.push(
         `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
         `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
-        `  Fix: ${formatCliCommand("clawdbot config set gateway.bind loopback")}`,
+        `  Fix: ${formatCliCommand("moltbot config set gateway.bind loopback")}`,
         ...authFixLines,
       );
     } else {
@@ -124,7 +124,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
 
     if (dmScope === "main" && isMultiUserDm) {
       warnings.push(
-        `- ${params.label} DMs: multiple senders share the main session; set session.dmScope="per-channel-peer" to isolate sessions.`,
+        `- ${params.label} DMs: multiple senders share the main session; set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate sessions.`,
       );
     }
   };

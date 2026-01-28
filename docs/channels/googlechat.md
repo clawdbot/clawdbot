@@ -13,7 +13,7 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
    - Enable the API if it is not already enabled.
 2) Create a **Service Account**:
    - Press **Create Credentials** > **Service Account**.
-   - Name it whatever you want (e.g., `clawdbot-chat`).
+   - Name it whatever you want (e.g., `moltbot-chat`).
    - Leave permissions blank (press **Continue**).
    - Leave principals with access blank (press **Done**).
 3) Create and download the **JSON Key**:
@@ -24,14 +24,14 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
 4) Store the downloaded JSON file on your gateway host (e.g., `~/.clawdbot/googlechat-service-account.json`).
 5) Create a Google Chat app in the [Google Cloud Console Chat Configuration](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat):
    - Fill in the **Application info**:
-     - **App name**: (e.g. `Clawdbot`)
-     - **Avatar URL**: (e.g. `https://clawd.bot/logo.png`)
+     - **App name**: (e.g. `Moltbot`)
+     - **Avatar URL**: (e.g. `https://molt.bot/logo.png`)
      - **Description**: (e.g. `Personal AI Assistant`)
    - Enable **Interactive features**.
    - Under **Functionality**, check **Join spaces and group conversations**.
    - Under **Connection settings**, select **HTTP endpoint URL**.
    - Under **Triggers**, select **Use a common HTTP endpoint URL for all triggers** and set it to your gateway's public URL followed by `/googlechat`.
-     - *Tip: Run `clawdbot status` to find your gateway's public URL.*
+     - *Tip: Run `moltbot status` to find your gateway's public URL.*
    - Under **Visibility**, check **Make this Chat app available to specific people and groups in &lt;Your Domain&gt;**.
    - Enter your email address (e.g. `user@example.com`) in the text box.
    - Click **Save** at the bottom.
@@ -40,7 +40,7 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
    - Look for the **App status** section (usually near the top or bottom after saving).
    - Change the status to **Live - available to users**.
    - Click **Save** again.
-7) Configure Clawdbot with the service account path + webhook audience:
+7) Configure Moltbot with the service account path + webhook audience:
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - Or config: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`.
 8) Set the webhook audience type + value (matches your Chat app config).
@@ -57,7 +57,7 @@ Once the gateway is running and your email is added to the visibility list:
 6) Send "Hello" to trigger the assistant!
 
 ## Public URL (Webhook-only)
-Google Chat webhooks require a public HTTPS endpoint. For security, **only expose the `/googlechat` path** to the internet. Keep the Clawdbot dashboard and other sensitive endpoints on your private network.
+Google Chat webhooks require a public HTTPS endpoint. For security, **only expose the `/googlechat` path** to the internet. Keep the Moltbot dashboard and other sensitive endpoints on your private network.
 
 ### Option A: Tailscale Funnel (Recommended)
 Use Tailscale Serve for the private dashboard and Funnel for the public webhook path. This keeps `/` private while exposing only `/googlechat`.
@@ -112,7 +112,7 @@ your-domain.com {
     reverse_proxy /googlechat* localhost:18789
 }
 ```
-With this config, any request to `your-domain.com/` will be ignored or returned as 404, while `your-domain.com/googlechat` is safely routed to Clawdbot.
+With this config, any request to `your-domain.com/` will be ignored or returned as 404, while `your-domain.com/googlechat` is safely routed to Moltbot.
 
 ### Option C: Cloudflare Tunnel
 Configure your tunnel's ingress rules to only route the webhook path:
@@ -122,14 +122,14 @@ Configure your tunnel's ingress rules to only route the webhook path:
 ## How it works
 
 1. Google Chat sends webhook POSTs to the gateway. Each request includes an `Authorization: Bearer <token>` header.
-2. Clawdbot verifies the token against the configured `audienceType` + `audience`:
+2. Moltbot verifies the token against the configured `audienceType` + `audience`:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.
 3. Messages are routed by space:
    - DMs use session key `agent:<agentId>:googlechat:dm:<spaceId>`.
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
-   - `clawdbot pairing approve googlechat <code>`
+   - `moltbot pairing approve googlechat <code>`
 5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app’s user name.
 
 ## Targets
@@ -187,32 +187,32 @@ status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Al
 This means the webhook handler isn't registered. Common causes:
 1. **Channel not configured**: The `channels.googlechat` section is missing from your config. Verify with:
    ```bash
-   clawdbot config get channels.googlechat
+   moltbot config get channels.googlechat
    ```
    If it returns "Config path not found", add the configuration (see [Config highlights](#config-highlights)).
 
 2. **Plugin not enabled**: Check plugin status:
    ```bash
-   clawdbot plugins list | grep googlechat
+   moltbot plugins list | grep googlechat
    ```
    If it shows "disabled", add `plugins.entries.googlechat.enabled: true` to your config.
 
 3. **Gateway not restarted**: After adding config, restart the gateway:
    ```bash
-   clawdbot gateway restart
+   moltbot gateway restart
    ```
 
 Verify the channel is running:
 ```bash
-clawdbot channels status
+moltbot channels status
 # Should show: Google Chat default: enabled, configured, ...
 ```
 
 ### Other issues
-- Check `clawdbot channels status --probe` for auth errors or missing audience config.
+- Check `moltbot channels status --probe` for auth errors or missing audience config.
 - If no messages arrive, confirm the Chat app's webhook URL + event subscriptions.
 - If mention gating blocks replies, set `botUser` to the app's user resource name and verify `requireMention`.
-- Use `clawdbot logs --follow` while sending a test message to see if requests reach the gateway.
+- Use `moltbot logs --follow` while sending a test message to see if requests reach the gateway.
 
 Related docs:
 - [Gateway configuration](/gateway/configuration)

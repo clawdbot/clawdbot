@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: clawdbot
+    name: moltbot
     runtime: docker
     plan: starter
     healthCheckPath: /health
@@ -16,6 +16,6 @@ services:
       - key: CLAWDBOT_GATEWAY_TOKEN
         generateValue: true
     disk:
-      name: clawdbot-data
+      name: moltbot-data
       mountPath: /data
       sizeGB: 1

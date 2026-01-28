@@ -1,7 +1,7 @@
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 
-export function applyOpencodeZenProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyOpencodeZenProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   // Use the built-in opencode provider from pi-ai; only seed the allowlist alias.
   const models = { ...cfg.agents?.defaults?.models };
   models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
@@ -21,7 +21,7 @@ export function applyOpencodeZenProviderConfig(cfg: ClawdbotConfig): ClawdbotCon
   };
 }
 
-export function applyOpencodeZenConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyOpencodeZenConfig(cfg: MoltbotConfig): MoltbotConfig {
   const next = applyOpencodeZenProviderConfig(cfg);
   return {
     ...next,

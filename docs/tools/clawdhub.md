@@ -8,13 +8,13 @@ read_when:
 
 # ClawdHub
 
-ClawdHub is the **public skill registry for Clawdbot**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
+ClawdHub is the **public skill registry for Moltbot**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
 
 Site: [clawdhub.com](https://clawdhub.com)
 
 ## Who this is for (beginner-friendly)
 
-If you want to add new capabilities to your Clawdbot agent, ClawdHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
+If you want to add new capabilities to your Moltbot agent, ClawdHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
 
 - Search for skills by plain language.
 - Install a skill into your workspace.
@@ -28,7 +28,7 @@ If you want to add new capabilities to your Clawdbot agent, ClawdHub is the easi
    - `clawdhub search "calendar"`
 3) Install a skill:
    - `clawdhub install <skill-slug>`
-4) Start a new Clawdbot session so it picks up the new skill.
+4) Start a new Moltbot session so it picks up the new skill.
 
 ## Install the CLI
 
@@ -42,9 +42,9 @@ npm i -g clawdhub
 pnpm add -g clawdhub
 ```
 
-## How it fits into Clawdbot
+## How it fits into Moltbot
 
-By default, the CLI installs skills into `./skills` under your current working directory. If a Clawdbot workspace is configured, `clawdhub` falls back to that workspace unless you override `--workdir` (or `CLAWDHUB_WORKDIR`). Clawdbot loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.clawdbot/skills` or bundled skills, workspace skills take precedence.
+By default, the CLI installs skills into `./skills` under your current working directory. If a Moltbot workspace is configured, `clawdhub` falls back to that workspace unless you override `--workdir` (or `CLAWDHUB_WORKDIR`). Moltbot loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.clawdbot/skills` or bundled skills, workspace skills take precedence.
 
 For more detail on how skills are loaded, shared, and gated, see
 [Skills](/tools/skills).
@@ -63,7 +63,7 @@ For more detail on how skills are loaded, shared, and gated, see
 
 Global options (apply to all commands):
 
-- `--workdir <dir>`: Working directory (default: current dir; falls back to Clawdbot workspace).
+- `--workdir <dir>`: Working directory (default: current dir; falls back to Moltbot workspace).
 - `--dir <dir>`: Skills directory, relative to workdir (default: `skills`).
 - `--site <url>`: Site base URL (browser login).
 - `--registry <url>`: Registry API base URL.
@@ -177,7 +177,7 @@ Updates compare the local skill contents to registry versions using a content ha
 
 ### Sync scanning and fallback roots
 
-`clawdhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/clawdbot/skills` and `~/.clawdbot/skills`). This is designed to find older skill installs without extra flags.
+`clawdhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/moltbot/skills` and `~/.clawdbot/skills`). This is designed to find older skill installs without extra flags.
 
 ### Storage and lockfile
 

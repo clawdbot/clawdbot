@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/telegram",
-  "version": "2026.1.25",
+  "name": "@moltbot/telegram",
+  "version": "2026.1.27-beta.1",
   "type": "module",
-  "description": "Clawdbot Telegram channel plugin",
-  "clawdbot": {
+  "description": "Moltbot Telegram channel plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

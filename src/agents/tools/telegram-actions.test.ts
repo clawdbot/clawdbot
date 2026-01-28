@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { handleTelegramAction, readTelegramButtons } from "./telegram-actions.js";
 
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
 const sendMessageTelegram = vi.fn(async () => ({
   messageId: "789",
+  chatId: "123",
+}));
+const sendStickerTelegram = vi.fn(async () => ({
+  messageId: "456",
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -14,6 +18,7 @@ const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
+  sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
 }));
 
@@ -21,6 +26,7 @@ describe("handleTelegramAction", () => {
   beforeEach(() => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
+    sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -36,7 +42,7 @@ describe("handleTelegramAction", () => {
   it("adds reactions when reactionLevel is minimal", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -57,7 +63,7 @@ describe("handleTelegramAction", () => {
   it("adds reactions when reactionLevel is extensive", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "extensive" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -78,7 +84,7 @@ describe("handleTelegramAction", () => {
   it("removes reactions on empty emoji", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -96,10 +102,44 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("rejects sticker actions when disabled by default", async () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as MoltbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendSticker",
+          to: "123",
+          fileId: "sticker",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/sticker actions are disabled/i);
+    expect(sendStickerTelegram).not.toHaveBeenCalled();
+  });
+
+  it("sends stickers when enabled", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { sticker: true } } },
+    } as MoltbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendSticker",
+        to: "123",
+        fileId: "sticker",
+      },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker",
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
   it("removes reactions when remove flag set", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "extensive" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -121,7 +161,7 @@ describe("handleTelegramAction", () => {
   it("blocks reactions when reactionLevel is off", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "off" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -138,7 +178,7 @@ describe("handleTelegramAction", () => {
   it("blocks reactions when reactionLevel is ack", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "ack" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -161,7 +201,7 @@ describe("handleTelegramAction", () => {
           actions: { reactions: false },
         },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -178,7 +218,7 @@ describe("handleTelegramAction", () => {
   it("sends a text message", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     const result = await handleTelegramAction(
       {
         action: "sendMessage",
@@ -201,7 +241,7 @@ describe("handleTelegramAction", () => {
   it("sends a message with media", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -221,10 +261,35 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("passes quoteText when provided", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as MoltbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Replying now",
+        replyToMessageId: 144,
+        quoteText: "The text you want to quote",
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "Replying now",
+      expect.objectContaining({
+        token: "tok",
+        replyToMessageId: 144,
+        quoteText: "The text you want to quote",
+      }),
+    );
+  });
+
   it("allows media-only messages without content", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -246,7 +311,7 @@ describe("handleTelegramAction", () => {
   it("requires content when no mediaUrl is provided", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -263,7 +328,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", actions: { sendMessage: false } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -279,7 +344,7 @@ describe("handleTelegramAction", () => {
   it("deletes a message", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "deleteMessage",
@@ -300,7 +365,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", actions: { deleteMessage: false } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -315,7 +380,7 @@ describe("handleTelegramAction", () => {
 
   it("throws on missing bot token for sendMessage", async () => {
     delete process.env.TELEGRAM_BOT_TOKEN;
-    const cfg = {} as ClawdbotConfig;
+    const cfg = {} as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -331,7 +396,7 @@ describe("handleTelegramAction", () => {
   it("allows inline buttons by default (allowlist)", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -349,7 +414,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", capabilities: { inlineButtons: "off" } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -368,7 +433,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await expect(
       handleTelegramAction(
         {
@@ -387,7 +452,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -405,7 +470,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", capabilities: { inlineButtons: "group" } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -423,7 +488,7 @@ describe("handleTelegramAction", () => {
       channels: {
         telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
       },
-    } as ClawdbotConfig;
+    } as MoltbotConfig;
     await handleTelegramAction(
       {
         action: "sendMessage",

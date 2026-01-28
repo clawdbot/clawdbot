@@ -1,6 +1,6 @@
 ---
 summary: "Plan: Add OpenResponses /v1/responses endpoint and deprecate chat completions cleanly"
-owner: "clawdbot"
+owner: "moltbot"
 status: "draft"
 last_updated: "2026-01-19"
 ---
@@ -9,7 +9,7 @@ last_updated: "2026-01-19"
 
 ## Context
 
-Clawdbot Gateway currently exposes a minimal OpenAI-compatible Chat Completions endpoint at
+Moltbot Gateway currently exposes a minimal OpenAI-compatible Chat Completions endpoint at
 `/v1/chat/completions` (see [OpenAI Chat Completions](/gateway/openai-http-api)).
 
 Open Responses is an open inference standard based on the OpenAI Responses API. It is designed

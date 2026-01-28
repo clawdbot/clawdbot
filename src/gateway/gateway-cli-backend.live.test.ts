@@ -246,7 +246,7 @@ describeLive("gateway live (cli backend)", () => {
       );
     }
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-live-cli-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-live-cli-"));
     const disableMcpConfig = process.env.CLAWDBOT_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
     let cliArgs = baseCliArgs;
     if (providerId === "claude-cli" && disableMcpConfig) {
@@ -281,7 +281,7 @@ describeLive("gateway live (cli backend)", () => {
         },
       },
     };
-    const tempConfigPath = path.join(tempDir, "clawdbot.json");
+    const tempConfigPath = path.join(tempDir, "moltbot.json");
     await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
     process.env.CLAWDBOT_CONFIG_PATH = tempConfigPath;
 

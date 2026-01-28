@@ -14,7 +14,7 @@ should use the unified Gateway WebSocket protocol instead.
 If you are building an operator or node client, use the
 [Gateway protocol](/gateway/protocol).
 
-**Note:** Current Clawdbot builds no longer ship the TCP bridge listener; this document is kept for historical reference.
+**Note:** Current Moltbot builds no longer ship the TCP bridge listener; this document is kept for historical reference.
 Legacy `bridge.*` config keys are no longer part of the config schema.
 
 ## Why we have both
@@ -74,7 +74,7 @@ Payload fields (all optional unless noted):
 ## Tailnet usage
 
 - Bind the bridge to a tailnet IP: `bridge.bind: "tailnet"` in
-  `~/.clawdbot/clawdbot.json`.
+  `~/.clawdbot/moltbot.json`.
 - Clients connect via MagicDNS name or tailnet IP.
 - Bonjour does **not** cross networks; use manual host/port or wide-area DNS‑SD
   when needed.

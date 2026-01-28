@@ -15,13 +15,13 @@ provider mixes reasoning into normal text.
 
 Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
 `/debug` is disabled by default; enable with `commands.debug: true`.
-This is handy when you need to toggle obscure settings without editing `clawdbot.json`.
+This is handy when you need to toggle obscure settings without editing `moltbot.json`.
 
 Examples:
 
 ```
 /debug show
-/debug set messages.responsePrefix="[clawdbot]"
+/debug set messages.responsePrefix="[moltbot]"
 /debug unset messages.responsePrefix
 /debug reset
 ```
@@ -59,17 +59,17 @@ Recommended flow (dev profile + dev bootstrap):
 
 ```bash
 pnpm gateway:dev
-CLAWDBOT_PROFILE=dev clawdbot tui
+CLAWDBOT_PROFILE=dev moltbot tui
 ```
 
-If you don’t have a global install yet, run the CLI via `pnpm clawdbot ...`.
+If you don’t have a global install yet, run the CLI via `pnpm moltbot ...`.
 
 What this does:
 
 1) **Profile isolation** (global `--dev`)
    - `CLAWDBOT_PROFILE=dev`
    - `CLAWDBOT_STATE_DIR=~/.clawdbot-dev`
-   - `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/clawdbot.json`
+   - `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/moltbot.json`
    - `CLAWDBOT_GATEWAY_PORT=19001` (browser/canvas shift accordingly)
 
 2) **Dev bootstrap** (`gateway --dev`)
@@ -91,7 +91,7 @@ Note: `--dev` is a **global** profile flag and gets eaten by some runners.
 If you need to spell it out, use the env var form:
 
 ```bash
-CLAWDBOT_PROFILE=dev clawdbot gateway --dev --reset
+CLAWDBOT_PROFILE=dev moltbot gateway --dev --reset
 ```
 
 `--reset` wipes config, credentials, sessions, and the dev workspace (using
@@ -100,12 +100,12 @@ CLAWDBOT_PROFILE=dev clawdbot gateway --dev --reset
 Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
 
 ```bash
-clawdbot gateway stop
+moltbot gateway stop
 ```
 
-## Raw stream logging (Clawdbot)
+## Raw stream logging (Moltbot)
 
-Clawdbot can log the **raw assistant stream** before any filtering/formatting.
+Moltbot can log the **raw assistant stream** before any filtering/formatting.
 This is the best way to see whether reasoning is arriving as plain text deltas
 (or as separate thinking blocks).
 

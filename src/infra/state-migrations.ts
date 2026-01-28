@@ -3,8 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import type { MoltbotConfig } from "../config/config.js";
+import {
+  resolveLegacyStateDir,
+  resolveNewStateDir,
+  resolveOAuthDir,
+  resolveStateDir,
+} from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import { saveSessionStore } from "../config/sessions.js";
@@ -59,6 +64,7 @@ type MigrationLogger = {
 };
 
 let autoMigrateChecked = false;
+let autoMigrateStateDirChecked = false;
 
 function isSurfaceGroupKey(key: string): boolean {
   return key.includes(":group:") || key.includes(":channel:");
@@ -267,8 +273,133 @@ export function resetAutoMigrateLegacyAgentDirForTest() {
   resetAutoMigrateLegacyStateForTest();
 }
 
+export function resetAutoMigrateLegacyStateDirForTest() {
+  autoMigrateStateDirChecked = false;
+}
+
+type StateDirMigrationResult = {
+  migrated: boolean;
+  skipped: boolean;
+  changes: string[];
+  warnings: string[];
+};
+
+function resolveSymlinkTarget(linkPath: string): string | null {
+  try {
+    const target = fs.readlinkSync(linkPath);
+    return path.resolve(path.dirname(linkPath), target);
+  } catch {
+    return null;
+  }
+}
+
+function formatStateDirMigration(legacyDir: string, targetDir: string): string {
+  return `State dir: ${legacyDir} → ${targetDir} (legacy path now symlinked)`;
+}
+
+function isDirPath(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export async function autoMigrateLegacyStateDir(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  log?: MigrationLogger;
+}): Promise<StateDirMigrationResult> {
+  if (autoMigrateStateDirChecked) {
+    return { migrated: false, skipped: true, changes: [], warnings: [] };
+  }
+  autoMigrateStateDirChecked = true;
+
+  const env = params.env ?? process.env;
+  if (env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim()) {
+    return { migrated: false, skipped: true, changes: [], warnings: [] };
+  }
+
+  const homedir = params.homedir ?? os.homedir;
+  const legacyDir = resolveLegacyStateDir(homedir);
+  const targetDir = resolveNewStateDir(homedir);
+  const warnings: string[] = [];
+  const changes: string[] = [];
+
+  let legacyStat: fs.Stats | null = null;
+  try {
+    legacyStat = fs.lstatSync(legacyDir);
+  } catch {
+    legacyStat = null;
+  }
+  if (!legacyStat) {
+    return { migrated: false, skipped: false, changes, warnings };
+  }
+  if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+    warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
+    return { migrated: false, skipped: false, changes, warnings };
+  }
+
+  if (legacyStat.isSymbolicLink()) {
+    const legacyTarget = resolveSymlinkTarget(legacyDir);
+    if (legacyTarget && path.resolve(legacyTarget) === path.resolve(targetDir)) {
+      return { migrated: false, skipped: false, changes, warnings };
+    }
+    warnings.push(
+      `Legacy state dir is a symlink (${legacyDir} → ${legacyTarget ?? "unknown"}); skipping auto-migration.`,
+    );
+    return { migrated: false, skipped: false, changes, warnings };
+  }
+
+  if (isDirPath(targetDir)) {
+    warnings.push(
+      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
+    );
+    return { migrated: false, skipped: false, changes, warnings };
+  }
+
+  try {
+    fs.renameSync(legacyDir, targetDir);
+  } catch (err) {
+    warnings.push(`Failed to move legacy state dir (${legacyDir} → ${targetDir}): ${String(err)}`);
+    return { migrated: false, skipped: false, changes, warnings };
+  }
+
+  try {
+    fs.symlinkSync(targetDir, legacyDir, "dir");
+    changes.push(formatStateDirMigration(legacyDir, targetDir));
+  } catch (err) {
+    try {
+      if (process.platform === "win32") {
+        fs.symlinkSync(targetDir, legacyDir, "junction");
+        changes.push(formatStateDirMigration(legacyDir, targetDir));
+      } else {
+        throw err;
+      }
+    } catch (fallbackErr) {
+      try {
+        fs.renameSync(targetDir, legacyDir);
+        warnings.push(
+          `State dir migration rolled back (failed to link legacy path): ${String(fallbackErr)}`,
+        );
+        return { migrated: false, skipped: false, changes: [], warnings };
+      } catch (rollbackErr) {
+        warnings.push(
+          `State dir moved but failed to link legacy path (${legacyDir} → ${targetDir}): ${String(fallbackErr)}`,
+        );
+        warnings.push(
+          `Rollback failed; set MOLTBOT_STATE_DIR=${targetDir} to avoid split state: ${String(rollbackErr)}`,
+        );
+        changes.push(`State dir: ${legacyDir} → ${targetDir}`);
+      }
+    }
+  }
+
+  return { migrated: changes.length > 0, skipped: false, changes, warnings };
+}
+
 export async function detectLegacyStateMigrations(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): Promise<LegacyStateDetection> {
@@ -559,7 +690,7 @@ export async function runLegacyStateMigrations(params: {
 }
 
 export async function autoMigrateLegacyAgentDir(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
@@ -574,7 +705,7 @@ export async function autoMigrateLegacyAgentDir(params: {
 }
 
 export async function autoMigrateLegacyState(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
@@ -591,8 +722,18 @@ export async function autoMigrateLegacyState(params: {
   autoMigrateChecked = true;
 
   const env = params.env ?? process.env;
+  const stateDirResult = await autoMigrateLegacyStateDir({
+    env,
+    homedir: params.homedir,
+    log: params.log,
+  });
   if (env.CLAWDBOT_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
+    return {
+      migrated: stateDirResult.migrated,
+      skipped: true,
+      changes: stateDirResult.changes,
+      warnings: stateDirResult.warnings,
+    };
   }
 
   const detected = await detectLegacyStateMigrations({
@@ -601,14 +742,19 @@ export async function autoMigrateLegacyState(params: {
     homedir: params.homedir,
   });
   if (!detected.sessions.hasLegacy && !detected.agentDir.hasLegacy) {
-    return { migrated: false, skipped: false, changes: [], warnings: [] };
+    return {
+      migrated: stateDirResult.migrated,
+      skipped: false,
+      changes: stateDirResult.changes,
+      warnings: stateDirResult.warnings,
+    };
   }
 
   const now = params.now ?? (() => Date.now());
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
-  const changes = [...sessions.changes, ...agentDir.changes];
-  const warnings = [...sessions.warnings, ...agentDir.warnings];
+  const changes = [...stateDirResult.changes, ...sessions.changes, ...agentDir.changes];
+  const warnings = [...stateDirResult.warnings, ...sessions.warnings, ...agentDir.warnings];
 
   const logger = params.log ?? createSubsystemLogger("state-migrations");
   if (changes.length > 0) {

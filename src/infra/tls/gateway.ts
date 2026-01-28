@@ -56,7 +56,7 @@ async function generateSelfSignedCert(params: {
     "-out",
     params.certPath,
     "-subj",
-    "/CN=clawdbot-gateway",
+    "/CN=moltbot-gateway",
   ]);
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});

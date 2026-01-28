@@ -75,11 +75,11 @@ export function assertSupportedRuntime(
 
   runtime.error(
     [
-      "clawdbot requires Node >=22.0.0.",
+      "moltbot requires Node >=22.0.0.",
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
       `PATH searched: ${details.pathEnv}`,
       "Install Node: https://nodejs.org/en/download",
-      "Upgrade Node and re-run clawdbot.",
+      "Upgrade Node and re-run moltbot.",
     ].join("\n"),
   );
   runtime.exit(1);

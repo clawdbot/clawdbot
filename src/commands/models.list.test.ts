@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 const loadConfig = vi.fn();
-const ensureClawdbotModelsJson = vi.fn().mockResolvedValue(undefined);
-const resolveClawdbotAgentDir = vi.fn().mockReturnValue("/tmp/clawdbot-agent");
+const ensureMoltbotModelsJson = vi.fn().mockResolvedValue(undefined);
+const resolveMoltbotAgentDir = vi.fn().mockReturnValue("/tmp/moltbot-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveAuthProfileDisplayLabel = vi.fn(({ profileId }: { profileId: string }) => profileId);
 const resolveAuthStorePathForDisplay = vi
   .fn()
-  .mockReturnValue("/tmp/clawdbot-agent/auth-profiles.json");
+  .mockReturnValue("/tmp/moltbot-agent/auth-profiles.json");
 const resolveProfileUnusableUntilForDisplay = vi.fn().mockReturnValue(null);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
@@ -17,17 +17,17 @@ const discoverAuthStorage = vi.fn().mockReturnValue({});
 const discoverModels = vi.fn();
 
 vi.mock("../config/config.js", () => ({
-  CONFIG_PATH_CLAWDBOT: "/tmp/clawdbot.json",
-  STATE_DIR_CLAWDBOT: "/tmp/clawdbot-state",
+  CONFIG_PATH: "/tmp/moltbot.json",
+  STATE_DIR: "/tmp/moltbot-state",
   loadConfig,
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureClawdbotModelsJson,
+  ensureMoltbotModelsJson,
 }));
 
 vi.mock("../agents/agent-paths.js", () => ({
-  resolveClawdbotAgentDir,
+  resolveMoltbotAgentDir,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({

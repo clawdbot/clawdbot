@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/nostr",
-  "version": "2026.1.25",
+  "name": "@moltbot/nostr",
+  "version": "2026.1.27-beta.1",
   "type": "module",
-  "description": "Clawdbot Nostr channel plugin for NIP-04 encrypted DMs",
-  "clawdbot": {
+  "description": "Moltbot Nostr channel plugin for NIP-04 encrypted DMs",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ],
@@ -18,13 +18,13 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@clawdbot/nostr",
+      "npmSpec": "@moltbot/nostr",
       "localPath": "extensions/nostr",
       "defaultChoice": "npm"
     }
   },
   "dependencies": {
-    "clawdbot": "workspace:*",
+    "moltbot": "workspace:*",
     "nostr-tools": "^2.20.0",
     "zod": "^4.3.6"
   }

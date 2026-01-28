@@ -1,7 +1,7 @@
 {
-  "name": "@clawdbot/twitch",
-  "version": "2026.1.23",
-  "description": "Clawdbot Twitch channel plugin",
+  "name": "@moltbot/twitch",
+  "version": "2026.1.27-beta.1",
+  "description": "Moltbot Twitch channel plugin",
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.0.3",
@@ -10,9 +10,9 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "clawdbot": "workspace:*"
+    "moltbot": "workspace:*"
   },
-  "clawdbot": {
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ]

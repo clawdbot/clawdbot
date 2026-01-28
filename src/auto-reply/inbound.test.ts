@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { MoltbotConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
@@ -260,9 +260,9 @@ describe("createInboundDebouncer", () => {
 
 describe("initSessionState sender meta", () => {
   it("injects sender meta into BodyStripped for group chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sender-meta-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sender-meta-"));
     const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as ClawdbotConfig;
+    const cfg = { session: { store: storePath } } as MoltbotConfig;
 
     const result = await initSessionState({
       ctx: {
@@ -281,9 +281,9 @@ describe("initSessionState sender meta", () => {
   });
 
   it("does not inject sender meta for direct chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sender-meta-direct-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sender-meta-direct-"));
     const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as ClawdbotConfig;
+    const cfg = { session: { store: storePath } } as MoltbotConfig;
 
     const result = await initSessionState({
       ctx: {
@@ -347,7 +347,7 @@ describe("mention helpers", () => {
 
 describe("resolveGroupRequireMention", () => {
   it("respects Discord guild/channel requireMention settings", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       channels: {
         discord: {
           guilds: {
@@ -377,7 +377,7 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("respects Slack channel requireMention settings", () => {
-    const cfg: ClawdbotConfig = {
+    const cfg: MoltbotConfig = {
       channels: {
         slack: {
           channels: {

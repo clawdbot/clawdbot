@@ -1,4 +1,4 @@
-# Clawdbot Fly.io PRIVATE deployment configuration
+# Moltbot Fly.io PRIVATE deployment configuration
 # Use this template for hardened deployments with no public IP exposure.
 #
 # This config is suitable when:
@@ -9,7 +9,7 @@
 #
 # See https://fly.io/docs/reference/configuration/
 
-app = "my-clawdbot"  # change to your app name
+app = "my-moltbot"  # change to your app name
 primary_region = "iad"  # change to your closest region
 
 [build]
@@ -35,5 +35,5 @@ primary_region = "iad"  # change to your closest region
   memory = "2048mb"
 
 [mounts]
-  source = "clawdbot_data"
+  source = "moltbot_data"
   destination = "/data"

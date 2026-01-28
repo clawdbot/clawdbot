@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ClawdbotConfig, HookConfig } from "../config/config.js";
+import type { MoltbotConfig, HookConfig } from "../config/config.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
 
@@ -18,7 +18,7 @@ function isTruthy(value: unknown): boolean {
   return true;
 }
 
-export function resolveConfigPath(config: ClawdbotConfig | undefined, pathStr: string) {
+export function resolveConfigPath(config: MoltbotConfig | undefined, pathStr: string) {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
@@ -28,7 +28,7 @@ export function resolveConfigPath(config: ClawdbotConfig | undefined, pathStr: s
   return current;
 }
 
-export function isConfigPathTruthy(config: ClawdbotConfig | undefined, pathStr: string): boolean {
+export function isConfigPathTruthy(config: MoltbotConfig | undefined, pathStr: string): boolean {
   const value = resolveConfigPath(config, pathStr);
   if (value === undefined && pathStr in DEFAULT_CONFIG_VALUES) {
     return DEFAULT_CONFIG_VALUES[pathStr] === true;
@@ -37,7 +37,7 @@ export function isConfigPathTruthy(config: ClawdbotConfig | undefined, pathStr: 
 }
 
 export function resolveHookConfig(
-  config: ClawdbotConfig | undefined,
+  config: MoltbotConfig | undefined,
   hookKey: string,
 ): HookConfig | undefined {
   const hooks = config?.hooks?.internal?.entries;
@@ -68,14 +68,14 @@ export function hasBinary(bin: string): boolean {
 
 export function shouldIncludeHook(params: {
   entry: HookEntry;
-  config?: ClawdbotConfig;
+  config?: MoltbotConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const pluginManaged = entry.hook.source === "clawdbot-plugin";
-  const osList = entry.clawdbot?.os ?? [];
+  const pluginManaged = entry.hook.source === "moltbot-plugin";
+  const osList = entry.metadata?.os ?? [];
   const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   // Check if explicitly disabled
@@ -91,12 +91,12 @@ export function shouldIncludeHook(params: {
   }
 
   // If marked as 'always', bypass all other checks
-  if (entry.clawdbot?.always === true) {
+  if (entry.metadata?.always === true) {
     return true;
   }
 
   // Check required binaries (all must be present)
-  const requiredBins = entry.clawdbot?.requires?.bins ?? [];
+  const requiredBins = entry.metadata?.requires?.bins ?? [];
   if (requiredBins.length > 0) {
     for (const bin of requiredBins) {
       if (hasBinary(bin)) continue;
@@ -106,7 +106,7 @@ export function shouldIncludeHook(params: {
   }
 
   // Check anyBins (at least one must be present)
-  const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
+  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
   if (requiredAnyBins.length > 0) {
     const anyFound =
       requiredAnyBins.some((bin) => hasBinary(bin)) ||
@@ -115,7 +115,7 @@ export function shouldIncludeHook(params: {
   }
 
   // Check required environment variables
-  const requiredEnv = entry.clawdbot?.requires?.env ?? [];
+  const requiredEnv = entry.metadata?.requires?.env ?? [];
   if (requiredEnv.length > 0) {
     for (const envName of requiredEnv) {
       if (process.env[envName]) continue;
@@ -125,7 +125,7 @@ export function shouldIncludeHook(params: {
   }
 
   // Check required config paths
-  const requiredConfig = entry.clawdbot?.requires?.config ?? [];
+  const requiredConfig = entry.metadata?.requires?.config ?? [];
   if (requiredConfig.length > 0) {
     for (const configPath of requiredConfig) {
       if (!isConfigPathTruthy(config, configPath)) return false;

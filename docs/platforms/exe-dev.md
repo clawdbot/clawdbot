@@ -1,5 +1,5 @@
 ---
-summary: "Run Clawdbot Gateway on exe.dev (VM + HTTPS proxy) for remote access"
+summary: "Run Moltbot Gateway on exe.dev (VM + HTTPS proxy) for remote access"
 read_when:
   - You want a cheap always-on Linux host for the Gateway
   - You want remote Control UI access without running your own VPS
@@ -7,43 +7,50 @@ read_when:
 
 # exe.dev
 
-Goal: Clawdbot Gateway running on an exe.dev VM, reachable from your laptop via:
-- **exe.dev HTTPS proxy** (easy, no tunnel) or
-- **SSH tunnel** (most secure; loopback-only Gateway)
+Goal: Moltbot Gateway running on an exe.dev VM, reachable from your laptop via: `https://<vm-name>.exe.xyz`
 
-This page assumes **Ubuntu/Debian**. If you picked a different distro, map packages accordingly.
-
-If you’re on any other Linux VPS, the same steps apply — you just won’t use the exe.dev proxy commands.
+This page assumes exe.dev's default **exeuntu** image. If you picked a different distro, map packages accordingly.
 
 ## Beginner quick path
 
-1) Create VM → install Node 22 → install Clawdbot  
-2) Run `clawdbot onboard --install-daemon`  
-3) Tunnel from laptop (`ssh -N -L 18789:127.0.0.1:18789 …`)  
-4) Open `http://127.0.0.1:18789/` and paste your token
+1) [https://exe.new/moltbot](https://exe.new/moltbot)
+2) Fill in your auth key/token as needed
+3) Click on "Agent" next to your VM, and wait...
+4) ???
+5) Profit
 
 ## What you need
 
-- exe.dev account + `ssh exe.dev` working on your laptop
-- SSH keys set up (your laptop → exe.dev)
-- Model auth (OAuth or API key) you want to use
-- Provider credentials (optional): WhatsApp QR scan, Telegram bot token, Discord bot token, …
+- exe.dev account
+- `ssh exe.dev` access to [exe.dev](https://exe.dev) virtual machines (optional)
+
+
+## Automated Install with Shelley
+
+Shelley, [exe.dev](https://exe.dev)'s agent, can install Moltbot instantly with our
+prompt. The prompt used is as below:
+
+```
+Set up Moltbot (https://docs.molt.bot/install) on this VM. Use the non-interactive and accept-risk flags for moltbot onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "moltbot devices list" and "moltbot device approve <request id>". Make sure the dashboard shows that Moltbot's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
+```
+
+## Manual installation
 
 ## 1) Create the VM
 
-From your laptop:
+From your device:
 
 ```bash
-ssh exe.dev new --name=clawdbot
+ssh exe.dev new 
 ```
 
 Then connect:
 
 ```bash
-ssh clawdbot.exe.xyz
+ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. Clawdbot stores state under `~/.clawdbot/` and `~/clawd/`.
+Tip: keep this VM **stateful**. Moltbot stores state under `~/.clawdbot/` and `~/clawd/`.
 
 ## 2) Install prerequisites (on the VM)
 
@@ -52,136 +59,67 @@ sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-### Node 22
+## 3) Install Moltbot
 
-Install Node **>= 22.12** (any method is fine). Quick check:
-
-```bash
-node -v
-```
-
-If you don’t already have Node 22 on the VM, use your preferred Node manager (nvm/mise/asdf) or a distro package source that provides Node 22+.
-
-Common Ubuntu/Debian option (NodeSource):
+Run the Moltbot install script:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
+curl -fsSL https://molt.bot/install.sh | bash
 ```
 
-## 3) Install Clawdbot
+## 4) Setup nginx to proxy Moltbot to port 8000
 
-Recommended on servers: npm global install.
+Edit `/etc/nginx/sites-enabled/default` with
 
-```bash
-npm i -g clawdbot@latest
-clawdbot --version
 ```
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    listen 8000;
+    listen [::]:8000;
 
-If native deps fail to install (rare; usually `sharp`), add build tools:
+    server_name _;
 
-```bash
-sudo apt-get install -y build-essential python3
-```
+    location / {
+        proxy_pass http://127.0.0.1:18789;
+        proxy_http_version 1.1;
 
-## 4) First-time setup (wizard)
+        # WebSocket support
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
 
-Run the onboarding wizard on the VM:
+        # Standard proxy headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-```bash
-clawdbot onboard --install-daemon
-```
-
-It can set up:
-- `~/clawd` workspace bootstrap
-- `~/.clawdbot/clawdbot.json` config
-- model auth profiles
-- model provider config/login
-- Linux systemd **user** service (service)
-
-If you’re doing OAuth on a headless VM: do OAuth on a normal machine first, then copy the auth profile to the VM (see [Help](/help)).
-
-## 5) Remote access options
-
-### Option A (recommended): SSH tunnel (loopback-only)
-
-Keep Gateway on loopback (default) and tunnel it from your laptop:
-
-```bash
-ssh -N -L 18789:127.0.0.1:18789 clawdbot.exe.xyz
-```
-
-Open locally:
-- `http://127.0.0.1:18789/` (Control UI)
-
-Runbook: [Remote access](/gateway/remote)
-
-### Option B: exe.dev HTTPS proxy (no tunnel)
-
-To let exe.dev proxy traffic to the VM, bind the Gateway to the LAN interface and set a token:
-
-```bash
-export CLAWDBOT_GATEWAY_TOKEN="$(openssl rand -hex 32)"
-clawdbot gateway --bind lan --port 8080 --token "$CLAWDBOT_GATEWAY_TOKEN"
-```
-
-For service runs, persist it in `~/.clawdbot/clawdbot.json`:
-
-```json5
-{
-  gateway: {
-    mode: "local",
-    port: 8080,
-    bind: "lan",
-    auth: { mode: "token", token: "YOUR_TOKEN" }
-  }
+        # Timeout settings for long-lived connections
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
 }
 ```
 
-Notes:
-- Non-loopback binds require `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
-- `gateway.remote.token` is only for remote CLI calls; it does not enable local auth.
+## 5) Access Moltbot and grant privileges
 
-Then point exe.dev’s proxy at `8080` (or whatever port you chose) and open your VM’s HTTPS URL:
+Access `https://<vm-name>.exe.xyz/?token=YOUR-TOKEN-FROM-TERMINAL`. Approve
+devices with `moltbot devices list` and `moltbot device approve`. When in doubt,
+use Shelley from your browser!
 
-```bash
-ssh exe.dev share port clawdbot 8080
-```
+## Remote Access
 
-Open:
-- `https://clawdbot.exe.xyz/`
+Remote access is handled by [exe.dev](https://exe.dev)'s authentication. By
+default, HTTP traffic from port 8000 is forwarded to `https://<vm-name>.exe.xyz`
+with email auth. 
 
-In the Control UI, paste the token (UI → Settings → token). The UI sends it as `connect.params.auth.token`.
-
-Notes:
-- Prefer a **non-default** port (like `8080`) if your proxy expects an app port.
-- Treat the token like a password.
-
-Control UI details: [Control UI](/web/control-ui)
-
-## 6) Keep it running (service)
-
-On Linux, Clawdbot uses a systemd **user** service. After `--install-daemon`, verify:
+## Updating
 
 ```bash
-systemctl --user status clawdbot-gateway[-<profile>].service
-```
-
-If the service dies after logout, enable lingering:
-
-```bash
-sudo loginctl enable-linger "$USER"
-```
-
-More: [Linux](/platforms/linux)
-
-## 7) Updates
-
-```bash
-npm i -g clawdbot@latest
-clawdbot doctor
-clawdbot gateway restart
-clawdbot health
+npm i -g moltbot@latest
+moltbot doctor
+moltbot gateway restart
+moltbot health
 ```
 
 Guide: [Updating](/install/updating)

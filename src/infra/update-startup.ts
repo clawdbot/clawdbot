@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveClawdbotPackageRoot } from "./clawdbot-root.js";
+import { resolveMoltbotPackageRoot } from "./moltbot-root.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { VERSION } from "../version.js";
@@ -57,7 +57,7 @@ export async function runGatewayUpdateCheck(params: {
     if (now - lastCheckedAt < UPDATE_CHECK_INTERVAL_MS) return;
   }
 
-  const root = await resolveClawdbotPackageRoot({
+  const root = await resolveMoltbotPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -93,7 +93,7 @@ export async function runGatewayUpdateCheck(params: {
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
       params.log.info(
-        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("clawdbot update")}`,
+        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("moltbot update")}`,
       );
       nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;

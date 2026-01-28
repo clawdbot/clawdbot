@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 
 import {
-  type ClawdbotConfig,
-  CONFIG_PATH_CLAWDBOT,
+  type MoltbotConfig,
+  CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
@@ -99,7 +99,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const configSnapshot = await readConfigFileSnapshot();
   if (!configSnapshot.valid) {
-    throw new Error(`Config invalid: ${CONFIG_PATH_CLAWDBOT}`);
+    throw new Error(`Config invalid: ${CONFIG_PATH}`);
   }
 
   const baseConfig = configSnapshot.config;
@@ -210,7 +210,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
     true,
   );
 
-  const nextConfig: ClawdbotConfig = {
+  const nextConfig: MoltbotConfig = {
     ...baseConfig,
     hooks: {
       ...baseConfig.hooks,
@@ -277,8 +277,8 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   defaultRuntime.log(`- subscription: ${subscription}`);
   defaultRuntime.log(`- push endpoint: ${pushEndpoint}`);
   defaultRuntime.log(`- hook url: ${hookUrl}`);
-  defaultRuntime.log(`- config: ${displayPath(CONFIG_PATH_CLAWDBOT)}`);
-  defaultRuntime.log(`Next: ${formatCliCommand("clawdbot webhooks gmail run")}`);
+  defaultRuntime.log(`- config: ${displayPath(CONFIG_PATH)}`);
+  defaultRuntime.log(`Next: ${formatCliCommand("moltbot webhooks gmail run")}`);
 }
 
 export async function runGmailService(opts: GmailRunOptions) {

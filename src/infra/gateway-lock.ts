@@ -72,6 +72,7 @@ function isGatewayArgv(args: string[]): boolean {
     "dist/index.js",
     "dist/index.mjs",
     "dist/entry.js",
+    "moltbot.mjs",
     "dist/entry.mjs",
     "scripts/run-node.mjs",
     "src/index.ts",
@@ -81,7 +82,7 @@ function isGatewayArgv(args: string[]): boolean {
   }
 
   const exe = normalized[0] ?? "";
-  return exe.endsWith("/clawdbot") || exe === "clawdbot";
+  return exe.endsWith("/moltbot") || exe === "moltbot";
 }
 
 function readLinuxCmdline(pid: number): string[] | null {

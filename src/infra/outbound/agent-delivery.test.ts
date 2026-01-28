@@ -12,7 +12,7 @@ vi.mock("./targets.js", async () => {
   };
 });
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
 
 describe("agent delivery helpers", () => {
@@ -45,7 +45,7 @@ describe("agent delivery helpers", () => {
     });
 
     const resolved = resolveAgentOutboundTarget({
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       plan,
       targetMode: "implicit",
     });
@@ -68,7 +68,7 @@ describe("agent delivery helpers", () => {
 
     mocks.resolveOutboundTarget.mockClear();
     const resolved = resolveAgentOutboundTarget({
-      cfg: {} as ClawdbotConfig,
+      cfg: {} as MoltbotConfig,
       plan,
       targetMode: "explicit",
       validateExplicitTarget: false,

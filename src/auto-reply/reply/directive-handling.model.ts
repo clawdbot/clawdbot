@@ -6,7 +6,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -24,7 +24,7 @@ import { resolveModelsCommandReply } from "./commands-models.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
 function buildModelPickerCatalog(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
@@ -153,7 +153,7 @@ function buildModelPickerCatalog(params: {
 
 export async function maybeHandleModelDirectiveInfo(params: {
   directives: InlineDirectives;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir: string;
   activeAgentId: string;
   provider: string;
@@ -271,7 +271,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
 export function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   agentDir: string;
   defaultProvider: string;
   defaultModel: string;

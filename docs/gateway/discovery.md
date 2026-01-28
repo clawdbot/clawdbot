@@ -7,12 +7,12 @@ read_when:
 ---
 # Discovery & transports
 
-Clawdbot has two distinct problems that look similar on the surface:
+Moltbot has two distinct problems that look similar on the surface:
 
 1) **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
 2) **Node pairing**: iOS/Android (and future nodes) finding a gateway and pairing securely.
 
-The design goal is to keep all network discovery/advertising in the **Node Gateway** (`clawd` / `clawdbot gateway`) and keep clients (mac app, iOS) as consumers.
+The design goal is to keep all network discovery/advertising in the **Node Gateway** (`clawd` / `moltbot gateway`) and keep clients (mac app, iOS) as consumers.
 
 ## Terms
 
@@ -52,7 +52,7 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 #### Service beacon details
 
 - Service types:
-  - `_clawdbot-gw._tcp` (gateway transport beacon)
+  - `_moltbot-gw._tcp` (gateway transport beacon)
 - TXT keys (non-secret):
   - `role=gateway`
   - `lanHost=<hostname>.local`
@@ -60,13 +60,13 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `gatewayPort=18789` (Gateway WS + HTTP)
   - `gatewayTls=1` (only when TLS is enabled)
   - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
-  - `canvasPort=18793` (default canvas host port; serves `/__clawdbot__/canvas/`)
-  - `cliPath=<path>` (optional; absolute path to a runnable `clawdbot` entrypoint or binary)
+  - `canvasPort=18793` (default canvas host port; serves `/__moltbot__/canvas/`)
+  - `cliPath=<path>` (optional; absolute path to a runnable `moltbot` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
 Disable/override:
 - `CLAWDBOT_DISABLE_BONJOUR=1` disables advertising.
-- `gateway.bind` in `~/.clawdbot/clawdbot.json` controls the Gateway bind mode.
+- `gateway.bind` in `~/.clawdbot/moltbot.json` controls the Gateway bind mode.
 - `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
 - `CLAWDBOT_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
 - `CLAWDBOT_CLI_PATH` overrides the advertised CLI path.

@@ -3,17 +3,17 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import { withTempHome } from "./test-helpers.js";
-import type { ClawdbotConfig } from "./types.js";
+import type { MoltbotConfig } from "./types.js";
 
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {
     await withTempHome(async () => {
       const { resolveConfigPath, writeConfigFile } = await import("./config.js");
       const configPath = resolveConfigPath();
-      const buildConfig = (version: number): ClawdbotConfig =>
+      const buildConfig = (version: number): MoltbotConfig =>
         ({
           agents: { list: [{ id: `v${version}` }] },
-        }) as ClawdbotConfig;
+        }) as MoltbotConfig;
 
       for (let version = 0; version <= 6; version += 1) {
         await writeConfigFile(buildConfig(version));

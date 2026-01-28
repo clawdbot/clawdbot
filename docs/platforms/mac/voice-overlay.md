@@ -32,14 +32,14 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
    - Push-to-talk: no delay; wake-word: optional delay for auto-send.
    - Apply a short cooldown to the wake runtime after push-to-talk finishes so wake-word doesn’t immediately retrigger.
 5. **Logging**
-   - Coordinator emits `.info` logs in subsystem `com.clawdbot`, categories `voicewake.overlay` and `voicewake.chime`.
+   - Coordinator emits `.info` logs in subsystem `bot.molt`, categories `voicewake.overlay` and `voicewake.chime`.
    - Key events: `session_started`, `adopted_by_push_to_talk`, `partial`, `finalized`, `send`, `dismiss`, `cancel`, `cooldown`.
 
 ### Debugging checklist
 - Stream logs while reproducing a sticky overlay:
 
   ```bash
-  sudo log stream --predicate 'subsystem == "com.clawdbot" AND category CONTAINS "voicewake"' --level info --style compact
+  sudo log stream --predicate 'subsystem == "bot.molt" AND category CONTAINS "voicewake"' --level info --style compact
   ```
 - Verify only one active session token; stale callbacks should be dropped by the coordinator.
 - Ensure push-to-talk release always calls `endCapture` with the active token; if text is empty, expect `dismiss` without chime or send.

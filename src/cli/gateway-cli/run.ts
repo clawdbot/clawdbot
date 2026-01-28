@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import type { GatewayAuthMode } from "../../config/config.js";
 import {
-  CONFIG_PATH_CLAWDBOT,
+  CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
@@ -157,12 +157,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordRaw = toOptionString(opts.password);
   const tokenRaw = toOptionString(opts.token);
 
-  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
+  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
-        `Missing config. Run \`${formatCliCommand("clawdbot setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
+        `Missing config. Run \`${formatCliCommand("moltbot setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
       );
     } else {
       defaultRuntime.error(
@@ -187,7 +188,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
 
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
   const authConfig = {
     ...cfg.gateway?.auth,
@@ -286,7 +286,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     ) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("clawdbot gateway stop")}`,
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("moltbot gateway stop")}`,
       );
       try {
         const diagnostics = await inspectPortUsage(port);

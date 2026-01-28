@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.27-beta.1
+
+### Changes
+- Version alignment with core Moltbot release numbers.
+
 ## 2026.1.23
 
 ### Features
@@ -17,5 +22,5 @@
 ### Improvements
 
 - Added proper configuration schema with Zod validation
-- Added plugin descriptor (clawdbot.plugin.json)
+- Added plugin descriptor (moltbot.plugin.json)
 - Added comprehensive README and documentation

@@ -2,7 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
 /**
@@ -12,7 +12,7 @@ import { log } from "./logger.js";
  * @internal Exported for testing only
  */
 export function resolveExtraParams(params: {
-  cfg: ClawdbotConfig | undefined;
+  cfg: MoltbotConfig | undefined;
   provider: string;
   modelId: string;
 }): Record<string, unknown> | undefined {
@@ -80,7 +80,7 @@ function createStreamFnWithExtraParams(
  */
 export function applyExtraParamsToAgent(
   agent: { streamFn?: StreamFn },
-  cfg: ClawdbotConfig | undefined,
+  cfg: MoltbotConfig | undefined,
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
