@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toRingCentralMarkdown, needsMarkdownConversion } from "./markdown.js";
+import { toRingCentralMarkdown, needsMarkdownConversion, hasCodeBlocks, markdownToAdaptiveCard } from "./markdown.js";
 
 describe("toRingCentralMarkdown", () => {
   it("converts single underscore italic to asterisk", () => {
@@ -117,5 +117,52 @@ describe("needsMarkdownConversion", () => {
 
   it("returns false for already compatible markdown", () => {
     expect(needsMarkdownConversion("*italic* and **bold**")).toBe(false);
+  });
+});
+
+describe("hasCodeBlocks", () => {
+  it("returns true for text with code blocks", () => {
+    expect(hasCodeBlocks("```\ncode\n```")).toBe(true);
+    expect(hasCodeBlocks("```js\nconst x = 1;\n```")).toBe(true);
+  });
+
+  it("returns false for text without code blocks", () => {
+    expect(hasCodeBlocks("plain text")).toBe(false);
+    expect(hasCodeBlocks("`inline code`")).toBe(false);
+  });
+});
+
+describe("markdownToAdaptiveCard", () => {
+  it("converts simple text to adaptive card", () => {
+    const result = markdownToAdaptiveCard("Hello world");
+    expect(result.type).toBe("AdaptiveCard");
+    expect(result.version).toBe("1.3");
+    expect(result.body).toHaveLength(1);
+    expect(result.body[0].type).toBe("TextBlock");
+    expect(result.body[0].text).toBe("Hello world");
+  });
+
+  it("converts code blocks with monospace font", () => {
+    const result = markdownToAdaptiveCard("```js\nconst x = 1;\n```");
+    expect(result.body).toHaveLength(1);
+    expect(result.body[0].fontType).toBe("Monospace");
+    expect(result.body[0].text).toBe("const x = 1;");
+  });
+
+  it("handles mixed text and code blocks", () => {
+    const result = markdownToAdaptiveCard("Some text\n\n```\ncode\n```\n\nMore text");
+    expect(result.body).toHaveLength(3);
+    expect(result.body[0].text).toBe("Some text");
+    expect(result.body[1].fontType).toBe("Monospace");
+    expect(result.body[1].text).toBe("code");
+    expect(result.body[2].text).toBe("More text");
+  });
+
+  it("converts headings with bold styling", () => {
+    const result = markdownToAdaptiveCard("# Title");
+    expect(result.body).toHaveLength(1);
+    expect(result.body[0].weight).toBe("Bolder");
+    expect(result.body[0].size).toBe("Medium");
+    expect(result.body[0].text).toBe("Title");
   });
 });

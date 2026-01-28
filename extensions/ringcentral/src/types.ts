@@ -53,6 +53,56 @@ export type RingCentralMention = {
   name?: string;
 };
 
+// Adaptive Cards types (Microsoft Adaptive Card schema v1.3)
+export type RingCentralAdaptiveCardElement = {
+  type: string;
+  text?: string;
+  size?: "Small" | "Default" | "Medium" | "Large" | "ExtraLarge";
+  weight?: "Lighter" | "Default" | "Bolder";
+  color?: "Default" | "Dark" | "Light" | "Accent" | "Good" | "Warning" | "Attention";
+  wrap?: boolean;
+  url?: string;
+  altText?: string;
+  columns?: RingCentralAdaptiveCardElement[];
+  items?: RingCentralAdaptiveCardElement[];
+  width?: string | number;
+  style?: string;
+  isVisible?: boolean;
+  id?: string;
+  // Input elements
+  label?: string;
+  placeholder?: string;
+  value?: string;
+  isRequired?: boolean;
+  // Action elements
+  title?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type RingCentralAdaptiveCardAction = {
+  type: "Action.Submit" | "Action.OpenUrl" | "Action.ShowCard" | "Action.ToggleVisibility";
+  title?: string;
+  url?: string;
+  data?: Record<string, unknown>;
+  card?: RingCentralAdaptiveCard;
+  targetElements?: Array<string | { elementId: string; isVisible?: boolean }>;
+};
+
+export type RingCentralAdaptiveCard = {
+  type?: "AdaptiveCard";
+  $schema?: string;
+  version?: string;
+  body?: RingCentralAdaptiveCardElement[];
+  actions?: RingCentralAdaptiveCardAction[];
+  fallbackText?: string;
+  speak?: string;
+  lang?: string;
+  verticalContentAlignment?: "Top" | "Center" | "Bottom";
+  backgroundImage?: string | { url: string; fillMode?: string };
+  minHeight?: string;
+};
+
 export type RingCentralWebhookEvent = {
   uuid?: string;
   event?: string;
@@ -113,6 +163,7 @@ export type RingCentralAccountConfig = {
   botExtensionId?: string;
   replyToMode?: "off" | "all";
   selfOnly?: boolean; // JWT mode: only accept messages from the JWT user in Personal chat (default: true)
+  useAdaptiveCards?: boolean; // Use Adaptive Cards for messages with code blocks (default: false)
 };
 
 export type RingCentralConfig = RingCentralAccountConfig & {

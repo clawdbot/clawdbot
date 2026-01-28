@@ -42,6 +42,7 @@ const RingCentralAccountSchemaBase = z
     allowBots: z.boolean().optional(),
     botExtensionId: z.string().optional(),
     selfOnly: z.boolean().optional(),
+    useAdaptiveCards: z.boolean().optional(), // Use Adaptive Cards for code blocks (default: false)
   })
   .strict();
 

@@ -6,6 +6,7 @@ import type {
   RingCentralPost,
   RingCentralUser,
   RingCentralAttachment,
+  RingCentralAdaptiveCard,
 } from "./types.js";
 
 // Team Messaging API endpoints
@@ -162,6 +163,60 @@ export async function downloadRingCentralAttachment(params: {
     buffer: Buffer.from(arrayBuffer),
     contentType,
   };
+}
+
+// Adaptive Cards API
+export async function sendRingCentralAdaptiveCard(params: {
+  account: ResolvedRingCentralAccount;
+  chatId: string;
+  card: RingCentralAdaptiveCard;
+  fallbackText?: string;
+}): Promise<{ cardId?: string } | null> {
+  const { account, chatId, card, fallbackText } = params;
+  const platform = await getRingCentralPlatform(account);
+
+  const body = {
+    ...card,
+    type: "AdaptiveCard",
+    $schema: card.$schema ?? "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: card.version ?? "1.3",
+    ...(fallbackText ? { fallbackText } : {}),
+  };
+
+  const response = await platform.post(`${TM_API_BASE}/chats/${chatId}/adaptive-cards`, body);
+  const result = (await response.json()) as { id?: string };
+  return result ? { cardId: result.id } : null;
+}
+
+export async function updateRingCentralAdaptiveCard(params: {
+  account: ResolvedRingCentralAccount;
+  cardId: string;
+  card: RingCentralAdaptiveCard;
+  fallbackText?: string;
+}): Promise<{ cardId?: string }> {
+  const { account, cardId, card, fallbackText } = params;
+  const platform = await getRingCentralPlatform(account);
+
+  const body = {
+    ...card,
+    type: "AdaptiveCard",
+    $schema: card.$schema ?? "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: card.version ?? "1.3",
+    ...(fallbackText ? { fallbackText } : {}),
+  };
+
+  const response = await platform.put(`${TM_API_BASE}/adaptive-cards/${cardId}`, body);
+  const result = (await response.json()) as { id?: string };
+  return { cardId: result.id };
+}
+
+export async function deleteRingCentralAdaptiveCard(params: {
+  account: ResolvedRingCentralAccount;
+  cardId: string;
+}): Promise<void> {
+  const { account, cardId } = params;
+  const platform = await getRingCentralPlatform(account);
+  await platform.delete(`${TM_API_BASE}/adaptive-cards/${cardId}`);
 }
 
 export async function probeRingCentral(

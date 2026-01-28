@@ -85,3 +85,74 @@ export function needsMarkdownConversion(text: string): boolean {
     /^#{1,6}\s+.+$/m.test(text)
   );
 }
+
+/**
+ * Check if text contains code blocks that would benefit from Adaptive Card formatting
+ */
+export function hasCodeBlocks(text: string): boolean {
+  return /```[\s\S]*?```/.test(text);
+}
+
+/**
+ * Convert markdown text to an Adaptive Card structure.
+ * This preserves code blocks with proper formatting.
+ */
+export function markdownToAdaptiveCard(text: string): {
+  type: "AdaptiveCard";
+  $schema: string;
+  version: string;
+  body: Array<{ type: string; text?: string; wrap?: boolean; fontType?: string; size?: string; weight?: string }>;
+} {
+  const body: Array<{ type: string; text?: string; wrap?: boolean; fontType?: string; size?: string; weight?: string }> = [];
+  
+  // Split by code blocks
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    
+    if (part.startsWith("```")) {
+      // Extract language and code
+      const match = part.match(/```(\w*)\n?([\s\S]*?)\n?```/);
+      if (match) {
+        const [, , code] = match;
+        // Add code block with monospace font
+        body.push({
+          type: "TextBlock",
+          text: code.trim(),
+          wrap: true,
+          fontType: "Monospace",
+        });
+      }
+    } else {
+      // Regular text - convert markdown
+      const converted = toRingCentralMarkdown(part.trim());
+      if (converted) {
+        // Check if it's a heading (starts with **)
+        const headingMatch = converted.match(/^\*\*(.+)\*\*$/);
+        if (headingMatch && !converted.includes("\n")) {
+          body.push({
+            type: "TextBlock",
+            text: headingMatch[1],
+            wrap: true,
+            size: "Medium",
+            weight: "Bolder",
+          });
+        } else {
+          body.push({
+            type: "TextBlock",
+            text: converted,
+            wrap: true,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    type: "AdaptiveCard",
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.3",
+    body,
+  };
+}
