@@ -1,7 +1,7 @@
 # 🦞 Moltbot — Personal AI Assistant
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/moltbot/moltbot/main/docs/whatsapp-clawd.jpg" alt="Clawdbot" width="400">
+  <img src="https://raw.githubusercontent.com/moltbot/moltbot/f0658149063225abf6122f964e9a481c7bd2ce1c/docs/whatsapp-molty.jpg" alt="Moltbot" width="400">
 </p>
 
 <p align="center">
