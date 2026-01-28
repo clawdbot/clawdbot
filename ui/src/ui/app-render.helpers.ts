@@ -82,7 +82,9 @@ export function renderChatControls(state: AppViewState) {
             (entry) => entry.key,
             (entry) => {
               const base = entry.displayName ?? entry.key;
-              const text = entry.label ? `${base} — ${entry.label}` : base;
+              // Only append label if it differs from displayName
+              const showLabel = entry.label && entry.label !== entry.displayName;
+              const text = showLabel ? `${base} — ${entry.label}` : base;
               return html`<option value=${entry.key}>${text}</option>`;
             },
           )}
