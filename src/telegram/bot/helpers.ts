@@ -13,14 +13,25 @@ import type {
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
+/**
+ * Resolve the thread ID for Telegram forum topics.
+ * For non-forum groups, returns undefined even if messageThreadId is present
+ * (reply threads in regular groups should not create separate sessions).
+ * For forum groups, returns the topic ID (or General topic ID=1 if unspecified).
+ */
 export function resolveTelegramForumThreadId(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
 }) {
-  if (params.isForum && params.messageThreadId == null) {
+  // Non-forum groups: ignore message_thread_id (reply threads are not real topics)
+  if (!params.isForum) {
+    return undefined;
+  }
+  // Forum groups: use the topic ID, defaulting to General topic
+  if (params.messageThreadId == null) {
     return TELEGRAM_GENERAL_TOPIC_ID;
   }
-  return params.messageThreadId ?? undefined;
+  return params.messageThreadId;
 }
 
 /**

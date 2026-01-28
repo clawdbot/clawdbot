@@ -555,7 +555,8 @@ function clearConfigCache(): void {
 }
 
 export function loadConfig(): MoltbotConfig {
-  const configPath = resolveConfigPath();
+  const io = createConfigIO();
+  const configPath = io.configPath;
   const now = Date.now();
   if (shouldUseConfigCache(process.env)) {
     const cached = configCache;
@@ -563,7 +564,7 @@ export function loadConfig(): MoltbotConfig {
       return cached.config;
     }
   }
-  const config = createConfigIO({ configPath }).loadConfig();
+  const config = io.loadConfig();
   if (shouldUseConfigCache(process.env)) {
     const cacheMs = resolveConfigCacheMs(process.env);
     if (cacheMs > 0) {
@@ -578,12 +579,10 @@ export function loadConfig(): MoltbotConfig {
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
-  return await createConfigIO({
-    configPath: resolveConfigPath(),
-  }).readConfigFileSnapshot();
+  return await createConfigIO().readConfigFileSnapshot();
 }
 
 export async function writeConfigFile(cfg: MoltbotConfig): Promise<void> {
   clearConfigCache();
-  await createConfigIO({ configPath: resolveConfigPath() }).writeConfigFile(cfg);
+  await createConfigIO().writeConfigFile(cfg);
 }

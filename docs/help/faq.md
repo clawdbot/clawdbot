@@ -1026,7 +1026,7 @@ Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-v
 
 **Can I run Apple macOS only skills from Linux**
 
-Not directly. macOS skills are gated by `metadata.clawdbot.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `imsg`, `apple-notes`, `apple-reminders`) will not load unless you override the gating.
+Not directly. macOS skills are gated by `metadata.moltbot.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `imsg`, `apple-notes`, `apple-reminders`) will not load unless you override the gating.
 
 You have three supported patterns:
 

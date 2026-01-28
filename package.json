@@ -1,6 +1,6 @@
 {
   "name": "moltbot",
-  "version": "2026.1.26",
+  "version": "2026.1.27-beta.1",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
@@ -8,11 +8,11 @@
     ".": "./dist/index.js",
     "./plugin-sdk": "./dist/plugin-sdk/index.js",
     "./plugin-sdk/*": "./dist/plugin-sdk/*",
-    "./cli-entry": "./dist/entry.js"
+    "./cli-entry": "./moltbot.mjs"
   },
   "bin": {
-    "moltbot": "dist/entry.js",
-    "clawdbot": "dist/entry.js"
+    "moltbot": "./moltbot.mjs",
+    "clawdbot": "./moltbot.mjs"
   },
   "files": [
     "dist/acp/**",
@@ -56,6 +56,7 @@
     "docs/**",
     "extensions/**",
     "assets/**",
+    "moltbot.mjs",
     "skills/**",
     "patches/**",
     "README.md",

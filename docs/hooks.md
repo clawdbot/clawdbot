@@ -149,7 +149,7 @@ No configuration needed.
 
 ### Metadata Fields
 
-The `metadata.clawdbot` object supports:
+The `metadata.moltbot` object supports:
 
 - **`emoji`**: Display emoji for CLI (e.g., `"💾"`)
 - **`events`**: Array of events to listen for (e.g., `["command:new", "command:reset"]`)

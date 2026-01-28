@@ -125,7 +125,7 @@ moltbot health
 ```
 
 Notes:
-- `pnpm build` matters when you run the packaged `moltbot` binary ([`dist/entry.js`](https://github.com/moltbot/moltbot/blob/main/dist/entry.js)) or use Node to run `dist/`.
+- `pnpm build` matters when you run the packaged `moltbot` binary ([`moltbot.mjs`](https://github.com/moltbot/moltbot/blob/main/moltbot.mjs)) or use Node to run `dist/`.
 - If you run from a repo checkout without a global install, use `pnpm moltbot ...` for CLI commands.
 - If you run directly from TypeScript (`pnpm moltbot ...`), a rebuild is usually unnecessary, but **config migrations still apply** → run doctor.
 - Switching between global and git installs is easy: install the other flavor, then run `moltbot doctor` so the gateway service entrypoint is rewritten to the current install.

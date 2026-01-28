@@ -2396,8 +2396,8 @@ Use Moonshot's OpenAI-compatible endpoint:
   env: { MOONSHOT_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "moonshot/kimi-k2-0905-preview" },
-      models: { "moonshot/kimi-k2-0905-preview": { alias: "Kimi K2" } }
+      model: { primary: "moonshot/kimi-k2.5" },
+      models: { "moonshot/kimi-k2.5": { alias: "Kimi K2.5" } }
     }
   },
   models: {
@@ -2409,8 +2409,8 @@ Use Moonshot's OpenAI-compatible endpoint:
         api: "openai-completions",
         models: [
           {
-            id: "kimi-k2-0905-preview",
-            name: "Kimi K2 0905 Preview",
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2426,7 +2426,7 @@ Use Moonshot's OpenAI-compatible endpoint:
 
 Notes:
 - Set `MOONSHOT_API_KEY` in the environment or use `moltbot onboard --auth-choice moonshot-api-key`.
-- Model ref: `moonshot/kimi-k2-0905-preview`.
+- Model ref: `moonshot/kimi-k2.5`.
 - Use `https://api.moonshot.cn/v1` if you need the China endpoint.
 
 ### Kimi Code
@@ -2657,7 +2657,8 @@ Fields:
   - `main`: all DMs share the main session for continuity.
   - `per-peer`: isolate DMs by sender id across channels.
   - `per-channel-peer`: isolate DMs per channel + sender (recommended for multi-user inboxes).
-- `identityLinks`: map canonical ids to provider-prefixed peers so the same person shares a DM session across channels when using `per-peer` or `per-channel-peer`.
+  - `per-account-channel-peer`: isolate DMs per account + channel + sender (recommended for multi-account inboxes).
+- `identityLinks`: map canonical ids to provider-prefixed peers so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
   - Example: `alice: ["telegram:123456789", "discord:987654321012345678"]`.
 - `reset`: primary reset policy. Defaults to daily resets at 4:00 AM local time on the gateway host.
   - `mode`: `daily` or `idle` (default: `daily` when `reset` is present).

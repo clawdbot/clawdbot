@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ZodIssue } from "zod";
 
 import type { MoltbotConfig } from "../config/config.js";
@@ -12,6 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { note } from "../terminal/note.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -117,12 +120,50 @@ function noteOpencodeProviderOverrides(cfg: MoltbotConfig) {
   note(lines.join("\n"), "OpenCode Zen");
 }
 
+function hasExplicitConfigPath(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.MOLTBOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim());
+}
+
+function moveLegacyConfigFile(legacyPath: string, canonicalPath: string) {
+  fs.mkdirSync(path.dirname(canonicalPath), { recursive: true, mode: 0o700 });
+  try {
+    fs.renameSync(legacyPath, canonicalPath);
+  } catch {
+    fs.copyFileSync(legacyPath, canonicalPath);
+    fs.chmodSync(canonicalPath, 0o600);
+    try {
+      fs.unlinkSync(legacyPath);
+    } catch {
+      // Best-effort cleanup; we'll warn later if both files exist.
+    }
+  }
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const snapshot = await readConfigFileSnapshot();
+  const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
+  if (stateDirResult.changes.length > 0) {
+    note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
+  if (stateDirResult.warnings.length > 0) {
+    note(stateDirResult.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
+  }
+
+  let snapshot = await readConfigFileSnapshot();
+  if (!hasExplicitConfigPath(process.env) && snapshot.exists) {
+    const basename = path.basename(snapshot.path);
+    if (basename === "clawdbot.json") {
+      const canonicalPath = path.join(path.dirname(snapshot.path), "moltbot.json");
+      if (!fs.existsSync(canonicalPath)) {
+        moveLegacyConfigFile(snapshot.path, canonicalPath);
+        note(`- Config: ${snapshot.path} → ${canonicalPath}`, "Doctor changes");
+        snapshot = await readConfigFileSnapshot();
+      }
+    }
+  }
   const baseCfg = snapshot.config ?? {};
   let cfg: MoltbotConfig = baseCfg;
   let candidate = structuredClone(baseCfg) as MoltbotConfig;

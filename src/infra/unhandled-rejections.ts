@@ -1,10 +1,51 @@
 import process from "node:process";
 
-import { formatUncaughtError } from "./errors.js";
+import { extractErrorCode, formatUncaughtError } from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
 const handlers = new Set<UnhandledRejectionHandler>();
+
+const FATAL_ERROR_CODES = new Set([
+  "ERR_OUT_OF_MEMORY",
+  "ERR_SCRIPT_EXECUTION_TIMEOUT",
+  "ERR_WORKER_OUT_OF_MEMORY",
+  "ERR_WORKER_UNCAUGHT_EXCEPTION",
+  "ERR_WORKER_INITIALIZATION_FAILED",
+]);
+
+const CONFIG_ERROR_CODES = new Set(["INVALID_CONFIG", "MISSING_API_KEY", "MISSING_CREDENTIALS"]);
+
+// Network error codes that indicate transient failures (shouldn't crash the gateway)
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNABORTED",
+  "EPIPE",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== "object") return undefined;
+  return (err as { cause?: unknown }).cause;
+}
+
+function extractErrorCodeWithCause(err: unknown): string | undefined {
+  const direct = extractErrorCode(err);
+  if (direct) return direct;
+  return extractErrorCode(getErrorCause(err));
+}
 
 /**
  * Checks if an error is an AbortError.
@@ -20,33 +61,14 @@ export function isAbortError(err: unknown): boolean {
   return false;
 }
 
-// Network error codes that indicate transient failures (shouldn't crash the gateway)
-const TRANSIENT_NETWORK_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNABORTED",
-  "EPIPE",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EAI_AGAIN",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_SOCKET",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-]);
-
-function getErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") return undefined;
-  const code = (err as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
+function isFatalError(err: unknown): boolean {
+  const code = extractErrorCodeWithCause(err);
+  return code !== undefined && FATAL_ERROR_CODES.has(code);
 }
 
-function getErrorCause(err: unknown): unknown {
-  if (!err || typeof err !== "object") return undefined;
-  return (err as { cause?: unknown }).cause;
+function isConfigError(err: unknown): boolean {
+  const code = extractErrorCodeWithCause(err);
+  return code !== undefined && CONFIG_ERROR_CODES.has(code);
 }
 
 /**
@@ -56,16 +78,13 @@ function getErrorCause(err: unknown): unknown {
 export function isTransientNetworkError(err: unknown): boolean {
   if (!err) return false;
 
-  // Check the error itself
-  const code = getErrorCode(err);
+  const code = extractErrorCodeWithCause(err);
   if (code && TRANSIENT_NETWORK_CODES.has(code)) return true;
 
   // "fetch failed" TypeError from undici (Node's native fetch)
   if (err instanceof TypeError && err.message === "fetch failed") {
     const cause = getErrorCause(err);
-    // The cause often contains the actual network error
     if (cause) return isTransientNetworkError(cause);
-    // Even without a cause, "fetch failed" is typically a network issue
     return true;
   }
 
@@ -115,10 +134,23 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
-    // Transient network errors (fetch failed, connection reset, etc.) shouldn't crash
-    // These are temporary connectivity issues that will resolve on their own
+    if (isFatalError(reason)) {
+      console.error("[moltbot] FATAL unhandled rejection:", formatUncaughtError(reason));
+      process.exit(1);
+      return;
+    }
+
+    if (isConfigError(reason)) {
+      console.error("[moltbot] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      process.exit(1);
+      return;
+    }
+
     if (isTransientNetworkError(reason)) {
-      console.error("[moltbot] Network error (non-fatal):", formatUncaughtError(reason));
+      console.warn(
+        "[moltbot] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
       return;
     }
 

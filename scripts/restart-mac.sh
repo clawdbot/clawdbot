@@ -96,8 +96,8 @@ for arg in "$@"; do
       log "  CLAWDBOT_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
       log ""
       log "Unsigned recovery:"
-      log "  node dist/entry.js daemon install --force --runtime node"
-      log "  node dist/entry.js daemon restart"
+      log "  node moltbot.mjs daemon install --force --runtime node"
+      log "  node moltbot.mjs daemon restart"
       log ""
       log "Reset unsigned overrides:"
       log "  rm ~/.clawdbot/disable-launchagent"
@@ -217,8 +217,8 @@ fi
 # When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
 # This reduces noisy "could not connect" errors during app startup.
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node dist/entry.js daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node dist/entry.js daemon restart"
+  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node moltbot.mjs daemon install --force --runtime node"
+  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node moltbot.mjs daemon restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi

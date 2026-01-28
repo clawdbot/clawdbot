@@ -13,7 +13,7 @@ import type { ChunkMode } from "../auto-reply/chunk.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
-import { parseDiscordTarget } from "./targets.js";
+import { parseDiscordTarget, resolveDiscordTarget } from "./targets.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
@@ -99,6 +99,51 @@ function parseRecipient(raw: string): DiscordRecipient {
     throw new Error("Recipient is required for Discord sends");
   }
   return { kind: target.kind, id: target.id };
+}
+
+/**
+ * Parse and resolve Discord recipient, including username lookup.
+ * This enables sending DMs by username (e.g., "john.doe") by querying
+ * the Discord directory to resolve usernames to user IDs.
+ *
+ * @param raw - The recipient string (username, ID, or known format)
+ * @param accountId - Discord account ID to use for directory lookup
+ * @returns Parsed DiscordRecipient with resolved user ID if applicable
+ */
+export async function parseAndResolveRecipient(
+  raw: string,
+  accountId?: string,
+): Promise<DiscordRecipient> {
+  const cfg = loadConfig();
+  const accountInfo = resolveDiscordAccount({ cfg, accountId });
+
+  // First try to resolve using directory lookup (handles usernames)
+  const trimmed = raw.trim();
+  const parseOptions = {
+    ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
+  };
+
+  const resolved = await resolveDiscordTarget(
+    raw,
+    {
+      cfg,
+      accountId: accountInfo.accountId,
+    },
+    parseOptions,
+  );
+
+  if (resolved) {
+    return { kind: resolved.kind, id: resolved.id };
+  }
+
+  // Fallback to standard parsing (for channels, etc.)
+  const parsed = parseDiscordTarget(raw, parseOptions);
+
+  if (!parsed) {
+    throw new Error("Recipient is required for Discord sends");
+  }
+
+  return { kind: parsed.kind, id: parsed.id };
 }
 
 function normalizeStickerIds(raw: string[]) {

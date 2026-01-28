@@ -17,7 +17,7 @@ import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
-const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
@@ -31,7 +31,7 @@ const MINIMAX_API_COST = {
 };
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
-const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2-0905-preview";
+const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 const MOONSHOT_DEFAULT_COST = {
@@ -244,7 +244,7 @@ export function normalizeProviders(params: {
 function buildMinimaxProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_API_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     models: [
       {
         id: MINIMAX_DEFAULT_MODEL_ID,
@@ -275,7 +275,7 @@ function buildMoonshotProvider(): ProviderConfig {
     models: [
       {
         id: MOONSHOT_DEFAULT_MODEL_ID,
-        name: "Kimi K2 0905 Preview",
+        name: "Kimi K2.5",
         reasoning: false,
         input: ["text"],
         cost: MOONSHOT_DEFAULT_COST,

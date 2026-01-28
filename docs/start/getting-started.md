@@ -180,7 +180,7 @@ If you don’t have a global install yet, run the onboarding step via `pnpm molt
 Gateway (from this repo):
 
 ```bash
-node dist/entry.js gateway --port 18789 --verbose
+node moltbot.mjs gateway --port 18789 --verbose
 ```
 
 ## 7) Verify end-to-end

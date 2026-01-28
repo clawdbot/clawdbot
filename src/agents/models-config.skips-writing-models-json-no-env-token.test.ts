@@ -136,7 +136,7 @@ describe("models-config", () => {
             }
           >;
         };
-        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.chat/v1");
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");

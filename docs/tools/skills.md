@@ -41,7 +41,7 @@ applies: workspace wins, then managed/local, then bundled.
 Plugins can ship their own skills by listing `skills` directories in
 `moltbot.plugin.json` (paths relative to the plugin root). Plugin skills load
 when the plugin is enabled and participate in the normal skill precedence rules.
-You can gate them via `metadata.clawdbot.requires.config` on the plugin’s config
+You can gate them via `metadata.moltbot.requires.config` on the plugin’s config
 entry. See [Plugins](/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
 
@@ -89,7 +89,7 @@ Notes:
 - `metadata` should be a **single-line JSON object**.
 - Use `{baseDir}` in instructions to reference the skill folder path.
 - Optional frontmatter keys:
-  - `homepage` — URL surfaced as “Website” in the macOS Skills UI (also supported via `metadata.clawdbot.homepage`).
+  - `homepage` — URL surfaced as “Website” in the macOS Skills UI (also supported via `metadata.moltbot.homepage`).
   - `user-invocable` — `true|false` (default: `true`). When `true`, the skill is exposed as a user slash command.
   - `disable-model-invocation` — `true|false` (default: `false`). When `true`, the skill is excluded from the model prompt (still available via user invocation).
   - `command-dispatch` — `tool` (optional). When set to `tool`, the slash command bypasses the model and dispatches directly to a tool.
@@ -111,7 +111,7 @@ metadata: {"moltbot":{"requires":{"bins":["uv"],"env":["GEMINI_API_KEY"],"config
 ---
 ```
 
-Fields under `metadata.clawdbot`:
+Fields under `metadata.moltbot`:
 - `always: true` — always include the skill (skip other gates).
 - `emoji` — optional emoji used by the macOS Skills UI.
 - `homepage` — optional URL shown as “Website” in the macOS Skills UI.
@@ -152,7 +152,7 @@ Notes:
 - Go installs: if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew’s `bin` when possible.
  - Download installs: `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.clawdbot/tools/<skillKey>`).
 
-If no `metadata.clawdbot` is present, the skill is always eligible (unless
+If no `metadata.moltbot` is present, the skill is always eligible (unless
 disabled in config or blocked by `skills.allowBundled` for bundled skills).
 
 ## Config overrides (`~/.clawdbot/moltbot.json`)
@@ -184,12 +184,12 @@ Bundled/managed skills can be toggled and supplied with env values:
 Note: if the skill name contains hyphens, quote the key (JSON5 allows quoted keys).
 
 Config keys match the **skill name** by default. If a skill defines
-`metadata.clawdbot.skillKey`, use that key under `skills.entries`.
+`metadata.moltbot.skillKey`, use that key under `skills.entries`.
 
 Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
-- `apiKey`: convenience for skills that declare `metadata.clawdbot.primaryEnv`.
+- `apiKey`: convenience for skills that declare `metadata.moltbot.primaryEnv`.
 - `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).
