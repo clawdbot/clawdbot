@@ -6,8 +6,30 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { FOLLOWUP_QUEUES, persistFollowupQueues } from "./state.js";
 import type { FollowupRun } from "./types.js";
+
+// Grace period before deleting empty queues (to handle subagent announce race conditions)
+const EMPTY_QUEUE_GRACE_PERIOD_MS = 30_000;
+
+// Periodic cleanup of expired empty queues
+let cleanupTimer: NodeJS.Timeout | null = null;
+
+function scheduleQueueCleanup() {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, queue] of FOLLOWUP_QUEUES.entries()) {
+      if (queue.items.length === 0 && queue.droppedCount === 0 && queue.emptyAt) {
+        const emptyDuration = now - queue.emptyAt;
+        if (emptyDuration >= EMPTY_QUEUE_GRACE_PERIOD_MS) {
+          FOLLOWUP_QUEUES.delete(key);
+        }
+      }
+    }
+    persistFollowupQueues();
+  }, EMPTY_QUEUE_GRACE_PERIOD_MS);
+}
 
 export function scheduleFollowupDrain(
   key: string,
@@ -16,6 +38,7 @@ export function scheduleFollowupDrain(
   const queue = FOLLOWUP_QUEUES.get(key);
   if (!queue || queue.draining) return;
   queue.draining = true;
+  scheduleQueueCleanup();
   void (async () => {
     try {
       let forceIndividualCollect = false;
@@ -113,11 +136,27 @@ export function scheduleFollowupDrain(
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;
-      if (queue.items.length === 0 && queue.droppedCount === 0) {
-        FOLLOWUP_QUEUES.delete(key);
+      const isEmpty = queue.items.length === 0 && queue.droppedCount === 0;
+
+      if (isEmpty) {
+        // Mark when queue became empty
+        if (!queue.emptyAt) {
+          queue.emptyAt = Date.now();
+        }
+
+        // Only delete if it's been empty for the grace period
+        // This prevents race conditions with subagent announces
+        const emptyDuration = Date.now() - queue.emptyAt;
+        if (emptyDuration >= EMPTY_QUEUE_GRACE_PERIOD_MS) {
+          FOLLOWUP_QUEUES.delete(key);
+        }
       } else {
+        // Queue has items, clear emptyAt and continue draining
+        queue.emptyAt = undefined;
         scheduleFollowupDrain(key, runFollowup);
       }
+
+      persistFollowupQueues();
     }
   })();
 }
