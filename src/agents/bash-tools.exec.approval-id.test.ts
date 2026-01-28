@@ -51,6 +51,11 @@ describe("exec approvals", () => {
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
+        // Return registration confirmation (status: "accepted")
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        // Return the decision when waitDecision is called
         return { decision: "allow-once" };
       }
       if (method === "node.invoke") {
@@ -159,10 +164,14 @@ describe("exec approvals", () => {
       resolveApproval = resolve;
     });
 
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
         resolveApproval?.();
+        // Return registration confirmation
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
         return { decision: "deny" };
       }
       return { ok: true };
