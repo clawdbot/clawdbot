@@ -4,8 +4,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   calculateAuthProfileCooldownMs,
+  clearAuthProfileCooldown,
   cooldownKey,
   isProfileInCooldown,
+  markAuthProfileCooldown,
+  markAuthProfileFailure,
   markAuthProfileUsed,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
@@ -171,6 +174,233 @@ describe("markAuthProfileUsed with per-model support", () => {
       // Profile-level cooldown should be cleared
       expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeUndefined();
       // Per-model cooldown should remain (no model specified)
+      expect(store.usageStats?.["openai:default:gpt-4"]?.cooldownUntil).toBe(cooldownTime);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("cooldownKey edge cases", () => {
+  it("treats empty string model the same as undefined", () => {
+    // Empty string should be treated as "no model" to avoid trailing colon
+    expect(cooldownKey("openai:default", "")).toBe("openai:default");
+    expect(cooldownKey("openai:default", "   ")).toBe("openai:default");
+  });
+});
+
+describe("isProfileInCooldown backward compatibility", () => {
+  it("returns true for any model when profile-level cooldown exists", () => {
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+      usageStats: {
+        "openai:default": { cooldownUntil: Date.now() + 60_000 }, // profile-level only
+      },
+    };
+    // Any model should be blocked when profile-level cooldown exists
+    expect(isProfileInCooldown(store, "openai:default", "gpt-4")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", "gpt-3.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", "o1-preview")).toBe(true);
+    // Profile-level check also works
+    expect(isProfileInCooldown(store, "openai:default")).toBe(true);
+  });
+
+  it("checks disabledUntil for per-model cooldowns (billing failures)", () => {
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+      usageStats: {
+        "openai:default:gpt-4": { disabledUntil: Date.now() + 60_000 }, // billing failure
+      },
+    };
+    expect(isProfileInCooldown(store, "openai:default", "gpt-4")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", "gpt-3.5")).toBe(false);
+  });
+});
+
+describe("markAuthProfileFailure with per-model support", () => {
+  it("tracks failure per model when model is provided", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+    };
+    saveAuthProfileStore(store, tempDir);
+
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openai:default",
+        model: "gpt-4",
+        reason: "rate_limit",
+        agentDir: tempDir,
+      });
+
+      // Per-model key should have cooldown
+      expect(store.usageStats?.["openai:default:gpt-4"]?.cooldownUntil).toBeGreaterThan(Date.now());
+      expect(store.usageStats?.["openai:default:gpt-4"]?.errorCount).toBe(1);
+      // Profile-level should NOT have cooldown (only model-specific)
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeUndefined();
+      // Other models should not be affected
+      expect(store.usageStats?.["openai:default:gpt-3.5"]).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks failure at profile level when model is not provided", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+    };
+    saveAuthProfileStore(store, tempDir);
+
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openai:default",
+        reason: "auth",
+        agentDir: tempDir,
+      });
+
+      // Profile-level key should have cooldown
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
+      expect(store.usageStats?.["openai:default"]?.errorCount).toBe(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks billing failures with disabledUntil per model", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+    };
+    saveAuthProfileStore(store, tempDir);
+
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openai:default",
+        model: "gpt-4",
+        reason: "billing",
+        agentDir: tempDir,
+      });
+
+      // Billing failures use disabledUntil instead of cooldownUntil
+      expect(store.usageStats?.["openai:default:gpt-4"]?.disabledUntil).toBeGreaterThan(Date.now());
+      expect(store.usageStats?.["openai:default:gpt-4"]?.disabledReason).toBe("billing");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("markAuthProfileCooldown with per-model support", () => {
+  it("marks cooldown per model when model is provided", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+    };
+    saveAuthProfileStore(store, tempDir);
+
+    try {
+      await markAuthProfileCooldown({
+        store,
+        profileId: "openai:default",
+        model: "gpt-4",
+        agentDir: tempDir,
+      });
+
+      // Per-model key should have cooldown
+      expect(store.usageStats?.["openai:default:gpt-4"]?.cooldownUntil).toBeGreaterThan(Date.now());
+      // Profile-level should NOT have cooldown
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("clearAuthProfileCooldown with per-model support", () => {
+  it("clears per-model cooldown when model is provided", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const cooldownTime = Date.now() + 60_000;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+      usageStats: {
+        "openai:default": { cooldownUntil: cooldownTime },
+        "openai:default:gpt-4": { cooldownUntil: cooldownTime, errorCount: 3 },
+        "openai:default:gpt-3.5": { cooldownUntil: cooldownTime },
+      },
+    };
+    saveAuthProfileStore(store, tempDir);
+
+    try {
+      await clearAuthProfileCooldown({
+        store,
+        profileId: "openai:default",
+        model: "gpt-4",
+        agentDir: tempDir,
+      });
+
+      // Per-model cooldown for gpt-4 should be cleared
+      expect(store.usageStats?.["openai:default:gpt-4"]?.cooldownUntil).toBeUndefined();
+      expect(store.usageStats?.["openai:default:gpt-4"]?.errorCount).toBe(0);
+      // Profile-level cooldown should remain (different key)
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(cooldownTime);
+      // Other model cooldown should remain
+      expect(store.usageStats?.["openai:default:gpt-3.5"]?.cooldownUntil).toBe(cooldownTime);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears profile-level cooldown when model is not provided", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const cooldownTime = Date.now() + 60_000;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test" },
+      },
+      usageStats: {
+        "openai:default": { cooldownUntil: cooldownTime, errorCount: 2 },
+        "openai:default:gpt-4": { cooldownUntil: cooldownTime },
+      },
+    };
+    saveAuthProfileStore(store, tempDir);
+
+    try {
+      await clearAuthProfileCooldown({
+        store,
+        profileId: "openai:default",
+        agentDir: tempDir,
+      });
+
+      // Profile-level cooldown should be cleared
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeUndefined();
+      expect(store.usageStats?.["openai:default"]?.errorCount).toBe(0);
+      // Per-model cooldown should remain (different key)
       expect(store.usageStats?.["openai:default:gpt-4"]?.cooldownUntil).toBe(cooldownTime);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
