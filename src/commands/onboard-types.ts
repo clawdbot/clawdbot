@@ -14,6 +14,7 @@ export type AuthChoice =
   | "openrouter-api-key"
   | "ai-gateway-api-key"
   | "moonshot-api-key"
+  | "nova-api-key"
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"
@@ -64,6 +65,7 @@ export type OnboardOptions = {
   openrouterApiKey?: string;
   aiGatewayApiKey?: string;
   moonshotApiKey?: string;
+  novaApiKey?: string;
   kimiCodeApiKey?: string;
   geminiApiKey?: string;
   zaiApiKey?: string;

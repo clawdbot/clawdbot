@@ -17,6 +17,8 @@ import {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyNovaConfig,
+  applyNovaProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -30,6 +32,7 @@ import {
   applyZaiConfig,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NOVA_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
@@ -37,6 +40,7 @@ import {
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMoonshotApiKey,
+  setNovaApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -73,6 +77,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "ai-gateway-api-key";
     } else if (params.opts.tokenProvider === "moonshot") {
       authChoice = "moonshot-api-key";
+    } else if (params.opts.tokenProvider === "nova") {
+      authChoice = "nova-api-key";
     } else if (params.opts.tokenProvider === "kimi-code") {
       authChoice = "kimi-code-api-key";
     } else if (params.opts.tokenProvider === "google") {
@@ -256,6 +262,62 @@ export async function applyAuthChoiceApiProviders(
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyDefaultConfig: applyMoonshotConfig,
         applyProviderConfig: applyMoonshotProviderConfig,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "nova-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "nova") {
+      await setNovaApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Amazon Nova provides multimodal AI models via chat completion API.",
+          "Get your API key at: https://nova.amazon.com/dev/api",
+        ].join("\n"),
+        "Amazon Nova",
+      );
+    }
+    const envKey = resolveEnvApiKey("nova");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing NOVA_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setNovaApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Amazon Nova API key",
+        validate: validateApiKeyInput,
+      });
+      await setNovaApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nova:default",
+      provider: "nova",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: NOVA_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyNovaConfig,
+        applyProviderConfig: applyNovaProviderConfig,
         noteAgentModel,
         prompter: params.prompter,
       });

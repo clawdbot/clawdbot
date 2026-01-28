@@ -12,6 +12,7 @@ import {
 } from "../agents/venice-models.js";
 import type { MoltbotConfig } from "../config/config.js";
 import {
+  NOVA_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -19,12 +20,15 @@ import {
 import {
   buildKimiCodeModelDefinition,
   buildMoonshotModelDefinition,
+  buildNovaModelDefinition,
   KIMI_CODE_BASE_URL,
   KIMI_CODE_MODEL_ID,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NOVA_BASE_URL,
+  NOVA_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
 
 export function applyZaiConfig(cfg: MoltbotConfig): MoltbotConfig {
@@ -196,6 +200,71 @@ export function applyMoonshotConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: MOONSHOT_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyNovaProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NOVA_DEFAULT_MODEL_REF] = {
+    ...models[NOVA_DEFAULT_MODEL_REF],
+    alias: models[NOVA_DEFAULT_MODEL_REF]?.alias ?? "Nova 2 Lite",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.nova;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildNovaModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === NOVA_DEFAULT_MODEL_ID);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.nova = {
+    ...existingProviderRest,
+    baseUrl: NOVA_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyNovaConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const next = applyNovaProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: NOVA_DEFAULT_MODEL_REF,
         },
       },
     },

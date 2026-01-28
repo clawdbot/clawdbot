@@ -9,6 +9,8 @@ export {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyNovaConfig,
+  applyNovaProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
@@ -33,12 +35,14 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  NOVA_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNovaApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -54,6 +58,7 @@ export {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
+  buildNovaModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
   KIMI_CODE_BASE_URL,
   KIMI_CODE_MODEL_ID,
@@ -64,4 +69,6 @@ export {
   MOONSHOT_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NOVA_BASE_URL,
+  NOVA_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
