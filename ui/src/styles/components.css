@@ -1484,3 +1484,49 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* Delete session confirmation modal */
+.chat-delete-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(2px);
+}
+
+.chat-delete-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  max-width: 360px;
+  text-align: center;
+}
+
+.chat-delete-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.chat-delete-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 16px;
+  word-break: break-word;
+}
+
+.chat-delete-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.chat-delete-hint {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}

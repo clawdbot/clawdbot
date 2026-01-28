@@ -68,6 +68,11 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Delete session
+  showDeleteConfirm?: boolean;
+  onDeleteClick?: () => void;
+  onDeleteConfirm?: () => void;
+  onDeleteCancel?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -240,7 +245,44 @@ export function renderChat(props: ChatProps) {
   `;
 
   return html`
-    <section class="card chat">
+    <section
+      class="card chat"
+      tabindex="-1"
+      @keydown=${(e: KeyboardEvent) => {
+        // Escape to cancel delete confirmation
+        if (e.key === "Escape" && props.showDeleteConfirm && props.onDeleteCancel) {
+          e.preventDefault();
+          props.onDeleteCancel();
+        }
+        // Enter to confirm delete
+        if (e.key === "Enter" && props.showDeleteConfirm && props.onDeleteConfirm) {
+          e.preventDefault();
+          props.onDeleteConfirm();
+        }
+      }}
+    >
+      ${props.showDeleteConfirm
+        ? html`
+            <div class="chat-delete-overlay" role="dialog" aria-modal="true">
+              <div class="chat-delete-card">
+                <div class="chat-delete-title">Delete this session?</div>
+                <div class="chat-delete-sub">
+                  This will permanently delete the session "${props.sessionKey}".
+                </div>
+                <div class="chat-delete-actions">
+                  <button class="btn" @click=${props.onDeleteCancel} autofocus>
+                    Cancel
+                  </button>
+                  <button class="btn danger" @click=${props.onDeleteConfirm}>
+                    Delete
+                  </button>
+                </div>
+                <div class="chat-delete-hint">Press Enter to delete, Escape to cancel</div>
+              </div>
+            </div>
+          `
+        : nothing}
+
       ${props.disabledReason
         ? html`<div class="callout">${props.disabledReason}</div>`
         : nothing}
@@ -361,6 +403,18 @@ export function renderChat(props: ChatProps) {
             >
               ${canAbort ? "Stop" : "New session"}
             </button>
+            ${props.onDeleteClick
+              ? html`
+                  <button
+                    class="btn danger"
+                    ?disabled=${!props.connected || isBusy}
+                    @click=${props.onDeleteClick}
+                    title="Delete this session"
+                  >
+                    Delete
+                  </button>
+                `
+              : nothing}
             <button
               class="btn primary"
               ?disabled=${!props.connected}
