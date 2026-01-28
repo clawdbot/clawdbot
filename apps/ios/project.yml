@@ -1,6 +1,6 @@
 name: Moltbot
 options:
-  bundleIdPrefix: com.clawdbot
+  bundleIdPrefix: bot.molt
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.0"
@@ -11,7 +11,7 @@ settings:
 
 packages:
   MoltbotKit:
-    path: ../shared/ClawdbotKit
+    path: ../shared/MoltbotKit
   Swabble:
     path: ../../Swabble
 
@@ -71,8 +71,8 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: Y5PE65HELJ
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios
-        PROVISIONING_PROFILE_SPECIFIER: "com.clawdbot.ios Development"
+        PRODUCT_BUNDLE_IDENTIFIER: bot.molt.ios
+        PROVISIONING_PROFILE_SPECIFIER: "bot.molt.ios Development"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_APPINTENTS_METADATA: NO
@@ -81,7 +81,7 @@ targets:
       properties:
         CFBundleDisplayName: Moltbot
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.1.26"
+        CFBundleShortVersionString: "2026.1.27-beta.1"
         CFBundleVersion: "20260126"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -121,7 +121,7 @@ targets:
       - sdk: AppIntents.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: bot.molt.ios.tests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Moltbot.app/Moltbot"
@@ -130,5 +130,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: MoltbotTests
-        CFBundleShortVersionString: "2026.1.26"
+        CFBundleShortVersionString: "2026.1.27-beta.1"
         CFBundleVersion: "20260126"

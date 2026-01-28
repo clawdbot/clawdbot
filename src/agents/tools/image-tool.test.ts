@@ -275,7 +275,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0];
-    expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+    expect(String(url)).toBe("https://api.minimax.chat/v1/coding_plan/vlm");
     expect(init?.method).toBe("POST");
     expect(String((init?.headers as Record<string, string>)?.Authorization)).toBe(
       "Bearer minimax-test",

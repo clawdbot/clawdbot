@@ -340,12 +340,17 @@ describe("createTelegramBot", () => {
     expect(getTelegramSequentialKey({ message: { chat: { id: 123 } } })).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, message_thread_id: 9 },
+        message: { chat: { id: 123, type: "private" }, message_thread_id: 9 },
       }),
     ).toBe("telegram:123:topic:9");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, is_forum: true } },
+        message: { chat: { id: 123, type: "supergroup" }, message_thread_id: 9 },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123, type: "supergroup", is_forum: true } },
       }),
     ).toBe("telegram:123:topic:1");
     expect(
@@ -892,6 +897,73 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("Can you summarize this?");
     expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("uses quote text when a Telegram partial reply is received", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Sure, see below",
+        date: 1736380800,
+        reply_to_message: {
+          message_id: 9001,
+          text: "Can you summarize this?",
+          from: { first_name: "Ada" },
+        },
+        quote: {
+          text: "summarize this",
+        },
+      },
+      me: { username: "moltbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("[Quoting Ada id:9001]");
+    expect(payload.Body).toContain('"summarize this"');
+    expect(payload.ReplyToId).toBe("9001");
+    expect(payload.ReplyToBody).toBe("summarize this");
+    expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("handles quote-only replies without reply metadata", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Sure, see below",
+        date: 1736380800,
+        quote: {
+          text: "summarize this",
+        },
+      },
+      me: { username: "moltbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("[Quoting unknown sender]");
+    expect(payload.Body).toContain('"summarize this"');
+    expect(payload.ReplyToId).toBeUndefined();
+    expect(payload.ReplyToBody).toBe("summarize this");
+    expect(payload.ReplyToSender).toBe("unknown sender");
   });
 
   it("sends replies without native reply threading", async () => {

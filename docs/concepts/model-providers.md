@@ -130,9 +130,10 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2-0905-preview`
+- Example model: `moonshot/kimi-k2.5`
 - Kimi K2 model IDs:
   {/* moonshot-kimi-k2-model-refs:start */}
+  - `moonshot/kimi-k2.5`
   - `moonshot/kimi-k2-0905-preview`
   - `moonshot/kimi-k2-turbo-preview`
   - `moonshot/kimi-k2-thinking`
@@ -141,7 +142,7 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2-0905-preview" } }
+    defaults: { model: { primary: "moonshot/kimi-k2.5" } }
   },
   models: {
     mode: "merge",
@@ -150,7 +151,7 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
         baseUrl: "https://api.moonshot.ai/v1",
         apiKey: "${MOONSHOT_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2 0905 Preview" }]
+        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }]
       }
     }
   }

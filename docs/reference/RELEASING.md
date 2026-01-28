@@ -17,10 +17,10 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
 
 1) **Version & metadata**
-- [ ] Bump `package.json` version (e.g., `2026.1.26`).
+- [ ] Bump `package.json` version (e.g., `2026.1.27-beta.1`).
 - [ ] Run `pnpm plugins:sync` to align extension package versions + changelogs.
 - [ ] Update CLI/version strings: [`src/cli/program.ts`](https://github.com/moltbot/moltbot/blob/main/src/cli/program.ts) and the Baileys user agent in [`src/provider-web.ts`](https://github.com/moltbot/moltbot/blob/main/src/provider-web.ts).
-- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`dist/entry.js`](https://github.com/moltbot/moltbot/blob/main/dist/entry.js) for `moltbot`.
+- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`moltbot.mjs`](https://github.com/moltbot/moltbot/blob/main/moltbot.mjs) for `moltbot`.
 - [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
 
 2) **Build & artifacts**

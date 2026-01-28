@@ -37,7 +37,5 @@ jobs:
           CLAWDBOT_NO_ONBOARD: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
-          # Moltbot is newly published; the only npm version right now is 0.1.0.
-          # Avoid forcing an upgrade path from an unpublished version.
           CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
         run: pnpm test:install:smoke

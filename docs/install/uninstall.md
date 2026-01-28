@@ -78,14 +78,14 @@ Use this if the gateway service keeps running but `moltbot` is missing.
 
 ### macOS (launchd)
 
-Default label is `com.clawdbot.gateway` (or `com.clawdbot.<profile>`):
+Default label is `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.clawdbot.*` may still exist):
 
 ```bash
-launchctl bootout gui/$UID/com.clawdbot.gateway
-rm -f ~/Library/LaunchAgents/com.clawdbot.gateway.plist
+launchctl bootout gui/$UID/bot.molt.gateway
+rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-If you used a profile, replace the label and plist name with `com.clawdbot.<profile>`.
+If you used a profile, replace the label and plist name with `bot.molt.<profile>`. Remove any legacy `com.clawdbot.*` plists if present.
 
 ### Linux (systemd user unit)
 

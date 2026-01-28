@@ -103,11 +103,13 @@ function buildBaseSessionKey(params: {
   cfg: MoltbotConfig;
   agentId: string;
   channel: ChannelId;
+  accountId?: string | null;
   peer: RoutePeer;
 }): string {
   return buildAgentSessionKey({
     agentId: params.agentId,
     channel: params.channel,
+    accountId: params.accountId,
     peer: params.peer,
     dmScope: params.cfg.session?.dmScope ?? "main",
     identityLinks: params.cfg.session?.identityLinks,
@@ -200,6 +202,7 @@ async function resolveSlackSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "slack",
+    accountId: params.accountId,
     peer,
   });
   const threadId = normalizeThreadId(params.threadId ?? params.replyToId);
@@ -237,6 +240,7 @@ function resolveDiscordSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "discord",
+    accountId: params.accountId,
     peer,
   });
   const explicitThreadId = normalizeThreadId(params.threadId);
@@ -285,6 +289,7 @@ function resolveTelegramSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "telegram",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -312,6 +317,7 @@ function resolveWhatsAppSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "whatsapp",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -337,6 +343,7 @@ function resolveSignalSession(
       cfg: params.cfg,
       agentId: params.agentId,
       channel: "signal",
+      accountId: params.accountId,
       peer,
     });
     return {
@@ -371,6 +378,7 @@ function resolveSignalSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "signal",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -395,6 +403,7 @@ function resolveIMessageSession(
       cfg: params.cfg,
       agentId: params.agentId,
       channel: "imessage",
+      accountId: params.accountId,
       peer,
     });
     return {
@@ -419,6 +428,7 @@ function resolveIMessageSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "imessage",
+    accountId: params.accountId,
     peer,
   });
   const toPrefix =
@@ -450,6 +460,7 @@ function resolveMatrixSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "matrix",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -483,6 +494,7 @@ function resolveMSTeamsSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "msteams",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -517,6 +529,7 @@ function resolveMattermostSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "mattermost",
+    accountId: params.accountId,
     peer,
   });
   const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
@@ -561,6 +574,7 @@ function resolveBlueBubblesSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "bluebubbles",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -586,6 +600,7 @@ function resolveNextcloudTalkSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "nextcloud-talk",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -612,6 +627,7 @@ function resolveZaloSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "zalo",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -639,6 +655,7 @@ function resolveZalouserSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "zalouser",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -661,6 +678,7 @@ function resolveNostrSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "nostr",
+    accountId: params.accountId,
     peer,
   });
   return {
@@ -719,6 +737,7 @@ function resolveTlonSession(
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "tlon",
+    accountId: params.accountId,
     peer,
   });
   return {

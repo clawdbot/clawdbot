@@ -3,19 +3,19 @@ import fs from "node:fs/promises";
 import JSON5 from "json5";
 
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import { type MoltbotConfig, CONFIG_PATH, writeConfigFile } from "../config/config.js";
+import { type MoltbotConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-async function readConfigFileRaw(): Promise<{
+async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
   parsed: MoltbotConfig;
 }> {
   try {
-    const raw = await fs.readFile(CONFIG_PATH, "utf-8");
+    const raw = await fs.readFile(configPath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object") {
       return { exists: true, parsed: parsed as MoltbotConfig };
@@ -35,7 +35,9 @@ export async function setupCommand(
       ? opts.workspace.trim()
       : undefined;
 
-  const existingRaw = await readConfigFileRaw();
+  const io = createConfigIO();
+  const configPath = io.configPath;
+  const existingRaw = await readConfigFileRaw(configPath);
   const cfg = existingRaw.parsed;
   const defaults = cfg.agents?.defaults ?? {};
 
@@ -55,12 +57,12 @@ export async function setupCommand(
   if (!existingRaw.exists || defaults.workspace !== workspace) {
     await writeConfigFile(next);
     if (!existingRaw.exists) {
-      runtime.log(`Wrote ${formatConfigPath()}`);
+      runtime.log(`Wrote ${formatConfigPath(configPath)}`);
     } else {
-      logConfigUpdated(runtime, { suffix: "(set agents.defaults.workspace)" });
+      logConfigUpdated(runtime, { path: configPath, suffix: "(set agents.defaults.workspace)" });
     }
   } else {
-    runtime.log(`Config OK: ${formatConfigPath()}`);
+    runtime.log(`Config OK: ${formatConfigPath(configPath)}`);
   }
 
   const ws = await ensureAgentWorkspace({

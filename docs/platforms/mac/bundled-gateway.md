@@ -26,11 +26,11 @@ The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun no
 ## Launchd (Gateway as LaunchAgent)
 
 Label:
-- `com.clawdbot.gateway` (or `com.clawdbot.<profile>`)
+- `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.clawdbot.*` may remain)
 
 Plist location (per‑user):
-- `~/Library/LaunchAgents/com.clawdbot.gateway.plist`
-  (or `~/Library/LaunchAgents/com.clawdbot.<profile>.plist`)
+- `~/Library/LaunchAgents/bot.molt.gateway.plist`
+  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
 
 Manager:
 - The macOS app owns LaunchAgent install/update in Local mode.

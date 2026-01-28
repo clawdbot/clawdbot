@@ -173,7 +173,8 @@ export const buildTelegramMessageContext = async ({
     },
   });
   const baseSessionKey = route.sessionKey;
-  const dmThreadId = !isGroup ? resolvedThreadId : undefined;
+  // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
+  const dmThreadId = !isGroup ? messageThreadId : undefined;
   const threadKeys =
     dmThreadId != null
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
@@ -480,9 +481,13 @@ export const buildTelegramMessageContext = async ({
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
   const replySuffix = replyTarget
-    ? `\n\n[Replying to ${replyTarget.sender}${
-        replyTarget.id ? ` id:${replyTarget.id}` : ""
-      }]\n${replyTarget.body}\n[/Replying]`
+    ? replyTarget.kind === "quote"
+      ? `\n\n[Quoting ${replyTarget.sender}${
+          replyTarget.id ? ` id:${replyTarget.id}` : ""
+        }]\n"${replyTarget.body}"\n[/Quoting]`
+      : `\n\n[Replying to ${replyTarget.sender}${
+          replyTarget.id ? ` id:${replyTarget.id}` : ""
+        }]\n${replyTarget.body}\n[/Replying]`
     : "";
   const forwardPrefix = forwardOrigin
     ? `[Forwarded from ${forwardOrigin.from}${
@@ -565,6 +570,7 @@ export const buildTelegramMessageContext = async ({
     ReplyToId: replyTarget?.id,
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
+    ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
     ForwardedFrom: forwardOrigin?.from,
     ForwardedFromType: forwardOrigin?.fromType,
     ForwardedFromId: forwardOrigin?.fromId,
@@ -596,7 +602,8 @@ export const buildTelegramMessageContext = async ({
     Sticker: allMedia[0]?.stickerMetadata,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
-    MessageThreadId: resolvedThreadId,
+    // For groups: use resolvedThreadId (forum topics only); for DMs: use raw messageThreadId
+    MessageThreadId: isGroup ? resolvedThreadId : messageThreadId,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,

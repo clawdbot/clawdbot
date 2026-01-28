@@ -58,7 +58,7 @@ Authoritative list lives in `src/gateway/server.ts` (`METHODS`, `EVENTS`).
 - Server handshake + method dispatch: `src/gateway/server.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json`
-- Generated Swift models: `apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`
+- Generated Swift models: `apps/macos/Sources/MoltbotProtocol/GatewayModels.swift`
 
 ## Current pipeline
 

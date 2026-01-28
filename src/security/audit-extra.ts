@@ -280,7 +280,10 @@ function isClaudeModel(id: string): boolean {
 }
 
 function isClaude45OrHigher(id: string): boolean {
-  return /\bclaude-[^\s/]*?(?:-4-5\b|4\.5\b)/i.test(id);
+  // Match claude-*-4-5, claude-*-45, claude-*4.5, or opus-4-5/opus-45 variants
+  // Examples that should match:
+  //   claude-opus-4-5, claude-opus-45, claude-4.5, venice/claude-opus-45
+  return /\bclaude-[^\s/]*?(?:-4-?5\b|4\.5\b)/i.test(id);
 }
 
 export function collectModelHygieneFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {

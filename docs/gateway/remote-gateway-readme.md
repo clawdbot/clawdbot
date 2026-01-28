@@ -82,7 +82,7 @@ To have the SSH tunnel start automatically when you log in, create a Launch Agen
 
 ### Create the PLIST file
 
-Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
+Save this as `~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -90,7 +90,7 @@ Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.clawdbot.ssh-tunnel</string>
+    <string>bot.molt.ssh-tunnel</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/ssh</string>
@@ -108,13 +108,15 @@ Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
 ### Load the Launch Agent
 
 ```bash
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
 ```
 
 The tunnel will now:
 - Start automatically when you log in
 - Restart if it crashes
 - Keep running in the background
+
+Legacy note: remove any leftover `com.clawdbot.ssh-tunnel` LaunchAgent if present.
 
 ---
 
@@ -130,13 +132,13 @@ lsof -i :18789
 **Restart the tunnel:**
 
 ```bash
-launchctl kickstart -k gui/$UID/com.clawdbot.ssh-tunnel
+launchctl kickstart -k gui/$UID/bot.molt.ssh-tunnel
 ```
 
 **Stop the tunnel:**
 
 ```bash
-launchctl bootout gui/$UID/com.clawdbot.ssh-tunnel
+launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 ```
 
 ---

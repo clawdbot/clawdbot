@@ -250,7 +250,8 @@
   max-height: 150px;
   padding: 9px 12px;
   border-radius: 8px;
-  resize: vertical;
+  overflow-y: auto;
+  resize: none;
   white-space: pre-wrap;
   font-family: var(--font-body);
   font-size: 14px;

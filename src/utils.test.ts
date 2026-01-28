@@ -9,6 +9,7 @@ import {
   jidToE164,
   normalizeE164,
   normalizePath,
+  resolveConfigDir,
   resolveJidToE164,
   resolveUserPath,
   sleep,
@@ -117,6 +118,20 @@ describe("jidToE164", () => {
     expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
     fs.rmSync(first, { recursive: true, force: true });
     fs.rmSync(second, { recursive: true, force: true });
+  });
+});
+
+describe("resolveConfigDir", () => {
+  it("prefers ~/.moltbot when legacy dir is missing", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "moltbot-config-dir-"));
+    try {
+      const newDir = path.join(root, ".moltbot");
+      await fs.promises.mkdir(newDir, { recursive: true });
+      const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
+      expect(resolved).toBe(newDir);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

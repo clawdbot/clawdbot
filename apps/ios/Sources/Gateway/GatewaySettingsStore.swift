@@ -1,9 +1,11 @@
 import Foundation
 
 enum GatewaySettingsStore {
-    private static let gatewayService = "com.clawdbot.gateway"
+    private static let gatewayService = "bot.molt.gateway"
+    private static let legacyGatewayService = "com.clawdbot.gateway"
     private static let legacyBridgeService = "com.clawdbot.bridge"
-    private static let nodeService = "com.clawdbot.node"
+    private static let nodeService = "bot.molt.node"
+    private static let legacyNodeService = "com.clawdbot.node"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
@@ -33,8 +35,22 @@ enum GatewaySettingsStore {
     }
 
     static func loadStableInstanceID() -> String? {
-        KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+
+        if let legacy = KeychainStore.loadString(service: self.legacyNodeService, account: self.instanceIdAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !legacy.isEmpty
+        {
+            _ = KeychainStore.saveString(legacy, service: self.nodeService, account: self.instanceIdAccount)
+            return legacy
+        }
+
+        return nil
     }
 
     static func saveStableInstanceID(_ instanceId: String) {
@@ -42,8 +58,29 @@ enum GatewaySettingsStore {
     }
 
     static func loadPreferredGatewayStableID() -> String? {
-        KeychainStore.loadString(service: self.gatewayService, account: self.preferredGatewayStableIDAccount)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.preferredGatewayStableIDAccount
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+
+        if let legacy = KeychainStore.loadString(
+            service: self.legacyGatewayService,
+            account: self.preferredGatewayStableIDAccount
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !legacy.isEmpty
+        {
+            _ = KeychainStore.saveString(
+                legacy,
+                service: self.gatewayService,
+                account: self.preferredGatewayStableIDAccount)
+            return legacy
+        }
+
+        return nil
     }
 
     static func savePreferredGatewayStableID(_ stableID: String) {
@@ -54,8 +91,29 @@ enum GatewaySettingsStore {
     }
 
     static func loadLastDiscoveredGatewayStableID() -> String? {
-        KeychainStore.loadString(service: self.gatewayService, account: self.lastDiscoveredGatewayStableIDAccount)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+
+        if let legacy = KeychainStore.loadString(
+            service: self.legacyGatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !legacy.isEmpty
+        {
+            _ = KeychainStore.saveString(
+                legacy,
+                service: self.gatewayService,
+                account: self.lastDiscoveredGatewayStableIDAccount)
+            return legacy
+        }
+
+        return nil
     }
 
     static func saveLastDiscoveredGatewayStableID(_ stableID: String) {

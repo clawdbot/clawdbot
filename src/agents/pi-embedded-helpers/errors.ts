@@ -401,6 +401,7 @@ const ERROR_PATTERNS = {
 const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
+const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
 function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
   if (!raw) return false;
@@ -467,6 +468,25 @@ export function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
+export function parseImageSizeError(raw: string): {
+  maxMb?: number;
+  raw: string;
+} | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (!lower.includes("image exceeds") || !lower.includes("mb")) return null;
+  const match = raw.match(IMAGE_SIZE_ERROR_RE);
+  return {
+    maxMb: match?.[1] ? Number.parseFloat(match[1]) : undefined,
+    raw,
+  };
+}
+
+export function isImageSizeError(errorMessage?: string): boolean {
+  if (!errorMessage) return false;
+  return Boolean(parseImageSizeError(errorMessage));
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
@@ -478,6 +498,7 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) return null;
+  if (isImageSizeError(raw)) return null;
   if (isRateLimitErrorMessage(raw)) return "rate_limit";
   if (isOverloadedErrorMessage(raw)) return "rate_limit";
   if (isCloudCodeAssistFormatError(raw)) return "format";

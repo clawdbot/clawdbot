@@ -1,6 +1,12 @@
 import type { Message } from "@grammyjs/types";
 
-export type TelegramMessage = Message;
+export type TelegramQuote = {
+  text?: string;
+};
+
+export type TelegramMessage = Message & {
+  quote?: TelegramQuote;
+};
 
 export type TelegramStreamMode = "off" | "partial" | "block";
 

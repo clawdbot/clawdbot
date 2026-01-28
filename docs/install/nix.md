@@ -57,7 +57,7 @@ On macOS, the GUI app does not automatically inherit shell env vars. You can
 also enable Nix mode via defaults:
 
 ```bash
-defaults write com.clawdbot.mac moltbot.nixMode -bool true
+defaults write bot.molt.mac moltbot.nixMode -bool true
 ```
 
 ### Config + state paths

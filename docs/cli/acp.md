@@ -42,7 +42,7 @@ moltbot acp client
 moltbot acp client --server-args --url wss://gateway-host:18789 --token <token>
 
 # Override the server command (default: moltbot)
-moltbot acp client --server "node" --server-args dist/entry.js acp --url ws://127.0.0.1:19001
+moltbot acp client --server "node" --server-args moltbot.mjs acp --url ws://127.0.0.1:19001
 ```
 
 ## How to use this

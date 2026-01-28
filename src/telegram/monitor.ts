@@ -74,6 +74,23 @@ const isGetUpdatesConflict = (err: unknown) => {
   return haystack.includes("getupdates");
 };
 
+const NETWORK_ERROR_SNIPPETS = [
+  "fetch failed",
+  "network",
+  "timeout",
+  "socket",
+  "econnreset",
+  "econnrefused",
+  "undici",
+];
+
+const isNetworkRelatedError = (err: unknown) => {
+  if (!err) return false;
+  const message = formatErrorMessage(err).toLowerCase();
+  if (!message) return false;
+  return NETWORK_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
+};
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const account = resolveTelegramAccount({
@@ -158,7 +175,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
       const isConflict = isGetUpdatesConflict(err);
       const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
-      if (!isConflict && !isRecoverable) {
+      const isNetworkError = isNetworkRelatedError(err);
+      if (!isConflict && !isRecoverable && !isNetworkError) {
         throw err;
       }
       restartAttempts += 1;

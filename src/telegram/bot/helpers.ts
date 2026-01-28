@@ -13,14 +13,25 @@ import type {
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
+/**
+ * Resolve the thread ID for Telegram forum topics.
+ * For non-forum groups, returns undefined even if messageThreadId is present
+ * (reply threads in regular groups should not create separate sessions).
+ * For forum groups, returns the topic ID (or General topic ID=1 if unspecified).
+ */
 export function resolveTelegramForumThreadId(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
 }) {
-  if (params.isForum && params.messageThreadId == null) {
+  // Non-forum groups: ignore message_thread_id (reply threads are not real topics)
+  if (!params.isForum) {
+    return undefined;
+  }
+  // Forum groups: use the topic ID, defaulting to General topic
+  if (params.messageThreadId == null) {
     return TELEGRAM_GENERAL_TOPIC_ID;
   }
-  return params.messageThreadId ?? undefined;
+  return params.messageThreadId;
 }
 
 /**
@@ -150,28 +161,49 @@ export function resolveTelegramReplyId(raw?: string): number | undefined {
   return parsed;
 }
 
-export function describeReplyTarget(msg: TelegramMessage) {
+export type TelegramReplyTarget = {
+  id?: string;
+  sender: string;
+  body: string;
+  kind: "reply" | "quote";
+};
+
+export function describeReplyTarget(msg: TelegramMessage): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
-  if (!reply) return null;
-  const replyBody = (reply.text ?? reply.caption ?? "").trim();
-  let body = replyBody;
-  if (!body) {
-    if (reply.photo) body = "<media:image>";
-    else if (reply.video) body = "<media:video>";
-    else if (reply.audio || reply.voice) body = "<media:audio>";
-    else if (reply.document) body = "<media:document>";
-    else {
-      const locationData = extractTelegramLocation(reply);
-      if (locationData) body = formatLocationText(locationData);
+  const quote = msg.quote;
+  let body = "";
+  let kind: TelegramReplyTarget["kind"] = "reply";
+
+  if (quote?.text) {
+    body = quote.text.trim();
+    if (body) {
+      kind = "quote";
+    }
+  }
+
+  if (!body && reply) {
+    const replyBody = (reply.text ?? reply.caption ?? "").trim();
+    body = replyBody;
+    if (!body) {
+      if (reply.photo) body = "<media:image>";
+      else if (reply.video) body = "<media:video>";
+      else if (reply.audio || reply.voice) body = "<media:audio>";
+      else if (reply.document) body = "<media:document>";
+      else {
+        const locationData = extractTelegramLocation(reply);
+        if (locationData) body = formatLocationText(locationData);
+      }
     }
   }
   if (!body) return null;
-  const sender = buildSenderName(reply);
+  const sender = reply ? buildSenderName(reply) : undefined;
   const senderLabel = sender ? `${sender}` : "unknown sender";
+
   return {
-    id: reply.message_id ? String(reply.message_id) : undefined,
+    id: reply?.message_id ? String(reply.message_id) : undefined,
     sender: senderLabel,
     body,
+    kind,
   };
 }
 

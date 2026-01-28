@@ -49,6 +49,7 @@ export type MsgContext = {
   ReplyToIdFull?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
+  ReplyToIsQuote?: boolean;
   ForwardedFrom?: string;
   ForwardedFromType?: string;
   ForwardedFromId?: string;
