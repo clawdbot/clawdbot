@@ -56,8 +56,70 @@ function makeMissingToolResult(params: {
 
 export { makeMissingToolResult };
 
+export function sanitizeToolUseArgs(messages: AgentMessage[]): AgentMessage[] {
+  // Deep clone to avoid mutating the input unless necessary?
+  // Actually, we can mutate in place effectively or clone messages that need change.
+  // For safety against corrupt JSON rendering the whole session unusable:
+  const out: AgentMessage[] = [];
+  let changed = false;
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const content = msg.content;
+    const nextContent: any[] = [];
+    let msgChanged = false;
+
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall")
+      ) {
+        // Check if input is a string that needs parsing
+        if (typeof (block as any).input === "string") {
+          try {
+            JSON.parse((block as any).input);
+            nextContent.push(block);
+          } catch {
+            // Invalid JSON found in tool args.
+            // Replace with empty object to prevent downstream crashes.
+            nextContent.push({
+              ...block,
+              input: {},
+              _sanitized: true,
+              _originalInput: (block as any).input,
+            });
+            msgChanged = true;
+          }
+        } else {
+          nextContent.push(block);
+        }
+      } else {
+        nextContent.push(block);
+      }
+    }
+
+    if (msgChanged) {
+      out.push({
+        ...msg,
+        content: nextContent,
+      } as AgentMessage);
+      changed = true;
+    } else {
+      out.push(msg);
+    }
+  }
+
+  return changed ? out : messages;
+}
+
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
-  return repairToolUseResultPairing(messages).messages;
+  const sanitized = sanitizeToolUseArgs(messages);
+  return repairToolUseResultPairing(sanitized).messages;
 }
 
 export type ToolUseRepairReport = {
