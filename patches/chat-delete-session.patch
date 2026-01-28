@@ -43,7 +43,7 @@ index 27dfe62d1..9eb7f2150 100644
 +}
 +
 +.chat-delete-card {
-+  background: var(--surface);
++  background: var(--card);
 +  border: 1px solid var(--border);
 +  border-radius: 8px;
 +  padding: 20px 24px;
