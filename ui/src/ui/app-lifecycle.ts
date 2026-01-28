@@ -35,6 +35,11 @@ type LifecycleHost = {
 
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
+  // Apply URL settings FIRST so sessionKey is read before syncTabWithLocation
+  // overwrites it with the localStorage value
+  applySettingsFromUrl(
+    host as unknown as Parameters<typeof applySettingsFromUrl>[0],
+  );
   syncTabWithLocation(
     host as unknown as Parameters<typeof syncTabWithLocation>[0],
     true,
@@ -46,9 +51,6 @@ export function handleConnected(host: LifecycleHost) {
     host as unknown as Parameters<typeof attachThemeListener>[0],
   );
   window.addEventListener("popstate", host.popStateHandler);
-  applySettingsFromUrl(
-    host as unknown as Parameters<typeof applySettingsFromUrl>[0],
-  );
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {

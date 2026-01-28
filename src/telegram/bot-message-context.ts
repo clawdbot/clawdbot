@@ -605,6 +605,8 @@ export const buildTelegramMessageContext = async ({
     // For groups: use resolvedThreadId (forum topics only); for DMs: use raw messageThreadId
     MessageThreadId: isGroup ? resolvedThreadId : messageThreadId,
     IsForum: isForum,
+    // DM thread label for display in Sessions tab (e.g., "Sender Name (Thread: 42)")
+    ThreadLabel: !isGroup && messageThreadId != null ? `Thread: ${messageThreadId}` : undefined,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
