@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -18,6 +19,109 @@ const createFetchMock = () =>
   })) as unknown as typeof fetch;
 
 describe("embedding provider remote overrides", () => {
+  it("builds Mistral embeddings requests with api key header", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+      apiKey: "mistral-key",
+      mode: "api-key",
+      source: "test",
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "mistral",
+      remote: {
+        apiKey: "mistral-key",
+      },
+      model: "mistral-embed",
+      fallback: "openai",
+    });
+
+    await result.provider.embedQuery("hello");
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.mistral.ai/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer mistral-key");
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("uses Mistral remote baseUrl/apiKey and merges headers", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+      apiKey: "provider-key",
+      mode: "api-key",
+      source: "test",
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://provider.example/v1",
+            headers: {
+              "X-Provider": "p",
+              "X-Shared": "provider",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "mistral",
+      remote: {
+        baseUrl: "https://remote.example/v1",
+        apiKey: "  remote-key  ",
+        headers: {
+          "X-Shared": "remote",
+          "X-Remote": "r",
+        },
+      },
+      model: "mistral-embed",
+      fallback: "openai",
+    });
+
+    await result.provider.embedQuery("hello");
+
+    expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://remote.example/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer remote-key");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-Provider"]).toBe("p");
+    expect(headers["X-Shared"]).toBe("remote");
+    expect(headers["X-Remote"]).toBe("r");
+  });
+
   afterEach(() => {
     vi.resetAllMocks();
     vi.resetModules();
@@ -167,6 +271,27 @@ describe("embedding provider remote overrides", () => {
 });
 
 describe("embedding provider auto selection", () => {
+  it("prefers mistral when a key resolves", async () => {
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "mistral") {
+        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" };
+      }
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.provider.id).toBe("mistral");
+  });
+
   afterEach(() => {
     vi.resetAllMocks();
     vi.resetModules();
