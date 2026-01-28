@@ -23,7 +23,7 @@ Status: production-ready plugin for Zoom Team Chat direct messages via Team Chat
          enabled: true,
          clientId: "YOUR_CLIENT_ID",
          clientSecret: "YOUR_CLIENT_SECRET",
-         botJid: "YOUR_BOT_JID@xmppdev.zoom.us",
+         botJid: "YOUR_BOT_JID@xmpp.zoom.us",
          secretToken: "YOUR_SECRET_TOKEN",
          redirectUri: "https://yourdomain.com/api/zoomapp/auth",
          dm: { policy: "open" }
@@ -98,6 +98,26 @@ Examples:
 
 Add to `~/.clawdbot/moltbot.json`:
 
+**Production (default):**
+```json5
+{
+  channels: {
+    zoom: {
+      enabled: true,
+      clientId: "YOUR_CLIENT_ID",
+      clientSecret: "YOUR_CLIENT_SECRET",
+      botJid: "YOUR_BOT_JID@xmpp.zoom.us",
+      secretToken: "YOUR_SECRET_TOKEN",
+      redirectUri: "https://yourdomain.com/api/zoomapp/auth",  // Must match Zoom app OAuth Redirect URL
+      dm: {
+        policy: "open"                        // open | allowlist | pairing
+      }
+    }
+  }
+}
+```
+
+**Development (optional explicit config):**
 ```json5
 {
   channels: {
@@ -107,11 +127,11 @@ Add to `~/.clawdbot/moltbot.json`:
       clientSecret: "YOUR_CLIENT_SECRET",
       botJid: "YOUR_BOT_JID@xmppdev.zoom.us",
       secretToken: "YOUR_SECRET_TOKEN",
-      redirectUri: "https://yourdomain.com/api/zoomapp/auth",  // Must match Zoom app OAuth Redirect URL
-      apiHost: "https://zoomdev.us",          // Use https://api.zoom.us for production
-      oauthHost: "https://zoomdev.us",        // Use https://zoom.us for production
+      redirectUri: "https://abc123.ngrok.io/api/zoomapp/auth",
+      apiHost: "https://zoomdev.us",
+      oauthHost: "https://zoomdev.us",
       dm: {
-        policy: "open"                        // open | allowlist | pairing
+        policy: "open"
       }
     }
   }
@@ -170,8 +190,8 @@ Bot rejects all DMs.
       dm: {
         policy: "allowlist",
         allowFrom: [
-          "user1@xmppdev.zoom.us",
-          "user2@xmppdev.zoom.us"
+          "user1@xmpp.zoom.us",
+          "user2@xmpp.zoom.us"
         ]
       }
     }
@@ -182,7 +202,21 @@ Only specified users can message the bot.
 
 ### Development vs Production
 
-**Development (zoomdev.us):**
+**Production (default):**
+```json5
+{
+  channels: {
+    zoom: {
+      botJid: "bot@xmpp.zoom.us"
+      // apiHost and oauthHost default to production URLs
+      // apiHost: "https://api.zoom.us"
+      // oauthHost: "https://zoom.us"
+    }
+  }
+}
+```
+
+**Development:**
 ```json5
 {
   channels: {
@@ -190,19 +224,6 @@ Only specified users can message the bot.
       apiHost: "https://zoomdev.us",
       oauthHost: "https://zoomdev.us",
       botJid: "bot@xmppdev.zoom.us"
-    }
-  }
-}
-```
-
-**Production (zoom.us):**
-```json5
-{
-  channels: {
-    zoom: {
-      apiHost: "https://api.zoom.us",
-      oauthHost: "https://zoom.us",
-      botJid: "bot@xmpp.zoom.us"
     }
   }
 }
