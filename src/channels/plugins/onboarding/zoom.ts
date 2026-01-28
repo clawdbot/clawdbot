@@ -82,32 +82,51 @@ export const zoomOnboardingAdapter: ChannelOnboardingAdapter = {
 
     await noteZoomHelp(prompter);
 
-    const clientId = await prompter.text({
-      message: "Zoom Client ID",
-      placeholder: "lfcOyplW...",
-      validate: (value) => (value?.trim() ? undefined : "Client ID is required"),
-    });
+    const clientId = String(
+      await prompter.text({
+        message: "Zoom Client ID",
+        placeholder: "lfcOyplW...",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          return trimmed ? undefined : "Client ID is required";
+        },
+      }),
+    ).trim();
 
-    const clientSecret = await prompter.text({
-      message: "Zoom Client Secret",
-      placeholder: "rm48DW7m...",
-      validate: (value) => (value?.trim() ? undefined : "Client Secret is required"),
-    });
+    const clientSecret = String(
+      await prompter.text({
+        message: "Zoom Client Secret",
+        placeholder: "rm48DW7m...",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          return trimmed ? undefined : "Client Secret is required";
+        },
+      }),
+    ).trim();
 
-    const botJid = await prompter.text({
-      message: "Zoom Bot JID",
-      placeholder: "bot@xmpp.zoom.us",
-      validate: (value) =>
-        value?.includes("@xmpp")
-          ? undefined
-          : "Bot JID should contain @xmpp.zoom.us or @xmppdev.zoom.us",
-    });
+    const botJid = String(
+      await prompter.text({
+        message: "Zoom Bot JID",
+        placeholder: "bot@xmpp.zoom.us",
+        validate: (value) => {
+          const str = String(value ?? "").trim();
+          return str.includes("@xmpp")
+            ? undefined
+            : "Bot JID should contain @xmpp.zoom.us or @xmppdev.zoom.us";
+        },
+      }),
+    ).trim();
 
-    const secretToken = await prompter.text({
-      message: "Zoom Secret Token",
-      placeholder: "kVJhHKxo...",
-      validate: (value) => (value?.trim() ? undefined : "Secret Token is required"),
-    });
+    const secretToken = String(
+      await prompter.text({
+        message: "Zoom Secret Token",
+        placeholder: "kVJhHKxo...",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          return trimmed ? undefined : "Secret Token is required";
+        },
+      }),
+    ).trim();
 
     // Determine environment from Bot JID
     const isDev = botJid.includes("@xmppdev");
