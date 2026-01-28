@@ -1668,6 +1668,9 @@ Example:
         "claude-cli": {
           command: "/opt/homebrew/bin/claude"
         },
+        "copilot-cli": {
+          command: "/opt/homebrew/bin/copilot"
+        },
         "my-cli": {
           command: "my-cli",
           args: ["--json"],

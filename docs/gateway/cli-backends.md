@@ -32,6 +32,12 @@ Codex CLI also works out of the box:
 moltbot agent --message "hi" --model codex-cli/gpt-5.2-codex
 ```
 
+GitHub Copilot CLI works the same way (requires GitHub CLI auth):
+
+```bash
+moltbot agent --message "hi" --model copilot-cli/gpt-4o
+```
+
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
 command path:
 
@@ -199,6 +205,18 @@ Moltbot also ships a default for `codex-cli`:
 - `modelArg: "--model"`
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
+
+Moltbot also ships a default for `copilot-cli`:
+
+- `command: "copilot"`
+- `args: ["-p"]`
+- `resumeArgs: ["-p", "--resume", "{sessionId}"]`
+- `output: "text"`
+- `modelArg: "--model"`
+- `sessionMode: "existing"`
+
+Note: Copilot CLI uses GitHub CLI (`gh`) for authentication and currently outputs
+text only (JSON output is not yet supported).
 
 Override only if needed (common: absolute `command` path).
 

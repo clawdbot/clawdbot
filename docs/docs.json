@@ -1008,6 +1008,8 @@
           "providers/models",
           "providers/openai",
           "providers/anthropic",
+          "providers/github-copilot",
+          "providers/github-copilot-cli",
           "bedrock",
           "providers/moonshot",
           "providers/minimax",

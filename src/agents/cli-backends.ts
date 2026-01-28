@@ -25,6 +25,15 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   "claude-haiku-3-5": "haiku",
 };
 
+const COPILOT_CLI_MODEL_ALIASES: Record<string, string> = {
+  "gpt-4o": "gpt-4o",
+  "gpt-4.1": "gpt-4.1",
+  "gpt-4.1-mini": "gpt-4.1-mini",
+  "gpt-4-turbo": "gpt-4-turbo",
+  "claude-sonnet-4-5": "claude-sonnet-4-5",
+  "claude-opus-4-5": "claude-opus-4-5",
+};
+
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   command: "claude",
   args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
@@ -74,6 +83,19 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+const DEFAULT_COPILOT_CLI_BACKEND: CliBackendConfig = {
+  command: "copilot",
+  args: ["-p"],
+  resumeArgs: ["-p", "--resume", "{sessionId}"],
+  output: "text",
+  input: "arg",
+  modelArg: "--model",
+  modelAliases: COPILOT_CLI_MODEL_ALIASES,
+  sessionIdFields: ["session_id", "sessionId"],
+  sessionMode: "existing",
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -107,6 +129,7 @@ export function resolveCliBackendIds(cfg?: MoltbotConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("copilot-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -131,6 +154,12 @@ export function resolveCliBackendConfig(
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) return null;
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "copilot-cli") {
+    const merged = mergeBackendConfig(DEFAULT_COPILOT_CLI_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) return null;
     return { id: normalized, config: { ...merged, command } };
