@@ -397,7 +397,7 @@ export async function compactEmbeddedPiSessionDirect(
         sessionManager,
         settingsManager,
         skills: [],
-        contextFiles: [],
+        contextFiles,
         additionalExtensionPaths,
       }));
 
