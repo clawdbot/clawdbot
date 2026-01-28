@@ -63,7 +63,7 @@ Skills can be gated by config/env (see `skills` in [Gateway configuration](/gate
 
 Moltbot reuses pieces of the [pi-mono](https://github.com/badlogic/pi-mono) codebase (models/tools), but **session management, discovery, and tool wiring are Moltbot-owned**.
 
-- No p-coding agent runtime.
+- No pi-coding agent runtime.
 - No `~/.pi/agent` or `<workspace>/.pi` settings are consulted.
 
 ## Sessions
