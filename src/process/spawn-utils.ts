@@ -54,21 +54,31 @@ function shouldRetry(err: unknown, codes: string[]): boolean {
   return code.length > 0 && codes.includes(code);
 }
 
+// Fake child process interface for EBADF workaround
+interface FakeChildProcess extends EventEmitter {
+  stdout: PassThrough;
+  stderr: PassThrough;
+  stdin: PassThrough;
+  pid: number;
+  killed: boolean;
+  kill: () => boolean;
+}
+
 // EBADF workaround: capture output via temp files, use stdio: ignore for spawn
 function createFakeChildFromSync(argv: string[], options: SpawnOptions): ChildProcess {
-  const child = new EventEmitter() as unknown as ChildProcess;
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
+  const fakeChild: FakeChildProcess = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdin: new PassThrough(),
+    pid: process.pid,
+    killed: false,
+    kill: () => {
+      fakeChild.killed = true;
+      return true;
+    },
+  });
 
-  child.stdout = stdout;
-  child.stderr = stderr;
-  child.stdin = new PassThrough();
-  child.pid = process.pid;
-  child.killed = false;
-  child.kill = () => {
-    child.killed = true;
-    return true;
-  };
+  const child = fakeChild as unknown as ChildProcess;
 
   // Extract command from argv (typically [shell, "-c", command])
   const command = argv.length >= 3 ? argv[2] : argv.join(" ");
@@ -99,21 +109,21 @@ function createFakeChildFromSync(argv: string[], options: SpawnOptions): ChildPr
         try {
           fs.unlinkSync(stderrFile);
         } catch {}
-        child.emit("error", result.error);
+        fakeChild.emit("error", result.error);
         return;
       }
 
-      child.pid = result.pid || process.pid;
+      fakeChild.pid = result.pid || process.pid;
 
       // Read output from temp files
       try {
         const stdoutData = fs.readFileSync(stdoutFile, "utf8");
-        if (stdoutData) stdout.write(stdoutData);
+        if (stdoutData) fakeChild.stdout.write(stdoutData);
       } catch {}
 
       try {
         const stderrData = fs.readFileSync(stderrFile, "utf8");
-        if (stderrData) stderr.write(stderrData);
+        if (stderrData) fakeChild.stderr.write(stderrData);
       } catch {}
 
       // Clean up temp files
@@ -124,9 +134,9 @@ function createFakeChildFromSync(argv: string[], options: SpawnOptions): ChildPr
         fs.unlinkSync(stderrFile);
       } catch {}
 
-      stdout.end();
-      stderr.end();
-      child.emit("close", result.status, result.signal);
+      fakeChild.stdout.end();
+      fakeChild.stderr.end();
+      fakeChild.emit("close", result.status, result.signal);
     } catch (err) {
       // Clean up temp files
       try {
@@ -135,13 +145,13 @@ function createFakeChildFromSync(argv: string[], options: SpawnOptions): ChildPr
       try {
         fs.unlinkSync(stderrFile);
       } catch {}
-      child.emit("error", err);
+      fakeChild.emit("error", err);
     }
   });
 
   // Emit spawn immediately
   process.nextTick(() => {
-    child.emit("spawn");
+    fakeChild.emit("spawn");
   });
 
   return child;
