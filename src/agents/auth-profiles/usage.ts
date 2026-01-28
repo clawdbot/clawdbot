@@ -48,6 +48,14 @@ function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
   return Math.max(...values);
 }
 
+/** Checks if a key is currently in cooldown. */
+function isKeyInCooldown(store: AuthProfileStore, key: string, now: number): boolean {
+  const stats = store.usageStats?.[key];
+  if (!stats) return false;
+  const unusableUntil = resolveProfileUnusableUntil(stats);
+  return unusableUntil !== null && now < unusableUntil;
+}
+
 /**
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
  *
@@ -66,22 +74,43 @@ export function isProfileInCooldown(
   const now = Date.now();
 
   // Check per-model cooldown first (if model provided)
-  if (model) {
-    const modelKey = cooldownKey(profileId, model);
-    const modelStats = store.usageStats?.[modelKey];
-    if (modelStats) {
-      const modelUnusableUntil = resolveProfileUnusableUntil(modelStats);
-      if (modelUnusableUntil && now < modelUnusableUntil) {
-        return true;
-      }
-    }
+  if (model && isKeyInCooldown(store, cooldownKey(profileId, model), now)) {
+    return true;
   }
 
   // Also check profile-level cooldown (applies to all models)
-  const profileStats = store.usageStats?.[profileId];
-  if (!profileStats) return false;
-  const profileUnusableUntil = resolveProfileUnusableUntil(profileStats);
-  return profileUnusableUntil ? now < profileUnusableUntil : false;
+  return isKeyInCooldown(store, profileId, now);
+}
+
+/** Clears cooldown fields from usage stats, preserving other fields. */
+function clearCooldownFields(
+  stats: ProfileUsageStats | undefined,
+  options?: { setLastUsed?: boolean },
+): ProfileUsageStats {
+  return {
+    ...stats,
+    ...(options?.setLastUsed ? { lastUsed: Date.now() } : {}),
+    errorCount: 0,
+    cooldownUntil: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+  };
+}
+
+/** Applies success updates to usage stats in-place. */
+function applySuccessUpdates(
+  usageStats: Record<string, ProfileUsageStats>,
+  profileId: string,
+  model?: string,
+): void {
+  usageStats[profileId] = clearCooldownFields(usageStats[profileId], { setLastUsed: true });
+  if (model) {
+    const modelKey = cooldownKey(profileId, model);
+    if (usageStats[modelKey]) {
+      usageStats[modelKey] = clearCooldownFields(usageStats[modelKey]);
+    }
+  }
 }
 
 /**
@@ -107,30 +136,7 @@ export async function markAuthProfileUsed(params: {
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) return false;
       freshStore.usageStats = freshStore.usageStats ?? {};
-      // Clear profile-level cooldown
-      freshStore.usageStats[profileId] = {
-        ...freshStore.usageStats[profileId],
-        lastUsed: Date.now(),
-        errorCount: 0,
-        cooldownUntil: undefined,
-        disabledUntil: undefined,
-        disabledReason: undefined,
-        failureCounts: undefined,
-      };
-      // Also clear per-model cooldown if model provided
-      if (model) {
-        const modelKey = cooldownKey(profileId, model);
-        if (freshStore.usageStats[modelKey]) {
-          freshStore.usageStats[modelKey] = {
-            ...freshStore.usageStats[modelKey],
-            errorCount: 0,
-            cooldownUntil: undefined,
-            disabledUntil: undefined,
-            disabledReason: undefined,
-            failureCounts: undefined,
-          };
-        }
-      }
+      applySuccessUpdates(freshStore.usageStats, profileId, model);
       return true;
     },
   });
@@ -141,30 +147,7 @@ export async function markAuthProfileUsed(params: {
   if (!store.profiles[profileId]) return;
 
   store.usageStats = store.usageStats ?? {};
-  // Clear profile-level cooldown
-  store.usageStats[profileId] = {
-    ...store.usageStats[profileId],
-    lastUsed: Date.now(),
-    errorCount: 0,
-    cooldownUntil: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
-    failureCounts: undefined,
-  };
-  // Also clear per-model cooldown if model provided
-  if (model) {
-    const modelKey = cooldownKey(profileId, model);
-    if (store.usageStats[modelKey]) {
-      store.usageStats[modelKey] = {
-        ...store.usageStats[modelKey],
-        errorCount: 0,
-        cooldownUntil: undefined,
-        disabledUntil: undefined,
-        disabledReason: undefined,
-        failureCounts: undefined,
-      };
-    }
-  }
+  applySuccessUpdates(store.usageStats, profileId, model);
   saveAuthProfileStore(store, agentDir);
 }
 
