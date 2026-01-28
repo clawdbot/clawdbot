@@ -1,0 +1,9 @@
+{
+  "id": "webex",
+  "channels": ["webex"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -77,6 +77,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/voice-call/**"
+"channel: webex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/webex/**"
+          - "docs/channels/webex.md"
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:

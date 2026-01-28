@@ -1,0 +1,34 @@
+{
+  "name": "@moltbot/webex",
+  "version": "2026.1.27",
+  "description": "Moltbot Webex channel plugin",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "moltbot": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "webex",
+      "label": "Webex (Bot Framework)",
+      "docsPath": "/channels/webex",
+      "order": 65,
+      "aliases": ["cisco-webex", "spark"]
+    },
+    "install": {
+      "npmSpec": "@moltbot/webex",
+      "localPath": "extensions/webex",
+      "defaultChoice": "local"
+    }
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "moltbot": "workspace:*"
+  },
+  "peerDependencies": {
+    "moltbot": ">=2026.1.26"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
