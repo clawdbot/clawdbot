@@ -765,13 +765,17 @@ const isCustomOpenAIEndpoint = OPENAI_TTS_BASE_URL !== "https://api.openai.com/v
 export const OPENAI_TTS_VOICES = [
   "alloy",
   "ash",
+  "ballad",
+  "cedar",
   "coral",
   "echo",
   "fable",
-  "onyx",
+  "marin",
   "nova",
+  "onyx",
   "sage",
   "shimmer",
+  "verse",
 ] as const;
 
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
