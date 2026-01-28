@@ -98,6 +98,16 @@ Files not intended to be loaded into context, but rather used within the output 
 - **Use cases**: Templates, images, icons, boilerplate code, fonts, sample documents that get copied or modified
 - **Benefits**: Separates output resources from documentation, enables Codex to use files without loading them into context
 
+#### Secrets & Credentials
+
+**NEVER hardcode secrets automatically**—only if user explicitly requests it. Scripts must look up secrets dynamically: config → env → error.
+
+```bash
+VALUE=$(jq -r '.skills.entries["skill-name"].apiKey // empty' ~/.clawdbot/clawdbot.json)
+VALUE="${VALUE:-$SKILL_NAME_API_KEY}"
+[[ -z "$VALUE" ]] && echo "Error: Set skills.entries.skill-name.apiKey in config or SKILL_NAME_API_KEY env var" && exit 1
+```
+
 #### What to Not Include in a Skill
 
 A skill should only contain essential files that directly support its functionality. Do NOT create extraneous documentation or auxiliary files, including:
