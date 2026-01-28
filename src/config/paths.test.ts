@@ -69,6 +69,7 @@ describe("state + config path candidates", () => {
   it("CONFIG_PATH prefers existing legacy filename when present", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-config-"));
     const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
     const previousMoltbotConfig = process.env.MOLTBOT_CONFIG_PATH;
     const previousClawdbotConfig = process.env.CLAWDBOT_CONFIG_PATH;
     const previousMoltbotState = process.env.MOLTBOT_STATE_DIR;
@@ -80,6 +81,7 @@ describe("state + config path candidates", () => {
       await fs.writeFile(legacyPath, "{}", "utf-8");
 
       process.env.HOME = root;
+      process.env.USERPROFILE = root;
       delete process.env.MOLTBOT_CONFIG_PATH;
       delete process.env.CLAWDBOT_CONFIG_PATH;
       delete process.env.MOLTBOT_STATE_DIR;
@@ -93,6 +95,11 @@ describe("state + config path candidates", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = previousHome;
+      }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
       }
       if (previousMoltbotConfig === undefined) delete process.env.MOLTBOT_CONFIG_PATH;
       else process.env.MOLTBOT_CONFIG_PATH = previousMoltbotConfig;
