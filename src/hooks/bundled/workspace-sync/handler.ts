@@ -8,6 +8,7 @@
 import type { MoltbotConfig } from "../../../config/config.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
 import {
   isRcloneInstalled,
@@ -15,6 +16,8 @@ import {
   resolveSyncConfig,
   runBisync,
 } from "../../../infra/rclone.js";
+
+const log = createSubsystemLogger("workspace-sync");
 
 /**
  * Sync workspace on session start or end
@@ -55,13 +58,13 @@ const workspaceSyncHandler: HookHandler = async (event) => {
     return;
   }
 
-  console.log(`[workspace-sync] Triggered on session ${event.action}`);
+  log.info(`triggered on session ${event.action}`);
 
   try {
     // Check if rclone is installed
     const installed = await isRcloneInstalled();
     if (!installed) {
-      console.warn("[workspace-sync] rclone not installed, skipping sync");
+      log.warn("rclone not installed, skipping sync");
       return;
     }
 
@@ -74,15 +77,11 @@ const workspaceSyncHandler: HookHandler = async (event) => {
 
     // Check if rclone is configured
     if (!isRcloneConfigured(resolved.configPath, resolved.remoteName)) {
-      console.warn(
-        `[workspace-sync] rclone not configured for remote "${resolved.remoteName}", skipping sync`,
-      );
+      log.warn(`rclone not configured for remote "${resolved.remoteName}", skipping sync`);
       return;
     }
 
-    console.log(
-      `[workspace-sync] Syncing ${resolved.remoteName}:${resolved.remotePath} <-> ${resolved.localPath}`,
-    );
+    log.info(`syncing ${resolved.remoteName}:${resolved.remotePath} <-> ${resolved.localPath}`);
 
     // Run sync
     const result = await runBisync({
@@ -96,22 +95,20 @@ const workspaceSyncHandler: HookHandler = async (event) => {
     });
 
     if (result.ok) {
-      console.log("[workspace-sync] Sync completed successfully");
+      log.info("sync completed successfully");
       if (result.filesTransferred) {
-        console.log(`[workspace-sync] Files transferred: ${result.filesTransferred}`);
+        log.info(`files transferred: ${result.filesTransferred}`);
       }
     } else {
       // Check if this is a first-run issue
       if (result.error?.includes("--resync")) {
-        console.warn(
-          "[workspace-sync] First sync requires manual --resync. Run: moltbot workspace sync --resync",
-        );
+        log.warn("first sync requires manual --resync. Run: moltbot workspace sync --resync");
       } else {
-        console.error(`[workspace-sync] Sync failed: ${result.error}`);
+        log.error(`sync failed: ${result.error}`);
       }
     }
   } catch (err) {
-    console.error("[workspace-sync] Error:", err instanceof Error ? err.message : String(err));
+    log.error(`error: ${err instanceof Error ? err.message : String(err)}`);
   }
 };
 

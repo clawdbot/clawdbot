@@ -1,7 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import workspaceSyncHandler from "./handler.js";
 import * as rclone from "../../../infra/rclone.js";
+
+const mockLog = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  fatal: vi.fn(),
+  raw: vi.fn(),
+  child: vi.fn(),
+  subsystem: "workspace-sync",
+}));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => mockLog),
+}));
 
 vi.mock("../../../infra/rclone.js", () => ({
   isRcloneInstalled: vi.fn(),
@@ -17,6 +32,9 @@ vi.mock("../../../agents/agent-scope.js", () => ({
 vi.mock("../../../routing/session-key.js", () => ({
   resolveAgentIdFromSessionKey: vi.fn(() => "default"),
 }));
+
+// Import after mocks are set up
+const { default: workspaceSyncHandler } = await import("./handler.js");
 
 describe("workspace-sync hook handler", () => {
   beforeEach(() => {
@@ -126,7 +144,6 @@ describe("workspace-sync hook handler", () => {
 
   it("warns when rclone is not installed", async () => {
     vi.mocked(rclone.isRcloneInstalled).mockResolvedValue(false);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const event = {
       type: "session",
@@ -148,7 +165,7 @@ describe("workspace-sync hook handler", () => {
     await workspaceSyncHandler(event as never);
 
     expect(rclone.isRcloneInstalled).toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith("[workspace-sync] rclone not installed, skipping sync");
+    expect(mockLog.warn).toHaveBeenCalledWith("rclone not installed, skipping sync");
   });
 
   it("warns when rclone is not configured", async () => {
@@ -166,7 +183,6 @@ describe("workspace-sync hook handler", () => {
       onSessionStart: true,
       onSessionEnd: false,
     });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const event = {
       type: "session",
@@ -187,7 +203,7 @@ describe("workspace-sync hook handler", () => {
 
     await workspaceSyncHandler(event as never);
 
-    expect(warnSpy).toHaveBeenCalledWith(
+    expect(mockLog.warn).toHaveBeenCalledWith(
       expect.stringContaining('rclone not configured for remote "cloud"'),
     );
   });
@@ -208,7 +224,6 @@ describe("workspace-sync hook handler", () => {
       onSessionEnd: false,
     });
     vi.mocked(rclone.runBisync).mockResolvedValue({ ok: true });
-    vi.spyOn(console, "log").mockImplementation(() => {});
 
     const event = {
       type: "session",
@@ -255,7 +270,6 @@ describe("workspace-sync hook handler", () => {
       onSessionEnd: true,
     });
     vi.mocked(rclone.runBisync).mockResolvedValue({ ok: true });
-    vi.spyOn(console, "log").mockImplementation(() => {});
 
     const event = {
       type: "session",
@@ -298,8 +312,6 @@ describe("workspace-sync hook handler", () => {
       ok: false,
       error: "bisync requires --resync on first run",
     });
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const event = {
       type: "session",
@@ -320,8 +332,8 @@ describe("workspace-sync hook handler", () => {
 
     await workspaceSyncHandler(event as never);
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("First sync requires manual --resync"),
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("first sync requires manual --resync"),
     );
   });
 });
