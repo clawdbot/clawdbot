@@ -157,7 +157,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordRaw = toOptionString(opts.password);
   const tokenRaw = toOptionString(opts.token);
 
-  const configExists = fs.existsSync(CONFIG_PATH);
+  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
@@ -187,7 +188,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
 
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
   const authConfig = {
     ...cfg.gateway?.auth,

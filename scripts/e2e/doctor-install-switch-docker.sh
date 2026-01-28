@@ -81,8 +81,8 @@ LOGINCTL
   npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz"
 
   npm_bin="/tmp/npm-prefix/bin/moltbot"
-  npm_entry="/tmp/npm-prefix/lib/node_modules/moltbot/dist/entry.js"
-  git_entry="/app/dist/entry.js"
+  npm_entry="/tmp/npm-prefix/lib/node_modules/moltbot/moltbot.mjs"
+  git_entry="/app/moltbot.mjs"
 
   assert_entrypoint() {
     local unit_path="$1"

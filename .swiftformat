@@ -48,4 +48,4 @@
 --allman false
 
 # Exclusions
---exclude .build,.swiftpm,DerivedData,node_modules,dist,coverage,xcuserdata,Peekaboo,Swabble,apps/android,apps/ios,apps/shared,apps/macos/Sources/ClawdisProtocol,apps/macos/Sources/ClawdbotProtocol
+--exclude .build,.swiftpm,DerivedData,node_modules,dist,coverage,xcuserdata,Peekaboo,Swabble,apps/android,apps/ios,apps/shared,apps/macos/Sources/MoltbotProtocol

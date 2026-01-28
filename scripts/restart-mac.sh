@@ -9,7 +9,7 @@ APP_PROCESS_PATTERN="Moltbot.app/Contents/MacOS/Moltbot"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Moltbot"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Moltbot"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Moltbot"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.clawdbot.mac.plist"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/bot.molt.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/moltbot-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
@@ -96,8 +96,8 @@ for arg in "$@"; do
       log "  CLAWDBOT_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
       log ""
       log "Unsigned recovery:"
-      log "  node dist/entry.js daemon install --force --runtime node"
-      log "  node dist/entry.js daemon restart"
+      log "  node moltbot.mjs daemon install --force --runtime node"
+      log "  node moltbot.mjs daemon restart"
       log ""
       log "Reset unsigned overrides:"
       log "  rm ~/.clawdbot/disable-launchagent"
@@ -145,7 +145,7 @@ kill_all_moltbot() {
 }
 
 stop_launch_agent() {
-  launchctl bootout gui/"$UID"/com.clawdbot.mac 2>/dev/null || true
+  launchctl bootout gui/"$UID"/bot.molt.mac 2>/dev/null || true
 }
 
 # 1) Kill all running instances first.
@@ -217,8 +217,8 @@ fi
 # When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
 # This reduces noisy "could not connect" errors during app startup.
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node dist/entry.js daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node dist/entry.js daemon restart"
+  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node moltbot.mjs daemon install --force --runtime node"
+  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node moltbot.mjs daemon restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi
@@ -265,5 +265,5 @@ else
 fi
 
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/com.clawdbot.gateway.plist' | head -n 40 || true"
+  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/bot.molt.gateway.plist' | head -n 40 || true"
 fi

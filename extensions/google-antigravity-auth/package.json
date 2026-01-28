@@ -1,6 +1,6 @@
 {
   "name": "@moltbot/google-antigravity-auth",
-  "version": "2026.1.26",
+  "version": "2026.1.27-beta.1",
   "type": "module",
   "description": "Moltbot Google Antigravity OAuth provider plugin",
   "moltbot": {

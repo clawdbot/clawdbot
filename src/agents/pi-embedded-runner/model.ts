@@ -8,15 +8,25 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
 
-type InlineModelEntry = ModelDefinitionConfig & { provider: string };
+type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
+type InlineProviderConfig = {
+  baseUrl?: string;
+  api?: ModelDefinitionConfig["api"];
+  models?: ModelDefinitionConfig[];
+};
 
 export function buildInlineProviderModels(
-  providers: Record<string, { models?: ModelDefinitionConfig[] }>,
+  providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
   return Object.entries(providers).flatMap(([providerId, entry]) => {
     const trimmed = providerId.trim();
     if (!trimmed) return [];
-    return (entry?.models ?? []).map((model) => ({ ...model, provider: trimmed }));
+    return (entry?.models ?? []).map((model) => ({
+      ...model,
+      provider: trimmed,
+      baseUrl: entry?.baseUrl,
+      api: model.api ?? entry?.api,
+    }));
   });
 }
 
@@ -72,6 +82,7 @@ export function resolveModel(
         name: modelId,
         api: providerCfg?.api ?? "openai-responses",
         provider,
+        baseUrl: providerCfg?.baseUrl,
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

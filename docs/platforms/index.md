@@ -46,5 +46,5 @@ Use one of these (all supported):
 - Repair/migrate: `moltbot doctor` (offers to install or fix the service)
 
 The service target depends on OS:
-- macOS: LaunchAgent (`com.clawdbot.gateway` or `com.clawdbot.<profile>`)
+- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.clawdbot.*`)
 - Linux/WSL2: systemd user service (`moltbot-gateway[-<profile>].service`)

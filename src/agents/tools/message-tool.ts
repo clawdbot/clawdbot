@@ -60,6 +60,9 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
+    quoteText: Type.Optional(
+      Type.String({ description: "Quote text for Telegram reply_parameters" }),
+    ),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     buttons: Type.Optional(

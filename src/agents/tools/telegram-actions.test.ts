@@ -261,6 +261,31 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("passes quoteText when provided", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as MoltbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Replying now",
+        replyToMessageId: 144,
+        quoteText: "The text you want to quote",
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "Replying now",
+      expect.objectContaining({
+        token: "tok",
+        replyToMessageId: 144,
+        quoteText: "The text you want to quote",
+      }),
+    );
+  });
+
   it("allows media-only messages without content", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },

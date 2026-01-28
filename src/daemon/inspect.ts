@@ -6,12 +6,12 @@ import { promisify } from "node:util";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
-  LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
+  resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 
 export type ExtraGatewayService = {
@@ -78,7 +78,7 @@ function isMoltbotGatewayLaunchdService(label: string, contents: string): boolea
   if (hasGatewayServiceMarker(contents)) return true;
   const lowerContents = contents.toLowerCase();
   if (!lowerContents.includes("gateway")) return false;
-  return label.startsWith("com.clawdbot.");
+  return label.startsWith("bot.molt.") || label.startsWith("com.clawdbot.");
 }
 
 function isMoltbotGatewaySystemdService(name: string, contents: string): boolean {
@@ -102,7 +102,8 @@ function tryExtractPlistLabel(contents: string): string | null {
 
 function isIgnoredLaunchdLabel(label: string): boolean {
   return (
-    label === resolveGatewayLaunchAgentLabel() || LEGACY_GATEWAY_LAUNCH_AGENT_LABELS.includes(label)
+    label === resolveGatewayLaunchAgentLabel() ||
+    resolveLegacyGatewayLaunchAgentLabels(process.env.CLAWDBOT_PROFILE).includes(label)
   );
 }
 

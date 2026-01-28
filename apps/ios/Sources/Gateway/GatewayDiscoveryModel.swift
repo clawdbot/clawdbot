@@ -104,7 +104,7 @@ final class GatewayDiscoveryModel {
             }
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "com.clawdbot.ios.gateway-discovery.\(domain)"))
+            browser.start(queue: DispatchQueue(label: "bot.molt.ios.gateway-discovery.\(domain)"))
         }
     }
 

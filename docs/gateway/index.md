@@ -56,7 +56,7 @@ Usually unnecessary: one Gateway can serve multiple messaging channels and agent
 Supported if you isolate state + config and use unique ports. Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 Service names are profile-aware:
-- macOS: `com.clawdbot.<profile>`
+- macOS: `bot.molt.<profile>` (legacy `com.clawdbot.*` may still exist)
 - Linux: `moltbot-gateway-<profile>.service`
 - Windows: `Moltbot Gateway (<profile>)`
 
@@ -181,8 +181,8 @@ See also: [Presence](/concepts/presence) for how presence is produced/deduped an
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
-  - `moltbot gateway install` writes `~/Library/LaunchAgents/com.clawdbot.gateway.plist`
-    (or `com.clawdbot.<profile>.plist`).
+  - `moltbot gateway install` writes `~/Library/LaunchAgents/bot.molt.gateway.plist`
+    (or `bot.molt.<profile>.plist`; legacy `com.clawdbot.*` is cleaned up).
   - `moltbot doctor` audits the LaunchAgent config and can update it to current defaults.
 
 ## Gateway service management (CLI)
@@ -213,11 +213,11 @@ Notes:
 
 Bundled mac app:
 - Moltbot.app can bundle a Node-based gateway relay and install a per-user LaunchAgent labeled
-  `com.clawdbot.gateway` (or `com.clawdbot.<profile>`).
-- To stop it cleanly, use `moltbot gateway stop` (or `launchctl bootout gui/$UID/com.clawdbot.gateway`).
-- To restart, use `moltbot gateway restart` (or `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`).
+  `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.clawdbot.*` labels still unload cleanly).
+- To stop it cleanly, use `moltbot gateway stop` (or `launchctl bootout gui/$UID/bot.molt.gateway`).
+- To restart, use `moltbot gateway restart` (or `launchctl kickstart -k gui/$UID/bot.molt.gateway`).
   - `launchctl` only works if the LaunchAgent is installed; otherwise use `moltbot gateway install` first.
-  - Replace the label with `com.clawdbot.<profile>` when running a named profile.
+  - Replace the label with `bot.molt.<profile>` when running a named profile.
 
 ## Supervision (systemd user unit)
 Moltbot installs a **systemd user service** by default on Linux/WSL2. We

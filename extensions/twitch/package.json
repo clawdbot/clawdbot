@@ -1,6 +1,6 @@
 {
   "name": "@moltbot/twitch",
-  "version": "2026.1.26",
+  "version": "2026.1.27-beta.1",
   "description": "Moltbot Twitch channel plugin",
   "type": "module",
   "dependencies": {

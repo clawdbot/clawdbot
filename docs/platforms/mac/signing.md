@@ -7,7 +7,7 @@ read_when:
 
 This app is usually built from [`scripts/package-mac-app.sh`](https://github.com/moltbot/moltbot/blob/main/scripts/package-mac-app.sh), which now:
 
-- sets a stable debug bundle identifier: `com.clawdbot.mac.debug`
+- sets a stable debug bundle identifier: `bot.molt.mac.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
 - calls [`scripts/codesign-mac-app.sh`](https://github.com/moltbot/moltbot/blob/main/scripts/codesign-mac-app.sh) to sign the main binary and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [macOS permissions](/platforms/mac/permissions)).
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).

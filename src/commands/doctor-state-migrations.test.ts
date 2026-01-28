@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MoltbotConfig } from "../config/config.js";
 import {
+  autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
   detectLegacyStateMigrations,
+  resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
@@ -22,6 +24,7 @@ async function makeTempRoot() {
 
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
+  resetAutoMigrateLegacyStateDirForTest();
   if (!tempRoot) return;
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
   tempRoot = null;
@@ -322,5 +325,54 @@ describe("doctor legacy state migrations", () => {
     expect(log.info).toHaveBeenCalled();
     expect(store["main"]).toBeUndefined();
     expect(store["agent:main:main"]?.sessionId).toBe("legacy");
+  });
+
+  it("auto-migrates legacy state dir to ~/.moltbot", async () => {
+    const root = await makeTempRoot();
+    const legacyDir = path.join(root, ".clawdbot");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, "foo.txt"), "legacy", "utf-8");
+
+    const result = await autoMigrateLegacyStateDir({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    const targetDir = path.join(root, ".moltbot");
+    expect(fs.existsSync(path.join(targetDir, "foo.txt"))).toBe(true);
+    const legacyStat = fs.lstatSync(legacyDir);
+    expect(legacyStat.isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(legacyDir)).toBe(fs.realpathSync(targetDir));
+    expect(result.migrated).toBe(true);
+  });
+
+  it("skips state dir migration when target exists", async () => {
+    const root = await makeTempRoot();
+    const legacyDir = path.join(root, ".clawdbot");
+    const targetDir = path.join(root, ".moltbot");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const result = await autoMigrateLegacyStateDir({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(result.migrated).toBe(false);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("skips state dir migration when env override is set", async () => {
+    const root = await makeTempRoot();
+    const legacyDir = path.join(root, ".clawdbot");
+    fs.mkdirSync(legacyDir, { recursive: true });
+
+    const result = await autoMigrateLegacyStateDir({
+      env: { MOLTBOT_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(result.skipped).toBe(true);
+    expect(result.migrated).toBe(false);
   });
 });

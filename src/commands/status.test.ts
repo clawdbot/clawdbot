@@ -255,7 +255,7 @@ vi.mock("../daemon/service.js", () => ({
     readRuntime: async () => ({ status: "running", pid: 1234 }),
     readCommand: async () => ({
       programArguments: ["node", "dist/entry.js", "gateway"],
-      sourcePath: "/tmp/Library/LaunchAgents/com.clawdbot.gateway.plist",
+      sourcePath: "/tmp/Library/LaunchAgents/bot.molt.gateway.plist",
     }),
   }),
 }));
@@ -268,7 +268,7 @@ vi.mock("../daemon/node-service.js", () => ({
     readRuntime: async () => ({ status: "running", pid: 4321 }),
     readCommand: async () => ({
       programArguments: ["node", "dist/entry.js", "node-host"],
-      sourcePath: "/tmp/Library/LaunchAgents/com.clawdbot.node.plist",
+      sourcePath: "/tmp/Library/LaunchAgents/bot.molt.node.plist",
     }),
   }),
 }));

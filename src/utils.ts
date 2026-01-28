@@ -215,9 +215,18 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.CLAWDBOT_STATE_DIR?.trim();
+  const override = env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) return resolveUserPath(override);
-  return path.join(homedir(), ".clawdbot");
+  const legacyDir = path.join(homedir(), ".clawdbot");
+  const newDir = path.join(homedir(), ".moltbot");
+  try {
+    const hasLegacy = fs.existsSync(legacyDir);
+    const hasNew = fs.existsSync(newDir);
+    if (!hasLegacy && hasNew) return newDir;
+  } catch {
+    // best-effort
+  }
+  return legacyDir;
 }
 
 export function resolveHomeDir(): string | undefined {

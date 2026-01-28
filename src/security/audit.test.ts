@@ -730,6 +730,23 @@ describe("security audit", () => {
     );
   });
 
+  it("does not warn on Venice-style opus-45 model names", async () => {
+    // Venice uses "claude-opus-45" format (no dash between 4 and 5)
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "venice/claude-opus-45" } } },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    // Should NOT contain weak_tier warning for opus-45
+    const weakTierFinding = res.findings.find((f) => f.checkId === "models.weak_tier");
+    expect(weakTierFinding).toBeUndefined();
+  });
+
   it("warns when hooks token looks short", async () => {
     const cfg: MoltbotConfig = {
       hooks: { enabled: true, token: "short" },

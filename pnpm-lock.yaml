@@ -316,7 +316,7 @@ importers:
     devDependencies:
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/imessage: {}
 
@@ -324,7 +324,7 @@ importers:
     devDependencies:
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/llm-task: {}
 
@@ -350,15 +350,15 @@ importers:
     devDependencies:
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/mattermost: {}
 
   extensions/memory-core:
-    dependencies:
+    devDependencies:
       moltbot:
-        specifier: '*'
-        version: 0.1.0
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-lancedb:
     dependencies:
@@ -388,7 +388,7 @@ importers:
         version: 5.2.1
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -399,7 +399,7 @@ importers:
     dependencies:
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
       nostr-tools:
         specifier: ^2.20.0
         version: 2.20.0(typescript@5.9.3)
@@ -441,7 +441,7 @@ importers:
     devDependencies:
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   extensions/voice-call:
     dependencies:
@@ -461,7 +461,7 @@ importers:
     dependencies:
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
       undici:
         specifier: 7.19.0
         version: 7.19.0
@@ -473,13 +473,13 @@ importers:
         version: 0.34.47
       moltbot:
         specifier: workspace:*
-        version: link:../../packages/clawdbot
+        version: link:../..
 
   packages/clawdbot:
     dependencies:
       moltbot:
         specifier: workspace:*
-        version: 'link:'
+        version: link:../..
 
   ui:
     dependencies:
@@ -4349,10 +4349,6 @@ packages:
 
   module-details-from-path@1.0.4:
     resolution: {integrity: sha512-EGWKgxALGMgzvxYF1UyGTy0HXX/2vHLkw6+NvDKW2jypWbHpjQuj4UMcqQWXHERJhVGKikolT06G3bcKe4fi7w==}
-
-  moltbot@0.1.0:
-    resolution: {integrity: sha512-lJaI85TWhrDYmsaMXElp4EuvJpsdyaVpeoOnmOLXwOUPUUlwkJv7aAz+AlxFmwqtYP5wT95ZUCu16sfrM/VtiA==}
-    engines: {node: '>=24', pnpm: '>=10'}
 
   morgan@1.10.1:
     resolution: {integrity: sha512-223dMRJtI/l25dJKWpgij2cMtywuG/WiUKXdvwfbhGKBhy1puASqXwFzmWZ7+K73vUPoR7SS2Qz2cI/g9MKw0A==}
@@ -10330,8 +10326,6 @@ snapshots:
   mkdirp@3.0.1: {}
 
   module-details-from-path@1.0.4: {}
-
-  moltbot@0.1.0: {}
 
   morgan@1.10.1:
     dependencies:

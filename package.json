@@ -1,6 +1,6 @@
 {
   "name": "moltbot",
-  "version": "2026.1.26",
+  "version": "2026.1.27-beta.1",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
@@ -8,11 +8,11 @@
     ".": "./dist/index.js",
     "./plugin-sdk": "./dist/plugin-sdk/index.js",
     "./plugin-sdk/*": "./dist/plugin-sdk/*",
-    "./cli-entry": "./dist/entry.js"
+    "./cli-entry": "./moltbot.mjs"
   },
   "bin": {
-    "moltbot": "dist/entry.js",
-    "clawdbot": "dist/entry.js"
+    "moltbot": "./moltbot.mjs",
+    "clawdbot": "./moltbot.mjs"
   },
   "files": [
     "dist/acp/**",
@@ -56,6 +56,7 @@
     "docs/**",
     "extensions/**",
     "assets/**",
+    "moltbot.mjs",
     "skills/**",
     "patches/**",
     "README.md",
@@ -102,10 +103,10 @@
     "ios:gen": "cd apps/ios && xcodegen generate",
     "ios:open": "cd apps/ios && xcodegen generate && open Moltbot.xcodeproj",
     "ios:build": "bash -lc 'cd apps/ios && xcodegen generate && xcodebuild -project Moltbot.xcodeproj -scheme Moltbot -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build'",
-    "ios:run": "bash -lc 'cd apps/ios && xcodegen generate && xcodebuild -project Moltbot.xcodeproj -scheme Moltbot -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted com.clawdbot.ios'",
+    "ios:run": "bash -lc 'cd apps/ios && xcodegen generate && xcodebuild -project Moltbot.xcodeproj -scheme Moltbot -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted bot.molt.ios'",
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
     "android:install": "cd apps/android && ./gradlew :app:installDebug",
-    "android:run": "cd apps/android && ./gradlew :app:installDebug && adb shell am start -n com.clawdbot.android/.MainActivity",
+    "android:run": "cd apps/android && ./gradlew :app:installDebug && adb shell am start -n bot.molt.android/.MainActivity",
     "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
     "mac:restart": "bash scripts/restart-mac.sh",
     "mac:package": "bash scripts/package-mac-app.sh",
@@ -115,7 +116,7 @@
     "lint:all": "pnpm lint && pnpm lint:swift",
     "lint:fix": "pnpm format:fix && oxlint --type-aware --fix src test",
     "format": "oxfmt --check src test",
-    "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
+    "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/MoltbotKit/Sources",
     "format:all": "pnpm format && pnpm format:swift",
     "format:fix": "oxfmt --write src test",
     "test": "node scripts/test-parallel.mjs",
@@ -141,7 +142,7 @@
     "test:install:e2e:anthropic": "CLAWDBOT_E2E_MODELS=anthropic bash scripts/test-install-sh-e2e-docker.sh",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/MoltbotProtocol/GatewayModels.swift",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500"
   },
