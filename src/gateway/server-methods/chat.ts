@@ -56,11 +56,24 @@ function resolveTranscriptPath(params: {
   sessionFile?: string;
 }): string | null {
   const { sessionId, storePath, sessionFile } = params;
-  if (sessionFile) return sessionFile;
+  if (sessionFile) {
+    if (storePath) {
+      const storeDir = path.dirname(storePath);
+      const absSessionFile = path.resolve(storeDir, sessionFile);
+      const rel = path.relative(storeDir, absSessionFile);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        throw new Error("sessionFile escapes store directory");
+      }
+      return absSessionFile;
+    }
+    if (!path.isAbsolute(sessionFile)) {
+      throw new Error("sessionFile must be absolute when storePath is not set");
+    }
+    return sessionFile;
+  }
   if (!storePath) return null;
   return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 }
-
 function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
   ok: boolean;
   error?: string;
