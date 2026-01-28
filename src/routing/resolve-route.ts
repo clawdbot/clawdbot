@@ -69,9 +69,10 @@ function matchesAccountId(match: string | undefined, actual: string): boolean {
 export function buildAgentSessionKey(params: {
   agentId: string;
   channel: string;
+  accountId?: string | null;
   peer?: RoutePeer | null;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer";
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
@@ -80,6 +81,7 @@ export function buildAgentSessionKey(params: {
     agentId: params.agentId,
     mainKey: DEFAULT_MAIN_KEY,
     channel,
+    accountId: params.accountId,
     peerKind: peer?.kind ?? "dm",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
@@ -160,6 +162,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
+      accountId,
       peer,
       dmScope,
       identityLinks,
