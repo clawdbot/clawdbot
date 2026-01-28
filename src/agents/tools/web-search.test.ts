@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { __testing } from "./web-search.js";
 
-const { inferPerplexityBaseUrlFromApiKey, resolvePerplexityBaseUrl, normalizeFreshness } =
-  __testing;
+const {
+  inferPerplexityBaseUrlFromApiKey,
+  resolvePerplexityBaseUrl,
+  normalizeFreshness,
+  resolveGrokApiKey,
+  resolveGrokModel,
+  resolveGrokInlineCitations,
+} = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
   it("detects a Perplexity key prefix", () => {
@@ -67,5 +73,35 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
+  });
+});
+
+describe("web_search grok config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    expect(resolveGrokApiKey({})).toBeUndefined();
+    expect(resolveGrokApiKey(undefined)).toBeUndefined();
+  });
+
+  it("uses default model when not specified", () => {
+    expect(resolveGrokModel({})).toBe("grok-4-1-fast");
+    expect(resolveGrokModel(undefined)).toBe("grok-4-1-fast");
+  });
+
+  it("uses config model when provided", () => {
+    expect(resolveGrokModel({ model: "grok-3" })).toBe("grok-3");
+  });
+
+  it("defaults inlineCitations to false", () => {
+    expect(resolveGrokInlineCitations({})).toBe(false);
+    expect(resolveGrokInlineCitations(undefined)).toBe(false);
+  });
+
+  it("respects inlineCitations config", () => {
+    expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
+    expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
   });
 });
