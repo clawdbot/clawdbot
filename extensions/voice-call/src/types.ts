@@ -102,6 +102,10 @@ export const NormalizedEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   BaseEventSchema.extend({
+    type: z.literal("call.speak.ended"),
+    text: z.string().optional(),
+  }),
+  BaseEventSchema.extend({
     type: z.literal("call.speech"),
     transcript: z.string(),
     isFinal: z.boolean(),
@@ -180,7 +184,6 @@ export type WebhookContext = {
   url: string;
   method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   query?: Record<string, string | string[] | undefined>;
-  remoteAddress?: string;
 };
 
 export type ProviderWebhookParseResult = {
