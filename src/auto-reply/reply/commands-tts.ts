@@ -25,11 +25,11 @@ type ParsedTtsCommand = {
 };
 
 function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
-  // Accept `/tts` and `/tts <action> [args]` as a single control surface.
-  if (normalized === "/tts") return { action: "status", args: "" };
+  // Accept `/tts <action> [args]` - return null for `/tts` alone to trigger inline menu.
+  if (normalized === "/tts") return null;
   if (!normalized.startsWith("/tts ")) return null;
   const rest = normalized.slice(5).trim();
-  if (!rest) return { action: "status", args: "" };
+  if (!rest) return null;
   const [action, ...tail] = rest.split(/\s+/);
   return { action: action.toLowerCase(), args: tail.join(" ").trim() };
 }
