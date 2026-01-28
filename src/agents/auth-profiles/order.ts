@@ -4,6 +4,26 @@ import { listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
 import { isProfileInCooldown } from "./usage.js";
 
+/*
+ * Profile Ordering Design
+ * ───────────────────────
+ * Profile ordering is intentionally MODEL-AGNOSTIC. This module answers:
+ * "Which auth profiles should we try for this provider?"
+ *
+ * Per-model cooldown filtering happens DOWNSTREAM in model-fallback.ts,
+ * which calls isProfileInCooldown(store, profileId, model) for each candidate.
+ *
+ * Why two layers?
+ * 1. Profile layer (here): Selects credentials based on provider, type preference,
+ *    round-robin (lastUsed), and profile-level cooldowns (auth failures).
+ * 2. Model layer (model-fallback.ts): Filters by per-model rate limits before
+ *    each API call attempt.
+ *
+ * This separation exists because:
+ * - Auth credentials (API keys/tokens) are profile-level
+ * - Rate limits are often model-level (e.g., gpt-5.2 has quota, gpt-5-mini unlimited)
+ */
+
 function resolveProfileUnusableUntil(stats: {
   cooldownUntil?: number;
   disabledUntil?: number;

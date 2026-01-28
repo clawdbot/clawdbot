@@ -87,7 +87,13 @@ export function isProfileInCooldown(
 /**
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
- * When model is provided, also clears the per-model cooldown.
+ *
+ * Success metrics (lastUsed, lastGood) are ALWAYS updated at the profile level,
+ * regardless of which model was used. This is intentional: if ANY model works,
+ * the credentials are valid and the profile should be remembered as "good".
+ *
+ * When model is provided, also clears the per-model cooldown (if one exists).
+ * This allows a recovered model to be used immediately without waiting for expiry.
  */
 export async function markAuthProfileUsed(params: {
   store: AuthProfileStore;
