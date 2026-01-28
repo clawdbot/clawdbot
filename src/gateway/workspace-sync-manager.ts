@@ -133,6 +133,12 @@ async function runSync(): Promise<void> {
       state.lastSyncOk = false;
       state.errorCount++;
       logger.warn(`[workspace-sync] Periodic sync failed: ${result.error}`);
+
+      // Self-heal: if failed due to lock file, clear it for next attempt
+      if (result.error?.includes("lock file found") || result.error?.includes(".lck")) {
+        logger.info("[workspace-sync] Clearing lock file for next sync attempt");
+        clearStaleLocks(logger);
+      }
     }
   } catch (err) {
     state.lastSyncOk = false;
