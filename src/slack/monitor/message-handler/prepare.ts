@@ -498,7 +498,6 @@ export async function prepareSlackMessage(params: {
   }
 
   // Use thread starter media if current message has none
-  const effectiveMediaList = mediaList.length > 0 ? mediaList : threadStarterMediaList;
   const effectiveMediaPayload =
     mediaList.length > 0 ? mediaPayload : buildSlackMediaPayload(threadStarterMediaList);
 
