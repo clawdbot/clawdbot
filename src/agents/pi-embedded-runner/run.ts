@@ -474,6 +474,7 @@ export async function runEmbeddedPiAgent(
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
+                model: modelId,
                 reason: promptFailoverReason,
                 cfg: params.config,
                 agentDir: params.agentDir,
@@ -561,6 +562,7 @@ export async function runEmbeddedPiAgent(
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
+                model: modelId,
                 reason,
                 cfg: params.config,
                 agentDir: params.agentDir,
