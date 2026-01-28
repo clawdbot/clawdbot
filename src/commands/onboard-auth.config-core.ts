@@ -5,6 +5,12 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 import {
+  buildModelverseModelDefinition,
+  MODELVERSE_BASE_URL,
+  MODELVERSE_DEFAULT_MODEL_REF,
+  MODELVERSE_MODEL_CATALOG,
+} from "../agents/modelverse-models.js";
+import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
