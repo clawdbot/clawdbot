@@ -13,8 +13,12 @@ describe("resolveTelegramForumThreadId", () => {
   });
 
   it("returns undefined for non-forum groups without messageThreadId", () => {
-    expect(resolveTelegramForumThreadId({ isForum: false, messageThreadId: undefined })).toBeUndefined();
-    expect(resolveTelegramForumThreadId({ isForum: undefined, messageThreadId: 99 })).toBeUndefined();
+    expect(
+      resolveTelegramForumThreadId({ isForum: false, messageThreadId: undefined }),
+    ).toBeUndefined();
+    expect(
+      resolveTelegramForumThreadId({ isForum: undefined, messageThreadId: 99 }),
+    ).toBeUndefined();
   });
 
   it("returns General topic (1) for forum groups without messageThreadId", () => {

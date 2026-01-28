@@ -41,7 +41,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     if (commandPath[0] === "doctor") return;
-    await ensureConfigReady({ runtime: defaultRuntime, commandPath });
+    await ensureConfigReady({ runtime: defaultRuntime, commandPath, rawArgs: argv });
     // Load plugins for commands that need channel access
     if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
       ensurePluginRegistryLoaded();
