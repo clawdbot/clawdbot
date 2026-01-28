@@ -70,6 +70,14 @@
       "destination": "/providers/minimax"
     },
     {
+      "source": "/xiaomi",
+      "destination": "/providers/xiaomi"
+    },
+    {
+      "source": "/xiaomi/",
+      "destination": "/providers/xiaomi"
+    },
+    {
       "source": "/openai",
       "destination": "/providers/openai"
     },

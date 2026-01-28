@@ -33,6 +33,16 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.some((opt) => opt.value === "zai-api-key")).toBe(true);
   });
 
+  it("includes Xiaomi auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "xiaomi-api-key")).toBe(true);
+  });
+
   it("includes MiniMax auth choice", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({

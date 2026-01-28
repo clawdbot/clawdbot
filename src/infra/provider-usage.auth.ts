@@ -96,6 +96,33 @@ function resolveMinimaxApiKey(): string | undefined {
   return undefined;
 }
 
+function resolveXiaomiApiKey(): string | undefined {
+  const envDirect = process.env.XIAOMI_API_KEY?.trim();
+  if (envDirect) return envDirect;
+
+  const envResolved = resolveEnvApiKey("xiaomi");
+  if (envResolved?.apiKey) return envResolved.apiKey;
+
+  const cfg = loadConfig();
+  const key = getCustomProviderApiKey(cfg, "xiaomi");
+  if (key) return key;
+
+  const store = ensureAuthProfileStore();
+  const apiProfile = listProfilesForProvider(store, "xiaomi").find((id) => {
+    const cred = store.profiles[id];
+    return cred?.type === "api_key" || cred?.type === "token";
+  });
+  if (!apiProfile) return undefined;
+  const cred = store.profiles[apiProfile];
+  if (cred?.type === "api_key" && cred.key?.trim()) {
+    return cred.key.trim();
+  }
+  if (cred?.type === "token" && cred.token?.trim()) {
+    return cred.token.trim();
+  }
+  return undefined;
+}
+
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
   agentDir?: string;
@@ -196,6 +223,11 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "minimax") {
       const apiKey = resolveMinimaxApiKey();
+      if (apiKey) auths.push({ provider, token: apiKey });
+      continue;
+    }
+    if (provider === "xiaomi") {
+      const apiKey = resolveXiaomiApiKey();
       if (apiKey) auths.push({ provider, token: apiKey });
       continue;
     }
