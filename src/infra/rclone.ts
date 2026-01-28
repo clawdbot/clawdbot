@@ -451,6 +451,9 @@ export async function runBisync(params: {
 
   if (params.verbose) {
     args.push("--verbose");
+  } else {
+    // Suppress NOTICE messages (e.g., symlink warnings) unless verbose
+    args.push("--log-level", "WARNING");
   }
 
   logVerbose(`Running: ${rcloneBin} ${args.join(" ")}`);
@@ -522,6 +525,9 @@ export async function runSync(params: {
 
   if (params.verbose) {
     args.push("--verbose");
+  } else {
+    // Suppress NOTICE messages (e.g., symlink warnings) unless verbose
+    args.push("--log-level", "WARNING");
   }
 
   logVerbose(`Running: ${rcloneBin} ${args.join(" ")}`);
