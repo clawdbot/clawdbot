@@ -39,10 +39,7 @@ export function resolveDefaultStoreAgentId(cfg: MoltbotConfig): string {
 /**
  * Resolve a session key to its canonical store key form.
  */
-export function resolveSessionStoreKey(params: {
-  cfg: MoltbotConfig;
-  sessionKey: string;
-}): string {
+export function resolveSessionStoreKey(params: { cfg: MoltbotConfig; sessionKey: string }): string {
   const raw = params.sessionKey.trim();
   if (!raw) return raw;
   if (raw === "global" || raw === "unknown") return raw;

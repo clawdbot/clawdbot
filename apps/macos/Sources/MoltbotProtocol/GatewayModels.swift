@@ -9,6 +9,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
     case unavailable = "UNAVAILABLE"
+    case tooManyRequests = "TOO_MANY_REQUESTS"
 }
 
 public struct ConnectParams: Codable, Sendable {
