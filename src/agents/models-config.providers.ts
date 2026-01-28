@@ -41,7 +41,7 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_MODEL_ID = "kimi-for-coding";
+const KIMI_CODE_MODEL_ID = "kimi-k2.5";
 const KIMI_CODE_CONTEXT_WINDOW = 262144;
 const KIMI_CODE_MAX_TOKENS = 32768;
 const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;

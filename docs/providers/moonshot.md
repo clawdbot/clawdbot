@@ -121,9 +121,10 @@ Note: Moonshot and Kimi Code are separate providers. Keys are not interchangeabl
   env: { KIMICODE_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-code/kimi-for-coding" },
+      model: { primary: "kimi-code/kimi-k2.5" },
       models: {
-        "kimi-code/kimi-for-coding": { alias: "Kimi Code" }
+       "kimi-code/kimi-k2.5": { alias: "Kimi K2.5" },
+       "kimi-code/kimi-for-coding": { alias: "Kimi Code" }
       }
     }
   },
@@ -135,6 +136,15 @@ Note: Moonshot and Kimi Code are separate providers. Keys are not interchangeabl
         apiKey: "${KIMICODE_API_KEY}",
         api: "openai-completions",
         models: [
+          {
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192
+          },
           {
             id: "kimi-for-coding",
             name: "Kimi For Coding",
