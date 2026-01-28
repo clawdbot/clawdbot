@@ -118,19 +118,26 @@ export async function parseAndResolveRecipient(
   const accountInfo = resolveDiscordAccount({ cfg, accountId });
 
   // First try to resolve using directory lookup (handles usernames)
-  const resolved = await resolveDiscordTarget(raw, {
-    cfg,
-    accountId: accountInfo.accountId,
-  });
+  const trimmed = raw.trim();
+  const parseOptions = {
+    ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
+  };
+
+  const resolved = await resolveDiscordTarget(
+    raw,
+    {
+      cfg,
+      accountId: accountInfo.accountId,
+    },
+    parseOptions,
+  );
 
   if (resolved) {
     return { kind: resolved.kind, id: resolved.id };
   }
 
   // Fallback to standard parsing (for channels, etc.)
-  const parsed = parseDiscordTarget(raw, {
-    ambiguousMessage: `Ambiguous Discord recipient "${raw.trim()}". Use "user:${raw.trim()}" for DMs or "channel:${raw.trim()}" for channel messages.`,
-  });
+  const parsed = parseDiscordTarget(raw, parseOptions);
 
   if (!parsed) {
     throw new Error("Recipient is required for Discord sends");

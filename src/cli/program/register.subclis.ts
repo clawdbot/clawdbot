@@ -168,6 +168,11 @@ const entries: SubCliEntry[] = [
     name: "pairing",
     description: "Pairing helpers",
     register: async (program) => {
+      // Initialize plugins before registering pairing CLI.
+      // The pairing CLI calls listPairingChannels() at registration time,
+      // which requires the plugin registry to be populated with channel plugins.
+      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+      registerPluginCliCommands(program, await loadConfig());
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
