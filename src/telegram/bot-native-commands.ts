@@ -360,6 +360,8 @@ export const registerTelegramNativeCommands = ({
             topicConfig,
             commandAuthorized,
           } = auth;
+          const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+          const threadIdForSend = isGroup ? resolvedThreadId : messageThreadId;
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
@@ -406,7 +408,7 @@ export const registerTelegramNativeCommands = ({
               fn: () =>
                 bot.api.sendMessage(chatId, title, {
                   ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-                  ...(resolvedThreadId != null ? { message_thread_id: resolvedThreadId } : {}),
+                  ...(threadIdForSend != null ? { message_thread_id: threadIdForSend } : {}),
                 }),
             });
             return;
@@ -467,7 +469,7 @@ export const registerTelegramNativeCommands = ({
             CommandSource: "native" as const,
             SessionKey: `telegram:slash:${senderId || chatId}`,
             CommandTargetSessionKey: sessionKey,
-            MessageThreadId: resolvedThreadId,
+            MessageThreadId: threadIdForSend,
             IsForum: isForum,
             // Originating context for sub-agent announce routing
             OriginatingChannel: "telegram" as const,
@@ -494,7 +496,7 @@ export const registerTelegramNativeCommands = ({
                   bot,
                   replyToMode,
                   textLimit,
-                  messageThreadId: resolvedThreadId,
+                  messageThreadId: threadIdForSend,
                   tableMode,
                   chunkMode,
                   linkPreview: telegramCfg.linkPreview,
@@ -542,7 +544,9 @@ export const registerTelegramNativeCommands = ({
             requireAuth: match.command.requireAuth !== false,
           });
           if (!auth) return;
-          const { resolvedThreadId, senderId, commandAuthorized } = auth;
+          const { resolvedThreadId, senderId, commandAuthorized, isGroup } = auth;
+          const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+          const threadIdForSend = isGroup ? resolvedThreadId : messageThreadId;
 
           const result = await executePluginCommand({
             command: match.command,
@@ -568,7 +572,7 @@ export const registerTelegramNativeCommands = ({
             bot,
             replyToMode,
             textLimit,
-            messageThreadId: resolvedThreadId,
+            messageThreadId: threadIdForSend,
             tableMode,
             chunkMode,
             linkPreview: telegramCfg.linkPreview,
