@@ -80,10 +80,11 @@ export function renderChatControls(state: AppViewState) {
           ${repeat(
             sessionOptions,
             (entry) => entry.key,
-            (entry) =>
-              html`<option value=${entry.key}>
-                ${entry.displayName ?? entry.key}
-              </option>`,
+            (entry) => {
+              const base = entry.displayName ?? entry.key;
+              const text = entry.label ? `${base} — ${entry.label}` : base;
+              return html`<option value=${entry.key}>${text}</option>`;
+            },
           )}
         </select>
       </label>
@@ -155,20 +156,20 @@ export function renderChatControls(state: AppViewState) {
 
 function resolveSessionOptions(sessionKey: string, sessions: SessionsListResult | null) {
   const seen = new Set<string>();
-  const options: Array<{ key: string; displayName?: string }> = [];
+  const options: Array<{ key: string; displayName?: string; label?: string }> = [];
 
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
 
   // Add current session key first
   seen.add(sessionKey);
-  options.push({ key: sessionKey, displayName: resolvedCurrent?.displayName });
+  options.push({ key: sessionKey, displayName: resolvedCurrent?.displayName, label: resolvedCurrent?.label });
 
   // Add sessions from the result
   if (sessions?.sessions) {
     for (const s of sessions.sessions) {
       if (!seen.has(s.key)) {
         seen.add(s.key);
-        options.push({ key: s.key, displayName: s.displayName });
+        options.push({ key: s.key, displayName: s.displayName, label: s.label });
       }
     }
   }
