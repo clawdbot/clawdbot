@@ -6,7 +6,7 @@ import {
   normalizeAccountId,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
-  type ClawdbotConfig,
+  type MoltbotConfig,
   type DmPolicy,
   type WizardPrompter,
 } from "clawdbot/plugin-sdk";
@@ -24,10 +24,10 @@ const channel = "telegram-user" as const;
 type TelegramUserChannelConfig = NonNullable<CoreConfig["channels"]>["telegram-user"];
 
 function setTelegramUserDmPolicy(
-  cfg: ClawdbotConfig,
+  cfg: MoltbotConfig,
   policy: DmPolicy,
   accountId?: string,
-): ClawdbotConfig {
+): MoltbotConfig {
   const resolvedAccountId = normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID;
   const current = cfg.channels?.["telegram-user"] as TelegramUserChannelConfig | undefined;
   const allowFrom =
@@ -38,13 +38,13 @@ function setTelegramUserDmPolicy(
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
-    channels: {
-      ...cfg.channels,
-      "telegram-user": {
-        ...(current ?? {}),
-        dmPolicy: policy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
+      channels: {
+        ...cfg.channels,
+        "telegram-user": {
+          ...(current ?? {}),
+          dmPolicy: policy,
+          ...(allowFrom ? { allowFrom } : {}),
+        },
       },
     };
   }
@@ -73,7 +73,7 @@ async function noteTelegramUserAuthHelp(prompter: WizardPrompter): Promise<void>
     [
       "Telegram User (MTProto) needs an API ID + API hash from my.telegram.org.",
       "You can store them in config or set TELEGRAM_USER_API_ID/TELEGRAM_USER_API_HASH.",
-      "Login happens via `clawdbot channels login --channel telegram-user`.",
+      "Login happens via `moltbot channels login --channel telegram-user`.",
       `Docs: ${formatDocsLink("/channels/telegram-user", "channels/telegram-user")}`,
     ].join("\n"),
     "Telegram user setup",
@@ -94,10 +94,10 @@ function parseAllowFromInput(raw: string): string[] {
 }
 
 async function promptTelegramUserAllowFrom(params: {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   prompter: WizardPrompter;
   accountId?: string;
-}): Promise<ClawdbotConfig> {
+}): Promise<MoltbotConfig> {
   const accountId = normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID;
   const resolved = resolveTelegramUserAccount({
     cfg: params.cfg as CoreConfig,
@@ -197,7 +197,7 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;
     if (shouldPromptAccountIds && !override) {
       accountId = await promptAccountId({
-        cfg: cfg as ClawdbotConfig,
+        cfg: cfg as MoltbotConfig,
         prompter,
         label: "Telegram User",
         currentId: accountId ?? defaultAccountId,
@@ -344,7 +344,7 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
         } catch (err) {
           runtime.error(`Telegram user login failed: ${String(err)}`);
           await prompter.note(
-            `Run \`clawdbot channels login --channel telegram-user\` later to link.`,
+            `Run \`moltbot channels login --channel telegram-user\` later to link.`,
             "Telegram user login",
           );
         }
@@ -353,7 +353,7 @@ export const telegramUserOnboardingAdapter: ChannelOnboardingAdapter = {
       await prompter.note(
         [
           "Next: link the account via QR or phone code.",
-          "Run: clawdbot channels login --channel telegram-user",
+          "Run: moltbot channels login --channel telegram-user",
         ].join("\n"),
         "Telegram user login",
       );

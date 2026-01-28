@@ -17,10 +17,10 @@ export async function createTelegramUserClient(params: {
   // the "import" condition (ESM), eliminating the warning.
   const { BaseTelegramClient, TelegramClient, NodePlatform } = await loadMtcuteNode();
 
-  class ClawdbotTelegramUserPlatform extends NodePlatform {
+  class MoltbotTelegramUserPlatform extends NodePlatform {
     // mtcute's default NodePlatform.beforeExit installs SIGINT/SIGTERM handlers that re-send the
-    // signal, which can race with Clawdbot's graceful shutdown and close sqlite while writes are
-    // pending. We only hook into process exit events (no signal handlers) and rely on Clawdbot to
+    // signal, which can race with Moltbot's graceful shutdown and close sqlite while writes are
+    // pending. We only hook into process exit events (no signal handlers) and rely on Moltbot to
     // stop cleanly.
     override beforeExit(fn: () => void): () => void {
       const onBeforeExit = () => fn();
@@ -38,7 +38,7 @@ export async function createTelegramUserClient(params: {
     apiId: params.apiId,
     apiHash: params.apiHash,
     storage: params.storagePath,
-    platform: new ClawdbotTelegramUserPlatform(),
+    platform: new MoltbotTelegramUserPlatform(),
   });
   return new TelegramClient({ client });
 }

@@ -60,15 +60,15 @@ export async function monitorTelegramUserProvider(opts: MonitorTelegramUserOpts 
   const storagePath = resolveTelegramUserSessionPath(account.accountId);
   if (!fs.existsSync(storagePath)) {
     throw new Error(
-      "Telegram user session missing. Run `clawdbot channels login --channel telegram-user` first.",
+      "Telegram user session missing. Run `moltbot channels login --channel telegram-user` first.",
     );
   }
   const client = await createTelegramUserClient({ apiId, apiHash, storagePath });
-  setActiveTelegramUserClient(client);
+  setActiveTelegramUserClient(account.accountId, client);
 
   const stop = async () => {
     shuttingDown = true;
-    setActiveTelegramUserClient(null);
+    setActiveTelegramUserClient(account.accountId, null);
     await client.destroy().catch(() => undefined);
   };
 

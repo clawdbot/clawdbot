@@ -7,12 +7,13 @@ import {
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   normalizeAccountId,
+  PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   setAccountEnabledInConfigSection,
   type ChannelGroupContext,
   type ChannelPlugin,
   type ChannelSetupInput,
-  type ClawdbotConfig,
+  type MoltbotConfig,
   type GroupToolPolicyConfig,
 } from "clawdbot/plugin-sdk";
 
@@ -108,7 +109,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     normalizeAllowEntry: (entry) =>
       entry.replace(/^(telegram-user|telegram|tg):/i, "").toLowerCase(),
     notifyApproval: async ({ id }) => {
-      await sendMessageTelegramUser(String(id), "Clawdbot: access approved.", {});
+      await sendMessageTelegramUser(String(id), PAIRING_APPROVED_MESSAGE, {});
     },
   },
   capabilities: {
@@ -337,7 +338,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
-        cfg: cfg as ClawdbotConfig,
+        cfg: cfg as MoltbotConfig,
         channelKey: "telegram-user",
         accountId,
         name,
@@ -355,7 +356,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
     applyAccountConfig: ({ cfg, accountId, input }) => {
       const setupInput = input as TelegramUserSetupInput;
       const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg as ClawdbotConfig,
+        cfg: cfg as MoltbotConfig,
         channelKey: "telegram-user",
         accountId,
         name: setupInput.name,
@@ -432,13 +433,13 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         throw err;
       }
     },
-    stopAccount: async () => {
+    stopAccount: async ({ accountId }) => {
       const { getActiveTelegramUserClient, setActiveTelegramUserClient } =
         await import("./active-client.js");
-      const active = getActiveTelegramUserClient();
+      const active = getActiveTelegramUserClient(accountId);
       if (active) {
         await active.destroy().catch(() => undefined);
-        setActiveTelegramUserClient(null);
+        setActiveTelegramUserClient(accountId, null);
       }
     },
     logoutAccount: async ({ accountId, cfg, runtime }) => {
@@ -453,7 +454,7 @@ export const telegramUserPlugin: ChannelPlugin<ResolvedTelegramUserAccount> = {
         }
       }
 
-      const nextCfg = { ...cfg } as ClawdbotConfig;
+      const nextCfg = { ...cfg } as MoltbotConfig;
       const nextSection = cfg.channels?.["telegram-user"]
         ? { ...cfg.channels["telegram-user"] }
         : undefined;

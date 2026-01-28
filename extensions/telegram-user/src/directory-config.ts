@@ -1,10 +1,10 @@
-import type { ChannelDirectoryEntry, ClawdbotConfig } from "clawdbot/plugin-sdk";
+import type { ChannelDirectoryEntry, MoltbotConfig } from "clawdbot/plugin-sdk";
 
 import { resolveTelegramUserAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 export type TelegramUserDirectoryConfigParams = {
-  cfg: ClawdbotConfig;
+  cfg: MoltbotConfig;
   accountId?: string | null;
   query?: string | null;
   limit?: number | null;
@@ -65,4 +65,3 @@ export async function listTelegramUserDirectoryGroupsFromConfig(
     .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
     .map((id) => ({ kind: "group", id }) as const);
 }
-

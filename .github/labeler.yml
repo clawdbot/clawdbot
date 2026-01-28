@@ -68,6 +68,11 @@
           - "src/telegram/**"
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
+"channel: telegram-user":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/telegram-user/**"
+          - "docs/channels/telegram-user.md"
 "channel: tlon":
   - changed-files:
       - any-glob-to-any-file:

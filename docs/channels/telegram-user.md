@@ -3,7 +3,7 @@ summary: "Connect a Telegram user account via MTProto (DMs + groups)"
 ---
 # Telegram User
 
-Telegram User connects Clawdbot to a **personal Telegram account** using MTProto.
+Telegram User connects Moltbot to a **personal Telegram account** using MTProto.
 Use this when you need user-level DMs or want to message from your own account in groups.
 
 ## Requirements
@@ -16,7 +16,7 @@ Use this when you need user-level DMs or want to message from your own account i
 If the plugin is not bundled, install it:
 
 ```bash
-clawdbot plugins install @clawdbot/telegram-user
+moltbot plugins install @moltbot/telegram-user
 ```
 
 ## Configure
@@ -27,25 +27,25 @@ Option A: env vars (default account only)
 ```bash
 export TELEGRAM_USER_API_ID="123456"
 export TELEGRAM_USER_API_HASH="your_api_hash"
-clawdbot channels add --channel telegram-user --use-env
+moltbot channels add --channel telegram-user --use-env
 ```
 
 Option B: config
 ```bash
-clawdbot channels add --channel telegram-user --api-id 123456 --api-hash your_api_hash
+moltbot channels add --channel telegram-user --api-id 123456 --api-hash your_api_hash
 ```
 
 ## Login (QR or phone code)
 
 QR login (default):
 ```bash
-clawdbot channels login --channel telegram-user
+moltbot channels login --channel telegram-user
 ```
 
 Phone login:
 ```bash
 export TELEGRAM_USER_PHONE="+15551234567"
-clawdbot channels login --channel telegram-user
+moltbot channels login --channel telegram-user
 ```
 
 Optional env helpers:
@@ -57,7 +57,7 @@ Optional env helpers:
 By default, DMs are protected with pairing. Approve requests with:
 
 ```bash
-clawdbot pairing approve telegram-user <code>
+moltbot pairing approve telegram-user <code>
 ```
 
 See [Pairing](/start/pairing) for details.

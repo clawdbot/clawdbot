@@ -1,9 +1,9 @@
 {
-  "name": "@clawdbot/telegram-user",
+  "name": "@moltbot/telegram-user",
   "version": "2026.1.22",
   "type": "module",
-  "description": "Clawdbot Telegram user (MTProto) channel plugin",
-  "clawdbot": {
+  "description": "Moltbot Telegram user (MTProto) channel plugin",
+  "moltbot": {
     "extensions": [
       "./index.ts"
     ],
@@ -19,7 +19,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@clawdbot/telegram-user",
+      "npmSpec": "@moltbot/telegram-user",
       "localPath": "extensions/telegram-user",
       "defaultChoice": "npm"
     }
@@ -33,9 +33,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "clawdbot": "workspace:*"
+    "moltbot": "workspace:*"
   },
   "peerDependencies": {
-    "clawdbot": ">=2026.1.25"
+    "moltbot": ">=2026.1.25"
   }
 }

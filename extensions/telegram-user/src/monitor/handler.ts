@@ -115,6 +115,20 @@ function buildTelegramUserSelfMentionRegexes(params: {
     .filter((entry): entry is RegExp => Boolean(entry));
 }
 
+export function resolveTelegramUserTimestampMs(
+  value: Date | number | null | undefined,
+): number | undefined {
+  if (value == null) return undefined;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? Math.round(value * 1000) : Math.round(value);
+  }
+  return undefined;
+}
+
 async function safeSendTyping(params: {
   client: TelegramClient;
   target: number | string;
@@ -348,9 +362,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const chatId = msg.chat.type === "chat" ? msg.chat.id : undefined;
       const isForum = msg.chat.type === "chat" && msg.chat.isForum === true;
       const threadId =
-        isGroup && msg.isTopicMessage
-          ? msg.replyToMessage?.threadId ?? undefined
-          : undefined;
+        isGroup && isForum ? msg.replyToMessage?.threadId ?? undefined : undefined;
       const { groupConfig, topicConfig } =
         isGroup && chatId != null
           ? resolveTelegramUserGroupConfig(accountConfig, chatId, threadId)
@@ -452,7 +464,7 @@ export function createTelegramUserMessageHandler(params: TelegramUserHandlerPara
       const media = allMedia[0] ?? null;
       const rawBody = [text, locationText, pollText].filter(Boolean).join("\n").trim();
       if (!rawBody && !media) return;
-      const timestampMs = msg.date ? msg.date * 1000 : undefined;
+      const timestampMs = resolveTelegramUserTimestampMs(msg.date);
       const replyInfo = msg.replyToMessage ?? null;
       const replyToId = replyInfo?.id != null ? String(replyInfo.id) : undefined;
       const replyToSender = replyInfo?.sender

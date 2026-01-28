@@ -1,11 +1,25 @@
 import type { TelegramClient } from "@mtcute/node";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 
-let activeClient: TelegramClient | null = null;
+const activeClients = new Map<string, TelegramClient>();
 
-export function setActiveTelegramUserClient(next: TelegramClient | null) {
-  activeClient = next;
+function resolveAccountKey(accountId?: string | null): string {
+  return normalizeAccountId(accountId ?? DEFAULT_ACCOUNT_ID);
 }
 
-export function getActiveTelegramUserClient(): TelegramClient | null {
-  return activeClient;
+export function setActiveTelegramUserClient(
+  accountId: string | null | undefined,
+  next: TelegramClient | null,
+) {
+  const key = resolveAccountKey(accountId);
+  if (next) {
+    activeClients.set(key, next);
+    return;
+  }
+  activeClients.delete(key);
+}
+
+export function getActiveTelegramUserClient(accountId?: string | null): TelegramClient | null {
+  const key = resolveAccountKey(accountId);
+  return activeClients.get(key) ?? null;
 }

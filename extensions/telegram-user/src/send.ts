@@ -6,6 +6,7 @@ import { getTelegramUserRuntime } from "./runtime.js";
 import { resolveTelegramUserAccount } from "./accounts.js";
 import { createTelegramUserClient } from "./client.js";
 import { resolveTelegramUserSessionPath } from "./session.js";
+import { getActiveTelegramUserClient } from "./active-client.js";
 import type { CoreConfig } from "./types.js";
 
 export type TelegramUserSendResult = {
@@ -145,6 +146,8 @@ async function resolveClient(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
+  const active = getActiveTelegramUserClient(account.accountId);
+  if (active) return { client: active, stopOnDone: false };
   const apiId = account.credentials.apiId;
   const apiHash = account.credentials.apiHash;
   if (!apiId || !apiHash) {
@@ -153,7 +156,7 @@ async function resolveClient(params: {
   const storagePath = resolveTelegramUserSessionPath(account.accountId);
   if (!fs.existsSync(storagePath)) {
     throw new Error(
-      "Telegram user session missing. Run `clawdbot channels login --channel telegram-user` first.",
+      "Telegram user session missing. Run `moltbot channels login --channel telegram-user` first.",
     );
   }
   const client = await createTelegramUserClient({ apiId, apiHash, storagePath });

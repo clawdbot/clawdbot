@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
+import type { MoltbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
 
 const sendMediaTelegramUser = vi.fn<
   typeof import("./send.js").sendMediaTelegramUser
@@ -37,7 +37,7 @@ describe("telegram-user channel plugin", () => {
           mediaMaxMb: 7,
         },
       },
-    } satisfies Partial<ClawdbotConfig> as unknown as ClawdbotConfig;
+    } satisfies Partial<MoltbotConfig> as unknown as MoltbotConfig;
 
     const mod = await import("./channel.js");
     await mod.telegramUserPlugin.outbound?.sendMedia?.({
@@ -60,7 +60,7 @@ describe("telegram-user channel plugin", () => {
       channels: {
         "telegram-user": {},
       },
-    } satisfies Partial<ClawdbotConfig> as unknown as ClawdbotConfig;
+    } satisfies Partial<MoltbotConfig> as unknown as MoltbotConfig;
 
     const mod = await import("./channel.js");
     await mod.telegramUserPlugin.outbound?.sendMedia?.({
@@ -88,7 +88,7 @@ describe("telegram-user channel plugin", () => {
           },
         },
       },
-    } satisfies Partial<ClawdbotConfig> as unknown as ClawdbotConfig;
+    } satisfies Partial<MoltbotConfig> as unknown as MoltbotConfig;
 
     const mod = await import("./channel.js");
     const runtime = {
