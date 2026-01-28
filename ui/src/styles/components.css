@@ -1369,6 +1369,22 @@
   }
 }
 
+@media (max-width: 480px) {
+  .chat-compose__actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .chat-compose__actions .btn {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .chat-compose__actions .btn-kbd {
+    display: none;
+  }
+}
+
 /* ===========================================
    QR Code
    =========================================== */
