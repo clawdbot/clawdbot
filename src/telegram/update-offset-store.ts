@@ -6,11 +6,25 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
 const STORE_VERSION = 1;
+const TELEGRAM_UPDATE_ID_MAX = 2_147_483_647; // Telegram Bot API: Integer (32-bit signed)
 
 type TelegramUpdateOffsetState = {
   version: number;
   lastUpdateId: number | null;
 };
+
+function isValidTelegramUpdateId(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= TELEGRAM_UPDATE_ID_MAX
+  );
+}
+
+function formatBackupSuffix() {
+  return new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
+}
 
 function normalizeAccountId(accountId?: string) {
   const trimmed = accountId?.trim();
@@ -31,7 +45,7 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
   try {
     const parsed = JSON.parse(raw) as TelegramUpdateOffsetState;
     if (parsed?.version !== STORE_VERSION) return null;
-    if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
+    if (parsed.lastUpdateId !== null && !isValidTelegramUpdateId(parsed.lastUpdateId)) {
       return null;
     }
     return parsed;
@@ -43,12 +57,23 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
 export async function readTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
+  onInvalid?: (info: { path: string; backupPath: string }) => void;
 }): Promise<number | null> {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = safeParseState(raw);
-    return parsed?.lastUpdateId ?? null;
+    if (!parsed) {
+      const backupPath = `${filePath}.bak.invalid.${formatBackupSuffix()}`;
+      try {
+        await fs.rename(filePath, backupPath);
+        params.onInvalid?.({ path: filePath, backupPath });
+      } catch {
+        // Ignore backup failures; treat as missing offset.
+      }
+      return null;
+    }
+    return parsed.lastUpdateId ?? null;
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code === "ENOENT") return null;

@@ -11,6 +11,7 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
+import { acquireTelegramPollLock } from "./poll-lock.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
@@ -93,6 +94,7 @@ const isNetworkRelatedError = (err: unknown) => {
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const cfg = opts.config ?? loadConfig();
+  const runtimeError = opts.runtime?.error ?? console.error;
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -108,8 +110,28 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     opts.proxyFetch ??
     (account.config.proxy ? makeProxyFetch(account.config.proxy as string) : undefined);
 
+  let pollLock: { release: () => Promise<void> } | null = null;
+  try {
+    pollLock = await acquireTelegramPollLock({
+      token,
+      accountId: account.accountId,
+    });
+  } catch (err) {
+    runtimeError(
+      `[telegram] [${account.accountId}] polling lock unavailable; skipping provider start: ${String(
+        err,
+      )}`,
+    );
+    return;
+  }
+
   let lastUpdateId = await readTelegramUpdateOffset({
     accountId: account.accountId,
+    onInvalid: ({ path, backupPath }) => {
+      runtimeError(
+        `[telegram] [${account.accountId}] invalid update offset at ${path}; moved to ${backupPath}`,
+      );
+    },
   });
   const persistUpdateId = async (updateId: number) => {
     if (lastUpdateId !== null && updateId <= lastUpdateId) return;
@@ -151,49 +173,52 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       abortSignal: opts.abortSignal,
       publicUrl: opts.webhookUrl,
     });
+    await pollLock.release().catch(() => undefined);
     return;
   }
 
   // Use grammyjs/runner for concurrent update processing
   let restartAttempts = 0;
 
-  while (!opts.abortSignal?.aborted) {
-    const runner = run(bot, createTelegramRunnerOptions(cfg));
-    const stopOnAbort = () => {
-      if (opts.abortSignal?.aborted) {
-        void runner.stop();
-      }
-    };
-    opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
-    try {
-      // runner.task() returns a promise that resolves when the runner stops
-      await runner.task();
-      return;
-    } catch (err) {
-      if (opts.abortSignal?.aborted) {
-        throw err;
-      }
-      const isConflict = isGetUpdatesConflict(err);
-      const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
-      const isNetworkError = isNetworkRelatedError(err);
-      if (!isConflict && !isRecoverable && !isNetworkError) {
-        throw err;
-      }
-      restartAttempts += 1;
-      const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-      const reason = isConflict ? "getUpdates conflict" : "network error";
-      const errMsg = formatErrorMessage(err);
-      (opts.runtime?.error ?? console.error)(
-        `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
-      );
+  try {
+    while (!opts.abortSignal?.aborted) {
+      const runner = run(bot, createTelegramRunnerOptions(cfg));
+      const stopOnAbort = () => {
+        if (opts.abortSignal?.aborted) {
+          void runner.stop();
+        }
+      };
+      opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
       try {
-        await sleepWithAbort(delayMs, opts.abortSignal);
-      } catch (sleepErr) {
-        if (opts.abortSignal?.aborted) return;
-        throw sleepErr;
+        // runner.task() returns a promise that resolves when the runner stops
+        await runner.task();
+        return;
+      } catch (err) {
+        if (opts.abortSignal?.aborted) {
+          throw err;
+        }
+        const isConflict = isGetUpdatesConflict(err);
+        const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
+        const isNetworkError = isNetworkRelatedError(err);
+        if (!isConflict && !isRecoverable && !isNetworkError) {
+          throw err;
+        }
+        restartAttempts += 1;
+        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+        const reason = isConflict ? "getUpdates conflict" : "network error";
+        const errMsg = formatErrorMessage(err);
+        runtimeError(`Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`);
+        try {
+          await sleepWithAbort(delayMs, opts.abortSignal);
+        } catch (sleepErr) {
+          if (opts.abortSignal?.aborted) return;
+          throw sleepErr;
+        }
+      } finally {
+        opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       }
-    } finally {
-      opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     }
+  } finally {
+    await pollLock.release().catch(() => undefined);
   }
 }

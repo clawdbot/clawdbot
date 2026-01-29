@@ -32,4 +32,33 @@ describe("telegram update offset store", () => {
       expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
     });
   });
+
+  it("ignores invalid persisted update ids", async () => {
+    await withTempStateDir(async (dir) => {
+      const filePath = path.join(dir, "telegram", "update-offset-primary.json");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+
+      const writeRaw = async (lastUpdateId: unknown) => {
+        await fs.writeFile(
+          filePath,
+          `${JSON.stringify({ version: 1, lastUpdateId }, null, 2)}\n`,
+          "utf-8",
+        );
+      };
+
+      await writeRaw(2_147_483_648);
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
+
+      const backupFiles = (await fs.readdir(path.dirname(filePath))).filter((name) =>
+        name.includes("update-offset-primary.json.bak.invalid."),
+      );
+      expect(backupFiles.length).toBe(1);
+
+      await writeRaw(-1);
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
+
+      await writeRaw(1.25);
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
+    });
+  });
 });
