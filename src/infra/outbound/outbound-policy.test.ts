@@ -72,8 +72,12 @@ describe("outbound policy", () => {
   });
 
   it("uses embeds when available and preferred", async () => {
+    const cfg = {
+      ...discordConfig,
+      tools: { message: { crossContext: { marker: { enabled: true } } } },
+    } as ClawdbotConfig;
     const decoration = await buildCrossContextDecoration({
-      cfg: discordConfig,
+      cfg,
       channel: "discord",
       target: "123",
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "discord" },
