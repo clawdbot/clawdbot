@@ -5,6 +5,7 @@ import type { AppViewState } from "./app-view-state";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
 import { icons } from "./icons";
 import { loadChatHistory } from "./controllers/chat";
+import { patchSession } from "./controllers/sessions";
 import { syncUrlWithSessionKey } from "./app-settings";
 import type { SessionsListResult } from "./types";
 import type { ThemeMode } from "./theme";
@@ -40,6 +41,10 @@ export function renderTab(state: AppViewState, tab: Tab) {
 
 export function renderChatControls(state: AppViewState) {
   const sessionOptions = resolveSessionOptions(state.sessionKey, state.sessionsResult);
+  const activeSession = state.sessionsResult?.sessions?.find(
+    (row) => row.key === state.sessionKey,
+  );
+  const sessionLabel = activeSession?.label ?? "";
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -75,13 +80,32 @@ export function renderChatControls(state: AppViewState) {
           ${repeat(
             sessionOptions,
             (entry) => entry.key,
-            (entry) =>
-              html`<option value=${entry.key}>
-                ${entry.displayName ?? entry.key}
-              </option>`,
+            (entry) => {
+              const base = entry.displayName ?? entry.key;
+              // Only append label if it differs from displayName
+              const showLabel = entry.label && entry.label !== entry.displayName;
+              const text = showLabel ? `${base} — ${entry.label}` : base;
+              return html`<option value=${entry.key}>${text}</option>`;
+            },
           )}
         </select>
       </label>
+      <input
+        type="text"
+        class="chat-controls__label"
+        .value=${sessionLabel}
+        ?disabled=${!state.connected}
+        placeholder="Label"
+        title="Session label"
+        @change=${(e: Event) => {
+          const value = (e.target as HTMLInputElement).value.trim();
+          void patchSession(
+            state as Parameters<typeof patchSession>[0],
+            state.sessionKey,
+            { label: value || null },
+          );
+        }}
+      />
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -134,20 +158,20 @@ export function renderChatControls(state: AppViewState) {
 
 function resolveSessionOptions(sessionKey: string, sessions: SessionsListResult | null) {
   const seen = new Set<string>();
-  const options: Array<{ key: string; displayName?: string }> = [];
+  const options: Array<{ key: string; displayName?: string; label?: string }> = [];
 
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
 
   // Add current session key first
   seen.add(sessionKey);
-  options.push({ key: sessionKey, displayName: resolvedCurrent?.displayName });
+  options.push({ key: sessionKey, displayName: resolvedCurrent?.displayName, label: resolvedCurrent?.label });
 
   // Add sessions from the result
   if (sessions?.sessions) {
     for (const s of sessions.sessions) {
       if (!seen.has(s.key)) {
         seen.add(s.key);
-        options.push({ key: s.key, displayName: s.displayName });
+        options.push({ key: s.key, displayName: s.displayName, label: s.label });
       }
     }
   }
