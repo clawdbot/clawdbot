@@ -136,7 +136,7 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
     const manifest = readPackageManifest(fullPath);
     const extensions = manifest ? resolvePackageExtensions(manifest) : [];

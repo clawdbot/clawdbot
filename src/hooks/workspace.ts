@@ -112,7 +112,7 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
     const hookDir = path.join(dir, entry.name);
     const manifest = readHookPackageManifest(hookDir);

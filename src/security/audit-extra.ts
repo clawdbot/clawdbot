@@ -527,7 +527,7 @@ export async function collectPluginsTrustFindings(params: {
 
   const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch(() => []);
   const pluginDirs = entries
-    .filter((e) => e.isDirectory())
+    .filter((e) => e.isDirectory() || e.isSymbolicLink())
     .map((e) => e.name)
     .filter(Boolean);
   if (pluginDirs.length === 0) return findings;
