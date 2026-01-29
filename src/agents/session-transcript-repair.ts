@@ -5,6 +5,35 @@ type ToolCallLike = {
   name?: string;
 };
 
+/**
+ * Check whether a tool call block is incomplete (terminated mid-stream).
+ *
+ * When a streaming response is interrupted (`stopReason: "error"`,
+ * `errorMessage: "terminated"`), the assistant message may contain tool call
+ * blocks with only `partialJson` and no valid `arguments`.  These were never
+ * executed, so inserting a synthetic `toolResult` for them causes Anthropic's
+ * API to reject the request with "unexpected tool_use_id".
+ *
+ * We detect incompleteness by checking:
+ *   1. `partialJson` is present (streaming was in progress), AND
+ *   2. `arguments` is missing, empty, or not a non-empty object.
+ *
+ * If `arguments` is fully populated the call completed successfully and should
+ * be treated normally, even if `partialJson` happens to be set.
+ */
+function isIncompleteToolCall(block: Record<string, unknown>): boolean {
+  if (typeof block.partialJson !== "string" || !block.partialJson) return false;
+
+  const args = block.arguments;
+  // No arguments at all → incomplete
+  if (args === undefined || args === null) return true;
+  // Empty object {} → incomplete (arguments were not parsed)
+  if (typeof args === "object" && !Array.isArray(args) && Object.keys(args as object).length === 0)
+    return true;
+
+  return false;
+}
+
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
@@ -18,6 +47,10 @@ function extractToolCallsFromAssistant(
     if (typeof rec.id !== "string" || !rec.id) continue;
 
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
+      // Skip incomplete tool calls from terminated/errored streaming responses.
+      // These were never executed, so they must not receive a synthetic toolResult.
+      if (isIncompleteToolCall(rec as Record<string, unknown>)) continue;
+
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
@@ -54,7 +87,7 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-export { makeMissingToolResult };
+export { isIncompleteToolCall, makeMissingToolResult };
 
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
