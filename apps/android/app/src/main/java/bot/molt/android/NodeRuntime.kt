@@ -113,6 +113,15 @@ class NodeRuntime(context: Context) {
 
   private val identityStore = DeviceIdentityStore(appContext)
 
+  fun resetDeviceIdentity() {
+    identityStore.resetIdentity()
+    _deviceIdentityStatusText.value = computeDeviceIdentityStatusText()
+    refreshGatewayConnection()
+  }
+
+  private val _deviceIdentityStatusText = MutableStateFlow(computeDeviceIdentityStatusText())
+  val deviceIdentityStatusText: StateFlow<String> = _deviceIdentityStatusText.asStateFlow()
+
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
@@ -170,8 +179,11 @@ class NodeRuntime(context: Context) {
       onDisconnected = { message ->
         operatorConnected = false
         operatorStatusText = message
-        _serverName.value = null
-        _remoteAddress.value = null
+        // If the node session is still connected, keep server/remote around so Settings stays usable.
+        if (!nodeConnected) {
+          _serverName.value = null
+          _remoteAddress.value = null
+        }
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         if (!isCanonicalMainSessionKey(_mainSessionKey.value)) {
           _mainSessionKey.value = "main"
@@ -192,15 +204,22 @@ class NodeRuntime(context: Context) {
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
-      onConnected = { _, _, _ ->
+      onConnected = { name, remote, _ ->
         nodeConnected = true
         nodeStatusText = "Connected"
+        // When operator auth is failing, node can still connect; keep UI usable.
+        if (_serverName.value == null) _serverName.value = name
+        if (_remoteAddress.value == null) _remoteAddress.value = remote
         updateStatus()
         maybeNavigateToA2uiOnConnect()
       },
       onDisconnected = { message ->
         nodeConnected = false
         nodeStatusText = message
+        if (!operatorConnected) {
+          _serverName.value = null
+          _remoteAddress.value = null
+        }
         updateStatus()
         showLocalCanvasOnDisconnect()
       },
@@ -241,7 +260,7 @@ class NodeRuntime(context: Context) {
   }
 
   private fun updateStatus() {
-    _isConnected.value = operatorConnected
+    _isConnected.value = operatorConnected || nodeConnected
     _statusText.value =
       when {
         operatorConnected && nodeConnected -> "Connected"
@@ -284,6 +303,9 @@ class NodeRuntime(context: Context) {
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+
+  val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val gatewayPassword: StateFlow<String> = prefs.gatewayPassword
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
@@ -428,6 +450,14 @@ class NodeRuntime(context: Context) {
     prefs.setManualTls(value)
   }
 
+  fun setGatewayToken(value: String) {
+    prefs.setGatewayToken(value)
+  }
+
+  fun setGatewayPassword(value: String) {
+    prefs.setGatewayPassword(value)
+  }
+
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
@@ -534,20 +564,47 @@ class NodeRuntime(context: Context) {
     )
   }
 
+  private fun computeDeviceIdentityStatusText(): String {
+    return try {
+      val identity = identityStore.loadOrCreate()
+      val publicKey = identityStore.publicKeyBase64Url(identity)?.trim().orEmpty()
+      val signature = identityStore.signPayload("clawdbot:identity-probe", identity)?.trim().orEmpty()
+
+      // Fallback identity uses a placeholder public key (Base64 of a single 0 byte is "AA==").
+      val placeholder = identity.publicKeyRawBase64.trim() == "AA==" || identity.privateKeyPkcs8Base64.trim() == "AA=="
+
+      when {
+        placeholder -> "Missing (crypto fallback)"
+        publicKey.isEmpty() -> "Missing (no public key)"
+        signature.isEmpty() -> "Missing (cannot sign)"
+        else -> "OK"
+      }
+    } catch (err: Throwable) {
+      "Missing (${err::class.java.simpleName})"
+    }
+  }
+
   private fun buildOperatorConnectOptions(): GatewayConnectOptions {
+    // IMPORTANT:
+    // Do NOT use the CONTROL_UI client id here. The gateway enforces extra "secure context"
+    // rules for the Control UI (HTTPS/localhost), and our Android operator session is a native
+    // client over WS/WSS.
     return GatewayConnectOptions(
       role = "operator",
       scopes = emptyList(),
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "moltbot-control-ui", clientMode = "ui"),
+      // Use a known client id/mode so the gateway accepts the handshake.
+      // Avoid CONTROL_UI (web control panel) which may enforce secure-context rules.
+      client = buildClientInfo(clientId = "moltbot-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }
 
   fun refreshGatewayConnection() {
     val endpoint = connectedEndpoint ?: return
+    _deviceIdentityStatusText.value = computeDeviceIdentityStatusText()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
     val tls = resolveTlsParams(endpoint)
@@ -562,6 +619,7 @@ class NodeRuntime(context: Context) {
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
+    _deviceIdentityStatusText.value = computeDeviceIdentityStatusText()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
     val tls = resolveTlsParams(endpoint)
@@ -611,6 +669,52 @@ class NodeRuntime(context: Context) {
     connectedEndpoint = null
     operatorSession.disconnect()
     nodeSession.disconnect()
+  }
+
+  fun requestNodePairing() {
+    val endpoint = connectedEndpoint
+    if (!_isConnected.value || endpoint == null) {
+      _statusText.value = "Pairing failed: not connected"
+      return
+    }
+
+    scope.launch {
+      try {
+        val params =
+          buildJsonObject {
+            // IMPORTANT: Pair the actual nodeId used by the gateway for this device.
+            // With device identity enabled, this will be the deviceId (sha256 of public key).
+            val nodeId = identityStore.loadOrCreate().deviceId
+            put("nodeId", JsonPrimitive(nodeId))
+            put("displayName", JsonPrimitive(displayName.value))
+            put("platform", JsonPrimitive("android"))
+            put("version", JsonPrimitive(resolvedVersionName()))
+            put("deviceFamily", JsonPrimitive("Android"))
+            resolveModelIdentifier()?.let { put("modelIdentifier", JsonPrimitive(it)) }
+            put("caps", JsonArray(buildCapabilities().map(::JsonPrimitive)))
+            put("commands", JsonArray(buildInvokeCommands().map(::JsonPrimitive)))
+            put("silent", JsonPrimitive(false))
+          }
+
+        val res = operatorSession.request("node.pair.request", params.toString(), timeoutMs = 15_000)
+        val requestId =
+          try {
+            val obj = json.parseToJsonElement(res).asObjectOrNull()
+            obj?.get("request")?.asObjectOrNull()?.get("requestId")?.asStringOrNull()
+          } catch (_: Throwable) {
+            null
+          }
+
+        _statusText.value =
+          if (requestId.isNullOrBlank()) {
+            "Pairing requested"
+          } else {
+            "Pairing requested: $requestId"
+          }
+      } catch (err: Throwable) {
+        _statusText.value = "Pairing failed: ${err.message ?: err::class.java.simpleName}"
+      }
+    }
   }
 
   private fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
@@ -667,51 +771,123 @@ class NodeRuntime(context: Context) {
       }
       val name = MoltbotCanvasA2UIAction.extractActionName(userActionObj) ?: return@launch
 
-      val surfaceId =
-        (userActionObj["surfaceId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "main" }
-      val sourceComponentId =
-        (userActionObj["sourceComponentId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "-" }
-      val contextJson = (userActionObj["context"] as? JsonObject)?.toString()
+      // Extract context as key/value map (supports literal* values).
+      fun contextString(key: String): String? {
+        val ctx = userActionObj["context"] as? JsonObject ?: return null
+        val entry = ctx[key] as? JsonPrimitive ?: return null
+        return entry.content.trim().takeIf { it.isNotEmpty() }
+      }
 
-      val sessionKey = resolveMainSessionKey()
-      val message =
-        MoltbotCanvasA2UIAction.formatAgentMessage(
-          actionName = name,
-          sessionKey = sessionKey,
-          surfaceId = surfaceId,
-          sourceComponentId = sourceComponentId,
-          host = displayName.value,
-          instanceId = instanceId.value.lowercase(),
-          contextJson = contextJson,
-        )
+      fun contextNumber(key: String): Double? {
+        val ctx = userActionObj["context"] as? JsonObject ?: return null
+        val entry = ctx[key] as? JsonPrimitive ?: return null
+        return entry.content.toDoubleOrNull()
+      }
 
-      val connected = nodeConnected
+      val nodeId = contextString("nodeId")
+
+      var ok = false
       var error: String? = null
-      if (connected) {
-        try {
-          nodeSession.sendNodeEvent(
-            event = "agent.request",
-            payloadJson =
+
+      // If the action name matches a known node command, invoke it directly via the operator session.
+      // (Do not require operatorConnected here; if it's offline we'll return a visible error.)
+      val (command, params) =
+        when (name) {
+          "camera.snap" -> "camera.snap" to buildJsonObject { }
+          "camera.clip" -> {
+            val durationSec = (contextNumber("durationSec") ?: 5.0).toLong().coerceIn(1, 60)
+            "camera.clip" to
               buildJsonObject {
-                put("message", JsonPrimitive(message))
-                put("sessionKey", JsonPrimitive(sessionKey))
-                put("thinking", JsonPrimitive("low"))
-                put("deliver", JsonPrimitive(false))
-                put("key", JsonPrimitive(actionId))
-              }.toString(),
-          )
-        } catch (e: Throwable) {
-          error = e.message ?: "send failed"
+                put("durationMs", JsonPrimitive(durationSec * 1000))
+                put("includeAudio", JsonPrimitive(true))
+              }
+          }
+          "screen.record" -> {
+            val durationSec = (contextNumber("durationSec") ?: 15.0).toLong().coerceIn(1, 180)
+            "screen.record" to
+              buildJsonObject {
+                put("durationMs", JsonPrimitive(durationSec * 1000))
+                put("includeAudio", JsonPrimitive(false))
+              }
+          }
+          "location.get" ->
+            "location.get" to
+              buildJsonObject {
+                put("timeoutMs", JsonPrimitive(10_000))
+                put("desiredAccuracy", JsonPrimitive("balanced"))
+              }
+          else -> null
+        } ?: (null to null)
+
+      val isDirectNodeCommand = command != null && params != null
+      if (isDirectNodeCommand) {
+        if (nodeId == null) {
+          error = "missing nodeId in action context"
+        } else {
+          try {
+            val invokeParams =
+              buildJsonObject {
+                put("nodeId", JsonPrimitive(nodeId))
+                put("command", JsonPrimitive(command!!))
+                put("params", params!!)
+                put("timeoutMs", JsonPrimitive(30_000))
+                put("idempotencyKey", JsonPrimitive(actionId))
+              }
+            operatorSession.request("node.invoke", invokeParams.toString(), timeoutMs = 35_000)
+            ok = true
+          } catch (e: Throwable) {
+            error = e.message ?: "invoke failed"
+          }
         }
-      } else {
-        error = "gateway not connected"
+      }
+
+      // Fall back to agent request only for unknown action names.
+      if (!ok && error == null && !isDirectNodeCommand) {
+        val surfaceId =
+          (userActionObj["surfaceId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "main" }
+        val sourceComponentId =
+          (userActionObj["sourceComponentId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "-" }
+        val contextJson = (userActionObj["context"] as? JsonObject)?.toString()
+
+        val sessionKey = resolveMainSessionKey()
+        val message =
+          MoltbotCanvasA2UIAction.formatAgentMessage(
+            actionName = name,
+            sessionKey = sessionKey,
+            surfaceId = surfaceId,
+            sourceComponentId = sourceComponentId,
+            host = displayName.value,
+            instanceId = instanceId.value.lowercase(),
+            contextJson = contextJson,
+          )
+
+        if (nodeConnected) {
+          try {
+            nodeSession.sendNodeEvent(
+              event = "agent.request",
+              payloadJson =
+                buildJsonObject {
+                  put("message", JsonPrimitive(message))
+                  put("sessionKey", JsonPrimitive(sessionKey))
+                  put("thinking", JsonPrimitive("low"))
+                  put("deliver", JsonPrimitive(false))
+                  put("key", JsonPrimitive(actionId))
+                }.toString(),
+            )
+            ok = true
+          } catch (e: Throwable) {
+            error = e.message ?: "send failed"
+          }
+        } else {
+          error = "gateway not connected"
+        }
       }
 
       try {
         canvas.eval(
           MoltbotCanvasA2UIAction.jsDispatchA2UIActionStatus(
             actionId = actionId,
-            ok = connected && error == null,
+            ok = ok && error == null,
             error = error,
           ),
         )

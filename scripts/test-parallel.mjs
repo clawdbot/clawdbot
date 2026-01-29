@@ -3,6 +3,16 @@ import os from "node:os";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
+function runPnpm(args, label) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pnpm, args, { stdio: "inherit", shell: process.platform === "win32" });
+    child.on("exit", (code, signal) => {
+      if (code === 0) return resolve();
+      reject(new Error(`${label} failed (code=${code ?? "?"}${signal ? ` signal=${signal}` : ""})`));
+    });
+  });
+}
+
 const runs = [
   {
     name: "unit",
@@ -84,6 +94,10 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Some unit tests expect the gateway-hosted A2UI scaffold + bundle to be present.
+// The bundle is a generated artifact (gitignored), so ensure it's built before running Vitest.
+await runPnpm(["canvas:a2ui:bundle"], "A2UI bundle");
 
 const parallelCodes = await Promise.all(parallelRuns.map(run));
 const failedParallel = parallelCodes.find((code) => code !== 0);

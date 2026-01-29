@@ -35,6 +35,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val instanceId: StateFlow<String> = runtime.instanceId
   val displayName: StateFlow<String> = runtime.displayName
+  val deviceIdentityStatusText: StateFlow<String> = runtime.deviceIdentityStatusText
   val cameraEnabled: StateFlow<Boolean> = runtime.cameraEnabled
   val locationMode: StateFlow<LocationMode> = runtime.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
@@ -51,6 +52,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
   val manualTls: StateFlow<Boolean> = runtime.manualTls
+
+  val gatewayToken: StateFlow<String> = runtime.gatewayToken
+  val gatewayPassword: StateFlow<String> = runtime.gatewayPassword
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
@@ -104,6 +108,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setManualTls(value)
   }
 
+  fun setGatewayToken(value: String) {
+    runtime.setGatewayToken(value)
+  }
+
+  fun setGatewayPassword(value: String) {
+    runtime.setGatewayPassword(value)
+  }
+
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     runtime.setCanvasDebugStatusEnabled(value)
   }
@@ -138,6 +150,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun disconnect() {
     runtime.disconnect()
+  }
+
+  fun requestNodePairing() {
+    runtime.requestNodePairing()
+  }
+
+  fun resetDeviceIdentity() {
+    runtime.resetDeviceIdentity()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {

@@ -70,6 +70,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val context = LocalContext.current
   val instanceId by viewModel.instanceId.collectAsState()
   val displayName by viewModel.displayName.collectAsState()
+  val deviceIdentityStatusText by viewModel.deviceIdentityStatusText.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
@@ -82,6 +83,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val gatewayToken by viewModel.gatewayToken.collectAsState()
+  val gatewayPassword by viewModel.gatewayPassword.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
@@ -277,6 +280,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
     item { Text("Instance ID: $instanceId", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    item { Text("Identity: $deviceIdentityStatusText", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    item { Button(onClick = viewModel::resetDeviceIdentity) { Text("Reset identity") } }
     item { Text("Device: $deviceModel", color = MaterialTheme.colorScheme.onSurfaceVariant) }
     item { Text("Version: $appVersion", color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
@@ -292,15 +297,26 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { ListItem(headlineContent = { Text("Address") }, supportingContent = { Text(remoteAddress!!) }) }
     }
     item {
-      // UI sanity: "Disconnect" only when we have an active remote.
-      if (isConnected && remoteAddress != null) {
-        Button(
-          onClick = {
-            viewModel.disconnect()
-            NodeForegroundService.stop(context)
-          },
-        ) {
-          Text("Disconnect")
+      // Keep Disconnect/Pairing visible even if only the node session is connected.
+      if (isConnected) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          Button(
+            onClick = {
+              viewModel.disconnect()
+              NodeForegroundService.stop(context)
+            },
+          ) {
+            Text("Disconnect")
+          }
+
+          Button(
+            onClick = {
+              // Triggers a node pairing request (so it appears in `clawdbot nodes pending`).
+              viewModel.requestNodePairing()
+            },
+          ) {
+            Text("Request Pairing")
+          }
         }
       }
     }
@@ -403,6 +419,25 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
           )
+
+          OutlinedTextField(
+            value = gatewayToken,
+            onValueChange = viewModel::setGatewayToken,
+            label = { Text("Gateway token") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = manualEnabled,
+          )
+
+          OutlinedTextField(
+            value = gatewayPassword,
+            onValueChange = viewModel::setGatewayPassword,
+            label = { Text("Gateway password") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = manualEnabled,
+          )
+
+          // Node pairing token removed: gateway does not accept node pairing tokens as connect auth.
+
           ListItem(
             headlineContent = { Text("Require TLS") },
             supportingContent = { Text("Pin the gateway certificate on first connect.") },

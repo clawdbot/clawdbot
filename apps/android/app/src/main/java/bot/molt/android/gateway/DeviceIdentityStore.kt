@@ -7,7 +7,9 @@ import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
+import java.security.Security
 import java.security.spec.PKCS8EncodedKeySpec
+import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -22,6 +24,14 @@ data class DeviceIdentity(
 class DeviceIdentityStore(context: Context) {
   private val json = Json { ignoreUnknownKeys = true }
   private val identityFile = File(context.filesDir, "moltbot/identity/device.json")
+
+  fun resetIdentity() {
+    try {
+      if (identityFile.exists()) identityFile.delete()
+    } catch (_: Throwable) {
+      // best-effort
+    }
+  }
 
   @Synchronized
   fun loadOrCreate(): DeviceIdentity {
@@ -44,9 +54,11 @@ class DeviceIdentityStore(context: Context) {
     return try {
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
       val keySpec = PKCS8EncodedKeySpec(privateKeyBytes)
-      val keyFactory = KeyFactory.getInstance("Ed25519")
+      val keyFactory = runCatching { KeyFactory.getInstance("Ed25519", "BC") }.getOrNull()
+        ?: KeyFactory.getInstance("Ed25519")
       val privateKey = keyFactory.generatePrivate(keySpec)
-      val signature = Signature.getInstance("Ed25519")
+      val signature = runCatching { Signature.getInstance("Ed25519", "BC") }.getOrNull()
+        ?: Signature.getInstance("Ed25519")
       signature.initSign(privateKey)
       signature.update(payload.toByteArray(Charsets.UTF_8))
       base64UrlEncode(signature.sign())
@@ -93,17 +105,33 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun generate(): DeviceIdentity {
-    val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-    val spki = keyPair.public.encoded
-    val rawPublic = stripSpkiPrefix(spki)
-    val deviceId = sha256Hex(rawPublic)
-    val privateKey = keyPair.private.encoded
-    return DeviceIdentity(
-      deviceId = deviceId,
-      publicKeyRawBase64 = Base64.encodeToString(rawPublic, Base64.NO_WRAP),
-      privateKeyPkcs8Base64 = Base64.encodeToString(privateKey, Base64.NO_WRAP),
-      createdAtMs = System.currentTimeMillis(),
-    )
+    // Some Android builds/devices can be missing Ed25519 support at runtime (or have
+    // broken providers). The gateway can still accept a token-only connection, so
+    // we fall back to a "no-signature" identity rather than crashing.
+    return try {
+      // Prefer BC provider when available.
+      val kpg = runCatching { KeyPairGenerator.getInstance("Ed25519", "BC") }.getOrNull()
+        ?: KeyPairGenerator.getInstance("Ed25519")
+      val keyPair = kpg.generateKeyPair()
+      val spki = keyPair.public.encoded
+      val rawPublic = stripSpkiPrefix(spki)
+      val deviceId = sha256Hex(rawPublic)
+      val privateKey = keyPair.private.encoded
+      DeviceIdentity(
+        deviceId = deviceId,
+        publicKeyRawBase64 = Base64.encodeToString(rawPublic, Base64.NO_WRAP),
+        privateKeyPkcs8Base64 = Base64.encodeToString(privateKey, Base64.NO_WRAP),
+        createdAtMs = System.currentTimeMillis(),
+      )
+    } catch (_: Throwable) {
+      val placeholder = Base64.encodeToString(byteArrayOf(0), Base64.NO_WRAP)
+      DeviceIdentity(
+        deviceId = UUID.randomUUID().toString(),
+        publicKeyRawBase64 = placeholder,
+        privateKeyPkcs8Base64 = placeholder,
+        createdAtMs = System.currentTimeMillis(),
+      )
+    }
   }
 
   private fun deriveDeviceId(publicKeyRawBase64: String): String? {
