@@ -104,6 +104,30 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("accepts undefined args and defaults to current session", async () => {
+    loadSessionStoreMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = createMoltbotTools({ agentSessionKey: "main" }).find(
+      (candidate) => candidate.name === "session_status",
+    );
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error("missing session_status tool");
+
+    // Test with undefined args (the issue scenario)
+    const result = await tool.execute("call1b", undefined as unknown as Record<string, unknown>);
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.statusText).toContain("Moltbot");
+    expect(details.statusText).toContain("🧠 Model:");
+  });
+
   it("errors for unknown session keys", async () => {
     loadSessionStoreMock.mockReset();
     updateSessionStoreMock.mockReset();
