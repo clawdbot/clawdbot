@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 
+import { repairToolUseResultPairing } from "../session-transcript-repair.js";
+import { logDebug, logWarn } from "../../logger.js";
+
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
@@ -49,5 +52,63 @@ export async function prepareSessionManagerForRun(params: {
     sm.labelsById?.clear?.();
     sm.leafId = null;
     sm.flushed = false;
+  }
+
+  // Repair any unpaired tool calls (e.g., from crashed/timed-out sessions).
+  // This prevents sessions from getting stuck when tool calls never received results.
+  if (params.hadSessionFile && hasAssistant) {
+    repairSessionToolPairing(sm, params.sessionFile);
+  }
+}
+
+/**
+ * Repair unpaired tool calls in a loaded session by injecting synthetic error results.
+ * This handles cases where:
+ * - A tool execution timed out or crashed before returning
+ * - The session was interrupted mid-execution
+ * - Tool results were lost due to storage issues
+ */
+function repairSessionToolPairing(
+  sm: {
+    fileEntries: Array<SessionHeaderEntry | SessionMessageEntry | { type: string }>;
+    flushed: boolean;
+  },
+  sessionFile: string,
+): void {
+  // Extract messages from fileEntries
+  const messages = sm.fileEntries
+    .filter((e): e is SessionMessageEntry => e.type === "message")
+    .map((e) => e.message)
+    .filter((m): m is NonNullable<typeof m> => m != null);
+
+  if (messages.length === 0) return;
+
+  const report = repairToolUseResultPairing(messages as any);
+
+  if (
+    report.added.length > 0 ||
+    report.droppedDuplicateCount > 0 ||
+    report.droppedOrphanCount > 0
+  ) {
+    logWarn(
+      `Repaired session transcript: file=${sessionFile} ` +
+        `added=${report.added.length} droppedDuplicates=${report.droppedDuplicateCount} ` +
+        `droppedOrphans=${report.droppedOrphanCount}`,
+    );
+
+    // Rebuild fileEntries with repaired messages (nonMessages includes header)
+    const nonMessages = sm.fileEntries.filter((e) => e.type !== "message");
+
+    sm.fileEntries = [
+      ...nonMessages,
+      ...report.messages.map((msg) => ({ type: "message" as const, message: msg })),
+    ];
+
+    // Mark as unflushed so the repairs get persisted
+    sm.flushed = false;
+
+    logDebug(
+      `Session repair details: added synthetic results for tool calls: ${report.added.map((r) => (r as any).toolCallId).join(", ")}`,
+    );
   }
 }
