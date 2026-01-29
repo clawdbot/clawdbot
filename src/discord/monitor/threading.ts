@@ -304,9 +304,14 @@ export function resolveDiscordReplyDeliveryPlan(params: {
     replyTarget = deliverTarget;
   }
   const allowReference = deliverTarget === originalReplyTarget;
+  const effectiveReplyToMode = allowReference ? params.replyToMode : "off";
+  // Don't pass existingId when replyToMode is "off" - this prevents
+  // unwanted reply references in threads when the user has disabled them
+  const existingId =
+    params.threadChannel && effectiveReplyToMode !== "off" ? params.messageId : undefined;
   const replyReference = createReplyReferencePlanner({
-    replyToMode: allowReference ? params.replyToMode : "off",
-    existingId: params.threadChannel ? params.messageId : undefined,
+    replyToMode: effectiveReplyToMode,
+    existingId,
     startId: params.messageId,
     allowReference,
   });
