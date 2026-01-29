@@ -64,6 +64,12 @@ export type ResolvedMemorySearchConfig = {
       textWeight: number;
       candidateMultiplier: number;
     };
+    reranker: {
+      method: "rrf" | "weighted" | "none";
+      rrf: {
+        k: number;
+      };
+    };
   };
   cache: {
     enabled: boolean;
@@ -84,6 +90,8 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
+const DEFAULT_RERANKER_METHOD: "rrf" | "weighted" | "none" = "weighted";
+const DEFAULT_RRF_K = 60;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
@@ -223,6 +231,18 @@ function mergeConfig(
       defaults?.query?.hybrid?.candidateMultiplier ??
       DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
   };
+  const reranker = {
+    method:
+      overrides?.query?.reranker?.method ??
+      defaults?.query?.reranker?.method ??
+      DEFAULT_RERANKER_METHOD,
+    rrf: {
+      k:
+        overrides?.query?.reranker?.rrf?.k ??
+        defaults?.query?.reranker?.rrf?.k ??
+        DEFAULT_RRF_K,
+    },
+  };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
@@ -267,6 +287,12 @@ function mergeConfig(
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
+      },
+      reranker: {
+        method: reranker.method,
+        rrf: {
+          k: Math.max(1, reranker.rrf.k),
+        },
       },
     },
     cache: {

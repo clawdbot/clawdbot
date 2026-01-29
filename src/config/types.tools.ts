@@ -313,6 +313,13 @@ export type MemorySearchConfig = {
       /** Multiplier for candidate pool size (default: 4). */
       candidateMultiplier?: number;
     };
+    reranker?: {
+      /**Reranking method: "rrf" (Reciprocal Rank Fusion), "weighted" (legacy), or "none". */
+      method?: "rrf" | "weighted" | "none";
+      rrf?: {
+        k?: number;
+      };
+    };
   };
   /** Index cache behavior. */
   cache?: {
