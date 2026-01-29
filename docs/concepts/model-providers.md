@@ -33,6 +33,37 @@ Moltbot ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
+#### OpenAI-compatible base URL override
+
+To redirect `openai/*` requests to an OpenAI-compatible endpoint (LiteLLM, vLLM,
+LM Studio, etc.) without changing model refs:
+
+```bash
+export OPENAI_BASE_URL="http://localhost:8000/v1"
+export OPENAI_API_KEY="your-key-or-dummy"
+```
+
+This keeps the built-in OpenAI model catalog but routes requests to your custom
+endpoint. The env var takes effect on gateway startup (no config file needed).
+
+Alternatively, configure via `models.providers.openai.baseUrl` in your config:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "http://localhost:8000/v1",
+        models: []  // empty = keep built-in catalog
+      }
+    }
+  }
+}
+```
+
+For a custom provider id instead (e.g., `myproxy/<model>`), see [Providers via
+models.providers](#providers-via-modelsproviders-custombase-url) below.
+
 ### Anthropic
 
 - Provider: `anthropic`
@@ -122,7 +153,15 @@ Moltbot ships with the pi‑ai catalog. These providers require **no**
 ## Providers via `models.providers` (custom/base URL)
 
 Use `models.providers` (or `models.json`) to add **custom** providers or
-OpenAI/Anthropic‑compatible proxies.
+OpenAI/Anthropic-compatible proxies.
+
+Two patterns for OpenAI-compatible endpoints:
+
+1. **Drop-in override** (keep `openai/*` refs): set `OPENAI_BASE_URL` or
+   `models.providers.openai.baseUrl` with `models: []`. See [OpenAI section
+   above](#openai).
+2. **Custom provider id** (e.g., `myproxy/<model>`): define a new provider entry
+   with `baseUrl`, `apiKey`, and `api`. Examples below.
 
 ### Moonshot AI (Kimi)
 
@@ -307,6 +346,20 @@ Notes:
   - `contextWindow: 200000`
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
+
+## Other OpenAI-compatible surfaces
+
+Beyond the main chat model, Moltbot uses OpenAI-compatible APIs for other
+features. Each has its own endpoint configuration:
+
+- **Memory embeddings**: `agents.defaults.memorySearch.remote.baseUrl` or falls
+  back to `models.providers.openai.baseUrl`. See [/concepts/memory](/concepts/memory).
+- **Media tools** (audio transcription, vision): per-model `baseUrl` in
+  `tools.media.audio.models[].baseUrl` or `tools.media.image.models[].baseUrl`.
+  See [/gateway/configuration](/gateway/configuration#tools-media).
+- **TTS (text-to-speech)**: `OPENAI_TTS_BASE_URL` env var (separate from
+  `OPENAI_BASE_URL` because most OpenAI-compatible proxies do not implement
+  `/audio/speech`).
 
 ## CLI examples
 

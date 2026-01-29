@@ -8,6 +8,7 @@ import {
   type ProviderConfig,
   resolveImplicitBedrockProvider,
   resolveImplicitCopilotProvider,
+  resolveImplicitOpenAiProvider,
   resolveImplicitProviders,
 } from "./models-config.providers.js";
 
@@ -81,8 +82,18 @@ export async function ensureMoltbotModelsJson(
 
   const explicitProviders = (cfg.models?.providers ?? {}) as Record<string, ProviderConfig>;
   const implicitProviders = await resolveImplicitProviders({ agentDir });
+
+  // Check for OPENAI_BASE_URL env var to override the built-in openai provider endpoint.
+  // This allows drop-in replacement with OpenAI-compatible APIs (LiteLLM, vLLM, etc.)
+  // without changing model refs from openai/* to a custom provider.
+  const implicitOpenAi = resolveImplicitOpenAiProvider({});
+  const allImplicitProviders: Record<string, ProviderConfig> = {
+    ...implicitProviders,
+    ...(implicitOpenAi ? { openai: implicitOpenAi } : {}),
+  };
+
   const providers: Record<string, ProviderConfig> = mergeProviders({
-    implicit: implicitProviders,
+    implicit: allImplicitProviders,
     explicit: explicitProviders,
   });
   const implicitBedrock = await resolveImplicitBedrockProvider({ agentDir, config: cfg });

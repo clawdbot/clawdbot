@@ -421,6 +421,28 @@ export async function resolveImplicitProviders(params: {
   return providers;
 }
 
+/**
+ * Resolve an implicit OpenAI provider override when OPENAI_BASE_URL is set.
+ * This allows users to redirect all `openai/*` model requests to an OpenAI-compatible
+ * endpoint (e.g., LiteLLM, vLLM, LM Studio) without changing model refs.
+ *
+ * Returns `{ baseUrl, models: [] }` so that the built-in OpenAI model catalog is preserved,
+ * but requests go to the custom endpoint.
+ */
+export function resolveImplicitOpenAiProvider(params: {
+  env?: NodeJS.ProcessEnv;
+}): ProviderConfig | null {
+  const env = params.env ?? process.env;
+  const baseUrl = env.OPENAI_BASE_URL?.trim();
+  if (!baseUrl) return null;
+
+  // Only override baseUrl; keep the built-in model catalog by setting models: []
+  return {
+    baseUrl,
+    models: [],
+  } satisfies ProviderConfig;
+}
+
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;

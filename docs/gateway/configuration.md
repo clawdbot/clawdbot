@@ -2295,6 +2295,30 @@ Moltbot uses the **pi-coding-agent** model catalog. You can add custom providers
 Moltbot config under `models.providers`.
 Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
+**Quick: OpenAI-compatible base URL override**
+
+To redirect all `openai/*` requests to an OpenAI-compatible endpoint without
+changing model refs, set the `OPENAI_BASE_URL` env var:
+
+```bash
+export OPENAI_BASE_URL="http://localhost:8000/v1"
+export OPENAI_API_KEY="your-key-or-dummy"
+```
+
+Or configure via config (keeps built-in model catalog):
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { baseUrl: "http://localhost:8000/v1", models: [] }
+    }
+  }
+}
+```
+
+**Custom provider setup**
+
 When `models.providers` is present, Moltbot writes/merges a `models.json` into
 `~/.clawdbot/agents/<agentId>/agent/` on startup:
 - default behavior: **merge** (keeps existing providers, overrides on name)
