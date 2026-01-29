@@ -164,3 +164,17 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export const LITELLM_DEFAULT_MODEL_REF = "litellm/gpt-4";
+
+export async function setLitellmApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "litellm:default",
+    credential: {
+      type: "api_key",
+      provider: "litellm",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

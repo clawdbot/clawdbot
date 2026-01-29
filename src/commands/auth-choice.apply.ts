@@ -24,6 +24,12 @@ export type ApplyAuthChoiceParams = {
   opts?: {
     tokenProvider?: string;
     token?: string;
+    // LiteLLM-specific options
+    litellmApiKey?: string;
+    litellmBaseUrl?: string;
+    litellmModel?: string;
+    // Non-interactive mode flag
+    nonInteractive?: boolean;
   };
 };
 

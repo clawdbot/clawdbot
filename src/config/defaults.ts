@@ -323,7 +323,12 @@ export function applyContextPruningDefaults(cfg: MoltbotConfig): MoltbotConfig {
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") continue;
+      if (!parsed) continue;
+      // Apply cache control to Anthropic models and LiteLLM Claude models
+      const isAnthropicProvider = parsed.provider === "anthropic";
+      const isLitellmClaude =
+        parsed.provider === "litellm" && parsed.model.toLowerCase().startsWith("claude-");
+      if (!isAnthropicProvider && !isLitellmClaude) continue;
       const current = entry ?? {};
       const params = (current as { params?: Record<string, unknown> }).params ?? {};
       if (typeof params.cacheControlTtl === "string") continue;
@@ -337,17 +342,24 @@ export function applyContextPruningDefaults(cfg: MoltbotConfig): MoltbotConfig {
     const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
-        const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
-        const entry = nextModels[key];
-        const current = entry ?? {};
-        const params = (current as { params?: Record<string, unknown> }).params ?? {};
-        if (typeof params.cacheControlTtl !== "string") {
-          nextModels[key] = {
-            ...(current as Record<string, unknown>),
-            params: { ...params, cacheControlTtl: "1h" },
-          };
-          modelsMutated = true;
+      if (parsedPrimary) {
+        // Apply cache control to Anthropic models and LiteLLM Claude models
+        const isAnthropicProvider = parsedPrimary.provider === "anthropic";
+        const isLitellmClaude =
+          parsedPrimary.provider === "litellm" &&
+          parsedPrimary.model.toLowerCase().startsWith("claude-");
+        if (isAnthropicProvider || isLitellmClaude) {
+          const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
+          const entry = nextModels[key];
+          const current = entry ?? {};
+          const params = (current as { params?: Record<string, unknown> }).params ?? {};
+          if (typeof params.cacheControlTtl !== "string") {
+            nextModels[key] = {
+              ...(current as Record<string, unknown>),
+              params: { ...params, cacheControlTtl: "1h" },
+            };
+            modelsMutated = true;
+          }
         }
       }
     }

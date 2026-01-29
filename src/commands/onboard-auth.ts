@@ -7,6 +7,8 @@ export {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpenrouterConfig,
@@ -33,10 +35,12 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
+  setLitellmApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,

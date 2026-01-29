@@ -1014,6 +1014,7 @@
           "providers/vercel-ai-gateway",
           "providers/openrouter",
           "providers/synthetic",
+          "providers/litellm",
           "providers/opencode",
           "providers/glm",
           "providers/zai"

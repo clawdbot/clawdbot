@@ -32,6 +32,8 @@ function resolveCacheControlTtl(
   if (raw !== "5m" && raw !== "1h") return undefined;
   if (provider === "anthropic") return raw;
   if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
+  // LiteLLM proxying to Anthropic models (claude-*)
+  if (provider === "litellm" && modelId.startsWith("claude-")) return raw;
   return undefined;
 }
 
