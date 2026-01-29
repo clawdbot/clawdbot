@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 
 import { resolveAckReaction } from "../agents/identity.js";
+import { getPinnedContextString } from "./pinned-context.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -539,6 +540,18 @@ export const buildTelegramMessageContext = async ({
           envelope: envelopeOptions,
         }),
     });
+  }
+
+  // Inject pinned message context for groups
+  if (isGroup) {
+    try {
+      const pinnedContext = await getPinnedContextString(bot, chatId, resolvedThreadId);
+      if (pinnedContext) {
+        combinedBody = `${pinnedContext}\n\n${combinedBody}`;
+      }
+    } catch (err) {
+      logVerbose(`[telegram] Failed to fetch pinned context: ${String(err)}`);
+    }
   }
 
   const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);

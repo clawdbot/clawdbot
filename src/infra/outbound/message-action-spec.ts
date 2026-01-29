@@ -26,6 +26,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "list-pins": "to",
     permissions: "to",
     "thread-create": "to",
+    "thread-edit": "to",
     "thread-list": "none",
     "thread-reply": "to",
     search: "none",
