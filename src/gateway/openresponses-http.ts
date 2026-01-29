@@ -20,6 +20,7 @@ import {
   readJsonBodyOrError,
   sendJson,
   sendMethodNotAllowed,
+  sendRateLimited,
   sendUnauthorized,
   setSseHeaders,
   writeDone,
@@ -335,6 +336,10 @@ export async function handleOpenResponsesHttpRequest(
     trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
+    if (authResult.reason === "rate_limited") {
+      sendRateLimited(res);
+      return true;
+    }
     sendUnauthorized(res);
     return true;
   }

@@ -32,6 +32,19 @@ type TailscaleUser = {
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
+export const DEFAULT_GATEWAY_AUTH_MIN_LENGTH = 24;
+
+type AuthFailureState = {
+  count: number;
+  firstSeen: number;
+  blockedUntil?: number;
+};
+
+const AUTH_FAILURE_WINDOW_MS = 60_000;
+const AUTH_FAILURE_BLOCK_MS = 5 * 60_000;
+const AUTH_FAILURE_LIMIT = 10;
+const authFailuresByIp = new Map<string, AuthFailureState>();
+
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -101,6 +114,57 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
   return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+}
+
+function resolveAuthRateLimitKey(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+): string | null {
+  if (!req) return null;
+  if (isLocalDirectRequest(req, trustedProxies)) return null;
+  const clientIp = resolveRequestClientIp(req, trustedProxies);
+  if (!clientIp || isLoopbackAddress(clientIp)) return null;
+  return clientIp;
+}
+
+function isAuthRateLimited(key: string, now: number): boolean {
+  const state = authFailuresByIp.get(key);
+  if (!state) return false;
+  if (state.blockedUntil && state.blockedUntil > now) return true;
+  if (now - state.firstSeen > AUTH_FAILURE_WINDOW_MS) {
+    authFailuresByIp.delete(key);
+  }
+  return false;
+}
+
+function recordAuthFailure(key: string, now: number): void {
+  const state = authFailuresByIp.get(key);
+  if (!state || now - state.firstSeen > AUTH_FAILURE_WINDOW_MS) {
+    authFailuresByIp.set(key, { count: 1, firstSeen: now });
+    return;
+  }
+  const nextCount = state.count + 1;
+  const blockedUntil =
+    nextCount >= AUTH_FAILURE_LIMIT ? now + AUTH_FAILURE_BLOCK_MS : state.blockedUntil;
+  authFailuresByIp.set(key, { ...state, count: nextCount, blockedUntil });
+}
+
+function clearAuthFailures(key: string | null): void {
+  if (!key) return;
+  authFailuresByIp.delete(key);
+}
+
+function shouldRecordAuthFailure(reason: string | undefined): boolean {
+  return (
+    reason === "token_missing" ||
+    reason === "token_mismatch" ||
+    reason === "password_missing" ||
+    reason === "password_mismatch" ||
+    reason === "tailscale_user_missing" ||
+    reason === "tailscale_proxy_missing" ||
+    reason === "tailscale_whois_failed" ||
+    reason === "tailscale_user_mismatch"
+  );
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -206,6 +270,17 @@ export async function authorizeGatewayConnect(params: {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const now = Date.now();
+  const rateLimitKey = resolveAuthRateLimitKey(req, trustedProxies);
+  if (rateLimitKey && isAuthRateLimited(rateLimitKey, now)) {
+    return { ok: false, reason: "rate_limited" };
+  }
+  const fail = (reason: GatewayAuthResult["reason"]) => {
+    if (rateLimitKey && shouldRecordAuthFailure(reason)) {
+      recordAuthFailure(rateLimitKey, now);
+    }
+    return { ok: false, reason };
+  };
 
   if (auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
@@ -213,40 +288,44 @@ export async function authorizeGatewayConnect(params: {
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
+      clearAuthFailures(rateLimitKey);
       return {
         ok: true,
         method: "tailscale",
         user: tailscaleCheck.user.login,
       };
     }
+    return fail(tailscaleCheck.reason);
   }
 
   if (auth.mode === "token") {
     if (!auth.token) {
-      return { ok: false, reason: "token_missing_config" };
+      return fail("token_missing_config");
     }
     if (!connectAuth?.token) {
-      return { ok: false, reason: "token_missing" };
+      return fail("token_missing");
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
-      return { ok: false, reason: "token_mismatch" };
+      return fail("token_mismatch");
     }
+    clearAuthFailures(rateLimitKey);
     return { ok: true, method: "token" };
   }
 
   if (auth.mode === "password") {
     const password = connectAuth?.password;
     if (!auth.password) {
-      return { ok: false, reason: "password_missing_config" };
+      return fail("password_missing_config");
     }
     if (!password) {
-      return { ok: false, reason: "password_missing" };
+      return fail("password_missing");
     }
     if (!safeEqual(password, auth.password)) {
-      return { ok: false, reason: "password_mismatch" };
+      return fail("password_mismatch");
     }
+    clearAuthFailures(rateLimitKey);
     return { ok: true, method: "password" };
   }
 
-  return { ok: false, reason: "unauthorized" };
+  return fail("unauthorized");
 }

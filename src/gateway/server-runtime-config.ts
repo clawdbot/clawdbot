@@ -6,6 +6,7 @@ import type {
 } from "../config/config.js";
 import {
   assertGatewayAuthConfigured,
+  DEFAULT_GATEWAY_AUTH_MIN_LENGTH,
   type ResolvedGatewayAuth,
   resolveGatewayAuth,
 } from "./auth.js";
@@ -75,6 +76,12 @@ export async function resolveGatewayRuntimeConfig(params: {
     typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
+  const minAuthLength = params.cfg.gateway?.auth?.minLength ?? DEFAULT_GATEWAY_AUTH_MIN_LENGTH;
+  const tokenLength = hasToken ? resolvedAuth.token?.trim().length ?? 0 : 0;
+  const passwordLength = hasPassword ? resolvedAuth.password?.trim().length ?? 0 : 0;
+  const isWeakSharedSecret =
+    (authMode === "token" && tokenLength > 0 && tokenLength < minAuthLength) ||
+    (authMode === "password" && passwordLength > 0 && passwordLength < minAuthLength);
   const hooksConfig = resolveHooksConfig(params.cfg);
   const canvasHostEnabled =
     process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
@@ -91,6 +98,11 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (!isLoopbackHost(bindHost) && !hasSharedSecret) {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set CLAWDBOT_GATEWAY_TOKEN/CLAWDBOT_GATEWAY_PASSWORD)`,
+    );
+  }
+  if (!isLoopbackHost(bindHost) && isWeakSharedSecret) {
+    throw new Error(
+      `refusing to bind gateway to ${bindHost}:${params.port} with a weak shared secret (min length ${minAuthLength}; use a long random token/password or set gateway.bind=loopback)`,
     );
   }
 

@@ -3,6 +3,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
 import { getResolvedLoggerSettings } from "../logging.js";
+import { DEFAULT_GATEWAY_AUTH_MIN_LENGTH, resolveGatewayAuth } from "./auth.js";
 
 export function logGatewayStartup(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -10,7 +11,7 @@ export function logGatewayStartup(params: {
   bindHosts?: string[];
   port: number;
   tlsEnabled?: boolean;
-  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+  log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn?: (msg: string) => void };
   isNixMode: boolean;
 }) {
   const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
@@ -34,6 +35,29 @@ export function logGatewayStartup(params: {
     params.log.info(`listening on ${scheme}://${formatHost(host)}:${params.port}`);
   }
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  const minAuthLength = params.cfg.gateway?.auth?.minLength ?? DEFAULT_GATEWAY_AUTH_MIN_LENGTH;
+  const tailscaleMode = params.cfg.gateway?.tailscale?.mode ?? "off";
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig: params.cfg.gateway?.auth,
+    env: process.env,
+    tailscaleMode,
+  });
+  const tokenLength = resolvedAuth.token?.trim().length ?? 0;
+  const passwordLength = resolvedAuth.password?.trim().length ?? 0;
+  const activeLength = resolvedAuth.mode === "password" ? passwordLength : tokenLength;
+  const label = resolvedAuth.mode === "password" ? "password" : "token";
+  if (activeLength > 0) {
+    const message = `gateway auth: ${label} length ${activeLength} (min ${minAuthLength})`;
+    if (activeLength < minAuthLength) {
+      params.log.warn?.(`${message} - weak`);
+    } else {
+      params.log.info(`${message} - ok`);
+    }
+  } else if (resolvedAuth.allowTailscale && tailscaleMode === "serve") {
+    params.log.info("gateway auth: tailscale serve identity allowed (no shared secret configured)");
+  } else {
+    params.log.warn?.("gateway auth: no shared secret configured");
+  }
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }

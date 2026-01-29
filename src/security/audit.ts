@@ -4,7 +4,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { MoltbotConfig } from "../config/config.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
+import { DEFAULT_GATEWAY_AUTH_MIN_LENGTH, resolveGatewayAuth } from "../gateway/auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -264,6 +264,7 @@ function collectGatewayConfigFindings(
   const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
   const hasSharedSecret =
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
+  const minAuthLength = cfg.gateway?.auth?.minLength ?? DEFAULT_GATEWAY_AUTH_MIN_LENGTH;
   const hasTailscaleAuth = auth.allowTailscale === true && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
 
@@ -344,12 +345,24 @@ function collectGatewayConfigFindings(
 
   const token =
     typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
-  if (auth.mode === "token" && token && token.length < 24) {
+  if (auth.mode === "token" && token && token.length < minAuthLength) {
     findings.push({
       checkId: "gateway.token_too_short",
       severity: "warn",
       title: "Gateway token looks short",
-      detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
+      detail: `gateway auth token is ${token.length} chars (min length ${minAuthLength}).`,
+    });
+  }
+  const password =
+    typeof auth.password === "string" && auth.password.trim().length > 0
+      ? auth.password.trim()
+      : null;
+  if (auth.mode === "password" && password && password.length < minAuthLength) {
+    findings.push({
+      checkId: "gateway.password_too_short",
+      severity: "warn",
+      title: "Gateway password looks short",
+      detail: `gateway auth password is ${password.length} chars (min length ${minAuthLength}).`,
     });
   }
 

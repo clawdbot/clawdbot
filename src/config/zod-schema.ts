@@ -327,6 +327,7 @@ export const MoltbotSchema = z
             mode: z.union([z.literal("token"), z.literal("password")]).optional(),
             token: z.string().optional(),
             password: z.string().optional(),
+            minLength: z.number().int().min(8).max(128).optional(),
             allowTailscale: z.boolean().optional(),
           })
           .strict()

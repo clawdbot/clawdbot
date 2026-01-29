@@ -79,6 +79,8 @@ export type GatewayAuthConfig = {
   token?: string;
   /** Shared password for password mode (consider env instead). */
   password?: string;
+  /** Minimum auth token/password length when binding beyond loopback. Default: 24. */
+  minLength?: number;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
 };
