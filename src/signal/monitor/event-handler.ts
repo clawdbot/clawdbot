@@ -313,7 +313,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
-    const messageText = (dataMessage?.message ?? "").trim();
+
+    // Replace ￼ (object replacement character) with @uuid or @phone from mentions
+    let messageText = (dataMessage?.message ?? "").trim();
+    if (messageText && dataMessage?.mentions?.length) {
+      const mentions = dataMessage.mentions
+        .filter((m) => (m.uuid || m.number) && m.start != null && m.length != null)
+        .sort((a, b) => (b.start ?? 0) - (a.start ?? 0)); // Reverse order to avoid index shifting
+
+      for (const mention of mentions) {
+        const start = mention.start!;
+        const length = mention.length!;
+        const identifier = mention.uuid || mention.number || "";
+        const replacement = `@${identifier}`;
+        messageText = messageText.slice(0, start) + replacement + messageText.slice(start + length);
+      }
+    }
+
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
