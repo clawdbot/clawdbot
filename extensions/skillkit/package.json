@@ -1,20 +1,20 @@
 {
-  "name": "@moltbot/memory-core",
-  "version": "2026.1.27-beta.1",
+  "name": "@moltbot/skillkit",
+  "version": "2026.1.27",
   "type": "module",
-  "description": "Moltbot core memory search plugin",
+  "description": "SkillKit integration for Moltbot - Universal AI agent skills management",
   "moltbot": {
     "extensions": [
       "./index.ts"
     ]
+  },
+  "dependencies": {
+    "skillkit": "^1.7.2"
   },
   "devDependencies": {
     "moltbot": "workspace:*"
   },
   "peerDependencies": {
     "moltbot": ">=2026.1.26"
-  },
-  "devDependencies": {
-    "moltbot": "workspace:*"
   }
 }
