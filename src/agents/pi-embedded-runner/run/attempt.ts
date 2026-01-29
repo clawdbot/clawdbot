@@ -29,10 +29,12 @@ import { resolveMoltbotDocsPath } from "../../docs-path.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import {
   isCloudCodeAssistFormatError,
+  isOrphanToolResultError,
   resolveBootstrapMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { repairToolUseResultPairing } from "../../session-transcript-repair.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import {
   ensurePiCompactionReserveTokens,
@@ -778,13 +780,41 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          const runPrompt = async () => {
+            if (imageResult.images.length > 0) {
+              await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          };
+
+          try {
+            await runPrompt();
+          } catch (initialErr) {
+            // Check if error is due to orphaned tool_result entries in transcript.
+            // If so, repair the history and retry once before failing.
+            const errMsg = initialErr instanceof Error ? initialErr.message : String(initialErr);
+            if (isOrphanToolResultError(errMsg)) {
+              log.warn(
+                `Orphan tool_result error detected, repairing transcript and retrying: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              try {
+                const currentMessages = activeSession.messages;
+                const repaired = repairToolUseResultPairing(currentMessages);
+                if (repaired.messages !== currentMessages) {
+                  activeSession.agent.replaceMessages(repaired.messages);
+                  log.debug(
+                    `Transcript repair applied: dropped=${repaired.droppedOrphanCount} orphans, ${repaired.droppedDuplicateCount} duplicates, added=${repaired.added.length} synthetic results`,
+                  );
+                }
+                await runPrompt();
+              } catch (retryErr) {
+                promptError = retryErr;
+              }
+            } else {
+              promptError = initialErr;
+            }
           }
-        } catch (err) {
-          promptError = err;
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,

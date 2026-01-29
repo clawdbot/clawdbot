@@ -491,6 +491,24 @@ export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
+/**
+ * Detects the specific "unexpected tool_use_id found in tool_result blocks" error
+ * from Anthropic. This error indicates orphaned tool_result entries in the transcript
+ * that reference tool_use IDs not present in the previous assistant message.
+ *
+ * When detected, the session history should be repaired using repairToolUseResultPairing()
+ * and the request retried.
+ */
+export function isOrphanToolResultError(raw: string): boolean {
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("unexpected tool_use_id") ||
+    (lower.includes("tool_use_id") && lower.includes("tool_result")) ||
+    /tool_result.*does not have.*corresponding.*tool_use/i.test(raw)
+  );
+}
+
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isAuthErrorMessage(msg.errorMessage ?? "");
