@@ -63,15 +63,14 @@ export async function runCommandWithTimeout(
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
 
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") return true;
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+  const cmd = path.basename(argv[0] ?? "");
+  const isNpmCommand = cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe";
+  const isNpmViaCli =
+    (cmd === "node" || cmd === "node.exe") && (argv[1] ?? "").includes("npm-cli.js");
+  const shouldSuppressNpmFund = isNpmCommand || isNpmViaCli;
+
+  // On Windows, npm is a .cmd batch file that requires shell mode to execute
+  const useShell = process.platform === "win32" && isNpmCommand;
 
   const resolvedEnv = env ? { ...process.env, ...env } : { ...process.env };
   if (shouldSuppressNpmFund) {
@@ -85,6 +84,7 @@ export async function runCommandWithTimeout(
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+    shell: useShell,
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
