@@ -128,6 +128,20 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  # First build to generate resource_bundle_accessor.swift files
+  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks || true
+  
+  # Patch SwiftPM-generated resource_bundle_accessor.swift files to use resourceURL
+  # instead of bundleURL (fixes Bundle.module lookup in .app bundles)
+  echo "🔧 Patching Bundle.module accessors for app bundle compatibility"
+  find "$BUILD_PATH" -name "resource_bundle_accessor.swift" -type f 2>/dev/null | while read -r accessor; do
+    if grep -q "Bundle.main.bundleURL.appendingPathComponent" "$accessor" 2>/dev/null; then
+      sed -i '' 's/Bundle\.main\.bundleURL\.appendingPathComponent/(Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent/g' "$accessor"
+      echo "  Patched: $accessor"
+    fi
+  done
+  
+  # Rebuild with patched accessors
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
 
@@ -250,6 +264,15 @@ else
     echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
     exit 1
   fi
+fi
+
+echo "📦 Copying SwiftUIMath resources"
+SWIFTUIMATH_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/swiftui-math_SwiftUIMath.bundle"
+if [ -d "$SWIFTUIMATH_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/$(basename "$SWIFTUIMATH_BUNDLE")"
+  cp -R "$SWIFTUIMATH_BUNDLE" "$APP_ROOT/Contents/Resources/"
+else
+  echo "WARN: SwiftUIMath resource bundle not found at $SWIFTUIMATH_BUNDLE (continuing)" >&2
 fi
 
 echo "⏹  Stopping any running Moltbot"
