@@ -13,6 +13,31 @@ export const CANVAS_WS_PATH = "/__moltbot/ws";
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
 
+/** Reset the A2UI root cache (for testing). */
+export function resetA2uiCache(): void {
+  cachedA2uiRootReal = undefined;
+  resolvingA2uiRoot = null;
+}
+
+async function findRepoRoot(startDir: string): Promise<string | null> {
+  let dir = startDir;
+  for (let i = 0; i < 10; i++) {
+    try {
+      const pkgPath = path.join(dir, "package.json");
+      await fs.stat(pkgPath);
+      // Verify it's the clawdbot package
+      const pkg = JSON.parse(await fs.readFile(pkgPath, "utf8"));
+      if (pkg.name === "clawdbot") return dir;
+    } catch {
+      // not found, go up
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -26,6 +51,12 @@ async function resolveA2uiRoot(): Promise<string | null> {
   ];
   if (process.execPath) {
     candidates.unshift(path.resolve(path.dirname(process.execPath), "a2ui"));
+  }
+  // Find repo root by walking up from `here` or cwd (handles vitest/vite transforms).
+  const repoRoot = (await findRepoRoot(here)) ?? (await findRepoRoot(process.cwd()));
+  if (repoRoot) {
+    candidates.push(path.resolve(repoRoot, "src/canvas-host/a2ui"));
+    candidates.push(path.resolve(repoRoot, "dist/canvas-host/a2ui"));
   }
 
   for (const dir of candidates) {

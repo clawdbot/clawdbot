@@ -409,6 +409,8 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/poe: {}
+
   extensions/signal: {}
 
   extensions/slack: {}

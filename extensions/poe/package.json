@@ -1,0 +1,11 @@
+{
+  "name": "@clawdbot/poe",
+  "version": "2026.1.25",
+  "type": "module",
+  "description": "Clawdbot Poe provider plugin",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -49,27 +49,22 @@ async function walk(entryPath) {
   files.push(entryPath);
 }
 
-for (const input of inputs) {
-  await walk(input);
-}
-
-function normalize(p) {
-  return p.split(path.sep).join("/");
-}
-
-files.sort((a, b) => normalize(a).localeCompare(normalize(b)));
-
-const hash = createHash("sha256");
-for (const filePath of files) {
-  const rel = normalize(path.relative(rootDir, filePath));
-  hash.update(rel);
-  hash.update("\0");
-  hash.update(await fs.readFile(filePath));
-  hash.update("\0");
-}
-
-process.stdout.write(hash.digest("hex"));
-NODE
+compute_hash() {
+  # Use sha256sum on Linux/Windows (Git Bash), shasum on macOS
+  local sha_cmd
+  if command -v sha256sum &>/dev/null; then
+    sha_cmd="sha256sum"
+  elif command -v shasum &>/dev/null; then
+    sha_cmd="shasum -a 256"
+  else
+    echo "No sha256 tool found (sha256sum or shasum)" >&2
+    exit 1
+  fi
+  collect_files \
+    | LC_ALL=C sort -z \
+    | xargs -0 $sha_cmd \
+    | $sha_cmd \
+    | awk '{print $1}'
 }
 
 current_hash="$(compute_hash)"
