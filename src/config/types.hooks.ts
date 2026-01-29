@@ -12,6 +12,8 @@ export type HookMappingConfig = {
   id?: string;
   match?: HookMappingMatch;
   action?: "wake" | "agent";
+  /** Target agent for action: "agent". Must exist in agents.list. */
+  agentId?: string;
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
   sessionKey?: string;

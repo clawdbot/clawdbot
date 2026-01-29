@@ -9,6 +9,7 @@ export type HookMappingResolved = {
   matchPath?: string;
   matchSource?: string;
   action: "wake" | "agent";
+  agentId?: string;
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
   sessionKey?: string;
@@ -45,6 +46,7 @@ export type HookAction =
   | {
       kind: "agent";
       message: string;
+      agentId?: string;
       name?: string;
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
@@ -84,6 +86,7 @@ type HookTransformResult = Partial<{
   text: string;
   mode: "now" | "next-heartbeat";
   message: string;
+  agentId: string;
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
@@ -166,6 +169,7 @@ function normalizeHookMapping(
   const matchPath = normalizeMatchPath(mapping.match?.path);
   const matchSource = mapping.match?.source?.trim();
   const action = mapping.action ?? "agent";
+  const agentId = mapping.agentId?.trim() || undefined;
   const wakeMode = mapping.wakeMode ?? "now";
   const transform = mapping.transform
     ? {
@@ -179,6 +183,7 @@ function normalizeHookMapping(
     matchPath,
     matchSource,
     action,
+    agentId,
     wakeMode,
     name: mapping.name,
     sessionKey: mapping.sessionKey,
@@ -227,6 +232,7 @@ function buildActionFromMapping(
     action: {
       kind: "agent",
       message,
+      agentId: mapping.agentId,
       name: renderOptional(mapping.name, ctx),
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
@@ -264,6 +270,7 @@ function mergeAction(
   return validateAction({
     kind: "agent",
     message,
+    agentId: override.agentId ?? baseAgent?.agentId,
     wakeMode,
     name: override.name ?? baseAgent?.name,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,

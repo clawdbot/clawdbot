@@ -55,6 +55,7 @@ Payload:
 {
   "message": "Run this",
   "name": "Email",
+  "agentId": "email-handler",
   "sessionKey": "hook:email:msg-123",
   "wakeMode": "now",
   "deliver": true,
@@ -69,6 +70,7 @@ Payload:
 - `message` **required** (string): The prompt or message for the agent to process.
 - `name` optional (string): Human-readable name for the hook (e.g., "GitHub"), used as a prefix in session summaries.
 - `sessionKey` optional (string): The key used to identify the agent's session. Defaults to a random `hook:<uuid>`. Using a consistent key allows for a multi-turn conversation within the hook context.
+- `agentId` optional (string): Target agent to run this hook. Must exist in `agents.list`. Defaults to the default agent. Useful for routing webhooks to specialized agents with their own tools, workspace, and persona.
 - `wakeMode` optional (`now` | `next-heartbeat`): Whether to trigger an immediate heartbeat (default `now`) or wait for the next periodic check.
 - `deliver` optional (boolean): If `true`, the agent's response will be sent to the messaging channel. Defaults to `true`. Responses that are only heartbeat acknowledgments are automatically skipped.
 - `channel` optional (string): The messaging channel for delivery. One of: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Defaults to `last`.
@@ -94,6 +96,7 @@ Mapping options (summary):
 - `hooks.transformsDir` + `transform.module` loads a JS/TS module for custom logic.
 - Use `match.source` to keep a generic ingest endpoint (payload-driven routing).
 - TS transforms require a TS loader (e.g. `bun` or `tsx`) or precompiled `.js` at runtime.
+- Set `agentId` to route the hook to a specific agent (must exist in `agents.list`).
 - Set `deliver: true` + `channel`/`to` on mappings to route replies to a chat surface
   (`channel` defaults to `last` and falls back to WhatsApp).
 - `allowUnsafeExternalContent: true` disables the external content safety wrapper for that hook
@@ -144,6 +147,30 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
   -H 'Content-Type: application/json' \
   -d '{"source":"gmail","messages":[{"from":"Ada","subject":"Hello","snippet":"Hi"}]}'
 ```
+
+### Route to a specific agent
+
+Use `agentId` to route webhooks to a dedicated agent in multi-agent setups:
+
+```json5
+{
+  hooks: {
+    mappings: [
+      {
+        match: { path: "/email" },
+        action: "agent",
+        agentId: "email-handler",  // Must exist in agents.list
+        messageTemplate: "New email from {{from}}: {{subject}}",
+        deliver: true,
+        channel: "telegram",
+        to: "123456789"
+      }
+    ]
+  }
+}
+```
+
+This lets you have specialized agents with their own tools, workspace, and persona for different webhook sources (e.g., email processing, GitHub webhooks, support inbox).
 
 ## Security
 

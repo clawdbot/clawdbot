@@ -535,20 +535,34 @@ export const MoltbotSchema = z
     const agentIds = new Set(agents.map((agent) => agent.id));
 
     const broadcast = cfg.broadcast;
-    if (!broadcast) return;
-
-    for (const [peerId, ids] of Object.entries(broadcast)) {
-      if (peerId === "strategy") continue;
-      if (!Array.isArray(ids)) continue;
-      for (let idx = 0; idx < ids.length; idx += 1) {
-        const agentId = ids[idx];
-        if (!agentIds.has(agentId)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["broadcast", peerId, idx],
-            message: `Unknown agent id "${agentId}" (not in agents.list).`,
-          });
+    if (broadcast) {
+      for (const [peerId, ids] of Object.entries(broadcast)) {
+        if (peerId === "strategy") continue;
+        if (!Array.isArray(ids)) continue;
+        for (let idx = 0; idx < ids.length; idx += 1) {
+          const agentId = ids[idx];
+          if (!agentIds.has(agentId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["broadcast", peerId, idx],
+              message: `Unknown agent id "${agentId}" (not in agents.list).`,
+            });
+          }
         }
+      }
+    }
+
+    const hookMappings = cfg.hooks?.mappings ?? [];
+    for (let idx = 0; idx < hookMappings.length; idx += 1) {
+      const mapping = hookMappings[idx];
+      if (!mapping) continue;
+      const agentId = mapping.agentId?.trim();
+      if (agentId && !agentIds.has(agentId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["hooks", "mappings", idx, "agentId"],
+          message: `Unknown agent id "${agentId}" (not in agents.list).`,
+        });
       }
     }
   });

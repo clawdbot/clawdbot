@@ -32,6 +32,7 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = (value: {
     message: string;
+    agentId?: string;
     name: string;
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
@@ -49,6 +50,7 @@ export function createGatewayHooksRequestHandler(params: {
     const now = Date.now();
     const job: CronJob = {
       id: jobId,
+      agentId: value.agentId,
       name: value.name,
       enabled: true,
       createdAtMs: now,

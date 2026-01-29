@@ -165,4 +165,52 @@ describe("hooks mapping", () => {
     });
     expect(result?.ok).toBe(false);
   });
+
+  it("passes agentId from mapping to action", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "email-hook",
+          match: { path: "email" },
+          action: "agent",
+          agentId: "email-handler",
+          messageTemplate: "New email: {{subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: { subject: "Test" },
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/email"),
+      path: "email",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.agentId).toBe("email-handler");
+      expect(result.action.message).toBe("New email: Test");
+    }
+  });
+
+  it("omits agentId when not specified", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "default-hook",
+          match: { path: "default" },
+          action: "agent",
+          messageTemplate: "Message: {{text}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: { text: "Hello" },
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/default"),
+      path: "default",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.agentId).toBeUndefined();
+    }
+  });
 });
