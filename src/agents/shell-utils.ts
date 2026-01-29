@@ -59,6 +59,42 @@ function resolveShellFromPath(name: string): string | undefined {
   return undefined;
 }
 
+function normalizeShellName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return path.basename(trimmed).replace(/\.(exe|cmd|bat)$/i, "");
+}
+
+export function detectRuntimeShell(): string | undefined {
+  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
+  if (overrideShell) {
+    const name = normalizeShellName(overrideShell);
+    if (name) return name;
+  }
+
+  if (process.platform === "win32") {
+    if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
+      return "pwsh";
+    }
+    return "powershell";
+  }
+
+  const envShell = process.env.SHELL?.trim();
+  if (envShell) {
+    const name = normalizeShellName(envShell);
+    if (name) return name;
+  }
+
+  if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) return "pwsh";
+  if (process.env.BASH_VERSION) return "bash";
+  if (process.env.ZSH_VERSION) return "zsh";
+  if (process.env.FISH_VERSION) return "fish";
+  if (process.env.KSH_VERSION) return "ksh";
+  if (process.env.NU_VERSION || process.env.NUSHELL_VERSION) return "nu";
+
+  return undefined;
+}
+
 export function sanitizeBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) return scrubbed;

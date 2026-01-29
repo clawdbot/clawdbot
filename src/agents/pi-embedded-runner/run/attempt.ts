@@ -77,6 +77,7 @@ import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system
 import { splitSdkTools } from "../tool-split.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
+import { detectRuntimeShell } from "../../shell-utils.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
@@ -319,6 +320,7 @@ export async function runEmbeddedAttempt(
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
         defaultModel: defaultModelLabel,
+        shell: detectRuntimeShell(),
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,

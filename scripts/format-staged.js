@@ -61,6 +61,9 @@ function resolveOxfmtCommand(repoRoot) {
   const binName = process.platform === "win32" ? "oxfmt.cmd" : "oxfmt";
   const local = path.join(repoRoot, "node_modules", ".bin", binName);
   if (fs.existsSync(local)) {
+    if (process.platform === "win32" && local.toLowerCase().endsWith(".cmd")) {
+      return { command: "cmd.exe", args: ["/d", "/s", "/c", local] };
+    }
     return { command: local, args: [] };
   }
 

@@ -13,6 +13,7 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { detectRuntimeShell } from "../shell-utils.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
@@ -193,6 +194,7 @@ export function buildSystemPrompt(params: {
       node: process.version,
       model: params.modelDisplay,
       defaultModel: defaultModelLabel,
+      shell: detectRuntimeShell(),
     },
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;

@@ -17,6 +17,7 @@ export type RuntimeInfoInput = {
   node: string;
   model: string;
   defaultModel?: string;
+  shell?: string;
   channel?: string;
   capabilities?: string[];
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
