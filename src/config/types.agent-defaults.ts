@@ -16,6 +16,8 @@ export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
+  /** Per-model fallbacks (tried before global fallbacks). */
+  fallbacks?: string[];
 };
 
 export type AgentModelListConfig = {

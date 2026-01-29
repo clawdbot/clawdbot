@@ -37,6 +37,8 @@ export const AgentDefaultsSchema = z
             alias: z.string().optional(),
             /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
             params: z.record(z.string(), z.unknown()).optional(),
+            /** Per-model fallbacks (tried before global fallbacks). */
+            fallbacks: z.array(z.string()).optional(),
           })
           .strict(),
       )

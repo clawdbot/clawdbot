@@ -165,11 +165,18 @@ function resolveFallbackCandidates(params: {
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) return params.fallbacksOverride;
-    const model = params.cfg?.agents?.defaults?.model as
+
+    // Check for per-model fallbacks first
+    const key = modelKey(provider, model);
+    const modelConfig = params.cfg?.agents?.defaults?.models?.[key];
+    if (modelConfig?.fallbacks) return modelConfig.fallbacks;
+
+    // Fall back to global model.fallbacks
+    const modelCfg = params.cfg?.agents?.defaults?.model as
       | { fallbacks?: string[] }
       | string
       | undefined;
-    if (model && typeof model === "object") return model.fallbacks ?? [];
+    if (modelCfg && typeof modelCfg === "object") return modelCfg.fallbacks ?? [];
     return [];
   })();
 

@@ -538,4 +538,154 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
+
+  it("uses per-model fallbacks from model catalog entry", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4.1-mini" },
+          models: {
+            "openai/gpt-4.1-mini": {
+              alias: "GPT-4",
+              fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-4o"],
+            },
+            "anthropic/claude-haiku-3-5": {},
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as MoltbotConfig;
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limit"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-haiku-3-5");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("per-model fallbacks take precedence over global fallbacks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/z-ai/glm-4.5-air:free",
+            fallbacks: ["anthropic/claude-opus-4"],
+          },
+          models: {
+            "openrouter/z-ai/glm-4.5-air:free": {
+              alias: "GLM-Air",
+              fallbacks: ["zai/glm-4.5-air", "anthropic/claude-haiku-3-5"],
+            },
+            "zai/glm-4.5-air": {},
+            "anthropic/claude-haiku-3-5": {},
+            "anthropic/claude-opus-4": {},
+          },
+        },
+      },
+    } as MoltbotConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openrouter",
+      model: "z-ai/glm-4.5-air:free",
+      run: async (provider, model) => {
+        calls.push({ provider, model });
+        if (calls.length === 1) {
+          throw Object.assign(new Error("rate limit"), { status: 429 });
+        }
+        if (calls.length === 2) {
+          throw Object.assign(new Error("auth error"), { status: 401 });
+        }
+        return "ok";
+      },
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-haiku-3-5");
+    expect(calls).toEqual([
+      { provider: "openrouter", model: "z-ai/glm-4.5-air:free" },
+      { provider: "zai", model: "glm-4.5-air" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+    ]);
+  });
+
+  it("empty per-model fallbacks array disables global fallbacks for that model", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "openai/gpt-4.1-mini": {
+              fallbacks: [],
+            },
+          },
+        },
+      },
+    } as MoltbotConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw Object.assign(new Error("rate limit"), { status: 429 });
+        },
+      }),
+    ).rejects.toThrow("rate limit");
+
+    expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+  });
+
+  it("per-model fallbacks respect allowlist", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4.1-mini" },
+          models: {
+            "openai/gpt-4.1-mini": {
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+            },
+            "anthropic/claude-haiku-3-5": {},
+          },
+        },
+      },
+    } as MoltbotConfig;
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limit"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-haiku-3-5");
+  });
 });
