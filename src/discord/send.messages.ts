@@ -97,6 +97,22 @@ export async function createThreadDiscord(
   if (payload.autoArchiveMinutes) {
     body.auto_archive_duration = payload.autoArchiveMinutes;
   }
+
+  // Forum channels require a message object for the initial post
+  if (payload.message) {
+    body.message = {
+      content: payload.message.content,
+      ...(payload.message.embeds?.length ? { embeds: payload.message.embeds } : {}),
+    };
+  }
+
+  // Forum tags
+  if (payload.appliedTags?.length) {
+    body.applied_tags = payload.appliedTags;
+  }
+
+  // For forum channels without messageId, use the channel threads endpoint
+  // For regular channels with messageId, use the message-based thread endpoint
   const route = Routes.threads(channelId, payload.messageId);
   return await rest.post(route, { body });
 }

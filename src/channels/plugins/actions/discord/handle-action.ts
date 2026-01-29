@@ -183,6 +183,10 @@ export async function handleDiscordMessageAction(
     const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
       integer: true,
     });
+    // Forum channel support
+    const content = readStringParam(params, "message");
+    const appliedTags = readStringArrayParam(params, "appliedTags");
+    const embeds = Array.isArray(params.embeds) ? params.embeds : undefined;
     return await handleDiscordAction(
       {
         action: "threadCreate",
@@ -191,6 +195,9 @@ export async function handleDiscordMessageAction(
         name,
         messageId,
         autoArchiveMinutes,
+        content,
+        appliedTags,
+        embeds,
       },
       cfg,
     );
