@@ -69,7 +69,7 @@ never show dollar cost.
 
 Provider prompt caching only applies within the cache TTL window. Moltbot can
 optionally run **cache-ttl pruning**: it prunes the session once the cache TTL
-has expired, then resets the cache window so subsequent requests can re-use the
+has expired, then resets the cache window so subsequent requests can reuse the
 freshly cached context instead of re-caching the full history. This keeps cache
 write costs lower when a session goes idle past the TTL.
 

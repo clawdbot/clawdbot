@@ -1,0 +1,7 @@
+[codespell]
+# Ref: https://github.com/codespell-project/codespell#using-a-config-file
+skip = .git*,*.svg,package-lock.json,vendor,*-lock.yaml,*.css,.codespellrc,dist,*.caf,*/a2ui/*,.cache,*.prose,.npm
+check-hidden = true
+# Ignore camelCase and PascalCase identifiers (common in code)
+ignore-regex = \b[a-z]+[A-Z]\w*\b|\b[A-Z][a-z]+[A-Z]\w*\b
+ignore-words-list = inout,rouge,statics,caf,afterall,cript,fro,nd,ot,fo

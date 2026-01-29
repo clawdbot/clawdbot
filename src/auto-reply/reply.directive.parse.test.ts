@@ -152,33 +152,33 @@ describe("directive parsing", () => {
   });
 
   it("preserves spacing when stripping think directives before paths", () => {
-    const res = extractThinkDirective("thats not /think high/tmp/hello");
+    const res = extractThinkDirective("that's not /think high/tmp/hello");
     expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.cleaned).toBe("that's not /tmp/hello");
   });
 
   it("preserves spacing when stripping verbose directives before paths", () => {
-    const res = extractVerboseDirective("thats not /verbose on/tmp/hello");
+    const res = extractVerboseDirective("that's not /verbose on/tmp/hello");
     expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.cleaned).toBe("that's not /tmp/hello");
   });
 
   it("preserves spacing when stripping reasoning directives before paths", () => {
-    const res = extractReasoningDirective("thats not /reasoning on/tmp/hello");
+    const res = extractReasoningDirective("that's not /reasoning on/tmp/hello");
     expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.cleaned).toBe("that's not /tmp/hello");
   });
 
   it("preserves spacing when stripping status directives before paths", () => {
-    const res = extractStatusDirective("thats not /status:/tmp/hello");
+    const res = extractStatusDirective("that's not /status:/tmp/hello");
     expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.cleaned).toBe("that's not /tmp/hello");
   });
 
   it("does not treat /usage as a status directive", () => {
-    const res = extractStatusDirective("thats not /usage:/tmp/hello");
+    const res = extractStatusDirective("that's not /usage:/tmp/hello");
     expect(res.hasDirective).toBe(false);
-    expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
+    expect(res.cleaned).toBe("that's not /usage:/tmp/hello");
   });
 
   it("parses queue options and modes", () => {

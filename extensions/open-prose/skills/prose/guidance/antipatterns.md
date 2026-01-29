@@ -568,7 +568,7 @@ session "You are a helpful assistant. Analyze this code for bugs."
 # ... later ...
 session "You are a helpful assistant. Analyze this code for bugs."
 # ... even later ...
-session "You are a helpful assistent. Analyze this code for bugs."  # Typo!
+session "You are a helpful assistant. Analyze this code for bugs."  # Typo!
 ```
 
 **Why it's bad**: Inconsistency when updating. Typos go unnoticed.

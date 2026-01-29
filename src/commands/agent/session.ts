@@ -65,7 +65,7 @@ export function resolveSessionKeyForRequest(opts: {
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
-  // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
+  // If a session id was provided, prefer to reuse its entry (by id) even when no key was derived.
   if (
     !explicitSessionKey &&
     opts.sessionId &&

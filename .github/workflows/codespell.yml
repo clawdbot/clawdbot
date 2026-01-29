@@ -1,0 +1,25 @@
+# Codespell configuration is within .codespellrc
+---
+name: Codespell
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  codespell:
+    name: Check for spelling errors
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Annotate locations with typos
+        uses: codespell-project/codespell-problem-matcher@v1
+      - name: Codespell
+        uses: codespell-project/actions-codespell@v2

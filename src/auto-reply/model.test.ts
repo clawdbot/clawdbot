@@ -121,9 +121,9 @@ describe("extractModelDirective", () => {
 
   describe("edge cases", () => {
     it("absorbs path-like segments when /model includes extra slashes", () => {
-      const result = extractModelDirective("thats not /model gpt-5/tmp/hello");
+      const result = extractModelDirective("that's not /model gpt-5/tmp/hello");
       expect(result.hasDirective).toBe(true);
-      expect(result.cleaned).toBe("thats not");
+      expect(result.cleaned).toBe("that's not");
     });
 
     it("handles alias with special regex characters", () => {

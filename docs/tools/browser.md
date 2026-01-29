@@ -410,7 +410,7 @@ Notes:
   - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
-  - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
+  - `--labels` adds a viewport-only screenshot with overlaid ref labels (prints `MEDIA:<path>`).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 
@@ -427,7 +427,7 @@ Moltbot supports two “snapshot” styles:
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `moltbot browser click e12`, `moltbot browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
-  - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
+  - Add `--labels` to include a viewport screenshot with overlaid `e12` labels.
 
 Ref behavior:
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
