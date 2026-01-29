@@ -203,6 +203,72 @@ Full setup walkthrough (28m) by VelvetShark.
   Read, send, and archive messages via Beeper Desktop. Uses Beeper local MCP API so agents can manage all your chats (iMessage, WhatsApp, etc.) in one place.
 </Card>
 
+<Card title="Self-Patching Agent" icon="wand-magic-sparkles" href="#">
+  **@.kidlion** • `self-improvement` `discord` `autonomous`
+
+  Agent detected missing Discord forums support, asked permission to self-patch, and successfully modified its own codebase without service interruption. True autonomous self-improvement in action.
+
+  <img src="/assets/showcase/self-patch-forums.png" alt="Self-patching agent modifying its own code" />
+</Card>
+
+<Card title="Clauditor Security Monitor" icon="shield-halved" href="#">
+  **@chillbroker** • `security` `monitoring` `prompt-injection`
+
+  Background security logger that detects potentially malicious commands and prompt injection attempts. Lightweight protection layer for long-running agent installations.
+
+  <img src="/assets/showcase/clauditor.png" alt="Clauditor security monitoring tool" />
+</Card>
+
+<Card title="Gateway Widget (Zig)" icon="gauge-high" href="#">
+  **@frosty08** • `zig` `desktop` `monitoring` `widget`
+
+  Lightweight desktop widget (<1MB zipped) built in Zig that displays all gateway tools, jobs, and remaining cooldown timers. Cross-platform releases available.
+
+  <img src="/assets/showcase/gateway-widget.png" alt="Gateway monitoring widget" />
+</Card>
+
+<Card title="ADSB Plane Tracking" icon="plane" href="#">
+  **@albinoeatpod** • `raspberry-pi` `aviation` `hardware` `notifications`
+
+  ADSB integration with Pi-based local node. Get notified when planes fly overhead within configurable radius, complete with images from planespotters.net. Next: flag military/private aircraft.
+
+  <img src="/assets/showcase/adsb-tracking.png" alt="ADSB plane tracking on Raspberry Pi" />
+</Card>
+
+<Card title="Supermemory Plugin" icon="brain" href="https://github.com/hoverlover/moltbot-supermemory">
+  **@hoverlover617** • `memory` `plugin` `integration` `open-source`
+
+  Integrates Supermemory for enhanced memory capabilities. Swap out memory-core entirely or use in tandem for more powerful agent memory.
+
+  <img src="/assets/showcase/supermemory-plugin.png" alt="Supermemory plugin integration" />
+</Card>
+
+<Card title="Todoist Rust CLI" icon="list-check" href="#">
+  **@luoandorder** • `rust` `cli` `todoist` `productivity`
+
+  Custom Rust CLI for Todoist after official API deprecation broke existing tools. Handles all task operations including cross-project moves. Clawdbot skill wrapper included.
+</Card>
+
+<Card title="Agent Filing GitHub Issues" icon="github" href="https://github.com/moltbot/moltbot/issues/2971">
+  **@donnie8288** • `github` `autonomous` `self-improvement`
+
+  Agent running on dedicated hardware with its own GitHub account, autonomously filing issues it discovers. The agent filed its first issue without human intervention.
+</Card>
+
+<Card title="webXOS PWA Dashboard" icon="grid-2" href="#">
+  **@webxos2025** • `pwa` `dashboard` `browser-control` `monitoring`
+
+  Full-featured PWA for Moltbot with camera/screen feeds, node management, browser automation, and DigitalOcean/AWS/Docker deployment options. Complete gateway monitoring dashboard.
+
+  <img src="/assets/showcase/webxos-pwa-1.png" alt="webXOS PWA dashboard" />
+</Card>
+
+<Card title="Polymarket Trading Bot" icon="chart-line" href="#">
+  **@sashimi666** • `trading` `polymarket` `automation` `finance`
+
+  Automated Polymarket trading bot making real profits. 15 trades with only 1 loss in first 14 hours. Uses Brave search and X access for market research. Trades while sleeping.
+</Card>
+
 </CardGroup>
 
 ## 🤖 Automation & Workflows
