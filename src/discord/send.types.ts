@@ -67,9 +67,16 @@ export type DiscordMessageEdit = {
 };
 
 export type DiscordThreadCreate = {
+  /** Optional message id to start a thread from (for classic threads). */
   messageId?: string;
+  /** Thread / forum post title. */
   name: string;
+  /** Auto-archive duration in minutes. */
   autoArchiveMinutes?: number;
+  /** Optional initial post content (required for forum post creation). */
+  content?: string;
+  /** Optional forum tag ids (applied tags). */
+  appliedTagIds?: string[];
 };
 
 export type DiscordThreadList = {
