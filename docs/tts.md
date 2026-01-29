@@ -8,13 +8,14 @@ read_when:
 
 # Text-to-speech (TTS)
 
-Moltbot can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+Moltbot can convert outbound replies into audio using ElevenLabs, OpenAI, Smallest AI, or Edge TTS.
 It works anywhere Moltbot can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Smallest AI** (primary or fallback provider; fast Lightning model, native telephony support)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -31,9 +32,10 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Smallest AI:
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
+- `SMALLEST_API_KEY`
 
 Edge TTS does **not** require an API key. If no API keys are found, Moltbot defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
@@ -48,6 +50,7 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Smallest AI Waves TTS](https://waves-docs.smallest.ai/)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -114,6 +117,42 @@ Full schema is in [Gateway configuration](/gateway/configuration).
   }
 }
 ```
+
+### Smallest AI primary (Lightning v3.1)
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "smallestai",
+      smallestai: {
+        voiceId: "lauren",         // or "emily", "jasmine", "arman", custom ID
+        model: "lightning-v3.1",   // "lightning-v3.1" (latest), "lightning", or "waves"
+        sampleRate: 24000,
+        outputFormat: "mp3",       // "mp3", "wav", "pcm", or "mulaw" (telephony)
+        speed: 1.0,
+        language: "en",
+        consistency: 0.5,
+        similarity: 0,
+        enhancement: 1
+      }
+    }
+  }
+}
+```
+
+Smallest AI notes:
+- `lightning-v3.1` is the latest model, optimized for low latency (ideal for real-time)
+- `waves` model offers higher quality speech
+- Native `mulaw` @ 8kHz support for telephony (no resampling needed)
+- 20+ voices available:
+  - **US Female:** `sophia`, `sandra`, `rachel`, `lauren`, `hannah`, `vanessa`, `brooke`, `megan`
+  - **US Male:** `robert`, `johnny`, `ethan`, `lucas`, `daniel`
+  - **British Male:** `edward`
+  - **Indian Female:** `advika`, `aisha`, `yuvika`, `ishani`, `anuja`
+  - **Indian Male:** `vaibhav`, `hitesh`, `gaurav`, `vivaan`, `arjun`, `kunal`, `siddharth`
+- Get full voice list: `curl -H "Authorization: Bearer $SMALLEST_API_KEY" https://waves-api.smallest.ai/api/v1/lightning/get_voices`
 
 ### Edge TTS primary (no API key)
 
@@ -202,9 +241,9 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"smallestai"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, Moltbot prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `smallestai` (if key), otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).

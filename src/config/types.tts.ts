@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "smallestai";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,29 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Smallest AI (Waves) configuration. */
+  smallestai?: {
+    apiKey?: string;
+    baseUrl?: string;
+    /** Voice ID (e.g. "lauren", "emily", "jasmine", "arman", or custom voice ID). */
+    voiceId?: string;
+    /** Model: "lightning-v3.1" (latest), "lightning", or "waves". */
+    model?: "lightning-v3.1" | "lightning" | "waves";
+    /** Sample rate in Hz (8000, 16000, 22050, 24000, 44100, 48000). */
+    sampleRate?: number;
+    /** Output format: "mp3", "wav", "pcm" (raw), or "mulaw" (telephony). */
+    outputFormat?: "mp3" | "wav" | "pcm" | "mulaw";
+    /** Speed multiplier (0.5 to 2.0). */
+    speed?: number;
+    /** Language code (e.g. "en", "hi"). Default: "en". */
+    language?: string;
+    /** Consistency (0 to 1). Default: 0.5. */
+    consistency?: number;
+    /** Similarity (0 to 1). Default: 0. */
+    similarity?: number;
+    /** Enhancement (0 or 1). Default: 1. */
+    enhancement?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

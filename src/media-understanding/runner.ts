@@ -49,7 +49,7 @@ import {
 import { describeImageWithModel } from "./providers/image.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
-const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google"] as const;
+const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google", "smallestai"] as const;
 const AUTO_IMAGE_KEY_PROVIDERS = ["openai", "anthropic", "google", "minimax"] as const;
 const AUTO_VIDEO_KEY_PROVIDERS = ["google"] as const;
 const DEFAULT_IMAGE_MODELS: Record<string, string> = {

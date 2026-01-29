@@ -52,6 +52,19 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+// Smallest AI defaults (Lightning v3.1)
+// See: https://waves-docs.smallest.ai/
+const DEFAULT_SMALLESTAI_BASE_URL = "https://waves-api.smallest.ai/api/v1";
+const DEFAULT_SMALLESTAI_VOICE_ID = "lauren";
+const DEFAULT_SMALLESTAI_MODEL = "lightning-v3.1" as const;
+const DEFAULT_SMALLESTAI_SAMPLE_RATE = 24000;
+const DEFAULT_SMALLESTAI_OUTPUT_FORMAT = "mp3" as const;
+const DEFAULT_SMALLESTAI_SPEED = 1.0;
+const DEFAULT_SMALLESTAI_CONSISTENCY = 0.5;
+const DEFAULT_SMALLESTAI_SIMILARITY = 0;
+const DEFAULT_SMALLESTAI_ENHANCEMENT = 1;
+const DEFAULT_SMALLESTAI_LANGUAGE = "en";
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -79,6 +92,8 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  // Smallest AI natively supports mulaw@8kHz - perfect for telephony!
+  smallestai: { format: "mulaw" as const, sampleRate: 8000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -123,6 +138,19 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  smallestai: {
+    apiKey?: string;
+    baseUrl: string;
+    voiceId: string;
+    model: "lightning-v3.1" | "lightning" | "waves";
+    sampleRate: number;
+    outputFormat: "mp3" | "wav" | "pcm" | "mulaw";
+    speed: number;
+    language: string;
+    consistency: number;
+    similarity: number;
+    enhancement: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -296,6 +324,19 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    smallestai: {
+      apiKey: raw.smallestai?.apiKey,
+      baseUrl: raw.smallestai?.baseUrl?.trim() || DEFAULT_SMALLESTAI_BASE_URL,
+      voiceId: raw.smallestai?.voiceId?.trim() || DEFAULT_SMALLESTAI_VOICE_ID,
+      model: raw.smallestai?.model ?? DEFAULT_SMALLESTAI_MODEL,
+      sampleRate: raw.smallestai?.sampleRate ?? DEFAULT_SMALLESTAI_SAMPLE_RATE,
+      outputFormat: raw.smallestai?.outputFormat ?? DEFAULT_SMALLESTAI_OUTPUT_FORMAT,
+      speed: raw.smallestai?.speed ?? DEFAULT_SMALLESTAI_SPEED,
+      language: raw.smallestai?.language?.trim() || DEFAULT_SMALLESTAI_LANGUAGE,
+      consistency: raw.smallestai?.consistency ?? DEFAULT_SMALLESTAI_CONSISTENCY,
+      similarity: raw.smallestai?.similarity ?? DEFAULT_SMALLESTAI_SIMILARITY,
+      enhancement: raw.smallestai?.enhancement ?? DEFAULT_SMALLESTAI_ENHANCEMENT,
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -412,6 +453,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
 
   if (resolveTtsApiKey(config, "openai")) return "openai";
   if (resolveTtsApiKey(config, "elevenlabs")) return "elevenlabs";
+  if (resolveTtsApiKey(config, "smallestai")) return "smallestai";
   return "edge";
 }
 
@@ -474,10 +516,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "smallestai") {
+    return config.smallestai.apiKey || process.env.SMALLEST_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "smallestai", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -485,6 +530,7 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") return config.edge.enabled;
+  if (provider === "smallestai") return Boolean(resolveTtsApiKey(config, provider));
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
@@ -587,7 +633,12 @@ function parseTtsDirectives(
         switch (key) {
           case "provider":
             if (!policy.allowProvider) break;
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "smallestai"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -1044,6 +1095,114 @@ async function openaiTTS(params: {
   }
 }
 
+/**
+ * Smallest AI (Waves) TTS provider.
+ * Uses the Lightning model for fast speech synthesis or Waves for highest quality.
+ * Supports native mulaw@8kHz output for telephony.
+ *
+ * @see https://waves-docs.smallest.ai/
+ */
+async function smallestAiTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  voiceId: string;
+  model: "lightning-v3.1" | "lightning" | "waves";
+  sampleRate: number;
+  outputFormat: "mp3" | "wav" | "pcm" | "mulaw";
+  speed: number;
+  language?: string;
+  consistency?: number;
+  similarity?: number;
+  enhancement?: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    voiceId,
+    model,
+    sampleRate,
+    outputFormat,
+    speed,
+    language = DEFAULT_SMALLESTAI_LANGUAGE,
+    consistency = DEFAULT_SMALLESTAI_CONSISTENCY,
+    similarity = DEFAULT_SMALLESTAI_SIMILARITY,
+    enhancement = DEFAULT_SMALLESTAI_ENHANCEMENT,
+    timeoutMs,
+  } = params;
+
+  // Validate speed
+  if (speed < 0.5 || speed > 2.0) {
+    throw new Error("Smallest AI speed must be between 0.5 and 2.0");
+  }
+
+  // Validate sample rate
+  const validSampleRates = [8000, 16000, 22050, 24000, 44100, 48000];
+  if (!validSampleRates.includes(sampleRate)) {
+    throw new Error(`Invalid sample rate: ${sampleRate}. Valid: ${validSampleRates.join(", ")}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    // Choose endpoint based on model (v3.1 is the latest)
+    let endpoint: string;
+    if (model === "lightning-v3.1") {
+      endpoint = "lightning-v3.1/get_speech";
+    } else if (model === "lightning") {
+      endpoint = "lightning/get_speech";
+    } else {
+      endpoint = "waves/get_speech";
+    }
+    const url = `${baseUrl.replace(/\/+$/, "")}/${endpoint}`;
+
+    // Build request body based on model version
+    const body: Record<string, unknown> = {
+      text,
+      voice_id: voiceId,
+      sample_rate: sampleRate,
+      speed,
+    };
+
+    if (model === "lightning-v3.1") {
+      // v3.1 uses output_format directly and has additional parameters
+      body.output_format = outputFormat;
+      body.language = language;
+      body.consistency = consistency;
+      body.similarity = similarity;
+      body.enhancement = enhancement;
+    } else {
+      // Legacy models use add_wav_header and encoding
+      body.add_wav_header = outputFormat === "wav";
+      if (outputFormat === "mulaw") {
+        body.encoding = "pcm_mulaw";
+      }
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Smallest AI TTS API error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function inferEdgeExtension(outputFormat: string): string {
   const normalized = outputFormat.toLowerCase();
   if (normalized.includes("webm")) return ".webm";
@@ -1180,6 +1339,7 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let outputExtension = output.extension;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -1203,6 +1363,33 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "smallestai") {
+        // Choose output format based on config (mp3 is default for v3.1)
+        const smallestOutputFormat = config.smallestai.outputFormat;
+        audioBuffer = await smallestAiTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.smallestai.baseUrl,
+          voiceId: config.smallestai.voiceId,
+          model: config.smallestai.model,
+          sampleRate: config.smallestai.sampleRate,
+          outputFormat: smallestOutputFormat,
+          speed: config.smallestai.speed,
+          language: config.smallestai.language,
+          consistency: config.smallestai.consistency,
+          similarity: config.smallestai.similarity,
+          enhancement: config.smallestai.enhancement,
+          timeoutMs: config.timeoutMs,
+        });
+        // Determine extension based on output format
+        outputExtension =
+          smallestOutputFormat === "mp3"
+            ? ".mp3"
+            : smallestOutputFormat === "wav"
+              ? ".wav"
+              : smallestOutputFormat === "mulaw" || smallestOutputFormat === "pcm"
+                ? ".raw"
+                : ".wav"; // Default to .wav
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -1219,7 +1406,7 @@ export async function textToSpeech(params: {
       const latencyMs = Date.now() - providerStart;
 
       const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${outputExtension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -1228,7 +1415,12 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "smallestai"
+              ? config.smallestai.outputFormat
+              : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -1294,6 +1486,35 @@ export async function textToSpeechTelephony(params: {
           applyTextNormalization: config.elevenlabs.applyTextNormalization,
           languageCode: config.elevenlabs.languageCode,
           voiceSettings: config.elevenlabs.voiceSettings,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      // Smallest AI natively supports mulaw@8kHz - ideal for telephony!
+      if (provider === "smallestai") {
+        const output = TELEPHONY_OUTPUT.smallestai;
+        const audioBuffer = await smallestAiTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.smallestai.baseUrl,
+          voiceId: config.smallestai.voiceId,
+          model: config.smallestai.model,
+          sampleRate: output.sampleRate,
+          outputFormat: output.format,
+          speed: config.smallestai.speed,
+          language: config.smallestai.language,
+          consistency: config.smallestai.consistency,
+          similarity: config.smallestai.similarity,
+          enhancement: config.smallestai.enhancement,
           timeoutMs: config.timeoutMs,
         });
 
