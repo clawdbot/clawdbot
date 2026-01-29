@@ -89,6 +89,33 @@ describe("cron tool", () => {
     });
   });
 
+  it("accepts cron.add job payloads as JSON strings", async () => {
+    const tool = createCronTool();
+    const jobJson = JSON.stringify({
+      name: "wake-up",
+      schedule: { atMs: 123 },
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+    await tool.execute("call-json", {
+      action: "add",
+      job: jobJson,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params).toEqual({
+      name: "wake-up",
+      schedule: { kind: "at", atMs: 123 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+  });
+
   it("does not default agentId when job.agentId is null", async () => {
     const tool = createCronTool({ agentSessionKey: "main" });
     await tool.execute("call-null", {
