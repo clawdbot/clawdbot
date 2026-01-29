@@ -550,10 +550,15 @@ describe("applyMediaUnderstanding", () => {
   it("escapes XML special characters in filenames to prevent injection", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+
+    // Windows does not allow < or > in filenames.
+    const platform = process.platform;
+    const rawName = platform === "win32" ? "file&test>.txt" : "file<test>.txt";
+
     // Create file with XML special characters in the name (what filesystem allows)
     // Note: The sanitizeFilename in store.ts would strip most dangerous chars,
     // but we test that even if some slip through, they get escaped in output
-    const filePath = path.join(dir, "file<test>.txt");
+    const filePath = path.join(dir, rawName);
     await fs.writeFile(filePath, "safe content");
 
     const ctx: MsgContext = {
@@ -574,11 +579,18 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
     expect(result.appliedFile).toBe(true);
-    // Verify XML special chars are escaped in the output
-    expect(ctx.Body).toContain("&lt;");
-    expect(ctx.Body).toContain("&gt;");
-    // The raw < and > should not appear unescaped in the name attribute
-    expect(ctx.Body).not.toMatch(/name="[^"]*<[^"]*"/);
+    // Verify XML special chars are escaped in the output.
+    if (platform === "win32") {
+      expect(ctx.Body).toContain("&gt;");
+      expect(ctx.Body).toContain("&amp;");
+      // The raw > should not appear unescaped in the name attribute
+      expect(ctx.Body).not.toMatch(/name="[^"]*>[^"]*"/);
+    } else {
+      expect(ctx.Body).toContain("&lt;");
+      expect(ctx.Body).toContain("&gt;");
+      // The raw < and > should not appear unescaped in the name attribute
+      expect(ctx.Body).not.toMatch(/name="[^"]*<[^"]*"/);
+    }
   });
 
   it("normalizes MIME types to prevent attribute injection", async () => {
