@@ -57,9 +57,9 @@ function makeMissingToolResult(params: {
 export { makeMissingToolResult };
 
 export function sanitizeToolUseArgs(messages: AgentMessage[]): AgentMessage[] {
-  // Deep clone to avoid mutating the input unless necessary?
-  // Actually, we can mutate in place effectively or clone messages that need change.
-  // For safety against corrupt JSON rendering the whole session unusable:
+  // Creates new message objects only when sanitization is needed; otherwise
+  // returns the original messages to avoid unnecessary copying, while guarding
+  // against corrupt JSON in tool arguments that could break the session.
   const out: AgentMessage[] = [];
   let changed = false;
 
@@ -74,24 +74,36 @@ export function sanitizeToolUseArgs(messages: AgentMessage[]): AgentMessage[] {
     let msgChanged = false;
 
     for (const block of content) {
+      const anyBlock = block as any;
       if (
-        block &&
-        typeof block === "object" &&
-        (block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall")
+        anyBlock &&
+        typeof anyBlock === "object" &&
+        (anyBlock.type === "toolUse" || anyBlock.type === "toolCall" || anyBlock.type === "functionCall")
       ) {
-        // Check if input is a string that needs parsing
-        if (typeof (block as any).input === "string") {
+        const toolBlock = block as any;
+        // Handle both 'input' and 'arguments' fields (some providers use arguments)
+        const inputField = "input" in toolBlock ? "input" : "arguments" in toolBlock ? "arguments" : null;
+
+        if (inputField && typeof toolBlock[inputField] === "string") {
           try {
-            JSON.parse((block as any).input);
-            nextContent.push(block);
+            // Consistency: Always parse valid JSON strings into objects
+            const parsed = JSON.parse(toolBlock[inputField]);
+            nextContent.push({
+              ...toolBlock,
+              [inputField]: parsed,
+            });
+            msgChanged = true;
           } catch {
             // Invalid JSON found in tool args.
             // Replace with empty object to prevent downstream crashes.
+            console.warn(
+              `[SessionRepair] Sanitized malformed JSON in tool use '${toolBlock.name || "unknown"}'. Original: ${toolBlock[inputField]}`
+            );
             nextContent.push({
-              ...block,
-              input: {},
+              ...toolBlock,
+              [inputField]: {},
               _sanitized: true,
-              _originalInput: (block as any).input,
+              _originalInput: toolBlock[inputField],
             });
             msgChanged = true;
           }
