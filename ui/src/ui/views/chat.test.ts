@@ -93,4 +93,44 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("filters debug messages when showThinking is false", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: false,
+          messages: [
+            { role: "user", content: "hello", timestamp: 1 },
+            { role: "toolresult", content: "debug info", timestamp: 2 },
+            { role: "assistant", content: "world", timestamp: 3 },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("hello");
+    expect(container.textContent).toContain("world");
+    expect(container.textContent).not.toContain("debug info");
+  });
+
+  it("shows debug messages when showThinking is true", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          messages: [
+            { role: "user", content: "hello", timestamp: 1 },
+            { role: "toolresult", content: "debug info", timestamp: 2 },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("hello");
+    expect(container.textContent).toContain("debug info");
+  });
 });

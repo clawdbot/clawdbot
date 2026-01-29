@@ -434,7 +434,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
 
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+    if (!props.showThinking && isDebugMessage(msg)) {
       continue;
     }
 
@@ -483,4 +483,35 @@ function messageKey(message: unknown, index: number): string {
   const role = typeof m.role === "string" ? m.role : "unknown";
   if (timestamp != null) return `msg:${role}:${timestamp}:${index}`;
   return `msg:${role}:${index}`;
+}
+
+function extractTextContent(m: Record<string, unknown>): string {
+  if (typeof m.content === "string") return m.content;
+  if (Array.isArray(m.content)) {
+    return m.content
+      .filter((c: unknown) => (c as Record<string, unknown>).type === "text")
+      .map((c: unknown) => (c as Record<string, string>).text ?? "")
+      .join(" ");
+  }
+  return "";
+}
+
+function isDebugMessage(message: unknown): boolean {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+
+  // Filter tool results
+  if (role === "toolresult" || role === "tool_result" || role === "tool") {
+    return true;
+  }
+
+  // Filter system debug messages (heartbeats, context compaction, etc.)
+  if (role === "system") {
+    const content = extractTextContent(m);
+    if (/heartbeat|scheduled|context (compacted|trimmed)/i.test(content)) {
+      return true;
+    }
+  }
+
+  return false;
 }

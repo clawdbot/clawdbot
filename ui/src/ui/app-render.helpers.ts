@@ -107,9 +107,9 @@ export function renderChatControls(state: AppViewState) {
         aria-pressed=${showThinking}
         title=${disableThinkingToggle
           ? "Disabled during onboarding"
-          : "Toggle assistant thinking/working output"}
+          : "Show/hide debug info (tool calls, heartbeats)"}
       >
-        ${icons.brain}
+        ${icons.bug}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
