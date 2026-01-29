@@ -185,18 +185,28 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
+// Strip injected memory context from message text before processing
+function stripMemoryContext(text: string): string {
+  const memoryBlockEnd = text.indexOf("</relevant-memories>");
+  if (memoryBlockEnd !== -1) {
+    return text.slice(memoryBlockEnd + "</relevant-memories>".length).trim();
+  }
+  return text;
+}
+
 function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 500) return false;
-  // Skip injected context from memory recall
-  if (text.includes("<relevant-memories>")) return false;
-  // Skip system-generated content
-  if (text.startsWith("<") && text.includes("</")) return false;
+  // Strip any injected memory context first
+  const cleanText = stripMemoryContext(text);
+  
+  if (cleanText.length < 10 || cleanText.length > 500) return false;
+  // Skip system-generated content (pure XML)
+  if (cleanText.startsWith("<") && cleanText.includes("</")) return false;
   // Skip agent summary responses (contain markdown formatting)
-  if (text.includes("**") && text.includes("\n-")) return false;
+  if (cleanText.includes("**") && cleanText.includes("\n-")) return false;
   // Skip emoji-heavy responses (likely agent output)
-  const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  const emojiCount = (cleanText.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
   if (emojiCount > 3) return false;
-  return MEMORY_TRIGGERS.some((r) => r.test(text));
+  return MEMORY_TRIGGERS.some((r) => r.test(cleanText));
 }
 
 function detectCategory(text: string): MemoryCategory {
@@ -491,7 +501,8 @@ const memoryPlugin = {
       });
     }
 
-    // Auto-capture: analyze and store important information after agent ends
+    // Auto-capture: store important information from the current turn
+    // Only processes the last user message and last assistant message (not full history)
     if (cfg.autoCapture) {
       api.on("agent_end", async (event) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
@@ -499,26 +510,9 @@ const memoryPlugin = {
         }
 
         try {
-          // Extract text content from messages (handling unknown[] type)
-          const texts: string[] = [];
-          for (const msg of event.messages) {
-            // Type guard for message object
-            if (!msg || typeof msg !== "object") continue;
-            const msgObj = msg as Record<string, unknown>;
-
-            // Only process user and assistant messages
-            const role = msgObj.role;
-            if (role !== "user" && role !== "assistant") continue;
-
-            const content = msgObj.content;
-
-            // Handle string content directly
-            if (typeof content === "string") {
-              texts.push(content);
-              continue;
-            }
-
-            // Handle array content (content blocks)
+          // Helper to extract text from message content
+          const extractText = (content: unknown): string | null => {
+            if (typeof content === "string") return content;
             if (Array.isArray(content)) {
               for (const block of content) {
                 if (
@@ -529,21 +523,46 @@ const memoryPlugin = {
                   "text" in block &&
                   typeof (block as Record<string, unknown>).text === "string"
                 ) {
-                  texts.push((block as Record<string, unknown>).text as string);
+                  return (block as Record<string, unknown>).text as string;
                 }
               }
             }
+            return null;
+          };
+
+          // Find the LAST user message and LAST assistant message (current turn only)
+          // Previous turns were already captured when they happened
+          let lastUserText: string | null = null;
+          let lastAssistantText: string | null = null;
+          
+          for (const msg of event.messages) {
+            if (!msg || typeof msg !== "object") continue;
+            const msgObj = msg as Record<string, unknown>;
+            const role = msgObj.role;
+            const text = extractText(msgObj.content);
+            
+            if (role === "user" && text) lastUserText = text;
+            if (role === "assistant" && text) lastAssistantText = text;
           }
 
+          // Collect texts from this turn only
+          const turnTexts: string[] = [];
+          if (lastUserText) turnTexts.push(lastUserText);
+          if (lastAssistantText) turnTexts.push(lastAssistantText);
+
           // Filter for capturable content
-          const toCapture = texts.filter(
+          const toCapture = turnTexts.filter(
             (text) => text && shouldCapture(text),
           );
           if (toCapture.length === 0) return;
 
-          // Store each capturable piece (limit to 3 per conversation)
+          // Store each capturable piece from this turn
           let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
+          for (const rawText of toCapture) {
+            // Clean the text before storing (strip injected memory context)
+            const text = stripMemoryContext(rawText);
+            if (text.length < 10) continue; // Re-check length after cleaning
+            
             const category = detectCategory(text);
             const vector = await embeddings.embed(text);
 
