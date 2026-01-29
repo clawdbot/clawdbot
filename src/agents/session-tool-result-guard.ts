@@ -49,6 +49,11 @@ export function installSessionToolResultGuard(
      * Defaults to true.
      */
     allowSyntheticToolResults?: boolean;
+    /**
+     * Whether to drop toolResult messages that do not match a pending tool call.
+     * Defaults to true to avoid corrupting transcripts with orphan tool results.
+     */
+    dropOrphanToolResults?: boolean;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -66,6 +71,7 @@ export function installSessionToolResultGuard(
   };
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
+  const dropOrphanToolResults = opts?.dropOrphanToolResults ?? true;
 
   const flushPendingToolResults = () => {
     if (pending.size === 0) return;
@@ -90,6 +96,9 @@ export function installSessionToolResultGuard(
     if (role === "toolResult") {
       const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pending.get(id) : undefined;
+      if (id && !pending.has(id) && dropOrphanToolResults) {
+        return undefined as never;
+      }
       if (id) pending.delete(id);
       return originalAppend(
         persistToolResult(message, {
