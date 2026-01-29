@@ -36,6 +36,15 @@ export type ChannelsAddOptions = {
   webhookUrl?: string;
   audienceType?: string;
   audience?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthRedirectUri?: string;
+  oauthClientFile?: string;
+  oauthRefreshToken?: string;
+  oauthRefreshTokenFile?: string;
+  oauthFromGog?: boolean;
+  gogAccount?: string;
+  gogClient?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;
@@ -204,6 +213,15 @@ export async function channelsAddCommand(
       webhookUrl: opts.webhookUrl,
       audienceType: opts.audienceType,
       audience: opts.audience,
+      oauthClientId: opts.oauthClientId,
+      oauthClientSecret: opts.oauthClientSecret,
+      oauthRedirectUri: opts.oauthRedirectUri,
+      oauthClientFile: opts.oauthClientFile,
+      oauthRefreshToken: opts.oauthRefreshToken,
+      oauthRefreshTokenFile: opts.oauthRefreshTokenFile,
+      oauthFromGog: opts.oauthFromGog,
+      gogAccount: opts.gogAccount,
+      gogClient: opts.gogClient,
       homeserver: opts.homeserver,
       userId: opts.userId,
       accessToken: opts.accessToken,
@@ -247,6 +265,15 @@ export async function channelsAddCommand(
     webhookUrl: opts.webhookUrl,
     audienceType: opts.audienceType,
     audience: opts.audience,
+    oauthClientId: opts.oauthClientId,
+    oauthClientSecret: opts.oauthClientSecret,
+    oauthRedirectUri: opts.oauthRedirectUri,
+    oauthClientFile: opts.oauthClientFile,
+    oauthRefreshToken: opts.oauthRefreshToken,
+    oauthRefreshTokenFile: opts.oauthRefreshTokenFile,
+    oauthFromGog: opts.oauthFromGog,
+    gogAccount: opts.gogAccount,
+    gogClient: opts.gogClient,
     homeserver: opts.homeserver,
     userId: opts.userId,
     accessToken: opts.accessToken,

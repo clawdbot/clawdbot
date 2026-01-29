@@ -2,8 +2,11 @@ import type { MoltbotConfig } from "clawdbot/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
 
 import type { GoogleChatAccountConfig, GoogleChatConfig } from "./types.config.js";
+import { readGogRefreshTokenSync, resolveGogCredentialsFile } from "./gog.js";
 
-export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
+export type GoogleChatAppCredentialSource = "file" | "inline" | "env" | "none";
+export type GoogleChatUserCredentialSource = "file" | "inline" | "env" | "none";
+export type GoogleChatCredentialSource = "file" | "inline" | "env" | "oauth" | "none";
 
 export type ResolvedGoogleChatAccount = {
   accountId: string;
@@ -11,12 +14,21 @@ export type ResolvedGoogleChatAccount = {
   enabled: boolean;
   config: GoogleChatAccountConfig;
   credentialSource: GoogleChatCredentialSource;
+  appCredentialSource: GoogleChatAppCredentialSource;
+  userCredentialSource: GoogleChatUserCredentialSource;
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
 };
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
+const ENV_GOG_ACCOUNT = "GOG_ACCOUNT";
+const ENV_GOG_CLIENT = "GOG_CLIENT";
+const ENV_OAUTH_CLIENT_ID = "GOOGLE_CHAT_OAUTH_CLIENT_ID";
+const ENV_OAUTH_CLIENT_SECRET = "GOOGLE_CHAT_OAUTH_CLIENT_SECRET";
+const ENV_OAUTH_CLIENT_FILE = "GOOGLE_CHAT_OAUTH_CLIENT_FILE";
+const ENV_OAUTH_REFRESH_TOKEN = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN";
+const ENV_OAUTH_REFRESH_TOKEN_FILE = "GOOGLE_CHAT_OAUTH_REFRESH_TOKEN_FILE";
 
 function listConfiguredAccountIds(cfg: MoltbotConfig): string[] {
   const accounts = (cfg.channels?.["googlechat"] as GoogleChatConfig | undefined)?.accounts;
@@ -69,13 +81,17 @@ function parseServiceAccount(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function resolveCredentialsFromConfig(params: {
   accountId: string;
   account: GoogleChatAccountConfig;
 }): {
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
-  source: GoogleChatCredentialSource;
+  source: GoogleChatAppCredentialSource;
 } {
   const { account, accountId } = params;
   const inline = parseServiceAccount(account.serviceAccount);
@@ -103,6 +119,53 @@ function resolveCredentialsFromConfig(params: {
   return { source: "none" };
 }
 
+function resolveUserAuthSource(params: {
+  accountId: string;
+  account: GoogleChatAccountConfig;
+}): GoogleChatUserCredentialSource {
+  const { account, accountId } = params;
+  const gogAccount = account.gogAccount?.trim() || process.env[ENV_GOG_ACCOUNT]?.trim() || undefined;
+  const gogClient = account.gogClient?.trim() || process.env[ENV_GOG_CLIENT]?.trim() || undefined;
+  const clientId = account.oauthClientId?.trim();
+  const clientSecret = account.oauthClientSecret?.trim();
+  const clientFile = account.oauthClientFile?.trim();
+  const refreshToken = account.oauthRefreshToken?.trim();
+  const refreshTokenFile = account.oauthRefreshTokenFile?.trim();
+
+  const hasInlineClient = hasNonEmptyString(clientId) && hasNonEmptyString(clientSecret);
+  const hasFileClient = hasNonEmptyString(clientFile);
+  const hasInlineRefresh = hasNonEmptyString(refreshToken);
+  const hasFileRefresh = hasNonEmptyString(refreshTokenFile);
+  const hasGogClient = account.oauthFromGog
+    ? Boolean(resolveGogCredentialsFile({ gogClient, gogAccount }))
+    : false;
+  const hasGogRefresh = account.oauthFromGog
+    ? Boolean(readGogRefreshTokenSync({ gogAccount, gogClient }))
+    : false;
+
+  const hasEnvClient =
+    accountId === DEFAULT_ACCOUNT_ID &&
+    hasNonEmptyString(process.env[ENV_OAUTH_CLIENT_ID]) &&
+    hasNonEmptyString(process.env[ENV_OAUTH_CLIENT_SECRET]);
+  const hasEnvClientFile =
+    accountId === DEFAULT_ACCOUNT_ID && hasNonEmptyString(process.env[ENV_OAUTH_CLIENT_FILE]);
+  const hasEnvRefresh =
+    accountId === DEFAULT_ACCOUNT_ID && hasNonEmptyString(process.env[ENV_OAUTH_REFRESH_TOKEN]);
+  const hasEnvRefreshFile =
+    accountId === DEFAULT_ACCOUNT_ID &&
+    hasNonEmptyString(process.env[ENV_OAUTH_REFRESH_TOKEN_FILE]);
+
+  const hasClient =
+    hasInlineClient || hasFileClient || hasEnvClient || hasEnvClientFile || hasGogClient;
+  const hasRefresh =
+    hasInlineRefresh || hasFileRefresh || hasEnvRefresh || hasEnvRefreshFile || hasGogRefresh;
+  if (!hasClient || !hasRefresh) return "none";
+
+  if (hasFileClient || hasFileRefresh) return "file";
+  if (hasEnvClient || hasEnvClientFile || hasEnvRefresh || hasEnvRefreshFile) return "env";
+  return "inline";
+}
+
 export function resolveGoogleChatAccount(params: {
   cfg: MoltbotConfig;
   accountId?: string | null;
@@ -114,13 +177,22 @@ export function resolveGoogleChatAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const credentials = resolveCredentialsFromConfig({ accountId, account: merged });
+  const userCredentialSource = resolveUserAuthSource({ accountId, account: merged });
+  const credentialSource =
+    credentials.source !== "none"
+      ? credentials.source
+      : userCredentialSource !== "none"
+        ? "oauth"
+        : "none";
 
   return {
     accountId,
     name: merged.name?.trim() || undefined,
     enabled,
     config: merged,
-    credentialSource: credentials.source,
+    credentialSource,
+    appCredentialSource: credentials.source,
+    userCredentialSource,
     credentials: credentials.credentials,
     credentialsFile: credentials.credentialsFile,
   };

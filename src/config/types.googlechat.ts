@@ -60,6 +60,24 @@ export type GoogleChatAccountConfig = {
   serviceAccount?: string | Record<string, unknown>;
   /** Service account JSON file path. */
   serviceAccountFile?: string;
+  /** OAuth client id (user auth). */
+  oauthClientId?: string;
+  /** OAuth client secret (user auth). */
+  oauthClientSecret?: string;
+  /** OAuth redirect URI (user auth). */
+  oauthRedirectUri?: string;
+  /** OAuth client JSON file path (user auth). */
+  oauthClientFile?: string;
+  /** OAuth refresh token (user auth). */
+  oauthRefreshToken?: string;
+  /** OAuth refresh token file path (user auth). */
+  oauthRefreshTokenFile?: string;
+  /** Reuse gog OAuth credentials (user auth). */
+  oauthFromGog?: boolean;
+  /** gog account email to match refresh token (optional). */
+  gogAccount?: string;
+  /** gog client name to match credentials file (optional). */
+  gogClient?: string;
   /** Webhook audience type (app-url or project-number). */
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */

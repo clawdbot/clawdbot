@@ -11,6 +11,8 @@ const account = {
   accountId: "default",
   enabled: true,
   credentialSource: "inline",
+  appCredentialSource: "inline",
+  userCredentialSource: "none",
   config: {},
 } as ResolvedGoogleChatAccount;
 

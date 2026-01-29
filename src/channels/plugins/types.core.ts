@@ -35,6 +35,15 @@ export type ChannelSetupInput = {
   webhookUrl?: string;
   audienceType?: string;
   audience?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthRedirectUri?: string;
+  oauthClientFile?: string;
+  oauthRefreshToken?: string;
+  oauthRefreshTokenFile?: string;
+  oauthFromGog?: boolean;
+  gogAccount?: string;
+  gogClient?: string;
   useEnv?: boolean;
   homeserver?: string;
   userId?: string;

@@ -149,6 +149,15 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         clearBaseFields: [
           "serviceAccount",
           "serviceAccountFile",
+          "oauthClientId",
+          "oauthClientSecret",
+          "oauthRedirectUri",
+          "oauthClientFile",
+          "oauthRefreshToken",
+          "oauthRefreshTokenFile",
+          "oauthFromGog",
+          "gogAccount",
+          "gogClient",
           "audienceType",
           "audience",
           "webhookPath",
@@ -158,6 +167,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         ],
       }),
     isConfigured: (account) => account.credentialSource !== "none",
+    unconfiguredReason: (account) => {
+      if (account.config.oauthFromGog) {
+        return "Google Chat OAuth from gog is enabled but no gog credentials were found. Ensure gog is installed, the gateway can access its keyring, or set oauthRefreshToken/oauthClientFile.";
+      }
+      return "Google Chat credentials are missing. Configure a service account or user OAuth.";
+    },
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
@@ -298,10 +313,29 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       }),
     validateInput: ({ accountId, input }) => {
       if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.";
+        return "Google Chat env credentials can only be used for the default account.";
       }
-      if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Google Chat requires --token (service account JSON) or --token-file.";
+      const hasServiceAccount = Boolean(input.token || input.tokenFile);
+      const hasOauthInput = Boolean(
+        input.oauthFromGog ||
+          input.oauthClientId ||
+          input.oauthClientSecret ||
+          input.oauthRedirectUri ||
+          input.oauthClientFile ||
+          input.oauthRefreshToken ||
+          input.oauthRefreshTokenFile,
+      );
+      if (!input.useEnv && !hasServiceAccount && !hasOauthInput) {
+        return "Google Chat requires service account JSON or OAuth credentials.";
+      }
+      if (hasOauthInput && !input.oauthFromGog) {
+        const hasClient =
+          Boolean(input.oauthClientFile) ||
+          (Boolean(input.oauthClientId) && Boolean(input.oauthClientSecret));
+        const hasRefresh = Boolean(input.oauthRefreshToken || input.oauthRefreshTokenFile);
+        if (!hasClient || !hasRefresh) {
+          return "Google Chat OAuth requires client id/secret (or --oauth-client-file) and a refresh token.";
+        }
       }
       return null;
     },
@@ -326,12 +360,30 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           : input.token
             ? { serviceAccount: input.token }
             : {};
+      const oauthClientId = input.oauthClientId?.trim();
+      const oauthClientSecret = input.oauthClientSecret?.trim();
+      const oauthRedirectUri = input.oauthRedirectUri?.trim();
+      const oauthClientFile = input.oauthClientFile?.trim();
+      const oauthRefreshToken = input.oauthRefreshToken?.trim();
+      const oauthRefreshTokenFile = input.oauthRefreshTokenFile?.trim();
+      const oauthFromGog = input.oauthFromGog === true ? true : undefined;
+      const gogAccount = input.gogAccount?.trim();
+      const gogClient = input.gogClient?.trim();
       const audienceType = input.audienceType?.trim();
       const audience = input.audience?.trim();
       const webhookPath = input.webhookPath?.trim();
       const webhookUrl = input.webhookUrl?.trim();
       const configPatch = {
         ...patch,
+        ...(oauthClientId ? { oauthClientId } : {}),
+        ...(oauthClientSecret ? { oauthClientSecret } : {}),
+        ...(oauthRedirectUri ? { oauthRedirectUri } : {}),
+        ...(oauthClientFile ? { oauthClientFile } : {}),
+        ...(oauthRefreshToken ? { oauthRefreshToken } : {}),
+        ...(oauthRefreshTokenFile ? { oauthRefreshTokenFile } : {}),
+        ...(oauthFromGog ? { oauthFromGog } : {}),
+        ...(gogAccount ? { gogAccount } : {}),
+        ...(gogClient ? { gogClient } : {}),
         ...(audienceType ? { audienceType } : {}),
         ...(audience ? { audience } : {}),
         ...(webhookPath ? { webhookPath } : {}),
@@ -491,6 +543,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         const configured = entry.configured === true;
         if (!enabled || !configured) return [];
         const issues = [];
+        if (entry.oauthFromGog && entry.userCredentialSource === "none") {
+          issues.push({
+            channel: "googlechat",
+            accountId,
+            kind: "auth",
+            message:
+              "Google Chat OAuth is set to reuse gog, but no gog OAuth credentials were detected.",
+            fix: "Ensure gog is installed and the keyring is unlocked (set GOG_KEYRING_PASSWORD), or set oauthRefreshToken/oauthClientFile manually.",
+          });
+        }
         if (!entry.audience) {
           issues.push({
             channel: "googlechat",
@@ -532,6 +594,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       enabled: account.enabled,
       configured: account.credentialSource !== "none",
       credentialSource: account.credentialSource,
+      oauthFromGog: account.config.oauthFromGog ?? false,
+      userCredentialSource: account.userCredentialSource,
       audienceType: account.config.audienceType,
       audience: account.config.audience,
       webhookPath: account.config.webhookPath,

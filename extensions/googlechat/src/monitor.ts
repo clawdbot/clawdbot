@@ -7,8 +7,10 @@ import {
   type ResolvedGoogleChatAccount
 } from "./accounts.js";
 import {
+  createGoogleChatReaction,
   downloadGoogleChatMedia,
   deleteGoogleChatMessage,
+  deleteGoogleChatReaction,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 } from "./api.js";
@@ -642,18 +644,18 @@ async function processMessageWithPipeline(params: {
     });
 
   // Typing indicator setup
-  // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to message mode with a warning.
+  // Note: Reaction mode requires user OAuth. If unavailable, fall back to message mode.
   let typingIndicator = account.config.typingIndicator ?? "message";
-  if (typingIndicator === "reaction") {
+  if (typingIndicator === "reaction" && account.userCredentialSource === "none") {
     runtime.error?.(
-      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service account). Falling back to "message" mode.`,
+      `[${account.accountId}] typingIndicator="reaction" requires user OAuth. Configure OAuth (or oauthFromGog) to enable reactions; falling back to "message" mode.`,
     );
     typingIndicator = "message";
   }
   let typingMessageName: string | undefined;
+  let typingReactionName: string | undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
+  // Start typing indicator (message mode uses a temporary message; reaction mode uses 👀)
   if (typingIndicator === "message") {
     try {
       const botName = resolveBotDisplayName({
@@ -673,6 +675,21 @@ async function processMessageWithPipeline(params: {
     }
   }
 
+  if (typingIndicator === "reaction" && account.userCredentialSource !== "none") {
+    if (message.name) {
+      try {
+        const reaction = await createGoogleChatReaction({
+          account,
+          messageName: message.name,
+          emoji: "👀",
+        });
+        typingReactionName = reaction?.name;
+      } catch (err) {
+        runtime.error?.(`Failed sending typing reaction: ${String(err)}`);
+      }
+    }
+  }
+
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: config,
@@ -687,9 +704,11 @@ async function processMessageWithPipeline(params: {
           config,
           statusSink,
           typingMessageName,
+          typingReactionName,
         });
         // Only use typing message for first delivery
         typingMessageName = undefined;
+        typingReactionName = undefined;
       },
       onError: (err, info) => {
         runtime.error?.(
@@ -729,13 +748,35 @@ async function deliverGoogleChatReply(params: {
   config: MoltbotConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  typingReactionName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } = params;
+  const {
+    payload,
+    account,
+    spaceId,
+    runtime,
+    core,
+    config,
+    statusSink,
+    typingMessageName,
+    typingReactionName,
+  } = params;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
       ? [payload.mediaUrl]
       : [];
+
+  if (typingReactionName) {
+    try {
+      await deleteGoogleChatReaction({
+        account,
+        reactionName: typingReactionName,
+      });
+    } catch (err) {
+      runtime.error?.(`Google Chat typing reaction cleanup failed: ${String(err)}`);
+    }
+  }
 
   if (mediaList.length > 0) {
     let suppressCaption = false;
