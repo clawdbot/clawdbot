@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { optimizeImageToPng } from "../media/image-ops.js";
-import { loadWebMedia, optimizeImageToJpeg } from "./media.js";
+import { loadWebMedia, optimizeImageToJpeg, _isPathAllowed } from "./media.js";
 
 const tmpFiles: string[] = [];
 
@@ -260,5 +260,70 @@ describe("web media loading", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
+  });
+});
+
+describe("path traversal protection", () => {
+  it("allows paths within ~/.clawdbot", () => {
+    const clawdbotPath = path.join(os.homedir(), ".clawdbot", "test.txt");
+    expect(_isPathAllowed(clawdbotPath)).toBe(true);
+  });
+
+  it("allows paths within tmpdir", async () => {
+    // Create actual temp file to test real path resolution
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `clawdbot-test-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
+    );
+    await fs.writeFile(tmpFile, "test");
+    tmpFiles.push(tmpFile);
+
+    expect(_isPathAllowed(tmpFile)).toBe(true);
+  });
+
+  it("allows non-existent paths within allowed directories", () => {
+    const nonExistent = path.join(os.tmpdir(), "does-not-exist-12345.txt");
+    // Non-existent paths within allowed directories return true (let the read fail with proper error)
+    expect(_isPathAllowed(nonExistent)).toBe(true);
+  });
+
+  it("rejects non-existent paths outside allowed directories", () => {
+    const nonExistent = "/etc/does-not-exist-12345.txt";
+    // Non-existent paths outside allowed directories should be rejected
+    expect(_isPathAllowed(nonExistent)).toBe(false);
+  });
+
+  it("rejects file:// URLs to restricted paths via loadWebMedia", async () => {
+    // Use /bin/ls which exists on macOS and is definitely outside allowed roots
+    await expect(loadWebMedia("file:///bin/ls", 1024 * 1024)).rejects.toThrow(
+      /Access denied.*outside allowed directories/,
+    );
+  });
+
+  it("rejects local paths to restricted areas via loadWebMedia", async () => {
+    // Use /bin/ls which exists on macOS and is definitely outside allowed roots
+    await expect(loadWebMedia("/bin/ls", 1024 * 1024)).rejects.toThrow(
+      /Access denied.*outside allowed directories/,
+    );
+  });
+
+  it("blocks symlink escapes", async () => {
+    // Create a symlink in tmpdir that points to home directory (which is outside allowed roots)
+    const symlinkPath = path.join(
+      os.tmpdir(),
+      `clawdbot-symlink-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+
+    try {
+      await fs.symlink(os.homedir(), symlinkPath);
+      tmpFiles.push(symlinkPath);
+
+      // The symlink is in tmpdir, but its target (home dir) is not in allowed roots
+      // isPathAllowed should block this because realpathSync resolves to home dir
+      expect(_isPathAllowed(symlinkPath)).toBe(false);
+    } catch {
+      // If we can't create symlinks (permissions, Windows), skip this test
+      console.log("Skipping symlink test (cannot create symlink)");
+    }
   });
 });

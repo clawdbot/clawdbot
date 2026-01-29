@@ -1,4 +1,6 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +31,53 @@ type WebMediaOptions = {
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const MB = 1024 * 1024;
+
+/**
+ * Path traversal protection: validates that a file path is within allowed directories.
+ * Follows symlinks to ensure the real path is within bounds.
+ */
+function isPathAllowed(filePath: string): boolean {
+  // Resolve the input path (handles ..)
+  const resolved = path.resolve(filePath);
+
+  // Allowlist of safe roots (resolve them too since macOS /tmp is a symlink)
+  const allowedRoots = [path.join(os.homedir(), ".clawdbot"), os.tmpdir()].map((root) => {
+    try {
+      return fsSync.realpathSync(root);
+    } catch {
+      return root;
+    }
+  });
+
+  // Helper to check if a path is within allowed roots
+  const isWithinAllowedRoots = (pathToCheck: string): boolean => {
+    return allowedRoots.some(
+      (root) => pathToCheck === root || pathToCheck.startsWith(root + path.sep),
+    );
+  };
+
+  // Follow symlinks to get real path
+  let realPath: string;
+  try {
+    realPath = fsSync.realpathSync(resolved);
+  } catch {
+    // Path doesn't exist - try to resolve the parent directory to handle symlinks
+    // (e.g., /var -> /private/var on macOS)
+    const parentDir = path.dirname(resolved);
+    try {
+      const realParent = fsSync.realpathSync(parentDir);
+      const fileName = path.basename(resolved);
+      realPath = path.join(realParent, fileName);
+    } catch {
+      // Parent also doesn't exist - check raw resolved path against allowed roots
+      // This is more restrictive but safe
+      return isWithinAllowedRoots(resolved);
+    }
+  }
+
+  // Check REAL path (after symlink resolution) is within allowed roots
+  return isWithinAllowedRoots(realPath);
+}
 
 function formatMb(bytes: number, digits = 2): string {
   return (bytes / MB).toFixed(digits);
@@ -119,6 +168,10 @@ async function loadWebMediaInternal(
     } catch {
       throw new Error(`Invalid file:// URL: ${mediaUrl}`);
     }
+    // Path traversal protection: ensure file is within allowed directories
+    if (!isPathAllowed(mediaUrl)) {
+      throw new Error("Access denied: file path outside allowed directories");
+    }
   }
 
   const optimizeAndClampImage = async (
@@ -198,6 +251,11 @@ async function loadWebMediaInternal(
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
+  }
+
+  // Path traversal protection for local paths
+  if (!isPathAllowed(mediaUrl)) {
+    throw new Error("Access denied: file path outside allowed directories");
   }
 
   // Local path
@@ -302,3 +360,6 @@ export async function optimizeImageToJpeg(
 }
 
 export { optimizeImageToPng };
+
+// Export for testing
+export { isPathAllowed as _isPathAllowed };

@@ -82,7 +82,29 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
-  fs.mkdirSync(path.dirname(settings.file), { recursive: true });
+  const logDir = path.dirname(settings.file);
+  // Create log directory with secure permissions (owner-only access)
+  try {
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    } else {
+      // Ensure existing dir has secure permissions
+      fs.chmodSync(logDir, 0o700);
+    }
+  } catch (err) {
+    // Fall back to default umask if chmod fails (e.g., on Windows)
+    // Log a warning since permissions may not be secure
+    if (process.platform !== "win32") {
+      console.warn(
+        `[clawdbot] Could not set secure permissions on log directory ${logDir}: ${err}`,
+      );
+    }
+    try {
+      fs.mkdirSync(logDir, { recursive: true });
+    } catch {
+      // Directory may already exist, ignore
+    }
+  }
   // Clean up stale rolling logs when using a dated log filename.
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));

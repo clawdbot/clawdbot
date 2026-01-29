@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -78,6 +78,37 @@ type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
 
 type ExecSyncFn = typeof execSync;
 
+// Secure keychain operations using spawnSync to prevent shell injection
+function secureKeychainFind(service: string, account?: string): string | null {
+  const args = ["find-generic-password", "-s", service];
+  if (account) {
+    args.push("-a", account);
+  }
+  args.push("-w");
+  const result = spawnSync("security", args, {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (result.status !== 0 || result.error) {
+    return null;
+  }
+  return result.stdout?.trim() ?? null;
+}
+
+function secureKeychainWrite(service: string, account: string, value: string): boolean {
+  const result = spawnSync(
+    "security",
+    ["add-generic-password", "-U", "-s", service, "-a", account, "-w", value],
+    {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  return result.status === 0 && !result.error;
+}
+
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
@@ -113,20 +144,22 @@ function readCodexKeychainCredentials(options?: {
 }): CodexCliCredential | null {
   const platform = options?.platform ?? process.platform;
   if (platform !== "darwin") return null;
-  const execSyncImpl = options?.execSync ?? execSync;
+  // Note: execSync option preserved for test mocking but secure helper used by default
+  const _execSyncImpl = options?.execSync;
 
   const codexHome = resolveCodexHomePath();
   const account = computeCodexKeychainAccount(codexHome);
 
   try {
-    const secret = execSyncImpl(
-      `security find-generic-password -s "Codex Auth" -a "${account}" -w`,
-      {
-        encoding: "utf8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    ).trim();
+    // Use secure helper to prevent shell injection
+    const secret = _execSyncImpl
+      ? _execSyncImpl(`security find-generic-password -s "Codex Auth" -a "${account}" -w`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"],
+        }).trim()
+      : secureKeychainFind("Codex Auth", account);
+    if (!secret) return null;
 
     const parsed = JSON.parse(secret) as Record<string, unknown>;
     const tokens = parsed.tokens as Record<string, unknown> | undefined;
@@ -186,16 +219,19 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
   };
 }
 
-function readClaudeCliKeychainCredentials(
-  execSyncImpl: ExecSyncFn = execSync,
-): ClaudeCliCredential | null {
+function readClaudeCliKeychainCredentials(execSyncImpl?: ExecSyncFn): ClaudeCliCredential | null {
   try {
-    const result = execSyncImpl(
-      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    // Use secure helper to prevent shell injection (unless test mock provided)
+    const result = execSyncImpl
+      ? execSyncImpl(`security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      : secureKeychainFind(CLAUDE_CLI_KEYCHAIN_SERVICE);
+    if (!result) return null;
 
-    const data = JSON.parse(result.trim());
+    const data = JSON.parse(typeof result === "string" ? result.trim() : result);
     const claudeOauth = data?.claudeAiOauth;
     if (!claudeOauth || typeof claudeOauth !== "object") return null;
 
@@ -311,14 +347,20 @@ export function writeClaudeCliKeychainCredentials(
   newCredentials: OAuthCredentials,
   options?: { execSync?: ExecSyncFn },
 ): boolean {
-  const execSyncImpl = options?.execSync ?? execSync;
+  const execSyncImpl = options?.execSync;
   try {
-    const existingResult = execSyncImpl(
-      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w 2>/dev/null`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    // Use secure helper to prevent shell injection (unless test mock provided)
+    const existingResult = execSyncImpl
+      ? execSyncImpl(
+          `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w 2>/dev/null`,
+          { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+        )
+      : secureKeychainFind(CLAUDE_CLI_KEYCHAIN_SERVICE);
+    if (!existingResult) return false;
 
-    const existingData = JSON.parse(existingResult.trim());
+    const existingData = JSON.parse(
+      typeof existingResult === "string" ? existingResult.trim() : existingResult,
+    );
     const existingOauth = existingData?.claudeAiOauth;
     if (!existingOauth || typeof existingOauth !== "object") {
       return false;
@@ -333,10 +375,23 @@ export function writeClaudeCliKeychainCredentials(
 
     const newValue = JSON.stringify(existingData);
 
-    execSyncImpl(
-      `security add-generic-password -U -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -a "${CLAUDE_CLI_KEYCHAIN_ACCOUNT}" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    // Use secure helper for write (unless test mock provided)
+    if (execSyncImpl) {
+      execSyncImpl(
+        `security add-generic-password -U -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -a "${CLAUDE_CLI_KEYCHAIN_ACCOUNT}" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
+        { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    } else {
+      const writeOk = secureKeychainWrite(
+        CLAUDE_CLI_KEYCHAIN_SERVICE,
+        CLAUDE_CLI_KEYCHAIN_ACCOUNT,
+        newValue,
+      );
+      if (!writeOk) {
+        log.warn("failed to write credentials to claude cli keychain via secure helper");
+        return false;
+      }
+    }
 
     log.info("wrote refreshed credentials to claude cli keychain", {
       expires: new Date(newCredentials.expires).toISOString(),

@@ -1,6 +1,58 @@
 import path from "node:path";
 
+import * as ipaddr from "ipaddr.js";
+
 import { detectMime, extensionForMime } from "./mime.js";
+
+/**
+ * SSRF protection: validates that a URL is safe to fetch (not localhost, private IPs, etc.)
+ */
+function isUrlAllowed(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  // Only allow http/https
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return false;
+  }
+
+  const hostname = parsed.hostname;
+
+  // Block localhost variations
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+    return false;
+  }
+
+  // Check if hostname is an IP address
+  try {
+    // Handle IPv6 brackets [::1] -> ::1
+    const cleanHostname = hostname.replace(/^\[|\]$/g, "");
+    const addr = ipaddr.parse(cleanHostname);
+    const range = addr.range();
+
+    // Block all private/special ranges
+    const blockedRanges = [
+      "loopback", // 127.0.0.0/8, ::1
+      "private", // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7
+      "linkLocal", // 169.254.0.0/16, fe80::/10
+      "uniqueLocal", // fc00::/7
+      "unspecified", // 0.0.0.0, ::
+    ];
+
+    if (blockedRanges.includes(range)) {
+      return false;
+    }
+  } catch {
+    // Not a valid IP - it's a hostname, allow DNS resolution
+    // Note: DNS rebinding is still possible but harder to exploit
+  }
+
+  return true;
+}
 
 type FetchMediaResult = {
   buffer: Buffer;
@@ -63,23 +115,78 @@ async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<stri
   }
 }
 
+const MAX_REDIRECTS = 5;
+
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
   const { url, fetchImpl, filePathHint, maxBytes } = options;
+
+  // SSRF protection: block private/local addresses
+  if (!isUrlAllowed(url)) {
+    throw new MediaFetchError("fetch_failed", `URL not allowed: blocked private/local address`);
+  }
+
   const fetcher: FetchLike | undefined = fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
     throw new Error("fetch is not available");
   }
 
+  // Follow redirects manually to validate each redirect URL against SSRF rules
+  let currentUrl = url;
   let res: Response;
-  try {
-    res = await fetcher(url);
-  } catch (err) {
-    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
+  let redirectCount = 0;
+
+  while (true) {
+    try {
+      res = await fetcher(currentUrl, { redirect: "manual" });
+    } catch (err) {
+      throw new MediaFetchError(
+        "fetch_failed",
+        `Failed to fetch media from ${currentUrl}: ${String(err)}`,
+      );
+    }
+
+    // Handle redirects (3xx status codes)
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) {
+        throw new MediaFetchError(
+          "http_error",
+          `Redirect from ${currentUrl} missing Location header`,
+        );
+      }
+
+      // Resolve relative redirects
+      let redirectUrl: string;
+      try {
+        redirectUrl = new URL(location, currentUrl).href;
+      } catch {
+        throw new MediaFetchError("http_error", `Invalid redirect URL: ${location}`);
+      }
+
+      // SSRF protection: validate redirect target
+      if (!isUrlAllowed(redirectUrl)) {
+        throw new MediaFetchError(
+          "fetch_failed",
+          `Redirect blocked: target URL not allowed (private/local address)`,
+        );
+      }
+
+      redirectCount++;
+      if (redirectCount > MAX_REDIRECTS) {
+        throw new MediaFetchError("fetch_failed", `Too many redirects (max ${MAX_REDIRECTS})`);
+      }
+
+      currentUrl = redirectUrl;
+      continue;
+    }
+
+    // Not a redirect, exit loop
+    break;
   }
 
   if (!res.ok) {
     const statusText = res.statusText ? ` ${res.statusText}` : "";
-    const redirected = res.url && res.url !== url ? ` (redirected to ${res.url})` : "";
+    const redirected = currentUrl !== url ? ` (redirected to ${currentUrl})` : "";
     let detail = `HTTP ${res.status}${statusText}`;
     if (!res.body) {
       detail = `HTTP ${res.status}${statusText}; empty response body`;
@@ -184,3 +291,6 @@ async function readResponseWithLimit(res: Response, maxBytes: number): Promise<B
     total,
   );
 }
+
+// Export for testing
+export { isUrlAllowed as _isUrlAllowed };

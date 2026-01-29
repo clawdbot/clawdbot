@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 
-import { authorizeGatewayConnect } from "./auth.js";
+import {
+  authorizeGatewayConnect,
+  checkRateLimit,
+  recordAuthFailure,
+  resetRateLimiter,
+} from "./auth.js";
 
 describe("gateway auth", () => {
   it("does not throw when req is missing socket", async () => {
@@ -98,5 +103,87 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+});
+
+describe("rate limiting", () => {
+  const mockReq = (ip: string) => ({ socket: { remoteAddress: ip } }) as never;
+
+  beforeEach(() => {
+    resetRateLimiter();
+  });
+
+  it("allows requests initially", () => {
+    const result = checkRateLimit(mockReq("192.0.2.1"));
+    expect(result.allowed).toBe(true);
+    expect(result.retryAfterMs).toBeUndefined();
+  });
+
+  it("allows requests after fewer than 5 failures", () => {
+    const req = mockReq("192.0.2.2");
+    for (let i = 0; i < 4; i++) {
+      recordAuthFailure(req);
+    }
+    const result = checkRateLimit(req);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("blocks requests after 5 failures", () => {
+    const req = mockReq("192.0.2.3");
+    for (let i = 0; i < 5; i++) {
+      recordAuthFailure(req);
+    }
+    const result = checkRateLimit(req);
+    expect(result.allowed).toBe(false);
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    expect(result.retryAfterMs).toBeLessThanOrEqual(60000);
+  });
+
+  it("tracks different IPs independently", () => {
+    const req1 = mockReq("192.0.2.10");
+    const req2 = mockReq("192.0.2.20");
+
+    // Exhaust rate limit for req1
+    for (let i = 0; i < 5; i++) {
+      recordAuthFailure(req1);
+    }
+
+    // req1 should be blocked
+    expect(checkRateLimit(req1).allowed).toBe(false);
+
+    // req2 should still be allowed
+    expect(checkRateLimit(req2).allowed).toBe(true);
+  });
+
+  it("uses 'unknown' key when socket is missing", () => {
+    const reqWithoutSocket = {} as never;
+    for (let i = 0; i < 5; i++) {
+      recordAuthFailure(reqWithoutSocket);
+    }
+    expect(checkRateLimit(reqWithoutSocket).allowed).toBe(false);
+  });
+
+  it("integrates with authorizeGatewayConnect", async () => {
+    const req = mockReq("192.0.2.100");
+
+    // Fail auth 5 times
+    for (let i = 0; i < 5; i++) {
+      const res = await authorizeGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: false },
+        connectAuth: { token: "wrong" },
+        req,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("token_mismatch");
+    }
+
+    // 6th attempt should be rate limited
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "correct" }, // Even correct token should be blocked
+      req,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("rate_limited");
   });
 });

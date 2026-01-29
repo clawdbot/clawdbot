@@ -3,6 +3,76 @@ import type { IncomingMessage } from "node:http";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
+
+// Rate limiting for brute-force protection
+type RateLimitEntry = {
+  failures: number;
+  lastAttempt: number;
+  lockedUntil: number;
+};
+
+const rateLimitMap = new Map<string, RateLimitEntry>();
+const MAX_FAILURES = 5;
+const LOCKOUT_MS = 60_000; // 1 minute
+const WINDOW_MS = 300_000; // 5 minutes
+const CLEANUP_INTERVAL_MS = 60_000;
+
+// Cleanup stale entries to prevent memory leak
+let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+function ensureCleanupInterval(): void {
+  if (cleanupInterval) return;
+  cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitMap) {
+      if (now - entry.lastAttempt > WINDOW_MS) {
+        rateLimitMap.delete(key);
+      }
+    }
+  }, CLEANUP_INTERVAL_MS);
+  // Don't keep process alive just for cleanup
+  cleanupInterval.unref?.();
+}
+
+function getRateLimitKey(req?: IncomingMessage): string {
+  // Use socket address, not forwarded headers (spoofable)
+  return req?.socket?.remoteAddress ?? "unknown";
+}
+
+export function checkRateLimit(req?: IncomingMessage): { allowed: boolean; retryAfterMs?: number } {
+  ensureCleanupInterval();
+  const key = getRateLimitKey(req);
+  const now = Date.now();
+  const entry = rateLimitMap.get(key);
+
+  if (entry && now < entry.lockedUntil) {
+    return { allowed: false, retryAfterMs: entry.lockedUntil - now };
+  }
+
+  return { allowed: true };
+}
+
+export function recordAuthFailure(req?: IncomingMessage): void {
+  ensureCleanupInterval();
+  const key = getRateLimitKey(req);
+  const now = Date.now();
+  const entry = rateLimitMap.get(key) ?? { failures: 0, lastAttempt: 0, lockedUntil: 0 };
+
+  entry.failures += 1;
+  entry.lastAttempt = now;
+
+  if (entry.failures >= MAX_FAILURES) {
+    entry.lockedUntil = now + LOCKOUT_MS;
+    entry.failures = 0; // Reset after lockout
+  }
+
+  rateLimitMap.set(key, entry);
+}
+
+// Test helper
+export function resetRateLimiter(): void {
+  rateLimitMap.clear();
+}
+
 export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -204,6 +274,13 @@ export async function authorizeGatewayConnect(params: {
   tailscaleWhois?: TailscaleWhoisLookup;
 }): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
+
+  // Rate limit check - prevent brute-force attacks
+  const rateLimit = checkRateLimit(req);
+  if (!rateLimit.allowed) {
+    return { ok: false, reason: "rate_limited" };
+  }
+
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
@@ -219,6 +296,14 @@ export async function authorizeGatewayConnect(params: {
         user: tailscaleCheck.user.login,
       };
     }
+    // Record auth failure for Tailscale attempts that had user headers but failed verification
+    // (don't count missing headers as a "failure" since that's just falling through to token/password)
+    if (
+      tailscaleCheck.reason === "tailscale_user_mismatch" ||
+      tailscaleCheck.reason === "tailscale_whois_failed"
+    ) {
+      recordAuthFailure(req);
+    }
   }
 
   if (auth.mode === "token") {
@@ -229,6 +314,7 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "token_missing" };
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
+      recordAuthFailure(req);
       return { ok: false, reason: "token_mismatch" };
     }
     return { ok: true, method: "token" };
@@ -243,6 +329,7 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_missing" };
     }
     if (!safeEqual(password, auth.password)) {
+      recordAuthFailure(req);
       return { ok: false, reason: "password_mismatch" };
     }
     return { ok: true, method: "password" };
