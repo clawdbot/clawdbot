@@ -12,6 +12,26 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
 
   const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
     try {
+      // Check reactionNotifications config (consistent with Telegram/Discord/Signal)
+      const reactionMode = ctx.reactionMode ?? "own";
+      if (reactionMode === "off") return;
+
+      // Skip bot reactions (consistent with other providers)
+      if (event.user === ctx.botUserId) return;
+
+      // For "own" mode, only process reactions on messages sent by this bot
+      if (reactionMode === "own" && event.item_user !== ctx.botUserId) return;
+
+      // For "allowlist" mode, only process reactions from allowlisted users
+      if (reactionMode === "allowlist") {
+        const allowlist = ctx.reactionAllowlist ?? [];
+        if (allowlist.length === 0) return;
+        const userAllowed = allowlist.some(
+          (entry) => String(entry).toLowerCase() === String(event.user).toLowerCase(),
+        );
+        if (!userAllowed) return;
+      }
+
       const item = event.item;
       if (!item || item.type !== "message") return;
 
