@@ -49,9 +49,15 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
   return ["## User Identity", ownerLine, ""];
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
+function buildTimeSection(params: { userTimezone?: string; userTime?: string }) {
   if (!params.userTimezone) return [];
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const lines = ["## Current Date & Time"];
+  if (params.userTime) {
+    lines.push(`Current: ${params.userTime}`);
+  }
+  lines.push(`Time zone: ${params.userTimezone}`);
+  lines.push("");
+  return lines;
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -294,6 +300,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userTime = params.userTime?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
@@ -445,6 +452,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTime,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by Moltbot and included below in Project Context.",

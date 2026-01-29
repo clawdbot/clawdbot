@@ -145,6 +145,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Current Date & Time");
+    expect(prompt).toContain("Current: Monday, January 5th, 2026 — 3:26 PM");
     expect(prompt).toContain("Time zone: America/Chicago");
   });
 
@@ -157,6 +158,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Current Date & Time");
+    expect(prompt).toContain("Current: Monday, January 5th, 2026 — 15:26");
     expect(prompt).toContain("Time zone: America/Chicago");
   });
 

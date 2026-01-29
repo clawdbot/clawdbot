@@ -12,6 +12,7 @@ Status: beta.
 - macOS: finish Moltbot app rename for macOS sources, bundle identifiers, and shared kit paths. (#2844) Thanks @fal3.
 - Branding: update launchd labels, mobile bundle IDs, and logging subsystems to bot.molt (legacy com.clawdbot migrations). Thanks @thewilloftheshadow.
 - Tools: add per-sender group tool policies and fix precedence. (#1757) Thanks @adam91holt.
+- Agents: include full date with day of week in system prompt. (#2108)
 - Agents: summarize dropped messages during compaction safeguard pruning. (#2509) Thanks @jogi47.
 - Memory Search: allow extra paths for memory indexing (ignores symlinks). (#3600) Thanks @kira-ariaki.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
