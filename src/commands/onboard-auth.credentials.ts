@@ -115,6 +115,7 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.5";
+export const KILOCODE_DEFAULT_MODEL_REF = "kilocode/anthropic/claude-opus-4.5";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
@@ -159,6 +160,18 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "opencode",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setKilocodeApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "kilocode:default",
+    credential: {
+      type: "api_key",
+      provider: "kilocode",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

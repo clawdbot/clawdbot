@@ -12,13 +12,16 @@ import {
 } from "../agents/venice-models.js";
 import type { MoltbotConfig } from "../config/config.js";
 import {
+  KILOCODE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 import {
+  buildKilocodeModelDefinition,
   buildKimiCodeModelDefinition,
   buildMoonshotModelDefinition,
+  KILOCODE_DEFAULT_MODEL_ID,
   KIMI_CODE_BASE_URL,
   KIMI_CODE_MODEL_ID,
   KIMI_CODE_MODEL_REF,
@@ -405,6 +408,82 @@ export function applyVeniceConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/openrouter/";
+
+/**
+ * Apply Kilo Gateway provider configuration without changing the default model.
+ * Registers Kilo Gateway and sets up the provider, but preserves existing model selection.
+ */
+export function applyKilocodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[KILOCODE_DEFAULT_MODEL_REF] = {
+    ...models[KILOCODE_DEFAULT_MODEL_REF],
+    alias: models[KILOCODE_DEFAULT_MODEL_REF]?.alias ?? "Kilo Gateway",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.kilocode;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildKilocodeModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === KILOCODE_DEFAULT_MODEL_ID);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.kilocode = {
+    ...existingProviderRest,
+    baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Kilo Gateway provider configuration AND set Kilo Gateway as the default model.
+ * Use this when Kilo Gateway is the primary provider choice during onboarding.
+ */
+export function applyKilocodeConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const next = applyKilocodeProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: KILOCODE_DEFAULT_MODEL_REF,
         },
       },
     },

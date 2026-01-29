@@ -32,6 +32,7 @@ function resolveCacheControlTtl(
   if (raw !== "5m" && raw !== "1h") return undefined;
   if (provider === "anthropic") return raw;
   if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
+  if (provider === "kilocode" && modelId.startsWith("anthropic/")) return raw;
   return undefined;
 }
 

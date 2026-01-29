@@ -8,6 +8,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyKilocodeConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
@@ -20,6 +21,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setKilocodeApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
@@ -212,6 +214,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "kilocode-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "kilocode",
+      cfg: baseConfig,
+      flagValue: opts.kilocodeApiKey,
+      flagName: "--kilocode-api-key",
+      envVar: "KILOCODE_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setKilocodeApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "kilocode:default",
+      provider: "kilocode",
+      mode: "api_key",
+    });
+    return applyKilocodeConfig(nextConfig);
   }
 
   if (authChoice === "ai-gateway-api-key") {

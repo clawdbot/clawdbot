@@ -107,10 +107,22 @@ Moltbot ships with the pi‑ai catalog. These providers require **no**
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.5`
 - CLI: `moltbot onboard --auth-choice ai-gateway-api-key`
 
+### Kilo Gateway
+
+- Provider: `kilocode`
+- Auth: `KILOCODE_API_KEY`
+- Example model: `kilocode/anthropic/claude-opus-4.5`
+- CLI: `moltbot onboard --kilocode-api-key <key>`
+- Base URL: `https://api.kilo.ai/api/openrouter/`
+
+See [/providers/kilocode](/providers/kilocode) for setup details.
+
 ### Other built-in providers
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
+- Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
+- Example model: `kilocode/anthropic/claude-opus-4.5`
 - xAI: `xai` (`XAI_API_KEY`)
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
