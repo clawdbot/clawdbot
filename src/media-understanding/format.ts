@@ -25,6 +25,24 @@ function formatSection(
   return lines.join("\n");
 }
 
+export function escapeXml(unsafe: string): string {
+  return unsafe.replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case "'":
+        return "&apos;";
+      case '"':
+        return "&quot;";
+    }
+    return c;
+  });
+}
+
 export function formatMediaUnderstandingBody(params: {
   body?: string;
   outputs: MediaUnderstandingOutput[];
@@ -56,7 +74,7 @@ export function formatMediaUnderstandingBody(params: {
         formatSection(
           `Audio${suffix}`,
           "Transcript",
-          output.text,
+          escapeXml(output.text),
           outputs.length === 1 ? userText : undefined,
         ),
       );
@@ -67,7 +85,7 @@ export function formatMediaUnderstandingBody(params: {
         formatSection(
           `Image${suffix}`,
           "Description",
-          output.text,
+          escapeXml(output.text),
           outputs.length === 1 ? userText : undefined,
         ),
       );
@@ -77,7 +95,7 @@ export function formatMediaUnderstandingBody(params: {
       formatSection(
         `Video${suffix}`,
         "Description",
-        output.text,
+        escapeXml(output.text),
         outputs.length === 1 ? userText : undefined,
       ),
     );
@@ -87,6 +105,8 @@ export function formatMediaUnderstandingBody(params: {
 }
 
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
-  if (outputs.length === 1) return outputs[0].text;
-  return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
+  if (outputs.length === 1) return escapeXml(outputs[0].text);
+  return outputs
+    .map((output, index) => `Audio ${index + 1}:\n${escapeXml(output.text)}`)
+    .join("\n\n");
 }

@@ -487,4 +487,35 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.CommandBody).toBe("audio ok");
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
+  it("escapes XML special characters in transcripts to prevent injection", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    // Use & which is valid on Windows but needs escaping in XML
+    const audioPath = path.join(dir, "audio&test.ogg");
+    await fs.writeFile(audioPath, "audio-bytes");
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: MoltbotConfig = {
+      tools: { media: { audio: { enabled: true, models: [{ provider: "groq" }] } } },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio: async (req) => ({ text: req.fileName }),
+        },
+      },
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    // & should be escaped to &amp;
+    expect(ctx.Transcript).toContain("audio&amp;test.ogg");
+  });
 });
