@@ -240,6 +240,66 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it("allows different models from same provider when only one model is in cooldown", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const provider = `per-model-cooldown-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        // Only model-a is in cooldown (per-model key)
+        [`${profileId}:model-a`]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+        // model-b has no cooldown
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/model-a`,
+            fallbacks: [`${provider}/model-b`],
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (modelId === "model-b") return "ok";
+      throw new Error(`unexpected model: ${providerId}/${modelId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "model-a",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      // model-a should be skipped (in cooldown), model-b should be tried
+      expect(run.mock.calls).toEqual([[provider, "model-b"]]);
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.attempts[0]?.model).toBe("model-a");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not append configured primary when fallbacksOverride is set", async () => {
     const cfg = makeCfg({
       agents: {
