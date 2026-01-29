@@ -92,6 +92,7 @@ function resolveExecConfig(cfg: MoltbotConfig | undefined) {
     approvalRunningNoticeMs: globalExec?.approvalRunningNoticeMs,
     cleanupMs: globalExec?.cleanupMs,
     notifyOnExit: globalExec?.notifyOnExit,
+    pty: globalExec?.pty,
     applyPatch: globalExec?.applyPatch,
   };
 }
@@ -269,6 +270,7 @@ export function createMoltbotCodingTools(options?: {
     approvalRunningNoticeMs:
       options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+    pty: options?.exec?.pty ?? execConfig.pty,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
