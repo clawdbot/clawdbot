@@ -21,6 +21,8 @@ export type TtsModelOverrideConfig = {
   allowNormalization?: boolean;
   /** Allow model-provided seed override. */
   allowSeed?: boolean;
+  /** Allow model-provided instructions override (OpenAI gpt-4o-mini-tts). */
+  allowInstructions?: boolean;
 };
 
 export type TtsConfig = {
@@ -58,6 +60,8 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+    /** Instructions for gpt-4o-mini-tts model to control tone, style, etc. */
+    instructions?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

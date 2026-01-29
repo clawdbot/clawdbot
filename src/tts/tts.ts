@@ -110,6 +110,7 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+    instructions?: string;
   };
   edge: {
     enabled: boolean;
@@ -148,6 +149,7 @@ type ResolvedTtsModelOverrides = {
   allowVoiceSettings: boolean;
   allowNormalization: boolean;
   allowSeed: boolean;
+  allowInstructions: boolean;
 };
 
 type TtsDirectiveOverrides = {
@@ -156,6 +158,7 @@ type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+    instructions?: string;
   };
   elevenlabs?: {
     voiceId?: string;
@@ -230,6 +233,7 @@ function resolveModelOverridePolicy(
       allowVoiceSettings: false,
       allowNormalization: false,
       allowSeed: false,
+      allowInstructions: false,
     };
   }
   const allow = (value?: boolean) => value ?? true;
@@ -242,6 +246,7 @@ function resolveModelOverridePolicy(
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
     allowNormalization: allow(overrides?.allowNormalization),
     allowSeed: allow(overrides?.allowSeed),
+    allowInstructions: allow(overrides?.allowInstructions),
   };
 }
 
@@ -282,6 +287,7 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
       apiKey: raw.openai?.apiKey,
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+      instructions: raw.openai?.instructions?.trim() || undefined,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -732,6 +738,12 @@ function parseTtsDirectives(
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
             break;
+          case "instructions":
+          case "openai_instructions":
+          case "openaiinstructions":
+            if (!policy.allowInstructions) break;
+            overrides.openai = { ...overrides.openai, instructions: rawValue };
+            break;
           default:
             break;
         }
@@ -1005,8 +1017,9 @@ async function openaiTTS(params: {
   voice: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
+  instructions?: string;
 }): Promise<Buffer> {
-  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, model, voice, responseFormat, timeoutMs, instructions } = params;
 
   if (!isValidOpenAIModel(model)) {
     throw new Error(`Invalid model: ${model}`);
@@ -1018,6 +1031,18 @@ async function openaiTTS(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+  // instructions parameter only supported by gpt-4o-mini-tts model
+  const supportsInstructions = model === "gpt-4o-mini-tts";
+  const body: Record<string, unknown> = {
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+  };
+  if (supportsInstructions && instructions) {
+    body.instructions = instructions;
+  }
+
   try {
     const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
       method: "POST",
@@ -1025,12 +1050,7 @@ async function openaiTTS(params: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -1206,6 +1226,7 @@ export async function textToSpeech(params: {
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
+        const openaiInstructionsOverride = params.overrides?.openai?.instructions;
         audioBuffer = await openaiTTS({
           text: params.text,
           apiKey,
@@ -1213,6 +1234,7 @@ export async function textToSpeech(params: {
           voice: openaiVoiceOverride ?? config.openai.voice,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
+          instructions: openaiInstructionsOverride ?? config.openai.instructions,
         });
       }
 
@@ -1315,6 +1337,7 @@ export async function textToSpeechTelephony(params: {
         voice: config.openai.voice,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
+        instructions: config.openai.instructions,
       });
 
       return {
