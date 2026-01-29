@@ -1,0 +1,24 @@
+{
+    "id": "feishu",
+    "channels": [
+        "feishu"
+    ],
+    "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "appId": {
+                "type": "string"
+            },
+            "appSecret": {
+                "type": "string"
+            },
+            "encryptKey": {
+                "type": "string"
+            },
+            "verificationToken": {
+                "type": "string"
+            }
+        }
+    }
+}
