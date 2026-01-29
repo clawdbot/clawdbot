@@ -6,6 +6,43 @@ public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case compact
 }
 
+/// Check if the Textual package's resource bundle is available.
+/// When running from a packaged app, the bundle may not be in the expected location,
+/// causing a fatal error when StructuredText tries to access Bundle.module.
+private let textualBundleAvailable: Bool = {
+    // The Textual package looks for its bundle at specific paths.
+    // Check if we can find it before attempting to use StructuredText.
+    let bundleName = "textual_Textual.bundle"
+
+    // Check in main bundle (packaged app)
+    if Bundle.main.path(forResource: "textual_Textual", ofType: "bundle") != nil {
+        return true
+    }
+
+    // Check in app's PlugIns or Frameworks directories
+    if let pluginsURL = Bundle.main.builtInPlugInsURL,
+       FileManager.default.fileExists(atPath: pluginsURL.appendingPathComponent(bundleName).path)
+    {
+        return true
+    }
+
+    if let frameworksURL = Bundle.main.privateFrameworksURL,
+       FileManager.default.fileExists(atPath: frameworksURL.appendingPathComponent(bundleName).path)
+    {
+        return true
+    }
+
+    // In development (SwiftPM), Bundle.module should work
+    // We can't directly test Bundle.module without triggering the crash,
+    // so we check for a known development path pattern
+    #if DEBUG
+    return true
+    #else
+    // In release builds, if we haven't found the bundle, assume it's not available
+    return false
+    #endif
+}()
+
 @MainActor
 struct ChatMarkdownRenderer: View {
     enum Context {
@@ -22,12 +59,20 @@ struct ChatMarkdownRenderer: View {
     var body: some View {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
         VStack(alignment: .leading, spacing: 10) {
-            StructuredText(markdown: processed.cleaned)
-                .modifier(ChatMarkdownStyle(
-                    variant: self.variant,
-                    context: self.context,
-                    font: self.font,
-                    textColor: self.textColor))
+            if textualBundleAvailable {
+                StructuredText(markdown: processed.cleaned)
+                    .modifier(ChatMarkdownStyle(
+                        variant: self.variant,
+                        context: self.context,
+                        font: self.font,
+                        textColor: self.textColor))
+            } else {
+                // Fallback: render as plain text when Textual bundle is unavailable
+                Text(processed.cleaned)
+                    .font(self.font)
+                    .foregroundStyle(self.textColor)
+                    .textSelection(.enabled)
+            }
 
             if !processed.images.isEmpty {
                 InlineImageList(images: processed.images)

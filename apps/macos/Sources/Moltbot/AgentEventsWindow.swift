@@ -67,7 +67,7 @@ private struct EventRow: View {
 
     private var tint: Color {
         switch self.event.stream {
-        case "job": .blue
+        case "lifecycle": .blue
         case "tool": .orange
         case "assistant": .green
         default: .gray

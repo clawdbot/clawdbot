@@ -379,8 +379,11 @@ final class ControlChannel {
         let sessionKey = (event.data["sessionKey"]?.value as? String) ?? "main"
 
         switch event.stream.lowercased() {
-        case "job":
-            if let state = event.data["state"]?.value as? String {
+        case "lifecycle":
+            // Gateway emits phase: "start" | "end" | "error"
+            // WorkActivityStore expects state: "started" | "streaming" | (anything else = done)
+            if let phase = event.data["phase"]?.value as? String {
+                let state = phase.lowercased() == "start" ? "started" : "done"
                 WorkActivityStore.shared.handleJob(sessionKey: sessionKey, state: state)
             }
         case "tool":
