@@ -757,11 +757,19 @@ export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as con
  * Custom OpenAI-compatible TTS endpoint.
  * When set, model/voice validation is relaxed to allow non-OpenAI models.
  * Example: OPENAI_TTS_BASE_URL=http://localhost:8880/v1
+ *
+ * Note: Read at runtime (not module load) to support config.env loading.
  */
-const OPENAI_TTS_BASE_URL = (
-  process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1"
-).replace(/\/+$/, "");
-const isCustomOpenAIEndpoint = OPENAI_TTS_BASE_URL !== "https://api.openai.com/v1";
+function getOpenAITtsBaseUrl(): string {
+  return (process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1").replace(
+    /\/+$/,
+    "",
+  );
+}
+
+function isCustomOpenAIEndpoint(): boolean {
+  return getOpenAITtsBaseUrl() !== "https://api.openai.com/v1";
+}
 export const OPENAI_TTS_VOICES = [
   "alloy",
   "ash",
@@ -778,13 +786,13 @@ type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
 function isValidOpenAIModel(model: string): boolean {
   // Allow any model when using custom endpoint (e.g., Kokoro, LocalAI)
-  if (isCustomOpenAIEndpoint) return true;
+  if (isCustomOpenAIEndpoint()) return true;
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
 }
 
 function isValidOpenAIVoice(voice: string): voice is OpenAiTtsVoice {
   // Allow any voice when using custom endpoint (e.g., Kokoro Chinese voices)
-  if (isCustomOpenAIEndpoint) return true;
+  if (isCustomOpenAIEndpoint()) return true;
   return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
 }
 
@@ -1011,7 +1019,7 @@ async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${OPENAI_TTS_BASE_URL}/audio/speech`, {
+    const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
