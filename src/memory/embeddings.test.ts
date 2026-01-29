@@ -264,6 +264,131 @@ describe("embedding provider auto selection", () => {
   });
 });
 
+describe("embedding provider openrouter", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses openrouter with default base url", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+      apiKey: "openrouter-key",
+      mode: "api-key",
+      source: "env: OPENROUTER_API_KEY",
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openrouter",
+      model: "openai/text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(result.provider.id).toBe("openrouter");
+    expect(result.provider.model).toBe("openai/text-embedding-3-small");
+
+    await result.provider.embedQuery("hello");
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://openrouter.ai/api/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer openrouter-key");
+  });
+
+  it("normalizes model name by stripping openrouter/ prefix", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+      apiKey: "openrouter-key",
+      mode: "api-key",
+      source: "env: OPENROUTER_API_KEY",
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openrouter",
+      model: "openrouter/openai/text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(result.provider.model).toBe("openai/text-embedding-3-small");
+  });
+
+  it("uses openrouter in auto mode when openai/gemini are unavailable", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "openai") {
+        throw new Error('No API key found for provider "openai".');
+      }
+      if (provider === "google") {
+        throw new Error('No API key found for provider "google".');
+      }
+      if (provider === "openrouter") {
+        return { apiKey: "openrouter-key", source: "env: OPENROUTER_API_KEY", mode: "api-key" };
+      }
+      throw new Error(`Unexpected provider ${provider}`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.provider.id).toBe("openrouter");
+  });
+
+  it("batch embeds multiple texts in one request", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [{ embedding: [1, 2, 3] }, { embedding: [4, 5, 6] }, { embedding: [7, 8, 9] }],
+      }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+      apiKey: "openrouter-key",
+      mode: "api-key",
+      source: "env: OPENROUTER_API_KEY",
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openrouter",
+      model: "openai/text-embedding-3-small",
+      fallback: "none",
+    });
+
+    const embeddings = await result.provider.embedBatch(["text1", "text2", "text3"]);
+
+    expect(embeddings).toEqual([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      input?: string[];
+    };
+    expect(body.input).toEqual(["text1", "text2", "text3"]);
+  });
+});
+
 describe("embedding provider local fallback", () => {
   afterEach(() => {
     vi.resetAllMocks();

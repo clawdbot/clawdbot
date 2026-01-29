@@ -10,7 +10,7 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
-  provider: "openai" | "local" | "gemini" | "auto";
+  provider: "openai" | "local" | "gemini" | "openrouter" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -26,7 +26,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "none";
+  fallback: "openai" | "gemini" | "openrouter" | "local" | "none";
   model: string;
   local: {
     modelPath?: string;
@@ -71,8 +71,10 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
+
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
+const DEFAULT_OPENROUTER_MODEL = "openai/text-embedding-3-small";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
@@ -129,7 +131,11 @@ function mergeConfig(
     defaultRemote?.headers,
   );
   const includeRemote =
-    hasRemoteConfig || provider === "openai" || provider === "gemini" || provider === "auto";
+    hasRemoteConfig ||
+    provider === "openai" ||
+    provider === "gemini" ||
+    provider === "openrouter" ||
+    provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? true,
     wait: overrideRemote?.batch?.wait ?? defaultRemote?.batch?.wait ?? true,
@@ -156,7 +162,9 @@ function mergeConfig(
       ? DEFAULT_GEMINI_MODEL
       : provider === "openai"
         ? DEFAULT_OPENAI_MODEL
-        : undefined;
+        : provider === "openrouter"
+          ? DEFAULT_OPENROUTER_MODEL
+          : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,

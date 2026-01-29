@@ -20,9 +20,11 @@ import {
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type OpenRouterEmbeddingClient,
 } from "./embeddings.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
+import { DEFAULT_OPENROUTER_EMBEDDING_MODEL } from "./embeddings-openrouter.js";
 import {
   OPENAI_BATCH_ENDPOINT,
   type OpenAiBatchRequest,
@@ -123,11 +125,12 @@ export class MemoryIndexManager {
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private provider: EmbeddingProvider;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "auto";
-  private fallbackFrom?: "openai" | "local" | "gemini";
+  private readonly requestedProvider: "openai" | "local" | "gemini" | "openrouter" | "auto";
+  private fallbackFrom?: "openai" | "local" | "gemini" | "openrouter";
   private fallbackReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
+  private openRouter?: OpenRouterEmbeddingClient;
   private batch: {
     enabled: boolean;
     wait: boolean;
@@ -224,6 +227,7 @@ export class MemoryIndexManager {
     this.fallbackReason = params.providerResult.fallbackReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
+    this.openRouter = params.providerResult.openRouter;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
@@ -1318,14 +1322,16 @@ export class MemoryIndexManager {
     const fallback = this.settings.fallback;
     if (!fallback || fallback === "none" || fallback === this.provider.id) return false;
     if (this.fallbackFrom) return false;
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local";
+    const fallbackFrom = this.provider.id as "openai" | "gemini" | "openrouter" | "local";
 
     const fallbackModel =
       fallback === "gemini"
         ? DEFAULT_GEMINI_EMBEDDING_MODEL
         : fallback === "openai"
           ? DEFAULT_OPENAI_EMBEDDING_MODEL
-          : this.settings.model;
+          : fallback === "openrouter"
+            ? DEFAULT_OPENROUTER_EMBEDDING_MODEL
+            : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1342,6 +1348,7 @@ export class MemoryIndexManager {
     this.provider = fallbackResult.provider;
     this.openAi = fallbackResult.openAi;
     this.gemini = fallbackResult.gemini;
+    this.openRouter = fallbackResult.openRouter;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
@@ -1754,6 +1761,20 @@ export class MemoryIndexManager {
           provider: "gemini",
           baseUrl: this.gemini.baseUrl,
           model: this.gemini.model,
+          headers: entries,
+        }),
+      );
+    }
+    if (this.provider.id === "openrouter" && this.openRouter) {
+      const entries = Object.entries(this.openRouter.headers)
+        .filter(([key]) => key.toLowerCase() !== "authorization")
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "openrouter",
+          baseUrl: this.openRouter.baseUrl,
+          model: this.openRouter.model,
           headers: entries,
         }),
       );
