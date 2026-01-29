@@ -258,7 +258,8 @@ export function resolveDiscordChannelConfigWithFallback(params: {
     scope,
   } = params;
   const channels = guildInfo?.channels;
-  if (!channels) return null;
+  // Return null if channels is undefined, null, or empty object - allows all channels when no allowlist is configured
+  if (!channels || Object.keys(channels).length === 0) return null;
   const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");
   const match = resolveDiscordChannelEntryMatch(
     channels,
