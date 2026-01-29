@@ -18,9 +18,12 @@ export function resolveAckReaction(cfg: MoltbotConfig, agentId: string): string 
 }
 
 export function resolveIdentityNamePrefix(cfg: MoltbotConfig, agentId: string): string | undefined {
-  const name = resolveAgentIdentity(cfg, agentId)?.name?.trim();
-  if (!name) return undefined;
-  return `[${name}]`;
+  const identity = resolveAgentIdentity(cfg, agentId);
+  const name = identity?.name?.trim();
+  const emoji = identity?.emoji?.trim();
+  if (!name && !emoji) return undefined;
+  const parts = [emoji, name].filter(Boolean);
+  return `[${parts.join(" ")}]`;
 }
 
 /** Returns just the identity name (without brackets) for template context. */
