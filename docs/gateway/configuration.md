@@ -2857,9 +2857,11 @@ Related docs:
 - [Remote access](/gateway/remote)
 
 Trusted proxies:
-- `gateway.trustedProxies`: list of reverse proxy IPs that terminate TLS in front of the Gateway.
-- When a connection comes from one of these IPs, Moltbot uses `x-forwarded-for` (or `x-real-ip`) to determine the client IP for local pairing checks and HTTP auth/local checks.
-- Only list proxies you fully control, and ensure they **overwrite** incoming `x-forwarded-for`.
+- `gateway.trustedProxies`: list of reverse proxy IPs or CIDR ranges that terminate TLS in front of the Gateway.
+- Supports exact IPs (`127.0.0.1`), IPv4 CIDR (`188.114.96.0/20`), and IPv6 CIDR (`2400:cb00::/32`).
+- When a connection comes from a trusted proxy, Moltbot uses `X-Forwarded-For` (or `X-Real-IP`) to determine the real client IP.
+- For multi-proxy chains (e.g., Client to Cloudflare to nginx), Moltbot walks the `X-Forwarded-For` chain from right to left, skipping trusted proxies until it finds the real client.
+- Only list proxies you fully control, and ensure they **overwrite** incoming `X-Forwarded-For`.
 
 Notes:
 - `moltbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).

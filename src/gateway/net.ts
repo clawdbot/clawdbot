@@ -1,5 +1,7 @@
 import net from "node:net";
 
+import { Address4, Address6 } from "ip-address";
+
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
@@ -42,18 +44,78 @@ export function parseForwardedForClientIp(forwardedFor?: string): string | undef
   return normalizeIp(stripOptionalPort(raw));
 }
 
+/**
+ * Parse all IPs from X-Forwarded-For header.
+ * Returns array in original order: [client, proxy1, proxy2, ...]
+ */
+function parseForwardedForChain(forwardedFor?: string): string[] {
+  if (!forwardedFor) return [];
+  return forwardedFor
+    .split(",")
+    .map((ip) => normalizeIp(stripOptionalPort(ip.trim())))
+    .filter((ip): ip is string => ip !== undefined);
+}
+
 function parseRealIp(realIp?: string): string | undefined {
   const raw = realIp?.trim();
   if (!raw) return undefined;
   return normalizeIp(stripOptionalPort(raw));
 }
 
+/**
+ * Check if an IP address falls within a CIDR subnet.
+ * Supports both IPv4 (e.g., 188.114.96.0/20) and IPv6 (e.g., 2001:db8::/32).
+ * Uses the ip-address package for robust parsing and validation.
+ */
+function isIpInCidr(ip: string, cidr: string): boolean {
+  try {
+    // Detect IP version by presence of colon
+    const isIPv6 = ip.includes(":");
+    const isCidrIPv6 = cidr.includes(":");
+
+    // IP and CIDR must be same version
+    if (isIPv6 !== isCidrIPv6) return false;
+
+    if (isIPv6) {
+      const ipAddr = new Address6(ip);
+      const subnet = new Address6(cidr);
+      return ipAddr.isInSubnet(subnet);
+    }
+
+    const ipAddr = new Address4(ip);
+    const subnet = new Address4(cidr);
+    return ipAddr.isInSubnet(subnet);
+  } catch {
+    // Invalid IP or CIDR format
+    return false;
+  }
+}
+
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
   const normalized = normalizeIp(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) return false;
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+
+  return trustedProxies.some((proxy) => {
+    // Check for CIDR notation
+    if (proxy.includes("/")) {
+      return isIpInCidr(normalized, proxy);
+    }
+    // Exact IP match
+    return normalizeIp(proxy) === normalized;
+  });
 }
 
+/**
+ * Resolves the real client IP by walking the proxy chain.
+ *
+ * When the direct connection is from a trusted proxy, we examine the X-Forwarded-For
+ * header to find the real client. For multi-proxy setups (e.g., Client → Cloudflare → nginx → app),
+ * we walk the chain from right to left, skipping trusted proxies until we find the first
+ * untrusted IP (the real client).
+ *
+ * X-Forwarded-For format: "client, proxy1, proxy2" (leftmost is original client)
+ * We walk from right (most recent proxy) to left (original client), skipping trusted proxies.
+ */
 export function resolveGatewayClientIp(params: {
   remoteAddr?: string;
   forwardedFor?: string;
@@ -62,8 +124,27 @@ export function resolveGatewayClientIp(params: {
 }): string | undefined {
   const remote = normalizeIp(params.remoteAddr);
   if (!remote) return undefined;
+
+  // If direct connection is not from a trusted proxy, that's our client
   if (!isTrustedProxyAddress(remote, params.trustedProxies)) return remote;
-  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp) ?? remote;
+
+  // Walk the X-Forwarded-For chain from right to left, skipping trusted proxies
+  const chain = parseForwardedForChain(params.forwardedFor);
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const ip = chain[i];
+    if (!isTrustedProxyAddress(ip, params.trustedProxies)) {
+      return ip;
+    }
+  }
+
+  // Fall back to X-Real-IP if all XFF entries are trusted proxies
+  const realIp = parseRealIp(params.realIp);
+  if (realIp && !isTrustedProxyAddress(realIp, params.trustedProxies)) {
+    return realIp;
+  }
+
+  // All proxies are trusted, return the leftmost (original) from chain or remote
+  return chain[0] ?? remote;
 }
 
 export function isLocalGatewayAddress(ip: string | undefined): boolean {

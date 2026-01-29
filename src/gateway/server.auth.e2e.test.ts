@@ -566,5 +566,49 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  test(
+    "trusts x-forwarded-for when proxy IP is within CIDR range",
+    { timeout: 60_000 },
+    async () => {
+      testState.gatewayControlUi = { allowInsecureAuth: true };
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      const { writeConfigFile } = await import("../config/config.js");
+      // Configure a CIDR range (127.0.0.0/8) that includes the proxy IP (127.0.0.1)
+      await writeConfigFile({
+        gateway: {
+          trustedProxies: ["127.0.0.0/8"],
+        },
+      } as Record<string, unknown>);
+      const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
+      const port = await getFreePort();
+      const server = await startGatewayServer(port);
+      // Connect through the trusted proxy (127.0.0.1 is within 127.0.0.0/8)
+      // with a forwarded client IP
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { "x-forwarded-for": "203.0.113.42" },
+      });
+      const challengePromise = onceMessage<{ payload?: unknown }>(
+        ws,
+        (o) =>
+          (o as { type?: string }).type === "event" &&
+          (o as { event?: string }).event === "connect.challenge",
+      );
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+      const challenge = await challengePromise;
+      const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+      // A nonce is required when the resolved client IP is non-local
+      // Since x-forwarded-for is trusted (proxy in CIDR range), the client IP resolves to 203.0.113.42
+      expect(typeof nonce).toBe("string");
+      ws.close();
+      await server.close();
+      if (prevToken === undefined) {
+        delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      } else {
+        process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+      }
+    },
+  );
+
   // Remaining tests require isolated gateway state.
 });

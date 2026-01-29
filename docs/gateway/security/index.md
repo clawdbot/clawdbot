@@ -89,16 +89,23 @@ If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you
 
 When the Gateway detects proxy headers (`X-Forwarded-For` or `X-Real-IP`) from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
 
+`trustedProxies` supports exact IPs and CIDR notation (both IPv4 and IPv6):
+
 ```yaml
 gateway:
   trustedProxies:
-    - "127.0.0.1"  # if your proxy runs on localhost
+    - "127.0.0.1"         # exact IP (local proxy)
+    - "10.0.0.0/8"        # IPv4 CIDR (private network)
+    - "188.114.96.0/20"   # IPv4 CIDR (e.g., Cloudflare)
+    - "2400:cb00::/32"    # IPv6 CIDR
   auth:
     mode: password
     password: ${CLAWDBOT_GATEWAY_PASSWORD}
 ```
 
-When `trustedProxies` is configured, the Gateway will use `X-Forwarded-For` headers to determine the real client IP for local client detection. Make sure your proxy overwrites (not appends to) incoming `X-Forwarded-For` headers to prevent spoofing.
+**Multi-proxy chains:** When multiple proxies are involved (e.g., Client to Cloudflare to nginx to Gateway), Moltbot walks the `X-Forwarded-For` header from right to left, skipping trusted proxy IPs until it finds the first untrusted IP (the real client). This ensures correct client identification even through CDN and load balancer chains.
+
+Make sure your proxies overwrite (not append to) incoming `X-Forwarded-For` headers to prevent spoofing.
 
 ## Local session logs live on disk
 
@@ -428,9 +435,10 @@ you terminate TLS or proxy in front of the gateway, disable
 `gateway.auth.allowTailscale` and use token/password auth instead.
 
 Trusted proxies:
-- If you terminate TLS in front of the Gateway, set `gateway.trustedProxies` to your proxy IPs.
-- Moltbot will trust `x-forwarded-for` (or `x-real-ip`) from those IPs to determine the client IP for local pairing checks and HTTP auth/local checks.
-- Ensure your proxy **overwrites** `x-forwarded-for` and blocks direct access to the Gateway port.
+- If you terminate TLS in front of the Gateway, set `gateway.trustedProxies` to your proxy IPs or CIDR ranges.
+- Moltbot will trust `X-Forwarded-For` (or `X-Real-IP`) from those addresses to determine the client IP for local pairing checks and HTTP auth/local checks.
+- For multi-proxy setups, include all proxy ranges (e.g., CDN + local proxy); Moltbot walks the chain to find the real client.
+- Ensure your proxy **overwrites** `X-Forwarded-For` and blocks direct access to the Gateway port.
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
