@@ -8,7 +8,9 @@ import { healthCommand } from "../health.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
+  detectSystemTimezone,
   ensureWorkspaceAndSessions,
+  isValidTimezone,
   resolveControlUiLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -35,6 +37,23 @@ export async function runNonInteractiveOnboardingLocal(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
+  // Resolve user timezone
+  const systemTimezone = detectSystemTimezone();
+  const existingTimezone = baseConfig.agents?.defaults?.userTimezone;
+  let userTimezone: string | undefined;
+  if (opts.userTimezone !== undefined) {
+    const trimmed = opts.userTimezone.trim();
+    if (trimmed && isValidTimezone(trimmed)) {
+      userTimezone = trimmed;
+    } else if (trimmed) {
+      runtime.log(`Invalid timezone "${trimmed}". Using system default: ${systemTimezone}`);
+      userTimezone = systemTimezone;
+    }
+  } else {
+    // Use existing or system timezone
+    userTimezone = existingTimezone ?? systemTimezone;
+  }
+
   let nextConfig: MoltbotConfig = {
     ...baseConfig,
     agents: {
@@ -42,6 +61,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
       defaults: {
         ...baseConfig.agents?.defaults,
         workspace: workspaceDir,
+        ...(userTimezone ? { userTimezone } : {}),
       },
     },
     gateway: {

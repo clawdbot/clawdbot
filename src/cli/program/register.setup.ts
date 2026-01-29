@@ -20,6 +20,10 @@ export function registerSetupCommand(program: Command) {
       "--workspace <dir>",
       "Agent workspace directory (default: ~/clawd; stored as agents.defaults.workspace)",
     )
+    .option(
+      "--user-timezone <tz>",
+      "User timezone for cron schedules (e.g., America/New_York, Africa/Lagos)",
+    )
     .option("--wizard", "Run the interactive onboarding wizard", false)
     .option("--non-interactive", "Run the wizard without prompts", false)
     .option("--mode <mode>", "Wizard mode: local|remote")
@@ -38,6 +42,7 @@ export function registerSetupCommand(program: Command) {
           await onboardCommand(
             {
               workspace: opts.workspace as string | undefined,
+              userTimezone: opts.userTimezone as string | undefined,
               nonInteractive: Boolean(opts.nonInteractive),
               mode: opts.mode as "local" | "remote" | undefined,
               remoteUrl: opts.remoteUrl as string | undefined,

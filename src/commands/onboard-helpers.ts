@@ -425,3 +425,44 @@ function isValidIPv4(host: string): boolean {
     return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
   });
 }
+
+/**
+ * Validate an IANA timezone string.
+ * Uses Intl.supportedValuesOf('timeZone') when available (Node 18.6+),
+ * falls back to testing via DateTimeFormat.
+ */
+export function isValidTimezone(tz: string): boolean {
+  if (!tz || typeof tz !== "string") return false;
+  const trimmed = tz.trim();
+  if (!trimmed) return false;
+
+  // Try Intl.supportedValuesOf if available (Node 18.6+)
+  if (typeof Intl.supportedValuesOf === "function") {
+    try {
+      const supported = Intl.supportedValuesOf("timeZone");
+      return supported.includes(trimmed);
+    } catch {
+      // Fall through to DateTimeFormat check
+    }
+  }
+
+  // Fallback: try to create a DateTimeFormat with the timezone
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect the system's local timezone.
+ * Returns the IANA timezone string (e.g., "America/New_York").
+ */
+export function detectSystemTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return "UTC";
+  }
+}

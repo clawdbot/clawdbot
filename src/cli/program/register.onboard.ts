@@ -41,6 +41,10 @@ export function registerOnboardCommand(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.molt.bot/cli/onboard")}\n`,
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
+    .option(
+      "--user-timezone <tz>",
+      "User timezone for cron schedules (e.g., America/New_York, Africa/Lagos)",
+    )
     .option("--reset", "Reset config + credentials + sessions + workspace before running wizard")
     .option("--non-interactive", "Run without prompts", false)
     .option(
@@ -105,6 +109,7 @@ export function registerOnboardCommand(program: Command) {
         await onboardCommand(
           {
             workspace: opts.workspace as string | undefined,
+            userTimezone: opts.userTimezone as string | undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             acceptRisk: Boolean(opts.acceptRisk),
             flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,

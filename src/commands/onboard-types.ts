@@ -46,6 +46,8 @@ export type OnboardOptions = {
   /** "manual" is an alias for "advanced". */
   flow?: "quickstart" | "advanced" | "manual";
   workspace?: string;
+  /** User timezone for cron schedules (e.g., "America/New_York", "Europe/London"). */
+  userTimezone?: string;
   nonInteractive?: boolean;
   /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;

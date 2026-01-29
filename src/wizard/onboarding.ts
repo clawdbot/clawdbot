@@ -11,8 +11,10 @@ import { setupChannels } from "../commands/onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
+  detectSystemTimezone,
   ensureWorkspaceAndSessions,
   handleReset,
+  isValidTimezone,
   printWizardHeader,
   probeGatewayReachable,
   summarizeExistingConfig,
@@ -335,6 +337,42 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || DEFAULT_WORKSPACE);
 
+  // Timezone prompt
+  const systemTimezone = detectSystemTimezone();
+  const existingTimezone = baseConfig.agents?.defaults?.userTimezone;
+  const timezoneDefault = existingTimezone ?? systemTimezone;
+
+  let userTimezone: string | undefined;
+  if (opts.userTimezone !== undefined) {
+    // CLI option provided
+    userTimezone = opts.userTimezone.trim() || undefined;
+    if (userTimezone && !isValidTimezone(userTimezone)) {
+      await prompter.note(
+        `Invalid timezone "${userTimezone}". Using system default: ${systemTimezone}`,
+        "Timezone",
+      );
+      userTimezone = systemTimezone;
+    }
+  } else if (flow === "quickstart") {
+    // QuickStart: use existing or system timezone silently
+    userTimezone = existingTimezone ?? systemTimezone;
+  } else {
+    // Manual flow: prompt for timezone
+    const timezoneInput = await prompter.text({
+      message: "Timezone (for cron schedules)",
+      initialValue: timezoneDefault,
+      placeholder: "e.g., America/New_York, Europe/London, Africa/Lagos",
+      validate: (value) => {
+        const trimmed = value.trim();
+        if (!trimmed) return; // Allow empty (will use system default)
+        if (!isValidTimezone(trimmed)) {
+          return `Invalid timezone. Examples: America/New_York, Europe/London, Africa/Lagos`;
+        }
+      },
+    });
+    userTimezone = timezoneInput.trim() || systemTimezone;
+  }
+
   let nextConfig: MoltbotConfig = {
     ...baseConfig,
     agents: {
@@ -342,6 +380,7 @@ export async function runOnboardingWizard(
       defaults: {
         ...baseConfig.agents?.defaults,
         workspace: workspaceDir,
+        ...(userTimezone ? { userTimezone } : {}),
       },
     },
     gateway: {
