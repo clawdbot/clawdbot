@@ -25,6 +25,8 @@ import {
   applySyntheticProviderConfig,
   applyVeniceConfig,
   applyVeniceProviderConfig,
+  applyMorpheusConfig,
+  applyMorpheusProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
@@ -33,6 +35,7 @@ import {
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
+  MORPHEUS_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   setGeminiApiKey,
   setKimiCodeApiKey,
@@ -41,6 +44,7 @@ import {
   setOpenrouterApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
+  setMorpheusApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
@@ -83,6 +87,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "morpheus") {
+      authChoice = "morpheus-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     }
@@ -513,6 +519,65 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "morpheus-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "morpheus") {
+      await setMorpheusApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Morpheus provides decentralized AI inference via the Morpheus Network.",
+          "Get your API key at: https://app.mor.org",
+          "Currently FREE during Open Beta (until 1/31/26).",
+        ].join("\n"),
+        "Morpheus Inference",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("morpheus");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MORPHEUS_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMorpheusApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Morpheus API key",
+        validate: validateApiKeyInput,
+      });
+      await setMorpheusApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "morpheus:default",
+      provider: "morpheus",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MORPHEUS_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyMorpheusConfig,
+        applyProviderConfig: applyMorpheusProviderConfig,
+        noteDefault: MORPHEUS_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

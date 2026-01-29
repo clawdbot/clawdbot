@@ -14,6 +14,21 @@ export const VENICE_DEFAULT_COST = {
 };
 
 /**
+ * Venice API compatibility settings.
+ *
+ * Venice's OpenAI-compatible API doesn't support certain parameters that
+ * Clawdbot sends by default:
+ * - `store`: Venice returns HTTP 400 when this parameter is present
+ * - `developer` role: Not supported by Venice's API
+ *
+ * These settings ensure requests are formatted correctly for Venice.
+ */
+export const VENICE_COMPAT = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+} as const;
+
+/**
  * Complete catalog of Venice AI models.
  *
  * Venice provides two privacy modes:
@@ -300,6 +315,7 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     cost: VENICE_DEFAULT_COST,
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
+    compat: VENICE_COMPAT,
   };
 }
 
@@ -381,6 +397,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           cost: VENICE_DEFAULT_COST,
           contextWindow: apiModel.model_spec.availableContextTokens || 128000,
           maxTokens: 8192,
+          compat: VENICE_COMPAT,
         });
       }
     }

@@ -10,6 +10,12 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
+import {
+  buildMorpheusModelDefinition,
+  MORPHEUS_BASE_URL,
+  MORPHEUS_DEFAULT_MODEL_REF,
+  MORPHEUS_MODEL_CATALOG,
+} from "../agents/morpheus-models.js";
 import type { MoltbotConfig } from "../config/config.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -405,6 +411,75 @@ export function applyVeniceConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyMorpheusProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MORPHEUS_DEFAULT_MODEL_REF] = {
+    ...models[MORPHEUS_DEFAULT_MODEL_REF],
+    alias: models[MORPHEUS_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.morpheus;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const morpheusModels = MORPHEUS_MODEL_CATALOG.map(buildMorpheusModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...morpheusModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.morpheus = {
+    ...existingProviderRest,
+    baseUrl: MORPHEUS_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : morpheusModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyMorpheusConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const next = applyMorpheusProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: MORPHEUS_DEFAULT_MODEL_REF,
         },
       },
     },

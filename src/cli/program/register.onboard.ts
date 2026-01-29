@@ -75,6 +75,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--minimax-api-key <key>", "MiniMax API key")
     .option("--synthetic-api-key <key>", "Synthetic API key")
     .option("--venice-api-key <key>", "Venice API key")
+    .option("--morpheus-api-key <key>", "Morpheus API key")
     .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
