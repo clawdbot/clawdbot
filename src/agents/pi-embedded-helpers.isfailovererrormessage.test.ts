@@ -14,6 +14,8 @@ describe("isFailoverErrorMessage", () => {
     const samples = [
       "invalid api key",
       "429 rate limit exceeded",
+      "No available auth profile for openai-codex (all in cooldown or unavailable).",
+      "Provider openai-codex is in cooldown (all profiles unavailable)",
       "Your credit balance is too low",
       "request timed out",
       "invalid request format",

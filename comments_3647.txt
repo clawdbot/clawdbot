@@ -1,0 +1,47 @@
+﻿FILE: src/agents/session-transcript-repair.ts
+LINE: 62
+BODY: The comment on line 60 is questioning rather than explanatory. Comments with questions like "Deep clone to avoid mutating the input unless necessary?" and "Actually, we can mutate in place effectively or clone messages that need change" suggest uncertainty or incomplete decision-making. The implementation does create a new array and new message objects when changes are detected (lines 63, 107-110), so the comment should clearly state the approach taken: "Creates new message objects only when sanitization is needed; otherwise returns the original messages to avoid unnecessary copying."
+```suggestion
+  // Creates new message objects only when sanitization is needed; otherwise
+  // returns the original messages to avoid unnecessary copying, while guarding
+  // against corrupt JSON in tool arguments that could break the session.
+```
+---
+FILE: src/agents/session-transcript-repair.ts
+LINE: 86
+BODY: The function validates and discards valid JSON strings but doesn't parse them. When `input` is a string containing valid JSON (line 85), the code simply pushes the block unchanged. However, if `input` should always be an object (not a string), then valid JSON strings should also be parsed and converted to objects for consistency. Clarify the expected behavior: should valid JSON strings be preserved as-is, or should they also be parsed into objects? The current behavior creates inconsistency where some inputs are objects and some are JSON strings.
+```suggestion
+            const parsedInput = JSON.parse((block as any).input);
+            nextContent.push({
+              ...block,
+              input: parsedInput,
+            });
+            msgChanged = true;
+```
+---
+FILE: src/agents/session-transcript-repair.ts
+LINE: 118
+BODY: The function doesn't return any report or metadata about what was sanitized, unlike `repairToolUseResultPairing` which returns a `ToolUseRepairReport` with details about changes made. Consider returning a report object that includes information such as the number of sanitized blocks and which tool types were affected. This would help with debugging, monitoring, and understanding the extent of data corruption in sessions. Alternatively, add inline logging to track sanitization events.
+---
+FILE: src/agents/session-transcript-repair.ts
+LINE: 118
+BODY: The `sanitizeToolUseArgs` function lacks test coverage. The existing test file only tests `sanitizeToolUseResultPairing`, but does not directly test the new `sanitizeToolUseArgs` function. Add tests that verify:
+1. Valid JSON strings in `input` fields are preserved
+2. Invalid JSON strings in `input` fields are replaced with `{}`
+3. Object values in `input` fields are preserved
+4. The `_sanitized` and `_originalInput` metadata fields are correctly set when sanitization occurs
+5. Messages without tool blocks are left unchanged
+---
+FILE: src/agents/session-transcript-repair.ts
+LINE: 97
+BODY: Silent data loss occurs when malformed JSON is replaced with an empty object. When the sanitization logic detects and replaces invalid JSON in tool arguments, it stores the original input in `_originalInput` but doesn't log this potentially important information. Consider adding a warning log similar to patterns found elsewhere in the codebase (e.g., in `compaction.ts`, `model-catalog.ts`) to aid debugging when sessions are repaired. The log should include the tool name and a sample of the malformed input to help trace the root cause of the corruption.
+---
+FILE: src/agents/session-transcript-repair.ts
+LINE: 100
+BODY: The function only sanitizes the `input` field for tool use blocks, but the existing tests use `arguments` as the field name (see lines 11-12, 38, 65 in session-transcript-repair.test.ts). This suggests there may be inconsistency in the field naming across different tool block types. Verify whether tool blocks can use both `input` and `arguments` field names, and if so, ensure the sanitization logic handles both. If they are mutually exclusive based on the block type, add a comment explaining this distinction.
+---
+FILE: src/agents/session-transcript-repair.ts
+LINE: 94
+BODY: Using `(block as any).input` bypasses TypeScript's type checking. The code would be more maintainable and safer with proper type guards or typed access. Consider defining a proper type for tool blocks or using a type guard function to check for the presence of the `input` field before accessing it. This approach would make the code more self-documenting and catch potential issues at compile time.
+---
+

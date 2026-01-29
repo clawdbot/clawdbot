@@ -1,0 +1,29 @@
+﻿--- PR 3648 --
+REVIEWER: copilot-pull-request-reviewer
+BODY: ## Pull request overview
+
+This PR adds Windows-specific shell guidance to the agent's system prompt to help it use PowerShell syntax and commands when running on Windows. The implementation detects Windows via the runtime OS information and injects appropriate guidance about PowerShell syntax, environment variables, and command alternatives.
+
+**Changes:**
+- Added conditional Windows Shell Guidance section to system prompt when running on Windows
+- Reformatted multiple sections of system-prompt.ts from template literals to array-based formatting
+- Modified .github/PULL_REQUEST_TEMPLATE.md (appears unrelated to main feature)
+
+### Reviewed changes
+
+Copilot reviewed 2 out of 2 changed files in this pull request and generated 4 comments.
+
+| File | Description |
+| ---- | ----------- |
+| src/agents/system-prompt.ts | Added Windows PowerShell guidance section (lines 402-412) with conditional logic based on OS detection; includes extensive indentation/formatting changes throughout the file |
+| .github/PULL_REQUEST_TEMPLATE.md | Entire file appears as new additions (315 lines), likely due to formatting or line ending changes; unrelated to Windows PowerShell feature |
+
+
+
+
+
+---
+
+≡ƒÆí <a href="/moltbot/moltbot/new/main/.github/instructions?filename=*.instructions.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Add Copilot custom instructions</a> for smarter, more guided reviews. <a href="https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Learn how to get started</a>.
+
+

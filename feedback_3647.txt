@@ -1,0 +1,20 @@
+﻿--- PR 3647 --
+REVIEWER: copilot-pull-request-reviewer
+BODY: ## Pull request overview
+
+This PR implements sanitization for tool arguments in session history to prevent crashes caused by malformed JSON in tool input fields. When invalid JSON is detected in tool use blocks, it is replaced with an empty object `{}` to prevent `InternalError.Algo.InvalidParameter` errors that would otherwise crash the entire session.
+
+**Changes:**
+- Added `sanitizeToolUseArgs` function to detect and repair malformed JSON in tool input arguments
+- Integrated sanitization into the `sanitizeToolUseResultPairing` pipeline to ensure it runs before tool result pairing repair
+- Preserved original malformed input in `_originalInput` metadata field for debugging
+
+
+
+
+
+---
+
+≡ƒÆí <a href="/moltbot/moltbot/new/main/.github/instructions?filename=*.instructions.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Add Copilot custom instructions</a> for smarter, more guided reviews. <a href="https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Learn how to get started</a>.
+
+

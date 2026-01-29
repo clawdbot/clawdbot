@@ -1,0 +1,47 @@
+﻿FILE: src/agents/system-prompt.ts
+LINE: 412
+BODY: The Windows shell guidance feature lacks test coverage. Consider adding a test case in `system-prompt.test.ts` to verify that the Windows-specific guidance is included when `runtimeInfo.os` contains "windows" and excluded otherwise. This would ensure the feature works as expected and prevent regressions.
+
+For example, you could add a test like:
+- Test that when runtimeInfo.os includes "Windows_NT", the prompt contains "## Windows Shell Guidance"
+- Test that when runtimeInfo.os is "Darwin" or "Linux", this section is not included
+---
+FILE: src/agents/system-prompt.ts
+LINE: 100
+BODY: This PR includes extensive indentation/formatting changes throughout the file that are not mentioned in the PR description. While these changes appear to be consistent reformatting (switching from multi-line template literals to array-based formatting), they make it harder to review the actual functional change (the Windows guidance addition). Consider:
+
+1. Splitting formatting changes into a separate commit/PR, OR
+2. Explicitly mentioning these formatting changes in the PR description
+
+This follows best practices for keeping functional changes separate from style/formatting changes for easier code review and git history.
+---
+FILE: src/agents/system-prompt.ts
+LINE: 407
+BODY: The Windows guidance warns against using Unix commands like `grep`, but the system prompt (lines 340-342) also lists `grep`, `find`, and `ls` as Pi's standard tools. This could be confusing because:
+
+1. Pi provides `grep`, `find`, and `ls` as built-in tools that work cross-platform
+2. The Windows guidance seems to warn against using these names in shell commands via the `exec` tool
+
+Consider clarifying this distinction in the Windows guidance. For example: "- Do NOT use Unix commands like `grep`, `sed`, `awk`, `head`, `tail` in exec/shell commands unless you are sure they are installed (Pi's built-in grep/find/ls tools work fine)."
+
+This makes it clear that the warning is specifically about shell commands, not Pi's built-in tools.
+```suggestion
+        "- Do NOT use Unix commands like `grep`, `sed`, `awk`, `head`, `tail` in exec/shell (PowerShell) commands unless you are sure they are installed. Pi's built-in tools named `grep`, `find`, and `ls` are safe to use.",
+```
+---
+FILE: .github/PULL_REQUEST_TEMPLATE.md
+LINE: 315
+BODY: The PR includes changes to `.github/PULL_REQUEST_TEMPLATE.md` which is unrelated to adding Windows PowerShell support. The diff shows the entire file (315 lines) as new additions, which suggests either:
+
+1. The file was regenerated/reformatted
+2. Line ending changes (CRLF Γåö LF)
+3. The file was accidentally included in this PR
+
+Since this is unrelated to the stated PR purpose ("add windows powershell support to system prompt"), consider:
+- Removing this file from the PR if it was accidentally included
+- If intentional, explain the reason in the PR description
+- If it's a line ending change, consider using `.gitattributes` to enforce consistent line endings
+
+Including unrelated changes makes code review more difficult and complicates the git history.
+---
+

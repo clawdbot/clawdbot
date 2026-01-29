@@ -369,4 +369,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
+
+  it("includes Windows Shell Guidance when running on Windows", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      runtimeInfo: {
+        os: "Windows_NT",
+        host: "host",
+        agentId: "agent",
+      },
+    });
+
+    expect(prompt).toContain("## Windows Shell Guidance");
+    expect(prompt).toContain("You are running on Windows (PowerShell).");
+  });
+
+  it("omits Windows Shell Guidance when running on non-Windows", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      runtimeInfo: {
+        os: "Darwin",
+        host: "host",
+        agentId: "agent",
+      },
+    });
+
+    expect(prompt).not.toContain("## Windows Shell Guidance");
+    expect(prompt).not.toContain("You are running on Windows (PowerShell).");
+  });
 });

@@ -362,6 +362,10 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
+    // Auth-profile selection can fail due to provider-wide cooldown after repeated rate limits.
+    // Treat as rate_limit so model fallback can engage even before a request is sent.
+    /all in cooldown/i,
+    /in cooldown \(all profiles unavailable\)/i,
   ],
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
@@ -388,6 +392,8 @@ const ERROR_PATTERNS = {
     /\b403\b/,
     "no credentials found",
     "no api key found",
+    // Agent can fail before request if no usable auth profile exists.
+    /no available auth profile/i,
   ],
   format: [
     "string should match pattern",

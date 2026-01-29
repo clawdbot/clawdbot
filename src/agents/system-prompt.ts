@@ -399,6 +399,17 @@ export function buildAgentSystemPrompt(params: {
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
     ...workspaceNotes,
     "",
+    ...(runtimeInfo?.os?.toLowerCase().includes("windows")
+      ? [
+          "## Windows Shell Guidance",
+          "You are running on Windows (PowerShell).",
+          "- Use PowerShell syntax (e.g. `$env:VAR` instead of `%VAR%` or `$VAR`).",
+          "- Do NOT use Unix commands like `grep`, `sed`, `awk`, `head`, `tail` in exec/shell (PowerShell) commands unless you are sure they are installed. Pi's built-in tools named `grep`, `find`, and `ls` are safe to use.",
+          "- Use `findstr` or `Select-String` instead of `grep`.",
+          "- Use `Get-ChildItem` (dir/ls) with `-Recurse` instead of `find`.",
+          "",
+        ]
+      : []),
     ...docsSection,
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
