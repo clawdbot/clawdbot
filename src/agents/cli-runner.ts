@@ -65,7 +65,8 @@ export async function runCliAgent(params: {
 
   const extraSystemPrompt = [
     params.extraSystemPrompt?.trim(),
-    "Tools are disabled in this session. Do not call tools.",
+    // Only add "tools disabled" message if tools aren't enabled for this backend
+    backend.toolsEnabled ? undefined : "Tools are disabled in this session. Do not call tools.",
   ]
     .filter(Boolean)
     .join("\n");

@@ -89,6 +89,8 @@ export type CliBackendConfig = {
   imageMode?: "repeat" | "list";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Whether tools are enabled for this CLI backend (default: false). */
+  toolsEnabled?: boolean;
 };
 
 export type AgentDefaultsConfig = {
