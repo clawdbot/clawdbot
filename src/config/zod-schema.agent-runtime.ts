@@ -343,12 +343,27 @@ export const MemorySearchSchema = z
       .optional(),
     store: z
       .object({
-        driver: z.literal("sqlite").optional(),
+        driver: z.enum(["sqlite", "qdrant"]).optional(),
         path: z.string().optional(),
         vector: z
           .object({
             enabled: z.boolean().optional(),
             extensionPath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        qdrant: z
+          .object({
+            url: z.string().url().optional(),
+            apiKey: z.string().optional(),
+            collection: z
+              .object({
+                name: z.string().optional(),
+                onDisk: z.boolean().optional(),
+                distance: z.enum(["Cosine", "Euclidean", "Dot"]).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),

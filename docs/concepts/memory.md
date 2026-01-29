@@ -88,7 +88,7 @@ Defaults:
   3. `gemini` if a Gemini key can be resolved.
   4. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
-- Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
+- Uses sqlite-vec (when available) or Qdrant to accelerate vector search.
 
 Remote embeddings **require** an API key for the embedding provider. Moltbot
 resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
@@ -376,6 +376,91 @@ Notes:
   error and continues with the JS fallback (no vector table).
 - `extensionPath` overrides the bundled sqlite-vec path (useful for custom builds
   or non-standard install locations).
+
+### Qdrant vector database
+
+Clawdbot can use Qdrant as an alternative vector database backend, supporting both local (on-disk or in-memory) and cloud deployments.
+
+**Local Qdrant server:**
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      store: {
+        driver: "qdrant",
+        qdrant: {
+          url: "http://localhost:6333",  // Default Qdrant REST API port
+          collection: {
+            onDisk: true,  // Store vectors on disk (default: true)
+            distance: "Cosine"  // Distance metric: "Cosine", "Euclidean", or "Dot"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Cloud Qdrant:**
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      store: {
+        driver: "qdrant",
+        qdrant: {
+          url: "https://your-cluster.qdrant.io",
+          apiKey: "your-api-key",
+          collection: {
+            onDisk: false,  // Cloud handles persistence
+            distance: "Cosine"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**In-memory Qdrant (for testing):**
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      store: {
+        driver: "qdrant",
+        qdrant: {
+          url: "http://localhost:6333",
+          collection: {
+            onDisk: false,  // In-memory only
+            distance: "Cosine"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Running Qdrant locally with Docker:**
+
+```bash
+docker pull qdrant/qdrant
+docker run -p 6333:6333 -p 6334:6334 \
+  -v "$(pwd)/qdrant_storage:/qdrant/storage:z" \
+  qdrant/qdrant
+```
+
+Notes:
+- Collection names are auto-generated per agent and model to ensure isolation.
+- SQLite is still used for metadata (files, chunks tables) regardless of vector driver.
+- Embedding cache uses SQLite regardless of vector driver.
+- Hybrid search (BM25 + vector) works with Qdrant same as sqlite-vec.
+- If Qdrant connection fails, Clawdbot falls back to in-process cosine similarity.
+- Default driver is `"sqlite"` for backward compatibility.
 
 ### Local embedding auto-download
 

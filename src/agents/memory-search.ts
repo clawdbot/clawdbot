@@ -33,11 +33,20 @@ export type ResolvedMemorySearchConfig = {
     modelCacheDir?: string;
   };
   store: {
-    driver: "sqlite";
+    driver: "sqlite" | "qdrant";
     path: string;
     vector: {
       enabled: boolean;
       extensionPath?: string;
+    };
+    qdrant?: {
+      url?: string;
+      apiKey?: string;
+      collection?: {
+        name?: string;
+        onDisk?: boolean;
+        distance?: "Cosine" | "Euclidean" | "Dot";
+      };
     };
   };
   chunking: {
@@ -172,10 +181,12 @@ function mergeConfig(
     extensionPath:
       overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
   };
+  const qdrant = overrides?.store?.qdrant ?? defaults?.store?.qdrant;
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
     path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
     vector,
+    ...(qdrant ? { qdrant } : {}),
   };
   const chunking = {
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,

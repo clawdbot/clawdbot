@@ -265,13 +265,27 @@ export type MemorySearchConfig = {
   };
   /** Index storage configuration. */
   store?: {
-    driver?: "sqlite";
+    driver?: "sqlite" | "qdrant";
     path?: string;
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;
       /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
       extensionPath?: string;
+    };
+    qdrant?: {
+      /** Qdrant server URL (default: "http://localhost:6333"). */
+      url?: string;
+      /** API key for cloud Qdrant instances. */
+      apiKey?: string;
+      collection?: {
+        /** Collection name (default: auto-generated per agent/model). */
+        name?: string;
+        /** Store vectors on disk (default: true for local, false for in-memory). */
+        onDisk?: boolean;
+        /** Distance metric (default: "Cosine"). */
+        distance?: "Cosine" | "Euclidean" | "Dot";
+      };
     };
     cache?: {
       /** Enable embedding cache (default: true). */

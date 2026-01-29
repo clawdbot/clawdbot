@@ -1487,6 +1487,23 @@ packages:
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
 
+  '@qdrant/js-client-grpc@1.14.0':
+    resolution: {integrity: sha512-A1464Ub25+jVvqOKddemTZMP377LyilGrSHoWVaTT9FtieXXr0trIfJLL1UWExgZ6hhopaURVqcc8uK3OAsP1w==}
+    engines: {node: '>=18.0.0', pnpm: '>=8'}
+
+  '@qdrant/js-client-rest@1.14.0':
+    resolution: {integrity: sha512-2sM2g17FSkN2sNCSeAfqxHRr+SPEVnUQLXBjVv/whm4YQ4JjZ53Jiy1iShk95G+xBf3hKBhJdj8itRnor03IYw==}
+    engines: {node: '>=18.0.0', pnpm: '>=8'}
+
+  '@qdrant/qdrant-js@1.14.0':
+    resolution: {integrity: sha512-odY6jC/yKwE5uoyFhIN4J9EEyS6aVsGtrSdMFD0DuqMGW5ZvuvGcDNw3HLkN71JT0D0gQEyHO7/sokuG/GxkwA==}
+    engines: {node: '>=18.0.0', pnpm: '>=8'}
+    peerDependencies:
+      typescript: '>=4.1'
+    dependencies:
+      '@qdrant/js-client-grpc': 1.14.0
+      '@qdrant/js-client-rest': 1.14.0
+
   '@napi-rs/canvas-android-arm64@0.1.88':
     resolution: {integrity: sha512-KEaClPnZuVxJ8smUWjV1wWFkByBO/D+vy4lN+Dm5DFH514oqwukxKGeck9xcKJhaWJGjfruGmYGiwRe//+/zQQ==}
     engines: {node: '>= 10'}
@@ -7112,6 +7129,12 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
+  '@qdrant/js-client-grpc@1.14.0': {}
+
+  '@qdrant/js-client-rest@1.14.0': {}
+
+  '@qdrant/qdrant-js@1.14.0': {}
+
   '@napi-rs/canvas-android-arm64@0.1.88':
     optional: true
 
@@ -7916,6 +7939,15 @@ snapshots:
   '@silvia-odwyer/photon-node@0.3.4': {}
 
   '@sinclair/typebox@0.34.47': {}
+
+  '@qdrant/js-client-grpc@1.14.0': {}
+
+  '@qdrant/js-client-rest@1.14.0': {}
+
+  '@qdrant/qdrant-js@1.14.0':
+    dependencies:
+      '@qdrant/js-client-grpc': 1.14.0
+      '@qdrant/js-client-rest': 1.14.0
 
   '@slack/bolt@4.6.0(@types/express@5.0.6)':
     dependencies:
@@ -9114,6 +9146,7 @@ snapshots:
       '@mariozechner/pi-coding-agent': 0.49.3(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.49.3
       '@mozilla/readability': 0.6.0
+      '@qdrant/qdrant-js': 1.14.0
       '@sinclair/typebox': 0.34.47
       '@slack/bolt': 4.6.0(@types/express@5.0.6)
       '@slack/web-api': 7.13.0

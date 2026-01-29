@@ -168,6 +168,7 @@
     "@mariozechner/pi-coding-agent": "0.49.3",
     "@mariozechner/pi-tui": "0.49.3",
     "@mozilla/readability": "^0.6.0",
+    "@qdrant/qdrant-js": "^1.14.0",
     "@sinclair/typebox": "0.34.47",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
