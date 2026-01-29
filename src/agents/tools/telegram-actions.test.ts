@@ -13,6 +13,7 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const editForumTopicTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
@@ -20,6 +21,7 @@ vi.mock("../../telegram/send.js", () => ({
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
   sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
+  editForumTopicTelegram: (...args: unknown[]) => editForumTopicTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -28,6 +30,7 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    editForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -505,6 +508,80 @@ describe("handleTelegramAction", () => {
         buttons: [[{ text: "Option A", callback_data: "cmd:a" }]],
       }),
     );
+  });
+
+  it("edits a forum topic name", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as MoltbotConfig;
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        chatId: "-1001234567890",
+        messageThreadId: 42,
+        name: "New Topic Name",
+      },
+      cfg,
+    );
+    expect(editForumTopicTelegram).toHaveBeenCalledWith(
+      "-1001234567890",
+      42,
+      expect.objectContaining({
+        token: "tok",
+        name: "New Topic Name",
+        iconCustomEmojiId: undefined,
+      }),
+    );
+  });
+
+  it("respects editForumTopic gating", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", actions: { editForumTopic: false } },
+      },
+    } as MoltbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editForumTopic",
+          chatId: "-1001234567890",
+          messageThreadId: 42,
+          name: "New Name",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram editForumTopic is disabled/);
+  });
+
+  it("requires at least name or iconCustomEmojiId", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as MoltbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editForumTopic",
+          chatId: "-1001234567890",
+          messageThreadId: 42,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/At least one of name or iconCustomEmojiId is required/);
+  });
+
+  it("requires chatId and messageThreadId", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as MoltbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editForumTopic",
+          name: "New Name",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/chatId required/i);
   });
 });
 

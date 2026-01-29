@@ -630,6 +630,14 @@ function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {
   }
 }
 
+type TelegramEditForumTopicOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+};
+
 type TelegramStickerOpts = {
   token?: string;
   accountId?: string;
@@ -641,6 +649,62 @@ type TelegramStickerOpts = {
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
 };
+
+export async function editForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadId: number,
+  opts: TelegramEditForumTopicOpts & {
+    name?: string;
+    iconCustomEmojiId?: string;
+  } = {},
+): Promise<{ ok: true }> {
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  // The General topic (thread_id = 1) uses a different API method
+  if (messageThreadId === 1) {
+    if (!opts.name) {
+      throw new Error("name is required for editing the General forum topic");
+    }
+    await requestWithDiag(
+      () => api.editGeneralForumTopic(chatId, opts.name),
+      "editGeneralForumTopic",
+    );
+  } else {
+    const editParams: { name?: string; icon_custom_emoji_id?: string } = {};
+    if (opts.name) editParams.name = opts.name;
+    if (opts.iconCustomEmojiId) editParams.icon_custom_emoji_id = opts.iconCustomEmojiId;
+    await requestWithDiag(
+      () => api.editForumTopic(chatId, messageThreadId, editParams),
+      "editForumTopic",
+    );
+  }
+
+  logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
+  return { ok: true };
+}
 
 /**
  * Send a sticker to a Telegram chat by file_id.
