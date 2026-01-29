@@ -124,19 +124,26 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
         this.connected = true;
         this.reconnectAttempts = 0;
 
-        // Configure the transcription session
+        // Configure the transcription session (GA API format)
         this.sendEvent({
-          type: "transcription_session.update",
+          type: "session.update",
           session: {
-            input_audio_format: "g711_ulaw",
-            input_audio_transcription: {
-              model: this.model,
-            },
-            turn_detection: {
-              type: "server_vad",
-              threshold: this.vadThreshold,
-              prefix_padding_ms: 300,
-              silence_duration_ms: this.silenceDurationMs,
+            type: "transcription",
+            audio: {
+              input: {
+                format: {
+                  type: "audio/pcmu",
+                },
+                transcription: {
+                  model: this.model,
+                },
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: this.vadThreshold,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: this.silenceDurationMs,
+                },
+              },
             },
           },
         });
