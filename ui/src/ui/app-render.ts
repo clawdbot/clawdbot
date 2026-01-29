@@ -497,6 +497,27 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
+              // Delete session (disabled for main session)
+              showDeleteConfirm: state.chatDeleteConfirm,
+              isMainSession:
+                state.sessionKey === "main" ||
+                parseAgentSessionKey(state.sessionKey)?.rest === "main",
+              onDeleteClick: () => (state.chatDeleteConfirm = true),
+              onDeleteConfirm: async () => {
+                state.chatDeleteConfirm = false;
+                const { deleteSession } = await import("./controllers/sessions");
+                await deleteSession(state as Parameters<typeof deleteSession>[0], state.sessionKey);
+                // Switch to main session after deletion
+                const mainKey = state.sessionsResult?.mainSessionKey ?? "main";
+                state.sessionKey = mainKey;
+                state.applySettings({
+                  ...state.settings,
+                  sessionKey: mainKey,
+                  lastActiveSessionKey: mainKey,
+                });
+                void loadChatHistory(state);
+              },
+              onDeleteCancel: () => (state.chatDeleteConfirm = false),
             })
           : nothing}
 
