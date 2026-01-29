@@ -1,4 +1,5 @@
 import type { loadConfig } from "../../../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose } from "../../../globals.js";
 import { shouldAckReactionForWhatsApp } from "../../../channels/ack-reactions.js";
 import { sendReactionWhatsApp } from "../../outbound.js";
@@ -25,6 +26,16 @@ export function maybeSendAckReaction(params: {
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;
 
+  // Load session to check for per-session ackReaction override.
+  // Note: loadSessionStore uses an in-memory cache (45s TTL) so this is not
+  // doing disk I/O on every message in typical usage patterns.
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  const store = loadSessionStore(storePath);
+  const sessionEntry = store[params.sessionKey];
+  const sessionMode = sessionEntry?.ackReaction;
+
   const activation =
     params.msg.chatType === "group"
       ? resolveGroupActivationFor({
@@ -41,6 +52,7 @@ export function maybeSendAckReaction(params: {
       isGroup: params.msg.chatType === "group",
       directEnabled,
       groupMode,
+      sessionMode,
       wasMentioned: params.msg.wasMentioned === true,
       groupActivated: activation === "always",
     });

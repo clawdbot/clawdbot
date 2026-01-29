@@ -239,6 +239,18 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
   - `"mentions"`: React only when bot is @mentioned
   - `"never"`: Never react in groups
 
+**Per-session override:**
+The global and per-account configurations can be overridden for specific sessions (DMs or Groups) using session configuration (in `sessions.json`).
+- `ackReaction`: `"always" | "mentions" | "never"`
+  - `"always"`: Enables reactions (overrides global off/never).
+  - `"never"`: Disables reactions (overrides global on/always/mentions).
+  - `"mentions"`: Enforces **strict** mention-only reactions (requires actual @mention, ignores group activation state).
+  - Useful for disabling reactions in specific DMs (`"never"`) or forcing them in specific groups.
+
+> **Note:** Setting `"mentions"` on a DM session effectively disables reactions for that DM, since direct messages don't have @mentions. Use `"always"` or `"never"` for DMs.
+>
+> **Note:** Unlike the global `group: "mentions"` setting which respects group activation state, the session-level `"mentions"` override is strict and always requires an actual @mention.
+
 **Per-account override:**
 ```json
 {

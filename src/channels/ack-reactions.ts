@@ -36,8 +36,28 @@ export function shouldAckReactionForWhatsApp(params: {
   groupMode: WhatsAppAckReactionMode;
   wasMentioned: boolean;
   groupActivated: boolean;
+  sessionMode?: "always" | "mentions" | "never";
 }): boolean {
   if (!params.emoji) return false;
+
+  // Session override
+  if (params.sessionMode === "never") return false;
+  if (params.sessionMode === "always") return true;
+  if (params.sessionMode === "mentions") {
+    // Strict mention-only: explicit session override should not bypass via activation
+    return shouldAckReaction({
+      scope: "group-mentions",
+      isDirect: params.isDirect,
+      isGroup: params.isGroup,
+      isMentionableGroup: true,
+      requireMention: true,
+      canDetectMention: true,
+      effectiveWasMentioned: params.wasMentioned,
+      // Note: intentionally not passing shouldBypassMention here
+    });
+  }
+
+  // Config fallback
   if (params.isDirect) return params.directEnabled;
   if (!params.isGroup) return false;
   if (params.groupMode === "never") return false;

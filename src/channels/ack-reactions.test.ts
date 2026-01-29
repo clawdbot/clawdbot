@@ -225,6 +225,77 @@ describe("shouldAckReactionForWhatsApp", () => {
       }),
     ).toBe(false);
   });
+  it("honors session overrides", () => {
+    // Session: NEVER overrides Global: ALWAYS
+    expect(
+      shouldAckReactionForWhatsApp({
+        emoji: "👀",
+        isDirect: false,
+        isGroup: true,
+        directEnabled: true,
+        groupMode: "always",
+        wasMentioned: false,
+        groupActivated: false,
+        sessionMode: "never",
+      }),
+    ).toBe(false);
+
+    // Session: ALWAYS overrides Global: NEVER
+    expect(
+      shouldAckReactionForWhatsApp({
+        emoji: "👀",
+        isDirect: false,
+        isGroup: true,
+        directEnabled: true,
+        groupMode: "never",
+        wasMentioned: false,
+        groupActivated: false,
+        sessionMode: "always",
+      }),
+    ).toBe(true);
+
+    // Session: MENTIONS in DM (effectively OFF unless mentioned, which is false)
+    expect(
+      shouldAckReactionForWhatsApp({
+        emoji: "👀",
+        isDirect: true,
+        isGroup: false,
+        directEnabled: true, // Globally enabled
+        groupMode: "mentions",
+        wasMentioned: false,
+        groupActivated: false,
+        sessionMode: "mentions", // Override to strict mentions
+      }),
+    ).toBe(false);
+
+    // Session: MENTIONS in Group (works if mentioned)
+    expect(
+      shouldAckReactionForWhatsApp({
+        emoji: "👀",
+        isDirect: false,
+        isGroup: true,
+        directEnabled: true,
+        groupMode: "never", // Global OFF
+        wasMentioned: true, // But mentioned
+        groupActivated: false,
+        sessionMode: "mentions", // Session override ON (if mentioned)
+      }),
+    ).toBe(true);
+
+    // Session: MENTIONS is strict - does NOT bypass via groupActivated
+    expect(
+      shouldAckReactionForWhatsApp({
+        emoji: "👀",
+        isDirect: false,
+        isGroup: true,
+        directEnabled: true,
+        groupMode: "always",
+        wasMentioned: false, // Not mentioned
+        groupActivated: true, // But group is activated
+        sessionMode: "mentions", // Explicit mentions = strict, no bypass
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("removeAckReactionAfterReply", () => {
