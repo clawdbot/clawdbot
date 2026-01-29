@@ -4,8 +4,12 @@ import lockfile from "proper-lockfile";
 import type { MoltbotConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
-import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import {
+  trySyncClaudeCliCredentialsOnRefreshFailure,
+  trySyncCodexCliCredentialsOnRefreshFailure,
+} from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
@@ -194,6 +198,52 @@ export async function resolveApiKeyForProfile(params: {
         if (fallbackResolved) return fallbackResolved;
       } catch {
         // keep original error
+      }
+    }
+
+    // Fallback: try syncing from external CLI tools (Claude Code CLI, Codex CLI)
+    // This handles the case where another tool refreshed the token and we have stale credentials
+    if (cred.provider === "anthropic" && profileId === CLAUDE_CLI_PROFILE_ID) {
+      try {
+        const synced = trySyncClaudeCliCredentialsOnRefreshFailure(refreshedStore);
+        if (synced && Date.now() < synced.expires) {
+          saveAuthProfileStore(refreshedStore, params.agentDir);
+          log.info("recovered from refresh failure by syncing Claude Code CLI credentials", {
+            profileId,
+            expires: new Date(synced.expires).toISOString(),
+          });
+          return {
+            apiKey: buildOAuthApiKey(synced.provider, synced),
+            provider: synced.provider,
+            email: synced.email,
+          };
+        }
+      } catch (syncError) {
+        log.debug("failed to sync claude cli credentials after refresh failure", {
+          error: syncError instanceof Error ? syncError.message : String(syncError),
+        });
+      }
+    }
+
+    if (cred.provider === "openai-codex" && profileId === CODEX_CLI_PROFILE_ID) {
+      try {
+        const synced = trySyncCodexCliCredentialsOnRefreshFailure(refreshedStore);
+        if (synced && Date.now() < synced.expires) {
+          saveAuthProfileStore(refreshedStore, params.agentDir);
+          log.info("recovered from refresh failure by syncing Codex CLI credentials", {
+            profileId,
+            expires: new Date(synced.expires).toISOString(),
+          });
+          return {
+            apiKey: buildOAuthApiKey(synced.provider, synced),
+            provider: synced.provider,
+            email: synced.email,
+          };
+        }
+      } catch (syncError) {
+        log.debug("failed to sync codex cli credentials after refresh failure", {
+          error: syncError instanceof Error ? syncError.message : String(syncError),
+        });
       }
     }
 
