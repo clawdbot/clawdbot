@@ -247,7 +247,7 @@
   width: 100%;
   height: 40px;
   min-height: 40px;
-  max-height: 150px;
+  max-height: min(400px, 50vh);
   padding: 9px 12px;
   border-radius: 8px;
   overflow-y: auto;
