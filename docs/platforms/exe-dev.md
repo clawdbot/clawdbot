@@ -11,7 +11,7 @@ Goal: Moltbot Gateway running on an exe.dev VM, reachable from your laptop via: 
 
 This page assumes exe.dev's default **exeuntu** image. If you picked a different distro, map packages accordingly.
 
-## Beginner quick path
+## Quick Path
 
 1) [https://exe.new/moltbot](https://exe.new/moltbot)
 2) Fill in your auth key/token as needed
@@ -19,7 +19,7 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 4) ???
 5) Profit
 
-## What you need
+## Prerequisites
 
 - exe.dev account
 - `ssh exe.dev` access to [exe.dev](https://exe.dev) virtual machines (optional)
@@ -123,3 +123,59 @@ moltbot health
 ```
 
 Guide: [Updating](/install/updating)
+
+---
+
+## Persistence
+
+All state lives in:
+- `~/.clawdbot/` — config, credentials, session data
+- `~/clawd/` — workspace (SOUL.md, memory, artifacts)
+
+Keep the VM **stateful**. Back up periodically:
+```bash
+tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
+```
+
+---
+
+## Cost
+
+exe.dev pricing varies. Check [exe.dev](https://exe.dev) for current rates.
+
+| Provider | Plan | Specs | Price/mo | Notes |
+|----------|------|-------|----------|-------|
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity |
+| Hetzner | CX22 | 2 vCPU, 4GB RAM | ~$4 | Cheapest paid option |
+| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
+| **exe.dev** | **VM** | **Varies** | **Varies** | **Built-in HTTPS proxy** |
+
+---
+
+## Troubleshooting
+
+**Gateway won't start**
+
+```bash
+moltbot gateway status
+moltbot doctor --non-interactive
+```
+
+**nginx proxy issues**
+
+Verify the nginx config and restart:
+```bash
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+**Can't reach Control UI**
+
+Check that nginx is forwarding port 8000 to 18789 and the Gateway is running.
+
+---
+
+## See Also
+
+- [Channels](/channels)
+- [Gateway configuration](/gateway/configuration)

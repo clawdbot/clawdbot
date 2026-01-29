@@ -12,28 +12,26 @@ read_when:
 
 Run a persistent Moltbot Gateway on Oracle Cloud's **Always Free** ARM tier.
 
-Oracle’s free tier can be a great fit for Moltbot (especially if you already have an OCI account), but it comes with tradeoffs:
+Oracle's free tier can be a great fit for Moltbot (especially if you already have an OCI account), but it comes with tradeoffs:
 
 - ARM architecture (most things work, but some binaries may be x86-only)
 - Capacity and signup can be finicky
-
-## Cost Comparison (2026)
-
-| Provider | Plan | Specs | Price/mo | Notes |
-|----------|------|-------|----------|-------|
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity |
-| Hetzner | CX22 | 2 vCPU, 4GB RAM | ~ $4 | Cheapest paid option |
-| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
-| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
-| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
-
----
 
 ## Prerequisites
 
 - Oracle Cloud account ([signup](https://www.oracle.com/cloud/free/)) — see [community signup guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) if you hit issues
 - Tailscale account (free at [tailscale.com](https://tailscale.com))
 - ~30 minutes
+
+## Quick Path
+
+1) Create OCI ARM instance (VM.Standard.A1.Flex, Ubuntu 24.04)
+2) Connect via SSH and install Tailscale
+3) Install Moltbot via install script
+4) Configure Gateway with token auth + Tailscale Serve
+5) Lock down VCN security to Tailscale-only
+
+---
 
 ## 1) Create an OCI Instance
 
@@ -282,10 +280,19 @@ tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
 
 ---
 
+## Cost
+
+| Provider | Plan | Specs | Price/mo | Notes |
+|----------|------|-------|----------|-------|
+| **Oracle Cloud** | **Always Free ARM** | **up to 4 OCPU, 24GB RAM** | **$0** | **ARM, limited capacity** |
+| Hetzner | CX22 | 2 vCPU, 4GB RAM | ~$4 | Cheapest paid option |
+| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
+| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
+| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
+
+---
+
 ## See Also
 
-- [Gateway remote access](/gateway/remote) — other remote access patterns
-- [Tailscale integration](/gateway/tailscale) — full Tailscale docs
-- [Gateway configuration](/gateway/configuration) — all config options
-- [DigitalOcean guide](/platforms/digitalocean) — if you want paid + easier signup
-- [Hetzner guide](/platforms/hetzner) — Docker-based alternative
+- [Channels](/channels)
+- [Gateway configuration](/gateway/configuration)

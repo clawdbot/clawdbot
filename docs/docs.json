@@ -807,11 +807,19 @@
     },
     {
       "source": "/gcp",
-      "destination": "/platforms/gcp"
+      "destination": "/platforms/google-cloud"
     },
     {
       "source": "/gcp/",
-      "destination": "/platforms/gcp"
+      "destination": "/platforms/google-cloud"
+    },
+    {
+      "source": "/platforms/gcp",
+      "destination": "/platforms/google-cloud"
+    },
+    {
+      "source": "/platforms/gcp/",
+      "destination": "/platforms/google-cloud"
     }
   ],
   "navigation": {
@@ -1082,10 +1090,12 @@
           "platforms/android",
           "platforms/windows",
           "platforms/linux",
+          "platforms/digitalocean",
+          "platforms/exe-dev",
           "platforms/fly",
+          "platforms/google-cloud",
           "platforms/hetzner",
-          "platforms/gcp",
-          "platforms/exe-dev"
+          "platforms/oracle"
         ]
       },
       {

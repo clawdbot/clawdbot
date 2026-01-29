@@ -7,14 +7,14 @@ description: Deploy Moltbot on Fly.io
 
 **Goal:** Moltbot Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
 
-## What you need
+## Prerequisites
 
 - [flyctl CLI](https://fly.io/docs/hands-on/install-flyctl/) installed
 - Fly.io account (free tier works)
 - Model auth: Anthropic API key (or other provider keys)
 - Channel credentials: Discord bot token, Telegram token, etc.
 
-## Beginner quick path
+## Quick Path
 
 1. Clone repo → customize `fly.toml`
 2. Create app + volume → set secrets
@@ -456,6 +456,22 @@ The ngrok tunnel runs inside the container and provides a public webhook URL wit
 - Persistent data lives on the volume at `/data`
 - Signal requires Java + signal-cli; use a custom image and keep memory at 2GB+.
 
+## Persistence
+
+All state lives on the mounted volume at `/data`:
+- `moltbot.json` — config
+- Credentials and session data
+- Agent workspace
+
+Back up periodically:
+```bash
+fly ssh console --command "tar -czvf /tmp/backup.tar.gz /data"
+fly sftp shell
+> get /tmp/backup.tar.gz ./moltbot-backup.tar.gz
+```
+
+---
+
 ## Cost
 
 With the recommended config (`shared-cpu-2x`, 2GB RAM):
@@ -463,3 +479,10 @@ With the recommended config (`shared-cpu-2x`, 2GB RAM):
 - Free tier includes some allowance
 
 See [Fly.io pricing](https://fly.io/docs/about/pricing/) for details.
+
+---
+
+## See Also
+
+- [Channels](/channels)
+- [Gateway configuration](/gateway/configuration)

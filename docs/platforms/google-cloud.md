@@ -1,12 +1,12 @@
 ---
-summary: "Run Moltbot Gateway 24/7 on a GCP Compute Engine VM (Docker) with durable state"
+summary: "Run Moltbot Gateway 24/7 on a Google Cloud Compute Engine VM (Docker) with durable state"
 read_when:
-  - You want Moltbot running 24/7 on GCP
+  - You want Moltbot running 24/7 on Google Cloud
   - You want a production-grade, always-on Gateway on your own VM
   - You want full control over persistence, binaries, and restart behavior
 ---
 
-# Moltbot on GCP Compute Engine (Docker, Production VPS Guide)
+# Moltbot on Google Cloud (Docker, Production VPS Guide)
 
 ## Goal
 
@@ -34,7 +34,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
-## Quick path (experienced operators)
+## Quick Path
 
 1) Create GCP project + enable Compute Engine API
 2) Create Compute Engine VM (e2-small, Debian 12, 20GB)
@@ -47,9 +47,9 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
-## What you need
+## Prerequisites
 
-- GCP account (free tier eligible for e2-micro)
+- Google Cloud account (free tier eligible for e2-micro)
 - gcloud CLI installed (or use Cloud Console)
 - SSH access from your laptop
 - Basic comfort with SSH + copy/paste
@@ -398,7 +398,7 @@ Paste your gateway token.
 
 ---
 
-## What persists where (source of truth)
+## Persistence
 
 Moltbot runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
@@ -428,6 +428,20 @@ git pull
 docker compose build
 docker compose up -d
 ```
+
+---
+
+## Cost
+
+| Provider | Plan | Specs | Price/mo | Notes |
+|----------|------|-------|----------|-------|
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity |
+| Hetzner | CX22 | 2 vCPU, 4GB RAM | ~$4 | Cheapest paid option |
+| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
+| **Google Cloud** | **e2-small** | **2 vCPU, 2GB RAM** | **~$12/mo** | **Recommended** |
+| Google Cloud | e2-micro | 2 vCPU (shared), 1GB RAM | Free tier eligible | May OOM under load |
+
+Pricing varies by region. The e2-micro is part of the [GCP Free Tier](https://cloud.google.com/free) but may struggle under load.
 
 ---
 
@@ -491,8 +505,7 @@ See https://cloud.google.com/iam/docs/understanding-roles for IAM role details.
 
 ---
 
-## Next steps
+## See Also
 
-- Set up messaging channels: [Channels](/channels)
-- Pair local devices as nodes: [Nodes](/nodes)
-- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- [Channels](/channels)
+- [Gateway configuration](/gateway/configuration)

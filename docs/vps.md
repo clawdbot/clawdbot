@@ -16,7 +16,7 @@ deployments work at a high level.
 - **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
 - **Fly.io**: [Fly.io](/platforms/fly)
 - **Hetzner (Docker)**: [Hetzner](/platforms/hetzner)
-- **GCP (Compute Engine)**: [GCP](/platforms/gcp)
+- **Google Cloud (Compute Engine)**: [Google Cloud](/platforms/google-cloud)
 - **exe.dev** (VM + HTTPS proxy): [exe.dev](/platforms/exe-dev)
 - **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
   https://x.com/techfrenAJ/status/2014934471095812547

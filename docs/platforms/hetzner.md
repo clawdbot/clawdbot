@@ -33,7 +33,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
-## Quick path (experienced operators)
+## Quick Path
 
 1) Provision Hetzner VPS  
 2) Install Docker  
@@ -46,7 +46,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
-## What you need
+## Prerequisites
 
 - Hetzner VPS with root access  
 - SSH access from your laptop  
@@ -306,7 +306,7 @@ Paste your gateway token.
 
 ---
 
-## What persists where (source of truth)
+## Persistence
 
 Moltbot runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
@@ -323,3 +323,51 @@ All long-lived state must survive restarts, rebuilds, and reboots.
 | Node runtime | Container filesystem | Docker image | Rebuilt every image build |
 | OS packages | Container filesystem | Docker image | Do not install at runtime |
 | Docker container | Ephemeral | Restartable | Safe to destroy |
+
+---
+
+## Cost
+
+| Provider | Plan | Specs | Price/mo | Notes |
+|----------|------|-------|----------|-------|
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity |
+| **Hetzner** | **CX22** | **2 vCPU, 4GB RAM** | **~$4** | **Cheapest paid option** |
+| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
+| Google Cloud | e2-small | 2 vCPU, 2GB RAM | ~$12/mo | Free tier eligible (e2-micro) |
+
+Hetzner offers excellent price/performance for VPS hosting.
+
+---
+
+## Troubleshooting
+
+**Gateway won't start**
+
+```bash
+docker compose logs -f moltbot-gateway
+```
+
+Check for port conflicts or missing environment variables.
+
+**Out of memory (OOM)**
+
+If the container keeps restarting, increase RAM or add swap:
+
+```bash
+fallocate -l 2G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+**SSH connection issues**
+
+Verify your SSH key is added to the VPS and firewall allows port 22.
+
+---
+
+## See Also
+
+- [Channels](/channels)
+- [Gateway configuration](/gateway/configuration)

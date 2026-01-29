@@ -11,30 +11,22 @@ read_when:
 
 Run a persistent Moltbot Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
-If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
-
-## Cost Comparison (2026)
-
-| Provider | Plan | Specs | Price/mo | Notes |
-|----------|------|-------|----------|-------|
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity / signup quirks |
-| Hetzner | CX22 | 2 vCPU, 4GB RAM | €3.79 (~$4) | Cheapest paid option |
-| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
-| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
-| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
-
-**Picking a provider:**
-- DigitalOcean: simplest UX + predictable setup (this guide)
-- Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
-- Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
-
----
+If you want a $0/month option and don't mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
 
 ## Prerequisites
 
 - DigitalOcean account ([signup with $200 free credit](https://m.do.co/c/signup))
 - SSH key pair (or willingness to use password auth)
 - ~20 minutes
+
+## Quick Path
+
+1) Create Droplet (Ubuntu 24.04, $6/mo plan)
+2) SSH in and install Node.js + Moltbot
+3) Run `moltbot onboard --install-daemon`
+4) Access via SSH tunnel or Tailscale
+
+---
 
 ## 1) Create a Droplet
 
@@ -190,6 +182,23 @@ tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
 
 ---
 
+## Cost
+
+| Provider | Plan | Specs | Price/mo | Notes |
+|----------|------|-------|----------|-------|
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity / signup quirks |
+| Hetzner | CX22 | 2 vCPU, 4GB RAM | ~$4 | Cheapest paid option |
+| **DigitalOcean** | **Basic** | **1 vCPU, 1GB RAM** | **$6** | **Easy UI, good docs** |
+| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
+| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
+
+**Picking a provider:**
+- DigitalOcean: simplest UX + predictable setup (this guide)
+- Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
+- Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
+
+---
+
 ## Oracle Cloud Free Alternative
 
 Oracle Cloud offers **Always Free** ARM instances that are significantly more powerful than any paid option here — for $0/month.
@@ -237,7 +246,5 @@ free -h
 
 ## See Also
 
-- [Hetzner guide](/platforms/hetzner) — cheaper, more powerful
-- [Docker install](/install/docker) — containerized setup
-- [Tailscale](/gateway/tailscale) — secure remote access
-- [Configuration](/gateway/configuration) — full config reference
+- [Channels](/channels)
+- [Gateway configuration](/gateway/configuration)
