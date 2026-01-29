@@ -98,6 +98,7 @@ export function resolveMoltbotMetadata(
       always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
       emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
       homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
+      repository: typeof metadataObj.repository === "string" ? metadataObj.repository : undefined,
       skillKey: typeof metadataObj.skillKey === "string" ? metadataObj.skillKey : undefined,
       primaryEnv: typeof metadataObj.primaryEnv === "string" ? metadataObj.primaryEnv : undefined,
       os: osRaw.length > 0 ? osRaw : undefined,

@@ -22,6 +22,8 @@ export type MoltbotSkillMetadata = {
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;
+  /** URL to the source repository (e.g., GitHub) for transparency and auditability. */
+  repository?: string;
   os?: string[];
   requires?: {
     bins?: string[];

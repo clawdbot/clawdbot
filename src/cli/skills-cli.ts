@@ -84,6 +84,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         source: s.source,
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
+        repository: s.repository,
         missing: s.missing,
       })),
     };
@@ -180,6 +181,9 @@ export function formatSkillInfo(
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
   if (skill.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${skill.homepage}`);
+  }
+  if (skill.repository) {
+    lines.push(`${theme.muted("  Repository:")} ${skill.repository}`);
   }
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
