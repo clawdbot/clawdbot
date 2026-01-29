@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ((BASH_VERSINFO[0] < 4)); then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    echo "Bash 4+ required. macOS ships with Bash 3.2." >&2
+    echo "Install via: brew install bash" >&2
+    echo "Then run: /opt/homebrew/bin/bash $0" >&2
+  else
+    echo "Bash 4+ required (current: ${BASH_VERSION})" >&2
+  fi
+  exit 1
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
