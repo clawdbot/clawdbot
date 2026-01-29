@@ -13,6 +13,7 @@ import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
 import {
   describeReplyContext,
+  extractForwardingInfo,
   extractLocationData,
   extractMediaPlaceholder,
   extractMentionedJids,
@@ -222,6 +223,16 @@ export async function monitorWebInbox(options: {
         if (!body) continue;
       }
       const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+      const forwardingInfo = extractForwardingInfo(msg.message as proto.IMessage | undefined);
+
+      // Add forwarding tag to body if message is forwarded
+      if (forwardingInfo.isForwarded) {
+        const forwardTag =
+          forwardingInfo.forwardingScore && forwardingInfo.forwardingScore >= 5
+            ? "[forwarded many times]"
+            : "[forwarded]";
+        body = `${forwardTag} ${body}`;
+      }
 
       let mediaPath: string | undefined;
       let mediaType: string | undefined;
@@ -290,6 +301,8 @@ export async function monitorWebInbox(options: {
         groupSubject,
         groupParticipants,
         mentionedJids: mentionedJids ?? undefined,
+        isForwarded: forwardingInfo.isForwarded,
+        forwardingScore: forwardingInfo.forwardingScore,
         selfJid,
         selfE164,
         location: location ?? undefined,

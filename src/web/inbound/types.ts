@@ -29,6 +29,8 @@ export type WebInboundMessage = {
   groupSubject?: string;
   groupParticipants?: string[];
   mentionedJids?: string[];
+  isForwarded?: boolean;
+  forwardingScore?: number;
   selfJid?: string | null;
   selfE164?: string | null;
   location?: NormalizedLocation;

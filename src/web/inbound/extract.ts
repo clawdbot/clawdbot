@@ -14,7 +14,9 @@ function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | un
   return normalized as proto.IMessage | undefined;
 }
 
-function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
+export function extractContextInfo(
+  message: proto.IMessage | undefined,
+): proto.IContextInfo | undefined {
   if (!message) return undefined;
   const contentType = getContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
@@ -44,6 +46,22 @@ function extractContextInfo(message: proto.IMessage | undefined): proto.IContext
     if (candidateContext) return candidateContext;
   }
   return undefined;
+}
+
+export interface ForwardingInfo {
+  isForwarded: boolean;
+  forwardingScore?: number;
+}
+
+export function extractForwardingInfo(rawMessage: proto.IMessage | undefined): ForwardingInfo {
+  const message = unwrapMessage(rawMessage);
+  if (!message) return { isForwarded: false };
+  const contextInfo = extractContextInfo(message);
+  if (!contextInfo) return { isForwarded: false };
+  return {
+    isForwarded: contextInfo.isForwarded ?? false,
+    forwardingScore: contextInfo.forwardingScore ?? undefined,
+  };
 }
 
 export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
