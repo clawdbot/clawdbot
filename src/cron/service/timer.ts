@@ -79,8 +79,9 @@ export async function executeJob(
     job.state.lastDurationMs = Math.max(0, endedAt - startedAt);
     job.state.lastError = err;
 
-    const shouldDelete =
-      job.schedule.kind === "at" && status === "ok" && job.deleteAfterRun === true;
+    // deleteAfterRun: true means "delete after execution regardless of outcome"
+    // This prevents infinite loops when skipped/failed jobs keep their past nextRunAtMs.
+    const shouldDelete = job.schedule.kind === "at" && job.deleteAfterRun === true;
 
     if (!shouldDelete) {
       if (job.schedule.kind === "at" && status === "ok") {
