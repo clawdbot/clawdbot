@@ -496,15 +496,27 @@ export async function runHeartbeatOnce(opts: {
   // If so, use a specialized prompt that instructs the model to relay the result
   // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
   const isExecEvent = opts.reason === "exec-event";
-  const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
+  // Check if this is a cron job system event (not a periodic heartbeat).
+  // Cron jobs enqueue system events before calling runHeartbeatOnce.
+  const isCronEvent = typeof opts.reason === "string" && opts.reason.startsWith("cron:");
+  // Always peek system events for cron and exec events to determine prompt type.
+  const pendingEvents = isExecEvent || isCronEvent ? peekSystemEvents(sessionKey) : [];
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
+  // Cron system events should NOT get the heartbeat prompt - the system event IS the prompt.
+  // Only periodic heartbeats (reason: "interval" or no cron prefix) get the heartbeat prompt.
+  const hasCronSystemEvents = isCronEvent && pendingEvents.length > 0;
 
-  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
+  // For cron events with pending system events, use the system event text directly
+  // (without appending the heartbeat prompt). The system event IS the prompt.
+  const cronEventBody = hasCronSystemEvents ? pendingEvents.join("\n\n") : null;
+  const prompt = hasExecCompletion
+    ? EXEC_EVENT_PROMPT
+    : (cronEventBody ?? resolveHeartbeatPrompt(cfg, heartbeat));
   const ctx = {
     Body: prompt,
     From: sender,
     To: sender,
-    Provider: hasExecCompletion ? "exec-event" : "heartbeat",
+    Provider: hasExecCompletion ? "exec-event" : hasCronSystemEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
@@ -586,7 +598,19 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    // For cron system events, don't skip even if response contains HEARTBEAT_OK.
+    // The agent wasn't asked to reply with HEARTBEAT_OK - if they do, it's just incidental text.
+    // Preserve the original reply text for cron events when token stripping would empty it.
+    const cronFallbackText =
+      hasCronSystemEvents && !normalized.text.trim() && replyPayload.text?.trim()
+        ? replyPayload.text.trim()
+        : null;
+    if (cronFallbackText) {
+      normalized.text = cronFallbackText;
+      normalized.shouldSkip = false;
+    }
+    const shouldSkipMain =
+      normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion && !hasCronSystemEvents;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
