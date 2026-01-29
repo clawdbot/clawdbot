@@ -14,10 +14,14 @@ function extractToolCallsFromAssistant(
   const toolCalls: ToolCallLike[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
+    const rec = block as { type?: unknown; id?: unknown; name?: unknown; partialJson?: unknown };
     if (typeof rec.id !== "string" || !rec.id) continue;
 
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
+      // Skip incomplete tool calls that have partialJson (indicates streaming error mid-parse)
+      if (rec.partialJson !== undefined) {
+        continue;
+      }
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
@@ -60,6 +64,46 @@ export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMes
   return repairToolUseResultPairing(messages).messages;
 }
 
+/**
+ * Remove incomplete/partial tool calls from assistant message content.
+ * These occur when streaming fails mid-tool-call (e.g., JSON parse errors).
+ * Keeping them causes orphan tool_result errors with the API since the
+ * tool_use block is malformed but a synthetic tool_result gets inserted.
+ */
+function stripIncompleteToolCalls(
+  assistant: Extract<AgentMessage, { role: "assistant" }>,
+): Extract<AgentMessage, { role: "assistant" }> {
+  const content = assistant.content;
+  if (!Array.isArray(content)) return assistant;
+
+  // Check if this is an error response - if so, filter out incomplete tool calls
+  const rec = assistant as { stopReason?: unknown; errorMessage?: unknown };
+  const isErrorResponse = rec.stopReason === "error" || rec.errorMessage !== undefined;
+  if (!isErrorResponse) return assistant;
+
+  const filteredContent = content.filter((block) => {
+    if (!block || typeof block !== "object") return true;
+    const blockRec = block as { type?: unknown; partialJson?: unknown };
+    // Remove tool calls that have partialJson (incomplete parsing)
+    if (
+      (blockRec.type === "toolCall" || blockRec.type === "toolUse" || blockRec.type === "functionCall") &&
+      blockRec.partialJson !== undefined
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  // If nothing changed, return original
+  if (filteredContent.length === content.length) return assistant;
+
+  // Return a new message with filtered content
+  return {
+    ...assistant,
+    content: filteredContent,
+  } as Extract<AgentMessage, { role: "assistant" }>;
+}
+
 export type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
@@ -72,6 +116,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
   // displaced (e.g. after user turns) or duplicated. Repair by:
+  // - removing incomplete tool calls from error responses (prevents orphan tool_results)
   // - moving matching toolResult messages directly after their assistant toolCall turn
   // - inserting synthetic error toolResults for missing ids
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
@@ -115,10 +160,14 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       continue;
     }
 
-    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    // Strip incomplete tool calls from error responses before processing
+    const assistant = stripIncompleteToolCalls(msg as Extract<AgentMessage, { role: "assistant" }>);
+    if (assistant !== msg) {
+      changed = true;
+    }
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
-      out.push(msg);
+      out.push(assistant);
       continue;
     }
 
@@ -163,7 +212,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       }
     }
 
-    out.push(msg);
+    out.push(assistant);
 
     if (spanResultsById.size > 0 && remainder.length > 0) {
       moved = true;
