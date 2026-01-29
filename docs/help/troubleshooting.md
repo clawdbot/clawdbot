@@ -29,7 +29,7 @@ moltbot status --deep
 
 ### `moltbot: command not found`
 
-Almost always a Node/npm PATH issue. Start here:
+First try `clawdbot` (compatibility shim). If that also fails, it's almost always a Node/npm PATH issue. Start here:
 
 - [Install (Node/npm PATH sanity)](/install#nodejs--npm-path-sanity)
 

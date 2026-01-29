@@ -27,6 +27,8 @@ Next step (if you skipped onboarding):
 moltbot onboard --install-daemon
 ```
 
+**Troubleshooting**: If `moltbot` is not found, try `clawdbot` (compatibility shim) or see [PATH troubleshooting](/install/node).
+
 ## System requirements
 
 - **Node >=22**

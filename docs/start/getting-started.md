@@ -75,6 +75,8 @@ npm install -g moltbot@latest
 pnpm add -g moltbot@latest
 ```
 
+If `moltbot: command not found`, try `clawdbot` (compatibility shim) or see [PATH troubleshooting](/install/node).
+
 ## 2) Run the onboarding wizard (and install the service)
 
 ```bash

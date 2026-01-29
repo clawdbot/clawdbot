@@ -26,7 +26,7 @@ Windows (PowerShell) help:
 & ([scriptblock]::Create((iwr -useb https://molt.bot/install.ps1))) -?
 ```
 
-If the installer completes but `moltbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
+If the installer completes but `moltbot` is not found in a new terminal, try `clawdbot` (compatibility shim). If neither works, it's usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
 
 ## install.sh (recommended)
 

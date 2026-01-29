@@ -106,6 +106,7 @@ npm install -g moltbot@latest
 # or: pnpm add -g moltbot@latest
 
 # Onboard + install the service (launchd/systemd user service)
+# If "moltbot: command not found", try clawdbot (compatibility shim)
 moltbot onboard --install-daemon
 
 # Pair WhatsApp Web (shows QR)

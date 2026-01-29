@@ -50,7 +50,14 @@ moltbot onboard --install-daemon
 ```
 
 The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
-Legacy note: `clawdbot` remains available as a compatibility shim.
+
+Both `moltbot` and `clawdbot` should be available after a correct install. If `moltbot: command not found`, try:
+
+```bash
+clawdbot --version  # fallback compatibility shim
+```
+
+If neither works, see [PATH troubleshooting](https://docs.molt.bot/install/node).
 
 ## Quick start (TL;DR)
 
