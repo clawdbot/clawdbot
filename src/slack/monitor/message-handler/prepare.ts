@@ -437,7 +437,10 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
+  // Always use channel ID for replies - user:X triggers conversations.open which
+  // creates a bot↔user DM (App Home) instead of posting to the original channel.
+  // This broke @mentions in DMs between two other users. See #2412.
+  const slackTo = `channel:${message.channel}`;
 
   const channelDescription = [channelInfo?.topic, channelInfo?.purpose]
     .map((entry) => entry?.trim())
