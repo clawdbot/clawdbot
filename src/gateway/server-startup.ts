@@ -19,6 +19,8 @@ import type { loadMoltbotPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
+  type AddChatRunFn,
+  type BroadcastFn,
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
@@ -37,6 +39,8 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
+  addChatRun?: AddChatRunFn;
+  broadcast?: BroadcastFn;
 }) {
   // Start clawd browser control server (unless disabled via config).
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
@@ -152,7 +156,11 @@ export async function startGatewaySidecars(params: {
 
   if (shouldWakeFromRestartSentinel()) {
     setTimeout(() => {
-      void scheduleRestartSentinelWake({ deps: params.deps });
+      void scheduleRestartSentinelWake({
+        deps: params.deps,
+        addChatRun: params.addChatRun,
+        broadcast: params.broadcast,
+      });
     }, 750);
   }
 
