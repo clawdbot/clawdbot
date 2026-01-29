@@ -20,6 +20,7 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "nebius"
   | "qwen";
 
 export type AuthChoiceGroup = {
@@ -108,6 +109,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["zai-api-key"],
   },
   {
+    value: "nebius",
+    label: "Nebius",
+    hint: "Nebius Token Factory",
+    choices: ["nebius-api-key"],
+  },
+  {
     value: "opencode-zen",
     label: "OpenCode Zen",
     hint: "API key",
@@ -178,6 +185,11 @@ export function buildAuthChoiceOptions(params: {
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
   });
   options.push({ value: "minimax-api", label: "MiniMax M2.1" });
+  options.push({
+    value: "nebius-api-key",
+    label: "Nebius API key",
+    hint: "Nebius Token Factory)",
+  });
   options.push({
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",

@@ -27,6 +27,7 @@ export type AuthChoice =
   | "minimax"
   | "minimax-api"
   | "minimax-api-lightning"
+  | "nebius-api-key"
   | "opencode-zen"
   | "github-copilot"
   | "copilot-proxy"
@@ -68,6 +69,7 @@ export type OnboardOptions = {
   geminiApiKey?: string;
   zaiApiKey?: string;
   minimaxApiKey?: string;
+  nebiusApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
   opencodeZenApiKey?: string;

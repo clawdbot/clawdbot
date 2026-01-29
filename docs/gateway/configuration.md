@@ -2608,6 +2608,45 @@ Notes:
 - Override the agent config root with `CLAWDBOT_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
   if you want `models.json` stored elsewhere (default: `~/.clawdbot/agents/main/agent`).
 
+
+### Nebius (GLM 7 / GLM 5)
+
+Use Nebius via their OpenAI-compatible endpoint:
+
+```json5
+{
+  env: {
+    NEBIUS_API_KEY: "" },
+
+  agents: {
+    defaults: {
+      model: {
+        primary: "zai-org/GLM-4.7-FP8",
+        fallbacks: ["zai-org/GLM-4.5"]
+      },
+      models: {
+        "zai-org/GLM-4.7-FP8": { alias: "GLM 7 (Nebius)" },
+        "zai-org/GLM-4.5": { alias: "GLM 5 (Nebius)" }
+      }
+    }
+  },
+
+  models: {
+    mode: "merge",
+    providers: {
+      nebius: {
+        baseUrl: "https://api.tokenfactory.nebius.com/v1",
+        apiKey: "${NEBIUS_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "zai-org/GLM-4.7-FP8", name: "GLM 7 (Nebius)" },
+          { id: "zai-org/GLM-4.5", name: "GLM 5 (Nebius)" }
+        ]
+      }
+    }
+  }
+}
+
 ### `session`
 
 Controls session scoping, reset policy, reset triggers, and where the session store is written.
