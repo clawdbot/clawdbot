@@ -5,6 +5,12 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 import {
+  buildPollinationsModelDefinition,
+  POLLINATIONS_BASE_URL,
+  POLLINATIONS_DEFAULT_MODEL_REF,
+  POLLINATIONS_MODEL_CATALOG,
+} from "../agents/pollinations-models.js";
+import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
@@ -405,6 +411,81 @@ export function applyVeniceConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply Pollinations provider configuration without changing the default model.
+ */
+export function applyPollinationsProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[POLLINATIONS_DEFAULT_MODEL_REF] = {
+    ...models[POLLINATIONS_DEFAULT_MODEL_REF],
+    alias: models[POLLINATIONS_DEFAULT_MODEL_REF]?.alias ?? "Pollinations",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.pollinations;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const pollinationsModels = POLLINATIONS_MODEL_CATALOG.map(buildPollinationsModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...pollinationsModels.filter(
+      (model: any) => !existingModels.some((existing: any) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.pollinations = {
+    ...existingProviderRest,
+    baseUrl: POLLINATIONS_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : pollinationsModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Pollinations provider configuration AND set Pollinations as the default model.
+ */
+export function applyPollinationsConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyPollinationsProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: POLLINATIONS_DEFAULT_MODEL_REF,
         },
       },
     },

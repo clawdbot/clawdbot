@@ -23,6 +23,7 @@ export type AuthChoice =
   | "google-antigravity"
   | "google-gemini-cli"
   | "zai-api-key"
+  | "pollinations-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
@@ -70,6 +71,7 @@ export type OnboardOptions = {
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
+  pollinationsApiKey?: string;
   opencodeZenApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;

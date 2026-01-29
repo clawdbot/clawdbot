@@ -164,3 +164,15 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export async function setPollinationsApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "pollinations:default",
+    credential: {
+      type: "api_key",
+      provider: "pollinations",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
