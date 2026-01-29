@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
@@ -202,6 +203,15 @@ describe("canvas host", () => {
 
   it("serves the gateway-hosted A2UI scaffold", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-canvas-"));
+    const a2uiDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "a2ui");
+    const bundlePath = path.join(a2uiDir, "a2ui.bundle.js");
+    let wroteBundle = false;
+    try {
+      await fs.stat(bundlePath);
+    } catch {
+      await fs.writeFile(bundlePath, "window.moltbotA2UI = {};", "utf8");
+      wroteBundle = true;
+    }
 
     const server = await startCanvasHost({
       runtime: defaultRuntime,
@@ -227,6 +237,9 @@ describe("canvas host", () => {
     } finally {
       await server.close();
       await fs.rm(dir, { recursive: true, force: true });
+      if (wroteBundle) {
+        await fs.rm(bundlePath, { force: true });
+      }
     }
   });
 });
