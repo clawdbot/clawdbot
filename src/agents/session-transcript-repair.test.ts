@@ -110,3 +110,70 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 });
+
+import { sanitizeToolUseArgs } from "./session-transcript-repair.js";
+
+describe("sanitizeToolUseArgs", () => {
+  it("preserves valid objects in input/arguments", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "1", name: "tool", input: { key: "value" } }],
+      },
+    ] as any;
+    const out = sanitizeToolUseArgs(input);
+    expect((out[0].content[0] as any).input).toEqual({ key: "value" });
+    expect(out).toBe(input); // No change, referentially equal
+  });
+
+  it("parses valid JSON strings in input", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "1", name: "tool", input: '{"key": "value"}' }],
+      },
+    ] as any;
+    const out = sanitizeToolUseArgs(input);
+    expect((out[0].content[0] as any).input).toEqual({ key: "value" });
+    expect(out).not.toBe(input); // Changed
+  });
+
+  it("sanitizes invalid JSON strings in input", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "1", name: "tool", input: "{ bad json }" }],
+      },
+    ] as any;
+    const out = sanitizeToolUseArgs(input);
+    const block = out[0].content[0] as any;
+    expect(block.input).toEqual({});
+    expect(block._sanitized).toBe(true);
+    expect(block._originalInput).toBe("{ bad json }");
+  });
+
+  it("handles 'arguments' alias", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "1", name: "tool", arguments: '{"key": "val"}' }],
+      },
+    ] as any;
+    const out = sanitizeToolUseArgs(input);
+    const block = out[0].content[0] as any;
+    expect(block.arguments).toEqual({ key: "val" });
+  });
+
+  it("sanitizes invalid JSON in 'arguments' alias", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "1", name: "tool", arguments: "bad" }],
+      },
+    ] as any;
+    const out = sanitizeToolUseArgs(input);
+    const block = out[0].content[0] as any;
+    expect(block.arguments).toEqual({});
+    expect(block._sanitized).toBe(true);
+  });
+});

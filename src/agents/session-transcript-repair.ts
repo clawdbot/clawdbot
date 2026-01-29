@@ -56,8 +56,85 @@ function makeMissingToolResult(params: {
 
 export { makeMissingToolResult };
 
+export function sanitizeToolUseArgs(messages: AgentMessage[]): AgentMessage[] {
+  // Creates new message objects only when sanitization is needed; otherwise
+  // returns the original messages to avoid unnecessary copying, while guarding
+  // against corrupt JSON in tool arguments that could break the session.
+  const out: AgentMessage[] = [];
+  let changed = false;
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const content = msg.content;
+    const nextContent: any[] = [];
+    let msgChanged = false;
+
+    for (const block of content) {
+      const anyBlock = block as any;
+      if (
+        anyBlock &&
+        typeof anyBlock === "object" &&
+        (anyBlock.type === "toolUse" ||
+          anyBlock.type === "toolCall" ||
+          anyBlock.type === "functionCall")
+      ) {
+        const toolBlock = block as any;
+        // Handle both 'input' and 'arguments' fields (some providers use arguments)
+        const inputField =
+          "input" in toolBlock ? "input" : "arguments" in toolBlock ? "arguments" : null;
+
+        if (inputField && typeof toolBlock[inputField] === "string") {
+          try {
+            // Consistency: Always parse valid JSON strings into objects
+            const parsed = JSON.parse(toolBlock[inputField]);
+            nextContent.push({
+              ...toolBlock,
+              [inputField]: parsed,
+            });
+            msgChanged = true;
+          } catch {
+            // Invalid JSON found in tool args.
+            // Replace with empty object to prevent downstream crashes.
+            console.warn(
+              `[SessionRepair] Sanitized malformed JSON in tool use '${toolBlock.name || "unknown"}'. Original: ${toolBlock[inputField]}`,
+            );
+            nextContent.push({
+              ...toolBlock,
+              [inputField]: {},
+              _sanitized: true,
+              _originalInput: toolBlock[inputField],
+            });
+            msgChanged = true;
+          }
+        } else {
+          nextContent.push(block);
+        }
+      } else {
+        nextContent.push(block);
+      }
+    }
+
+    if (msgChanged) {
+      out.push({
+        ...msg,
+        content: nextContent,
+      } as AgentMessage);
+      changed = true;
+    } else {
+      out.push(msg);
+    }
+  }
+
+  return changed ? out : messages;
+}
+
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
-  return repairToolUseResultPairing(messages).messages;
+  const sanitized = sanitizeToolUseArgs(messages);
+  return repairToolUseResultPairing(sanitized).messages;
 }
 
 export type ToolUseRepairReport = {
