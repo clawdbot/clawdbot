@@ -348,12 +348,8 @@ export type ToolsConfig = {
       cacheTtlMinutes?: number;
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
-        /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
         apiKey?: string;
-        /** Base URL for API requests (defaults to OpenRouter: https://openrouter.ai/api/v1). */
-        baseUrl?: string;
-        /** Model to use (defaults to "perplexity/sonar-pro"). */
-        model?: string;
       };
     };
     fetch?: {

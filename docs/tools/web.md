@@ -1,16 +1,15 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter)"
+summary: "Web search + fetch tools (Perplexity Search API, Brave Search API)"
 read_when:
   - You want to enable web_search or web_fetch
-  - You need Brave Search API key setup
-  - You want to use Perplexity Sonar for web search
+  - You need Perplexity or Brave Search API key setup
 ---
 
 # Web tools
 
 Moltbot ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (direct or via OpenRouter).
+- `web_search` — Search the web using Perplexity Search API or Brave Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -19,21 +18,20 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 ## How it works
 
 - `web_search` calls your configured provider and returns results.
-  - **Brave** (default): returns structured results (title, URL, snippet).
-  - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
 
+See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-search) for provider-specific details.
+
 ## Choosing a search provider
 
-| Provider | Pros | Cons | API Key |
-|----------|------|------|---------|
-| **Brave** (default) | Fast, structured results, free tier | Traditional search results | `BRAVE_API_KEY` |
-| **Perplexity** | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| Provider                  | Pros                                                                                         | Cons                          | API Key                                        |
+|---------------------------|----------------------------------------------------------------------------------------------|-------------------------------|------------------------------------------------|
+| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction options; free credits for Moltbot users | —                             | Requires Perplexity API key `PERPLEXITY_API_KEY` |
+| **Brave Search API**      | Fast, structured results; free tier available                                                | Fewer filtering options       | Requires Brave API key `BRAVE_API_KEY`         |
 
-See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
 Set the provider in config:
 
@@ -42,63 +40,44 @@ Set the provider in config:
   tools: {
     web: {
       search: {
-        provider: "brave"  // or "perplexity"
+        provider: "perplexity"  // or "brave"
       }
     }
   }
 }
 ```
 
-Example: switch to Perplexity Sonar (direct API):
+## Setting up web search
 
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro"
-        }
-      }
-    }
-  }
-}
-```
+Use `moltbot configure --section web` to set up your API key and choose a provider.
 
-## Getting a Brave API key
+### Perplexity Search
+
+1) Create a Perplexity account at https://www.perplexity.ai/settings/api
+2) Generate an API key in the dashboard
+3) Run `moltbot configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
+
+Perplexity provides $5 in API credits on a monthly rolling basis to Perplexity Pro subscribers. Additionally, Perplexity provides complementary credits for Moltbot users.
+
+See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
+
+### Brave Search
 
 1) Create a Brave Search API account at https://brave.com/search/api/
-2) In the dashboard, choose the **Data for Search** plan (not “Data for AI”) and generate an API key.
+2) In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
 3) Run `moltbot configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
-Brave provides a free tier plus paid plans; check the Brave API portal for the
-current limits and pricing.
+Brave provides a free tier plus paid plans; check the Brave API portal for the current limits and pricing.
 
-### Where to set the key (recommended)
+### Where to store the key
 
-**Recommended:** run `moltbot configure --section web`. It stores the key in
-`~/.clawdbot/moltbot.json` under `tools.web.search.apiKey`.
+**Via config (recommended):** run `moltbot configure --section web`. It stores the key under `tools.web.search.perplexity.apiKey` or `tools.web.search.apiKey`.
 
-**Environment alternative:** set `BRAVE_API_KEY` in the Gateway process
-environment. For a gateway install, put it in `~/.clawdbot/.env` (or your
-service environment). See [Env vars](/help/faq#how-does-moltbot-load-environment-variables).
+**Via environment:** set `PERPLEXITY_API_KEY` or `BRAVE_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.clawdbot/.env` (or your service environment). See [Env vars](/help/faq#how-does-moltbot-load-environment-variables).
 
-## Using Perplexity (direct or via OpenRouter)
+### Config examples
 
-Perplexity Sonar models have built-in web search capabilities and return AI-synthesized
-answers with citations. You can use them via OpenRouter (no credit card required - supports
-crypto/prepaid).
-
-### Getting an OpenRouter API key
-
-1) Create an account at https://openrouter.ai/
-2) Add credits (supports crypto, prepaid, or credit card)
-3) Generate an API key in your account settings
-
-### Setting up Perplexity search
+**Perplexity Search:**
 
 ```json5
 {
@@ -108,12 +87,7 @@ crypto/prepaid).
         enabled: true,
         provider: "perplexity",
         perplexity: {
-          // API key (optional if OPENROUTER_API_KEY or PERPLEXITY_API_KEY is set)
-          apiKey: "sk-or-v1-...",
-          // Base URL (key-aware default if omitted)
-          baseUrl: "https://openrouter.ai/api/v1",
-          // Model (defaults to perplexity/sonar-pro)
-          model: "perplexity/sonar-pro"
+          apiKey: "pplx-..."  // optional if PERPLEXITY_API_KEY is set
         }
       }
     }
@@ -121,22 +95,21 @@ crypto/prepaid).
 }
 ```
 
-**Environment alternative:** set `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` in the Gateway
-environment. For a gateway install, put it in `~/.clawdbot/.env`.
+**Brave Search:**
 
-If no base URL is set, Moltbot chooses a default based on the API key source:
-
-- `PERPLEXITY_API_KEY` or `pplx-...` → `https://api.perplexity.ai`
-- `OPENROUTER_API_KEY` or `sk-or-...` → `https://openrouter.ai/api/v1`
-- Unknown key formats → OpenRouter (safe fallback)
-
-### Available Perplexity models
-
-| Model | Description | Best for |
-|-------|-------------|----------|
-| `perplexity/sonar` | Fast Q&A with web search | Quick lookups |
-| `perplexity/sonar-pro` (default) | Multi-step reasoning with web search | Complex questions |
-| `perplexity/sonar-reasoning-pro` | Chain-of-thought analysis | Deep research |
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "brave",
+        apiKey: "BSA..."  // optional if BRAVE_API_KEY is set
+      }
+    }
+  }
+}
+```
 
 ## web_search
 
@@ -147,7 +120,7 @@ Search the web using your configured provider.
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-  - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Perplexity**: `PERPLEXITY_API_KEY` or `tools.web.search.perplexity.apiKey`
 
 ### Config
 
@@ -169,12 +142,21 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-- `query` (required)
-- `count` (1–10; default from config)
-- `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
-- `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
-- `ui_lang` (optional): ISO language code for UI elements
-- `freshness` (optional, Brave only): filter by discovery time (`pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`)
+All parameters work for both Brave and Perplexity unless noted.
+
+| Parameter | Description |
+|-----------|-------------|
+| `query` | Search query (required) |
+| `count` | Results to return (1-10, default: 5) |
+| `country` | 2-letter ISO country code (e.g., "US", "DE") |
+| `language` | ISO 639-1 language code (e.g., "en", "de") |
+| `freshness` | Time filter: `day`, `week`, `month`, or `year` |
+| `date_after` | Results after this date (YYYY-MM-DD) |
+| `date_before` | Results before this date (YYYY-MM-DD) |
+| `ui_lang` | UI language code (Brave only) |
+| `domain_filter` | Domain allowlist/denylist array (Perplexity only) |
+| `max_tokens` | Total content budget, default 25000 (Perplexity only) |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only) |
 
 **Examples:**
 
@@ -182,23 +164,40 @@ Search the web using your configured provider.
 // German-specific search
 await web_search({
   query: "TV online schauen",
-  count: 10,
   country: "DE",
-  search_lang: "de"
-});
-
-// French search with French UI
-await web_search({
-  query: "actualités",
-  country: "FR",
-  search_lang: "fr",
-  ui_lang: "fr"
+  language: "de"
 });
 
 // Recent results (past week)
 await web_search({
   query: "TMBG interview",
-  freshness: "pw"
+  freshness: "week"
+});
+
+// Date range search
+await web_search({
+  query: "AI developments",
+  date_after: "2024-01-01",
+  date_before: "2024-06-30"
+});
+
+// Domain filtering (Perplexity only)
+await web_search({
+  query: "climate research",
+  domain_filter: ["nature.com", "science.org", ".edu"]
+});
+
+// Exclude domains (Perplexity only)
+await web_search({
+  query: "product reviews",
+  domain_filter: ["-reddit.com", "-pinterest.com"]
+});
+
+// More content extraction (Perplexity only)
+await web_search({
+  query: "detailed AI research",
+  max_tokens: 50000,
+  max_tokens_per_page: 4096
 });
 ```
 
