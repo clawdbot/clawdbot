@@ -10,6 +10,10 @@ export type CronEvent = {
   error?: string;
   summary?: string;
   nextRunAtMs?: number;
+  /** Delivery channel from the job payload (for agentTurn jobs). */
+  channel?: string;
+  /** Delivery target from the job payload (for agentTurn jobs). */
+  to?: string;
 };
 
 export type Logger = {

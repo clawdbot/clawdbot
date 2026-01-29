@@ -240,6 +240,10 @@ export const CronRunLogEntrySchema = Type.Object(
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    /** Delivery channel from the job payload (for agentTurn jobs). */
+    channel: Type.Optional(Type.String()),
+    /** Delivery target from the job payload (for agentTurn jobs). */
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

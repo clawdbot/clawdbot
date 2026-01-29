@@ -103,6 +103,9 @@ export async function executeJob(
       runAtMs: startedAt,
       durationMs: job.state.lastDurationMs,
       nextRunAtMs: job.state.nextRunAtMs,
+      // Include delivery target from payload for agentTurn jobs
+      channel: job.payload.kind === "agentTurn" ? job.payload.channel : undefined,
+      to: job.payload.kind === "agentTurn" ? job.payload.to : undefined,
     });
 
     if (shouldDelete && state.store) {
