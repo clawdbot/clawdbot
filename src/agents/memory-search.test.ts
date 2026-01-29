@@ -82,6 +82,29 @@ describe("memory search config", () => {
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
 
+  it("merges extra memory paths from defaults and overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            extraPaths: ["/shared/notes", " docs "],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              extraPaths: ["/shared/notes", "../team-notes"],
+            },
+          },
+        ],
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
+  });
+
   it("includes batch defaults for openai without remote overrides", () => {
     const cfg = {
       agents: {

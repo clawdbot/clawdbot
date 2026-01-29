@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -35,9 +36,9 @@ import {
   hashText,
   isMemoryPath,
   listMemoryFiles,
+  normalizeExtraMemoryPaths,
   type MemoryChunk,
   type MemoryFileEntry,
-  normalizeRelPath,
   parseEmbedding,
 } from "./internal.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
@@ -396,13 +397,52 @@ export class MemoryIndexManager {
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
-    const relPath = normalizeRelPath(params.relPath);
-    if (!relPath || !isMemoryPath(relPath)) {
+    const rawPath = params.relPath.trim();
+    if (!rawPath) {
       throw new Error("path required");
     }
-    const absPath = path.resolve(this.workspaceDir, relPath);
-    if (!absPath.startsWith(this.workspaceDir)) {
-      throw new Error("path escapes workspace");
+    const absPath = path.isAbsolute(rawPath)
+      ? path.resolve(rawPath)
+      : path.resolve(this.workspaceDir, rawPath);
+    const relPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
+    const inWorkspace =
+      relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
+    const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
+    let allowedAdditional = false;
+    if (!allowedWorkspace && this.settings.extraPaths.length > 0) {
+      const additionalPaths = normalizeExtraMemoryPaths(
+        this.workspaceDir,
+        this.settings.extraPaths,
+      );
+      for (const additionalPath of additionalPaths) {
+        try {
+          const stat = await fs.lstat(additionalPath);
+          if (stat.isSymbolicLink()) continue;
+          if (stat.isDirectory()) {
+            if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
+              allowedAdditional = true;
+              break;
+            }
+            continue;
+          }
+          if (stat.isFile()) {
+            if (absPath === additionalPath && absPath.endsWith(".md")) {
+              allowedAdditional = true;
+              break;
+            }
+          }
+        } catch {}
+      }
+    }
+    if (!allowedWorkspace && !allowedAdditional) {
+      throw new Error("path required");
+    }
+    if (!absPath.endsWith(".md")) {
+      throw new Error("path required");
+    }
+    const stat = await fs.lstat(absPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("path required");
     }
     const content = await fs.readFile(absPath, "utf-8");
     if (!params.from && !params.lines) {
@@ -425,6 +465,7 @@ export class MemoryIndexManager {
     model: string;
     requestedProvider: string;
     sources: MemorySource[];
+    extraPaths: string[];
     sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
     cache?: { enabled: boolean; entries?: number; maxEntries?: number };
     fts?: { enabled: boolean; available: boolean; error?: string };
@@ -498,6 +539,7 @@ export class MemoryIndexManager {
       model: this.provider.model,
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
+      extraPaths: this.settings.extraPaths,
       sourceCounts,
       cache: this.cache.enabled
         ? {
@@ -769,11 +811,23 @@ export class MemoryIndexManager {
 
   private ensureWatcher() {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) return;
-    const watchPaths = [
+    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths)
+      .map((entry) => {
+        try {
+          const stat = fsSync.lstatSync(entry);
+          return stat.isSymbolicLink() ? null : entry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is string => Boolean(entry));
+    const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
+      path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory"),
-    ];
-    this.watcher = chokidar.watch(watchPaths, {
+      ...additionalPaths,
+    ]);
+    this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
@@ -975,7 +1029,7 @@ export class MemoryIndexManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await listMemoryFiles(this.workspaceDir);
+    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
     );

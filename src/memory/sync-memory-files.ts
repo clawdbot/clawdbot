@@ -14,6 +14,7 @@ type ProgressState = {
 
 export async function syncMemoryFiles(params: {
   workspaceDir: string;
+  extraPaths?: string[];
   db: DatabaseSync;
   needsFullReindex: boolean;
   progress?: ProgressState;
@@ -27,7 +28,7 @@ export async function syncMemoryFiles(params: {
   ftsAvailable: boolean;
   model: string;
 }) {
-  const files = await listMemoryFiles(params.workspaceDir);
+  const files = await listMemoryFiles(params.workspaceDir, params.extraPaths);
   const fileEntries = await Promise.all(
     files.map(async (file) => buildFileEntry(file, params.workspaceDir)),
   );

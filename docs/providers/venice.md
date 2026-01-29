@@ -4,9 +4,9 @@ read_when:
   - You want privacy-focused inference in Moltbot
   - You want Venice AI setup guidance
 ---
-# Venice AI (Venius highlight)
+# Venice AI (Venice highlight)
 
-**Venius** is our highlight Venice setup for privacy-first inference with optional anonymized access to proprietary models.
+**Venice** is our highlight Venice setup for privacy-first inference with optional anonymized access to proprietary models.
 
 Venice AI provides privacy-focused AI inference with support for uncensored models and access to major proprietary models through their anonymized proxy. All inference is private by default—no training on your data, no logging.
 

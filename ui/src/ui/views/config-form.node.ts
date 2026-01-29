@@ -260,6 +260,11 @@ function renderTextInput(params: {
             }
             onPatch(path, raw);
           }}
+          @change=${(e: Event) => {
+            if (inputType === "number") return;
+            const raw = (e.target as HTMLInputElement).value;
+            onPatch(path, raw.trim());
+          }}
         />
         ${schema.default !== undefined ? html`
           <button
