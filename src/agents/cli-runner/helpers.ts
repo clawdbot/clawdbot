@@ -445,7 +445,11 @@ export function buildCliArgs(params: {
     }
   }
   if (params.promptArg !== undefined) {
-    args.push(params.promptArg);
+    if (params.backend.promptArg) {
+      args.push(params.backend.promptArg, params.promptArg);
+    } else {
+      args.push(params.promptArg);
+    }
   }
   return args;
 }

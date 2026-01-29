@@ -50,21 +50,21 @@ moltbot models auth login-github-copilot --yes
 ## Set a default model
 
 ```bash
-moltbot models set github-copilot/gpt-4o
+moltbot models set github-copilot/gpt-4.1
 ```
 
 ### Config snippet
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "github-copilot/gpt-4o" } } }
+  agents: { defaults: { model: { primary: "github-copilot/gpt-4.1" } } }
 }
 ```
 
 ## Notes
 
 - Requires an interactive TTY; run it directly in a terminal.
-- Copilot model availability depends on your plan; if a model is rejected, try
-  another ID (for example `github-copilot/gpt-4.1`).
+- `gpt-4.1` is available on the free GitHub tier. Other models like `gpt-4o` and
+  Claude models require a paid GitHub Copilot subscription.
 - The login stores a GitHub token in the auth profile store and exchanges it for a
   Copilot API token when Moltbot runs.

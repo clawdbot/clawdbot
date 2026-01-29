@@ -5,6 +5,7 @@ docker-compose.extra.yml
 dist
 *.bun-build
 pnpm-lock.yaml
+package-lock.json
 bun.lock
 bun.lockb
 coverage

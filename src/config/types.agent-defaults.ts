@@ -87,6 +87,8 @@ export type CliBackendConfig = {
   imageArg?: string;
   /** How to pass multiple images. */
   imageMode?: "repeat" | "list";
+  /** Flag used to pass the prompt (e.g. -p, --prompt). */
+  promptArg?: string;
   /** Serialize runs for this CLI. */
   serialize?: boolean;
 };

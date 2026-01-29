@@ -29,6 +29,7 @@ const DEFAULT_CODEX_ARGS = [
   "read-only",
   "--skip-git-repo-check",
 ];
+const DEFAULT_COPILOT_CLI_ARGS = ["-p"];
 const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
 
 function randomImageProbeCode(len = 6): string {
@@ -216,7 +217,9 @@ describeLive("gateway live (cli backend)", () => {
         ? { command: "claude", args: DEFAULT_CLAUDE_ARGS }
         : providerId === "codex-cli"
           ? { command: "codex", args: DEFAULT_CODEX_ARGS }
-          : null;
+          : providerId === "copilot-cli"
+            ? { command: "copilot", args: DEFAULT_COPILOT_CLI_ARGS }
+            : null;
 
     const cliCommand = process.env.CLAWDBOT_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
     if (!cliCommand) {
