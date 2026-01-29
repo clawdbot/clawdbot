@@ -250,10 +250,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // If E2EE is enabled, trigger device verification
   if (auth.encryption && client.crypto) {
     try {
-      // Request verification from other sessions
-      const verificationRequest = await client.crypto.requestOwnUserVerification();
-      if (verificationRequest) {
-        logger.info("matrix: device verification requested - please verify in another client");
+      // Request verification from other sessions (if supported by SDK)
+      if (typeof client.crypto.requestOwnUserVerification === "function") {
+        const verificationRequest = await client.crypto.requestOwnUserVerification();
+        if (verificationRequest) {
+          logger.info("matrix: device verification requested - please verify in another client");
+        }
+      } else {
+        logger.debug("matrix: device verification not supported by current crypto SDK version");
       }
     } catch (err) {
       logger.debug({ error: String(err) }, "Device verification request failed (may already be verified)");
