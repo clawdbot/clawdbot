@@ -124,6 +124,32 @@ Moltbot ships with the pi‑ai catalog. These providers require **no**
 Use `models.providers` (or `models.json`) to add **custom** providers or
 OpenAI/Anthropic‑compatible proxies.
 
+### Modelverse
+
+Modelverse (UCloud) provides an OpenAI-compatible API for multiple model families.
+
+- Provider: `modelverse`
+- Auth: `MODELVERSE_API_KEY`
+- Base URL: `https://api.modelverse.cn/v1`
+- Example model: `modelverse/gpt-5.2`
+- CLI: `clawdbot onboard --auth-choice modelverse-api-key`
+
+Model refs:
+- `modelverse/gpt-5.2`
+- `modelverse/claude-opus-4-5-20251101`
+- `modelverse/claude-sonnet-4-5-20250929`
+- `modelverse/deepseek-ai/DeepSeek-V3.2`
+- `modelverse/deepseek-ai/DeepSeek-R1`
+- `modelverse/deepseek-ai/DeepSeek-V3-0324`
+- `modelverse/openai/gpt-4o`
+- `modelverse/zai-org/glm-4.7`
+- `modelverse/gemini-3-flash-preview`
+- `modelverse/gemini-3-pro-preview`
+- `modelverse/gemini-2.5-flash`
+- `modelverse/gemini-2.5-pro`
+
+See [/providers/modelverse](/providers/modelverse).
+
 ### Moonshot AI (Kimi)
 
 Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:

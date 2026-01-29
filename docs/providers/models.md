@@ -41,6 +41,7 @@ See [Venice AI](/providers/venice).
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
+- [Modelverse (OpenAI-compatible)](/providers/modelverse)
 - [Venius (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/bedrock)
 

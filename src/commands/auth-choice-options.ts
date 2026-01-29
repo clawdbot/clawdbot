@@ -9,6 +9,7 @@ export type AuthChoiceOption = {
 
 export type AuthChoiceGroupId =
   | "openai"
+  | "modelverse"
   | "anthropic"
   | "google"
   | "copilot"
@@ -40,6 +41,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "OpenAI",
     hint: "Codex OAuth + API key",
     choices: ["openai-codex", "openai-api-key"],
+  },
+  {
+    value: "modelverse",
+    label: "Modelverse",
+    hint: "MODELVERSE-API-KEY",
+    choices: ["modelverse-api-key"],
   },
   {
     value: "anthropic",
@@ -134,6 +141,11 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "chutes", label: "Chutes (OAuth)" });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
+  options.push({
+    value: "modelverse-api-key",
+    label: "Modelverse API key",
+    hint: "OpenAI-compatible proxy (api.modelverse.cn)",
+  });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({
     value: "ai-gateway-api-key",

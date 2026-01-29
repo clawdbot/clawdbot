@@ -10,6 +10,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "codex-cli": "openai-codex",
   chutes: "chutes",
   "openai-api-key": "openai",
+  "modelverse-api-key": "modelverse",
   "openrouter-api-key": "openrouter",
   "ai-gateway-api-key": "vercel-ai-gateway",
   "moonshot-api-key": "moonshot",

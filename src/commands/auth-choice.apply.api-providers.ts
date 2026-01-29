@@ -15,6 +15,8 @@ import {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyModelverseConfig,
+  applyModelverseProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
@@ -29,6 +31,7 @@ import {
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
   KIMI_CODE_MODEL_REF,
+  MODELVERSE_DEFAULT_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -36,6 +39,7 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   setGeminiApiKey,
   setKimiCodeApiKey,
+  setModelverseApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
@@ -69,6 +73,8 @@ export async function applyAuthChoiceApiProviders(
   ) {
     if (params.opts.tokenProvider === "openrouter") {
       authChoice = "openrouter-api-key";
+    } else if (params.opts.tokenProvider === "modelverse") {
+      authChoice = "modelverse-api-key";
     } else if (params.opts.tokenProvider === "vercel-ai-gateway") {
       authChoice = "ai-gateway-api-key";
     } else if (params.opts.tokenProvider === "moonshot") {
@@ -157,6 +163,65 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyOpenrouterConfig,
         applyProviderConfig: applyOpenrouterProviderConfig,
         noteDefault: OPENROUTER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "modelverse-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "modelverse") {
+      await setModelverseApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Modelverse provides an OpenAI-compatible API for multiple model families.",
+          "Get your API key at: https://console.ucloud-global.com/modelverse/experience/api-keys",
+        ].join("\n"),
+        "Modelverse",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("modelverse");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MODELVERSE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setModelverseApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Modelverse API key",
+        validate: validateApiKeyInput,
+      });
+      await setModelverseApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelverse:default",
+      provider: "modelverse",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MODELVERSE_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyModelverseConfig,
+        applyProviderConfig: applyModelverseProviderConfig,
+        noteDefault: MODELVERSE_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

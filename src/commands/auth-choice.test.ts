@@ -31,6 +31,7 @@ describe("applyAuthChoice", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
   const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousModelverseKey = process.env.MODELVERSE_API_KEY;
   const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
   const previousAiGatewayKey = process.env.AI_GATEWAY_API_KEY;
   const previousSshTty = process.env.SSH_TTY;
@@ -58,6 +59,11 @@ describe("applyAuthChoice", () => {
       delete process.env.PI_CODING_AGENT_DIR;
     } else {
       process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+    }
+    if (previousModelverseKey === undefined) {
+      delete process.env.MODELVERSE_API_KEY;
+    } else {
+      process.env.MODELVERSE_API_KEY = previousModelverseKey;
     }
     if (previousOpenrouterKey === undefined) {
       delete process.env.OPENROUTER_API_KEY;
@@ -185,6 +191,64 @@ describe("applyAuthChoice", () => {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["synthetic:default"]?.key).toBe("sk-synthetic-test");
+  });
+
+  it("prompts and writes Modelverse API key when selecting modelverse-api-key", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+
+    const text = vi.fn().mockResolvedValue("sk-modelverse-test");
+    const select: WizardPrompter["select"] = vi.fn(
+      async (params) => params.options[0]?.value as never,
+    );
+    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect,
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "modelverse-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enter Modelverse API key" }),
+    );
+    expect(result.config.auth?.profiles?.["modelverse:default"]).toMatchObject({
+      provider: "modelverse",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("modelverse/gpt-5.2");
+    expect(result.config.models?.providers?.modelverse).toMatchObject({
+      baseUrl: "https://api.modelverse.cn/v1",
+      api: "openai-completions",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["modelverse:default"]?.key).toBe("sk-modelverse-test");
   });
 
   it("sets default model when selecting github-copilot", async () => {
@@ -595,6 +659,10 @@ describe("resolvePreferredProviderForAuthChoice", () => {
 
   it("maps qwen-portal to the provider", () => {
     expect(resolvePreferredProviderForAuthChoice("qwen-portal")).toBe("qwen-portal");
+  });
+
+  it("maps modelverse-api-key to the provider", () => {
+    expect(resolvePreferredProviderForAuthChoice("modelverse-api-key")).toBe("modelverse");
   });
 
   it("returns undefined for unknown choices", () => {

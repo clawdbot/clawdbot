@@ -4,9 +4,15 @@ export {
 } from "../agents/synthetic-models.js";
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
+  MODELVERSE_DEFAULT_MODEL_ID,
+  MODELVERSE_DEFAULT_MODEL_REF,
+} from "../agents/modelverse-models.js";
+export {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyModelverseConfig,
+  applyModelverseProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpenrouterConfig,
@@ -37,6 +43,7 @@ export {
   setAnthropicApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
+  setModelverseApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
