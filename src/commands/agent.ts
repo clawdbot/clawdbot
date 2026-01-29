@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -40,6 +43,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionTranscriptPath } from "../config/sessions/paths.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -460,6 +464,43 @@ export async function agentCommand(
       result = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+
+      // Write CLI transcript for subagent announce flow
+      // CLI backends don't normally write transcripts, but subagent-announce
+      // needs them to read the findings when the run completes.
+      if (isCliProvider(fallbackProvider, cfg) && result.payloads?.[0]?.text) {
+        try {
+          const agentId = resolveAgentIdFromSessionKey(sessionKey);
+          const transcriptPath = resolveSessionTranscriptPath(sessionId, agentId);
+          fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+          if (!fs.existsSync(transcriptPath)) {
+            const header = {
+              type: "session",
+              version: 1,
+              id: sessionId,
+              timestamp: new Date().toISOString(),
+              cwd: process.cwd(),
+            };
+            fs.writeFileSync(transcriptPath, JSON.stringify(header) + "\n", "utf-8");
+          }
+          const messageEntry = {
+            type: "message",
+            id: crypto.randomUUID().slice(0, 8),
+            timestamp: new Date().toISOString(),
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: result.payloads[0].text }],
+              timestamp: Date.now(),
+              stopReason: "cli",
+              usage: result.meta?.agentMeta?.usage ?? { input: 0, output: 0, totalTokens: 0 },
+            },
+          };
+          fs.appendFileSync(transcriptPath, JSON.stringify(messageEntry) + "\n", "utf-8");
+        } catch {
+          // Transcript write failure is non-fatal - log silently
+        }
+      }
+
       if (!lifecycleEnded) {
         emitAgentEvent({
           runId,
