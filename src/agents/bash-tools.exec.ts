@@ -318,7 +318,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  // Skip heartbeat for subagent exec completions - prevents main session spam
+  if (!sessionKey.includes(":subagent:")) {
+    requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  }
 }
 
 function createApprovalSlug(id: string) {
@@ -337,7 +340,10 @@ function emitExecSystemEvent(text: string, opts: { sessionKey?: string; contextK
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) return;
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow({ reason: "exec-event" });
+  // Skip heartbeat for subagent exec events
+  if (!sessionKey.includes(":subagent:")) {
+    requestHeartbeatNow({ reason: "exec-event" });
+  }
 }
 
 async function runExecProcess(opts: {
