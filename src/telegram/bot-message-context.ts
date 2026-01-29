@@ -161,6 +161,9 @@ export const buildTelegramMessageContext = async ({
     isForum,
     messageThreadId,
   });
+  // Effective thread ID for outbound delivery: groups use forum-resolved; DMs use raw messageThreadId
+  // (private chats never set is_forum=true per Telegram Bot API, so resolvedThreadId is always undefined for DMs)
+  const effectiveThreadId = isGroup ? resolvedThreadId : messageThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const route = resolveAgentRoute({
@@ -203,7 +206,8 @@ export const buildTelegramMessageContext = async ({
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
-      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(resolvedThreadId)),
+      fn: () =>
+        bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(effectiveThreadId)),
     });
   };
 
@@ -212,7 +216,11 @@ export const buildTelegramMessageContext = async ({
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
         fn: () =>
-          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(resolvedThreadId)),
+          bot.api.sendChatAction(
+            chatId,
+            "record_voice",
+            buildTypingThreadParams(effectiveThreadId),
+          ),
       });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
@@ -605,6 +613,8 @@ export const buildTelegramMessageContext = async ({
     // For groups: use resolvedThreadId (forum topics only); for DMs: use raw messageThreadId
     MessageThreadId: isGroup ? resolvedThreadId : messageThreadId,
     IsForum: isForum,
+    // DM thread label for display in Sessions tab (e.g., "Sender Name (Thread: 42)")
+    ThreadLabel: !isGroup && messageThreadId != null ? `Thread: ${messageThreadId}` : undefined,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
@@ -655,7 +665,7 @@ export const buildTelegramMessageContext = async ({
     msg,
     chatId,
     isGroup,
-    resolvedThreadId,
+    resolvedThreadId: effectiveThreadId,
     isForum,
     historyKey,
     historyLimit,
