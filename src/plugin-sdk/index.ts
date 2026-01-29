@@ -84,6 +84,7 @@ export type {
   GroupToolPolicyBySenderConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  FeishuConfig,
   GoogleChatAccountConfig,
   GoogleChatConfig,
   GoogleChatDmConfig,
@@ -96,6 +97,7 @@ export type {
 } from "../config/types.js";
 export {
   DiscordConfigSchema,
+  FeishuConfigSchema,
   GoogleChatConfigSchema,
   IMessageConfigSchema,
   MSTeamsConfigSchema,

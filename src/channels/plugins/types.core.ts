@@ -22,6 +22,8 @@ export type ChannelSetupInput = {
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
+  appId?: string;
+  appSecret?: string;
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;

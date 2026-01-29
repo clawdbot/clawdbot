@@ -10,6 +10,7 @@ export * from "./types.channels.js";
 export * from "./types.clawdbot.js";
 export * from "./types.cron.js";
 export * from "./types.discord.js";
+export * from "./types.feishu.js";
 export * from "./types.googlechat.js";
 export * from "./types.gateway.js";
 export * from "./types.hooks.js";

@@ -295,6 +295,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.telegram": "Telegram",
   "channels.telegram.customCommands": "Telegram Custom Commands",
   "channels.discord": "Discord",
+  "channels.feishu": "Feishu",
   "channels.slack": "Slack",
   "channels.mattermost": "Mattermost",
   "channels.signal": "Signal",
@@ -321,6 +322,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.imessage.dmPolicy": "iMessage DM Policy",
   "channels.bluebubbles.dmPolicy": "BlueBubbles DM Policy",
   "channels.discord.dm.policy": "Discord DM Policy",
+  "channels.feishu.dm.policy": "Feishu DM Policy",
   "channels.discord.retry.attempts": "Discord Retry Attempts",
   "channels.discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
   "channels.discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
@@ -331,6 +333,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack.dm.policy": "Slack DM Policy",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
   "channels.discord.token": "Discord Bot Token",
+  "channels.feishu.appId": "Feishu App ID",
+  "channels.feishu.appSecret": "Feishu App Secret",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",
   "channels.slack.userToken": "Slack User Token",
@@ -605,6 +609,8 @@ const FIELD_HELP: Record<string, string> = {
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.discord.configWrites":
     "Allow Discord to write config in response to channel events/commands (default: true).",
+  "channels.feishu.configWrites":
+    "Allow Feishu to write config in response to channel events/commands (default: true).",
   "channels.whatsapp.configWrites":
     "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   "channels.signal.configWrites":
@@ -664,6 +670,8 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
   "channels.discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
+  "channels.feishu.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.feishu.dm.allowFrom=["*"].',
   "channels.discord.retry.attempts":
     "Max retry attempts for outbound Discord API calls (default: 3).",
   "channels.discord.retry.minDelayMs": "Minimum retry delay in ms for Discord outbound calls.",

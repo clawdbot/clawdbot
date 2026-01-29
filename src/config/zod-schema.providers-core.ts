@@ -282,6 +282,67 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
 });
 
+export const FeishuDmSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    policy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.policy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.feishu.dm.policy="open" requires channels.feishu.dm.allowFrom to include "*"',
+    });
+  });
+
+export const FeishuGroupSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    allow: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+  })
+  .strict();
+
+export const FeishuAccountSchema = z
+  .object({
+    name: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema.optional(),
+    configWrites: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    appId: z.string().optional(),
+    appSecret: z.string().optional(),
+    allowBots: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
+    dm: FeishuDmSchema.optional(),
+    groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
+  })
+  .strict();
+
+export const FeishuConfigSchema = FeishuAccountSchema.extend({
+  accounts: z.record(z.string(), FeishuAccountSchema.optional()).optional(),
+});
+
 export const GoogleChatDmSchema = z
   .object({
     enabled: z.boolean().optional(),

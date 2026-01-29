@@ -23,6 +23,7 @@ export const HookMappingSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
+        z.literal("feishu"),
         z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),

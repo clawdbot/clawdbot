@@ -25,6 +25,8 @@ const optionNamesAdd = [
   "tokenFile",
   "botToken",
   "appToken",
+  "appId",
+  "appSecret",
   "signalNumber",
   "cliPath",
   "dbPath",
@@ -162,6 +164,8 @@ export function registerChannelsCli(program: Command) {
     .option("--token-file <path>", "Bot token file (Telegram)")
     .option("--bot-token <token>", "Slack bot token (xoxb-...)")
     .option("--app-token <token>", "Slack app token (xapp-...)")
+    .option("--app-id <id>", "Feishu app id")
+    .option("--app-secret <secret>", "Feishu app secret")
     .option("--signal-number <e164>", "Signal account number (E.164)")
     .option("--cli-path <path>", "CLI path (signal-cli or imsg)")
     .option("--db-path <path>", "iMessage database path")

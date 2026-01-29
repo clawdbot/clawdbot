@@ -13,6 +13,8 @@ import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
+  resolveFeishuGroupRequireMention,
+  resolveFeishuGroupToolPolicy,
   resolveGoogleChatGroupRequireMention,
   resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupRequireMention,
@@ -75,6 +77,12 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
+
+const normalizeFeishuAllowEntry = (entry: string) =>
+  entry
+    .trim()
+    .replace(/^(feishu|lark|user|open_id|user_id|union_id|email):/i, "")
+    .toLowerCase();
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -211,6 +219,40 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         currentThreadTs: context.ReplyToId,
         hasRepliedRef,
       }),
+    },
+  },
+  feishu: {
+    id: "feishu",
+    capabilities: {
+      chatTypes: ["direct", "channel"],
+    },
+    outbound: { textChunkLimit: 4000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) => {
+        const channel = cfg.channels?.feishu as
+          | {
+              accounts?: Record<string, { dm?: { allowFrom?: Array<string | number> } }>;
+              dm?: { allowFrom?: Array<string | number> };
+            }
+          | undefined;
+        const normalized = normalizeAccountId(accountId);
+        const account =
+          channel?.accounts?.[normalized] ??
+          channel?.accounts?.[
+            Object.keys(channel?.accounts ?? {}).find(
+              (key) => key.toLowerCase() === normalized.toLowerCase(),
+            ) ?? ""
+          ];
+        return (account?.dm?.allowFrom ?? channel?.dm?.allowFrom ?? []).map((entry) =>
+          String(entry),
+        );
+      },
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom.map((entry) => normalizeFeishuAllowEntry(String(entry))).filter(Boolean),
+    },
+    groups: {
+      resolveRequireMention: resolveFeishuGroupRequireMention,
+      resolveToolPolicy: resolveFeishuGroupToolPolicy,
     },
   },
   googlechat: {

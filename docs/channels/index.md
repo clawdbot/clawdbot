@@ -14,6 +14,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Telegram](/channels/telegram) — Bot API via grammY; supports groups.
 - [Discord](/channels/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
+- [Feishu](/channels/feishu) — Lark/Feishu app via WebSocket events.
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.
 - [Mattermost](/channels/mattermost) — Bot API + WebSocket; channels, groups, DMs (plugin, installed separately).
