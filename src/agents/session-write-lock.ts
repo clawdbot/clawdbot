@@ -18,6 +18,32 @@ const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const cleanupHandlers = new Map<CleanupSignal, () => void>();
 
+/**
+ * Release all held locks - called on process exit to prevent orphaned locks
+ */
+async function releaseAllLocks(): Promise<void> {
+  const locks = Array.from(HELD_LOCKS.values());
+  HELD_LOCKS.clear();
+  for (const lock of locks) {
+    try {
+      await lock.handle.close();
+      await fs.rm(lock.lockPath, { force: true });
+    } catch {
+      // Best effort cleanup
+    }
+  }
+}
+
+// Register cleanup handlers to release locks on unexpected termination
+process.on("exit", releaseAllLocks);
+process.on("SIGTERM", () => {
+  void releaseAllLocks().then(() => process.exit(0));
+});
+process.on("SIGINT", () => {
+  void releaseAllLocks().then(() => process.exit(0));
+});
+// Note: unhandledRejection handler will call process.exit() which triggers 'exit'
+
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false;
   try {
