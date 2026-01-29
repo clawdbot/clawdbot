@@ -12,6 +12,18 @@ The Moltbot Chrome extension lets the agent control your **existing Chrome tabs*
 
 Attach/detach happens via a **single Chrome toolbar button**.
 
+<Note>
+**Want a smoother experience?** The manual extension install has some friction:
+- You must load an unpacked extension via Developer Mode
+- Chrome shows a "browser controlled externally" banner
+- Sites may detect automation via `navigator.webdriver`
+
+[BrowserOS](https://browseros.com) (open-source Chromium fork) resolves all three:
+- Clawdbot extension is pre-installed automatically
+- No "controlled externally" banner
+- `navigator.webdriver` flag is disabled
+</Note>
+
 ## What it is (concept)
 
 There are three parts:

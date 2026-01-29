@@ -212,6 +212,10 @@ Moltbot can also drive **your existing Chrome tabs** (no separate “clawd” Ch
 
 Full guide: [Chrome extension](/tools/chrome-extension)
 
+<Tip>
+For a friction-free alternative (no manual extension install, no "controlled externally" banner, no webdriver detection), see [BrowserOS](https://browseros.com).
+</Tip>
+
 Flow:
 - The Gateway runs locally (same machine) or a node host runs on the browser machine.
 - A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
