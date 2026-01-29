@@ -37,6 +37,60 @@ export function resolveNewStateDir(homedir: () => string = os.homedir): string {
   return newStateDir(homedir);
 }
 
+export type StateDirConflict =
+  | {
+      hasConflict: true;
+      legacyDir: string;
+      newDir: string;
+    }
+  | {
+      hasConflict: false;
+    };
+
+/**
+ * Detect if both legacy (~/.clawdbot) and new (~/.moltbot) state directories exist.
+ * This creates a split-brain condition where different parts of the system may
+ * read/write to different directories.
+ *
+ * Returns conflict info if both directories exist and no explicit override is set.
+ */
+export function detectStateDirConflict(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): StateDirConflict {
+  // If explicit override is set, no conflict possible
+  const override = env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  if (override) return { hasConflict: false };
+
+  const legacyDir = legacyStateDir(homedir);
+  const newDir = newStateDir(homedir);
+
+  // Check if legacy is a symlink to new (already migrated)
+  try {
+    const legacyStat = fs.lstatSync(legacyDir);
+    if (legacyStat.isSymbolicLink()) {
+      const target = fs.readlinkSync(legacyDir);
+      const resolvedTarget = path.resolve(path.dirname(legacyDir), target);
+      if (path.resolve(resolvedTarget) === path.resolve(newDir)) {
+        return { hasConflict: false };
+      }
+    }
+  } catch {
+    // Legacy dir doesn't exist, no conflict
+    return { hasConflict: false };
+  }
+
+  // Check if both directories exist
+  const hasLegacy = fs.existsSync(legacyDir);
+  const hasNew = fs.existsSync(newDir);
+
+  if (hasLegacy && hasNew) {
+    return { hasConflict: true, legacyDir, newDir };
+  }
+
+  return { hasConflict: false };
+}
+
 /**
  * State directory for mutable data (sessions, logs, caches).
  * Can be overridden via MOLTBOT_STATE_DIR (preferred) or CLAWDBOT_STATE_DIR (legacy).

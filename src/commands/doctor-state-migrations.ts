@@ -4,9 +4,11 @@ export {
   autoMigrateLegacyAgentDir,
   autoMigrateLegacyState,
   detectLegacyStateMigrations,
+  formatStateDirConflictMessage,
   migrateLegacyAgentDir,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyAgentDirForTest,
   resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
+  StateDirConflictError,
 } from "../infra/state-migrations.js";

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  detectStateDirConflict,
   resolveDefaultConfigCandidates,
   resolveConfigPath,
   resolveOAuthDir,
@@ -135,6 +136,96 @@ describe("state + config path candidates", () => {
       const env = { MOLTBOT_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "moltbot.json"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("detectStateDirConflict", () => {
+  it("returns hasConflict: true when both legacy and new dirs exist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-conflict-"));
+    try {
+      const legacyDir = path.join(root, ".clawdbot");
+      const newDir = path.join(root, ".moltbot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      await fs.mkdir(newDir, { recursive: true });
+
+      const result = detectStateDirConflict({} as NodeJS.ProcessEnv, () => root);
+      expect(result.hasConflict).toBe(true);
+      if (result.hasConflict) {
+        expect(result.legacyDir).toBe(legacyDir);
+        expect(result.newDir).toBe(newDir);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns hasConflict: false when only legacy dir exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-conflict-"));
+    try {
+      const legacyDir = path.join(root, ".clawdbot");
+      await fs.mkdir(legacyDir, { recursive: true });
+
+      const result = detectStateDirConflict({} as NodeJS.ProcessEnv, () => root);
+      expect(result.hasConflict).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns hasConflict: false when only new dir exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-conflict-"));
+    try {
+      const newDir = path.join(root, ".moltbot");
+      await fs.mkdir(newDir, { recursive: true });
+
+      const result = detectStateDirConflict({} as NodeJS.ProcessEnv, () => root);
+      expect(result.hasConflict).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns hasConflict: false when neither dir exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-conflict-"));
+    try {
+      const result = detectStateDirConflict({} as NodeJS.ProcessEnv, () => root);
+      expect(result.hasConflict).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns hasConflict: false when env override is set", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-conflict-"));
+    try {
+      const legacyDir = path.join(root, ".clawdbot");
+      const newDir = path.join(root, ".moltbot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      await fs.mkdir(newDir, { recursive: true });
+
+      const env = { MOLTBOT_STATE_DIR: "/custom/path" } as NodeJS.ProcessEnv;
+      const result = detectStateDirConflict(env, () => root);
+      expect(result.hasConflict).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns hasConflict: false when legacy is symlink to new", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-conflict-"));
+    try {
+      const legacyDir = path.join(root, ".clawdbot");
+      const newDir = path.join(root, ".moltbot");
+      await fs.mkdir(newDir, { recursive: true });
+      // On Windows, use 'junction' which doesn't require admin privileges
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(newDir, legacyDir, symlinkType);
+
+      const result = detectStateDirConflict({} as NodeJS.ProcessEnv, () => root);
+      expect(result.hasConflict).toBe(false);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

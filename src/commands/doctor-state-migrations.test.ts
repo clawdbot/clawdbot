@@ -12,6 +12,7 @@ import {
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
+  StateDirConflictError,
 } from "./doctor-state-migrations.js";
 
 let tempRoot: string | null = null;
@@ -346,20 +347,19 @@ describe("doctor legacy state migrations", () => {
     expect(result.migrated).toBe(true);
   });
 
-  it("skips state dir migration when target exists", async () => {
+  it("throws StateDirConflictError when both state dirs exist", async () => {
     const root = await makeTempRoot();
     const legacyDir = path.join(root, ".clawdbot");
     const targetDir = path.join(root, ".moltbot");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.mkdirSync(targetDir, { recursive: true });
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings.length).toBeGreaterThan(0);
+    await expect(
+      autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      }),
+    ).rejects.toThrow(StateDirConflictError);
   });
 
   it("skips state dir migration when env override is set", async () => {

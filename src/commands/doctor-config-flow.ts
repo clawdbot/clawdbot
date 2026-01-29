@@ -214,7 +214,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   }
 
-  const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
+  const autoEnable = applyPluginAutoEnable({
+    config: candidate,
+    env: process.env,
+  });
   if (autoEnable.changes.length > 0) {
     note(autoEnable.changes.join("\n"), "Doctor changes");
     candidate = autoEnable.config;
