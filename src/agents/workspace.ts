@@ -28,6 +28,7 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
+export const DEFAULT_MEMORY_DIR = "memory";
 
 const TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -120,6 +121,7 @@ export async function ensureAgentWorkspace(params?: {
   ensureBootstrapFiles?: boolean;
 }): Promise<{
   dir: string;
+  memoryDir?: string;
   agentsPath?: string;
   soulPath?: string;
   toolsPath?: string;
@@ -174,10 +176,39 @@ export async function ensureAgentWorkspace(params?: {
   if (isBrandNewWorkspace) {
     await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
   }
+
+  // Ensure memory/ directory exists and symlink identity files for memory search indexing
+  const memoryDir = path.join(dir, DEFAULT_MEMORY_DIR);
+  await fs.mkdir(memoryDir, { recursive: true });
+
+  // Symlink identity files into memory/ so they are indexed by memory search
+  const identityFilesToSymlink = [
+    { source: soulPath, target: path.join(memoryDir, DEFAULT_SOUL_FILENAME) },
+    { source: userPath, target: path.join(memoryDir, DEFAULT_USER_FILENAME) },
+    { source: agentsPath, target: path.join(memoryDir, DEFAULT_AGENTS_FILENAME) },
+    { source: identityPath, target: path.join(memoryDir, DEFAULT_IDENTITY_FILENAME) },
+  ];
+
+  for (const { source, target } of identityFilesToSymlink) {
+    try {
+      await fs.access(target);
+      // Target already exists, skip
+    } catch {
+      // Target doesn't exist, create symlink
+      try {
+        const relativePath = path.relative(memoryDir, source);
+        await fs.symlink(relativePath, target);
+      } catch {
+        // Symlink creation failed (e.g., on Windows without privileges), skip silently
+      }
+    }
+  }
+
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
   return {
     dir,
+    memoryDir,
     agentsPath,
     soulPath,
     toolsPath,
