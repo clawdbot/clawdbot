@@ -20,7 +20,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "quotio";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -113,6 +114,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "API key",
     choices: ["opencode-zen"],
   },
+  {
+    value: "quotio",
+    label: "Quotio",
+    hint: "Unified AI accounts with quota tracking",
+    choices: ["quotio"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -182,6 +189,11 @@ export function buildAuthChoiceOptions(params: {
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
+  });
+  options.push({
+    value: "quotio",
+    label: "Quotio",
+    hint: "Unified AI accounts with smart failover (macOS)",
   });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
