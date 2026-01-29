@@ -337,8 +337,9 @@ export async function prepareSlackMessage(params: {
     maxBytes: ctx.mediaMaxBytes,
   });
   const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
-  if (!rawBody) return null;
 
+  // Handle ack reactions BEFORE checking for message content
+  // This ensures reactions work even for messages with no text body
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
 
@@ -371,6 +372,8 @@ export async function prepareSlackMessage(params: {
           },
         )
       : null;
+
+  if (!rawBody) return null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
