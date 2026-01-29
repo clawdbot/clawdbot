@@ -1,11 +1,44 @@
+# Version control
 .git
 .worktrees
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Cache directories
 .bun-cache
 .bun
 .tmp
 **/.tmp
-.DS_Store
-**/.DS_Store
+.pnpm-store
+**/.pnpm-store
+.turbo
+**/.turbo
+.cache
+**/.cache
+.next
+**/.next
+tmp
+**/tmp
+
+# Dependencies (rebuilt in container)
+node_modules
+**/node_modules
+
+# Test/coverage output
+coverage
+**/coverage
+*.log
+**/*.trace
+
+# Large app trees not needed for CLI build
+apps/macos/.build
+apps/ios/build
+Peekaboo/
+Swabble/
+
+# Media files (not needed for build)
 *.png
 *.jpg
 *.jpeg
@@ -15,34 +48,9 @@
 *.mov
 *.wav
 *.mp3
-node_modules
-**/node_modules
-.pnpm-store
-**/.pnpm-store
-.turbo
-**/.turbo
-.cache
-**/.cache
-.next
-**/.next
-coverage
-**/coverage
-*.log
-tmp
-**/tmp
 
-# build artifacts
-dist
-**/dist
-apps/macos/.build
-apps/ios/build
-**/*.trace
-
-# large app trees not needed for CLI build
-apps/
-assets/
-Peekaboo/
-Swabble/
-Core/
-Users/
-vendor/
+# Keep these (needed for build):
+# - packages/ (clawdbot shim)
+# - extensions/ (workspace packages)
+# - dist/ (excluded - rebuilt in container)
+# - Core/ (if needed)
