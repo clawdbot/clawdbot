@@ -44,7 +44,9 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-}) {
+  /** If true, send a fallback message when all replies are empty. Default: false */
+  notifyEmptyResponse?: boolean;
+}): Promise<{ delivered: boolean }> {
   const {
     replies,
     chatId,
@@ -58,6 +60,7 @@ export async function deliverReplies(params: {
   } = params;
   const chunkMode = params.chunkMode ?? "length";
   let hasReplied = false;
+  let skippedEmpty = 0;
   const chunkText = (markdown: string) => {
     const markdownChunks =
       chunkMode === "newline"
@@ -85,6 +88,7 @@ export async function deliverReplies(params: {
         continue;
       }
       runtime.error?.(danger("reply missing text/media"));
+      skippedEmpty++;
       continue;
     }
     const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
@@ -268,6 +272,18 @@ export async function deliverReplies(params: {
       }
     }
   }
+
+  // If all replies were empty and notifyEmptyResponse is enabled, send a fallback message
+  // Check both: (1) replies with no content (skippedEmpty), (2) no replies at all (empty array)
+  if (!hasReplied && (skippedEmpty > 0 || replies.length === 0) && params.notifyEmptyResponse) {
+    const fallbackText = "No response generated. Please try again.";
+    await sendTelegramText(bot, chatId, fallbackText, runtime, {
+      messageThreadId,
+    });
+    hasReplied = true;
+  }
+
+  return { delivered: hasReplied };
 }
 
 export async function resolveMedia(
