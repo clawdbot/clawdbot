@@ -1,19 +1,20 @@
 services:
   moltbot-gateway:
-    image: ${CLAWDBOT_IMAGE:-moltbot:local}
+    image: ${MOLTBOT_IMAGE:-moltbot:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      CLAWDBOT_GATEWAY_TOKEN: ${CLAWDBOT_GATEWAY_TOKEN}
+      MOLTBOT_GATEWAY_TOKEN: ${MOLTBOT_GATEWAY_TOKEN}
+      MOLTBOT_SERVICE_TOKEN: ${MOLTBOT_SERVICE_TOKEN}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${CLAWDBOT_CONFIG_DIR}:/home/node/.clawdbot
-      - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
+      - ${MOLTBOT_CONFIG_DIR:-~/.moltbot}:/home/node/.moltbot
+      - ${MOLTBOT_WORKSPACE_DIR:-~/clawd}:/home/node/clawd
     ports:
-      - "${CLAWDBOT_GATEWAY_PORT:-18789}:18789"
-      - "${CLAWDBOT_BRIDGE_PORT:-18790}:18790"
+      - "${MOLTBOT_GATEWAY_PORT:-18789}:18789"
+      - "${MOLTBOT_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:
@@ -22,13 +23,13 @@ services:
         "dist/index.js",
         "gateway",
         "--bind",
-        "${CLAWDBOT_GATEWAY_BIND:-lan}",
+        "${MOLTBOT_GATEWAY_BIND:-lan}",
         "--port",
-        "${CLAWDBOT_GATEWAY_PORT:-18789}"
+        "${MOLTBOT_GATEWAY_PORT:-18789}"
       ]
 
   moltbot-cli:
-    image: ${CLAWDBOT_IMAGE:-moltbot:local}
+    image: ${MOLTBOT_IMAGE:-moltbot:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -37,8 +38,8 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${CLAWDBOT_CONFIG_DIR}:/home/node/.clawdbot
-      - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
+      - ${MOLTBOT_CONFIG_DIR}:/home/node/.moltbot
+      - ${MOLTBOT_WORKSPACE_DIR}:/home/node/moltbot
     stdin_open: true
     tty: true
     init: true

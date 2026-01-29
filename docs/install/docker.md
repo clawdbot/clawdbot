@@ -56,6 +56,27 @@ It writes config/workspace on the host:
 - `~/.clawdbot/`
 - `~/clawd`
 
+**Important for Docker**: The dashboard requires additional config to bypass device pairing when accessed via the Docker bridge network. Create `~/.moltbot/moltbot.json` (or `~/.clawdbot/moltbot.json`) with:
+
+```json
+{
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "YOUR_GATEWAY_TOKEN_HERE"
+    },
+    "controlUi": {
+      "allowInsecureAuth": true
+    }
+  }
+}
+```
+
+Replace `YOUR_GATEWAY_TOKEN_HERE` with the actual token (or set `MOLTBOT_GATEWAY_TOKEN` environment variable instead). 
+
+The `controlUi.allowInsecureAuth` setting allows token-only authentication for the Control UI, bypassing device identity pairing. This is necessary because connections from the Docker bridge network (e.g., `172.21.0.1`) are not detected as "local" connections, even when accessing via `http://127.0.0.1:18789`. Without this setting, you will see "pairing required" errors.
+
 Running on a VPS? See [Hetzner (Docker VPS)](/platforms/hetzner).
 
 ### Manual flow (compose)
