@@ -76,6 +76,20 @@ export type SessionResetByTypeConfig = {
   thread?: SessionResetConfig;
 };
 
+/** TTL configuration for automatic session cleanup. */
+export type SessionTtlConfig = {
+  /** Idle timeout in seconds. Sessions inactive for this duration are eligible for cleanup. */
+  idle?: number;
+  /** Maximum age in seconds. Sessions older than this are eligible for cleanup regardless of activity. */
+  maxAge?: number;
+};
+
+/** Cleanup service configuration. */
+export type SessionCleanupConfig = {
+  /** Interval between cleanup runs in seconds. Default: 300 (5 minutes). */
+  intervalSeconds?: number;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -97,6 +111,10 @@ export type SessionConfig = {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  /** TTL for automatic session cleanup. Can be a number (idle seconds) or an object with idle/maxAge. */
+  ttl?: number | SessionTtlConfig;
+  /** Configuration for the automatic cleanup service. */
+  cleanup?: SessionCleanupConfig;
 };
 
 export type LoggingConfig = {

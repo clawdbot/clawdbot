@@ -16,6 +16,22 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
+const SessionTtlSchema = z.union([
+  z.number().int().positive(), // Simple form: just seconds
+  z
+    .object({
+      idle: z.number().int().positive().optional(),
+      maxAge: z.number().int().positive().optional(),
+    })
+    .strict(),
+]);
+
+const SessionCleanupSchema = z
+  .object({
+    intervalSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -82,6 +98,8 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    ttl: SessionTtlSchema.optional(),
+    cleanup: SessionCleanupSchema.optional(),
   })
   .strict()
   .optional();
