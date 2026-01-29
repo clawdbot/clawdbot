@@ -98,14 +98,23 @@ export function resolveAuthProfileOrder(params: {
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
     for (const profileId of deduped) {
-      const cooldownUntil = resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? 0;
+      const stats = store.usageStats?.[profileId];
+      const cooldownUntil = resolveProfileUnusableUntil(stats ?? {}) ?? 0;
+      
+      // Auto-expire cooldowns that have passed
+      if (stats && cooldownUntil > 0 && now >= cooldownUntil) {
+        stats.cooldownUntil = undefined;
+        stats.disabledUntil = undefined;
+      }
+      
+      const updatedCooldownUntil = resolveProfileUnusableUntil(stats ?? {}) ?? 0;
       if (
-        typeof cooldownUntil === "number" &&
-        Number.isFinite(cooldownUntil) &&
-        cooldownUntil > 0 &&
-        now < cooldownUntil
+        typeof updatedCooldownUntil === "number" &&
+        Number.isFinite(updatedCooldownUntil) &&
+        updatedCooldownUntil > 0 &&
+        now < updatedCooldownUntil
       ) {
-        inCooldown.push({ profileId, cooldownUntil });
+        inCooldown.push({ profileId, cooldownUntil: updatedCooldownUntil });
       } else {
         available.push(profileId);
       }
@@ -144,6 +153,16 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
   const inCooldown: string[] = [];
 
   for (const profileId of order) {
+    const stats = store.usageStats?.[profileId];
+    if (stats) {
+      const unusableUntil = resolveProfileUnusableUntil(stats);
+      // Auto-expire cooldowns that have passed
+      if (unusableUntil && unusableUntil > 0 && now >= unusableUntil) {
+        stats.cooldownUntil = undefined;
+        stats.disabledUntil = undefined;
+      }
+    }
+    
     if (isProfileInCooldown(store, profileId)) {
       inCooldown.push(profileId);
     } else {
