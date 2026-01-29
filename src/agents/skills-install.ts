@@ -12,6 +12,7 @@ import {
   hasBinary,
   loadWorkspaceSkillEntries,
   resolveSkillsInstallPreferences,
+  resolveRuntimePlatform,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
@@ -276,6 +277,28 @@ async function installDownloadSpec(params: {
   };
 }
 
+async function installWithWinget(
+  packageId: string,
+  timeoutMs: number,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  if (!hasBinary("winget")) {
+    return { code: null, stdout: "", stderr: "winget not found" };
+  }
+  return await runCommandWithTimeout(
+    [
+      "winget",
+      "install",
+      "--id",
+      packageId,
+      "-e",
+      "--silent",
+      "--accept-source-agreements",
+      "--accept-package-agreements",
+    ],
+    { timeoutMs },
+  );
+}
+
 async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
   const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
   if (!exe) return undefined;
@@ -366,10 +389,21 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
           code: brewResult.code,
         };
       }
+    } else if (resolveRuntimePlatform() === "win32" && hasBinary("winget")) {
+      const result = await installWithWinget("astral-sh.uv", timeoutMs);
+      if (result.code !== 0) {
+        return {
+          ok: false,
+          message: "Failed to install uv (winget)",
+          stdout: result.stdout.trim(),
+          stderr: result.stderr.trim(),
+          code: result.code,
+        };
+      }
     } else {
       return {
         ok: false,
-        message: "uv not installed (install via brew)",
+        message: "uv not installed (install via brew or winget)",
         stdout: "",
         stderr: "",
         code: null,
@@ -404,10 +438,21 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
           code: brewResult.code,
         };
       }
+    } else if (resolveRuntimePlatform() === "win32" && hasBinary("winget")) {
+      const result = await installWithWinget("GoLang.Go", timeoutMs);
+      if (result.code !== 0) {
+        return {
+          ok: false,
+          message: "Failed to install go (winget)",
+          stdout: result.stdout.trim(),
+          stderr: result.stderr.trim(),
+          code: result.code,
+        };
+      }
     } else {
       return {
         ok: false,
-        message: "go not installed (install via brew)",
+        message: "go not installed (install via brew or winget)",
         stdout: "",
         stderr: "",
         code: null,
