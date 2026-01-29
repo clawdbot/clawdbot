@@ -34,6 +34,34 @@
   justify-content: flex-end;
 }
 
+/* System messages centered with muted styling */
+.chat-group.system {
+  justify-content: center;
+  margin-left: 16px;
+}
+
+.chat-group.system .chat-group-messages {
+  align-items: center;
+  max-width: min(600px, calc(100% - 60px));
+}
+
+.chat-group.system .chat-bubble {
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 12px;
+}
+
+.chat-group.system .chat-group-footer {
+  justify-content: center;
+}
+
+.chat-group.system .chat-sender-name {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
 /* Footer at bottom of message group (role + time) */
 .chat-group-footer {
   display: flex;
@@ -87,6 +115,12 @@
 .chat-avatar.tool {
   background: var(--secondary);
   color: var(--muted);
+}
+
+.chat-avatar.system {
+  background: var(--border);
+  color: var(--muted);
+  font-size: 16px;
 }
 
 /* Image avatar support */
