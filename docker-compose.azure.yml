@@ -1,0 +1,100 @@
+# Docker Compose for Azure OpenAI deployment
+# Usage:
+#   1. Copy .env.example to .env and fill in your Azure OpenAI credentials
+#   2. Build the image: docker compose -f docker-compose.azure.yml build
+#   3. Run the gateway: docker compose -f docker-compose.azure.yml up -d moltbot-azure-gateway
+#   4. Or run the CLI: docker compose -f docker-compose.azure.yml run --rm moltbot-azure-cli
+
+services:
+  moltbot-azure-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moltbot-azure:local
+    container_name: moltbot-azure-gateway
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      # Gateway authentication token (generate a secure token for production)
+      CLAWDBOT_GATEWAY_TOKEN: ${CLAWDBOT_GATEWAY_TOKEN:-your-secure-gateway-token}
+      # Azure OpenAI Configuration (required)
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:?Azure OpenAI API key is required}
+      AZURE_OPENAI_RESOURCE_NAME: ${AZURE_OPENAI_RESOURCE_NAME:?Azure OpenAI resource name is required}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME:?Azure OpenAI deployment name is required}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
+      # Optional: provide full endpoint URL instead of resource name
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+    volumes:
+      # Persist configuration and session data
+      - ${CLAWDBOT_CONFIG_DIR:-./data/config}:/home/node/.moltbot
+      - ${CLAWDBOT_WORKSPACE_DIR:-./data/workspace}:/home/node/clawd
+    ports:
+      # Gateway HTTP/WebSocket port
+      - "${CLAWDBOT_GATEWAY_PORT:-18789}:18789"
+      # Bridge port for channel connections
+      - "${CLAWDBOT_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${CLAWDBOT_GATEWAY_BIND:-lan}",
+        "--port",
+        "${CLAWDBOT_GATEWAY_PORT:-18789}",
+        "--allow-unconfigured"
+      ]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  moltbot-azure-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moltbot-azure:local
+    container_name: moltbot-azure-cli
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      BROWSER: echo
+      # Azure OpenAI Configuration (required)
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:?Azure OpenAI API key is required}
+      AZURE_OPENAI_RESOURCE_NAME: ${AZURE_OPENAI_RESOURCE_NAME:?Azure OpenAI resource name is required}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME:?Azure OpenAI deployment name is required}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+    volumes:
+      - ${CLAWDBOT_CONFIG_DIR:-./data/config}:/home/node/.moltbot
+      - ${CLAWDBOT_WORKSPACE_DIR:-./data/workspace}:/home/node/clawd
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
+
+  # Minimal test service to verify Azure OpenAI connection
+  moltbot-azure-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moltbot-azure:local
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:?Azure OpenAI API key is required}
+      AZURE_OPENAI_RESOURCE_NAME: ${AZURE_OPENAI_RESOURCE_NAME:?Azure OpenAI resource name is required}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME:?Azure OpenAI deployment name is required}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
+    command: ["node", "dist/index.js", "models", "list"]
+    profiles:
+      - test
+
+# Named volumes for persistent storage (optional, use bind mounts above for easier access)
+volumes:
+  moltbot-config:
+  moltbot-workspace:

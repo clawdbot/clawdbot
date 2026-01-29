@@ -41,6 +41,10 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Azure OpenAI specific: resource name */
+  azureResourceName?: string;
+  /** Azure OpenAI specific: API version */
+  azureApiVersion?: string;
 };
 
 export type BedrockDiscoveryConfig = {
