@@ -177,6 +177,19 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("Isolated jobs require --message (agentTurn).");
           }
 
+          // Warn if isolated job won't deliver output anywhere
+          if (
+            sessionTarget === "isolated" &&
+            payload.kind === "agentTurn" &&
+            !payload.deliver &&
+            !payload.to
+          ) {
+            defaultRuntime.error(
+              "warning: isolated job has --message but no --deliver or --to; agent output will not be sent.\n" +
+                "Add --deliver --channel <channel> --to <dest> if you want proactive message delivery.",
+            );
+          }
+
           const isolation =
             sessionTarget === "isolated"
               ? {
