@@ -21,5 +21,9 @@
       "localPath": "extensions/mattermost",
       "defaultChoice": "npm"
     }
+  },
+  "dependencies": {
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
   }
 }
