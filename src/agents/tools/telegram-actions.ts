@@ -2,9 +2,14 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { MoltbotConfig } from "../../config/config.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
+  closeForumTopicTelegram,
+  createForumTopicTelegram,
+  deleteForumTopicTelegram,
   deleteMessageTelegram,
+  editForumTopicTelegram,
   editMessageTelegram,
   reactMessageTelegram,
+  reopenForumTopicTelegram,
   sendMessageTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
@@ -316,6 +321,147 @@ export async function handleTelegramAction(
   if (action === "stickerCacheStats") {
     const stats = getCacheStats();
     return jsonResult({ ok: true, ...stats });
+  }
+
+  if (action === "createForumTopic") {
+    if (!isActionEnabled("forumTopics", false)) {
+      throw new Error(
+        "Telegram forum topic actions are disabled. Set channels.telegram.actions.forumTopics to true.",
+      );
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const name = readStringParam(params, "name", { required: true });
+    const iconColor = readNumberParam(params, "iconColor", { integer: true });
+    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await createForumTopicTelegram(chatId ?? "", name, {
+      token,
+      accountId: accountId ?? undefined,
+      iconColor: iconColor ?? undefined,
+      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      messageThreadId: result.messageThreadId,
+      name: result.name,
+      iconColor: result.iconColor,
+      iconCustomEmojiId: result.iconCustomEmojiId,
+    });
+  }
+
+  if (action === "editForumTopic") {
+    if (!isActionEnabled("forumTopics", false)) {
+      throw new Error(
+        "Telegram forum topic actions are disabled. Set channels.telegram.actions.forumTopics to true.",
+      );
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      required: true,
+      integer: true,
+    });
+    const name = readStringParam(params, "name");
+    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    await editForumTopicTelegram(chatId ?? "", messageThreadId ?? 0, {
+      token,
+      accountId: accountId ?? undefined,
+      name: name ?? undefined,
+      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+    });
+    return jsonResult({ ok: true, edited: true });
+  }
+
+  if (action === "closeForumTopic") {
+    if (!isActionEnabled("forumTopics", false)) {
+      throw new Error(
+        "Telegram forum topic actions are disabled. Set channels.telegram.actions.forumTopics to true.",
+      );
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      required: true,
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    await closeForumTopicTelegram(chatId ?? "", messageThreadId ?? 0, {
+      token,
+      accountId: accountId ?? undefined,
+    });
+    return jsonResult({ ok: true, closed: true });
+  }
+
+  if (action === "reopenForumTopic") {
+    if (!isActionEnabled("forumTopics", false)) {
+      throw new Error(
+        "Telegram forum topic actions are disabled. Set channels.telegram.actions.forumTopics to true.",
+      );
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      required: true,
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    await reopenForumTopicTelegram(chatId ?? "", messageThreadId ?? 0, {
+      token,
+      accountId: accountId ?? undefined,
+    });
+    return jsonResult({ ok: true, reopened: true });
+  }
+
+  if (action === "deleteForumTopic") {
+    if (!isActionEnabled("forumTopics", false)) {
+      throw new Error(
+        "Telegram forum topic actions are disabled. Set channels.telegram.actions.forumTopics to true.",
+      );
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      required: true,
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    await deleteForumTopicTelegram(chatId ?? "", messageThreadId ?? 0, {
+      token,
+      accountId: accountId ?? undefined,
+    });
+    return jsonResult({ ok: true, deleted: true });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

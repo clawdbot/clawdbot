@@ -53,6 +53,11 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     timeout: "none",
     kick: "none",
     ban: "none",
+    "topic-create": "to",
+    "topic-edit": "to",
+    "topic-close": "to",
+    "topic-reopen": "to",
+    "topic-delete": "to",
   };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {

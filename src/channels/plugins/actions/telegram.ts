@@ -52,6 +52,13 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       actions.add("sticker");
       actions.add("sticker-search");
     }
+    if (gate("forumTopics", false)) {
+      actions.add("topic-create");
+      actions.add("topic-edit");
+      actions.add("topic-close");
+      actions.add("topic-reopen");
+      actions.add("topic-delete");
+    }
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -177,6 +184,106 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-create") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringParam(params, "to", { required: true });
+      const name = readStringParam(params, "name", { required: true });
+      const iconColor = readNumberParam(params, "iconColor", { integer: true });
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      return await handleTelegramAction(
+        {
+          action: "createForumTopic",
+          chatId,
+          name,
+          iconColor: iconColor ?? undefined,
+          iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-edit") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringParam(params, "to", { required: true });
+      const messageThreadId = readNumberParam(params, "messageThreadId", {
+        required: true,
+        integer: true,
+      });
+      const name = readStringParam(params, "name");
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      return await handleTelegramAction(
+        {
+          action: "editForumTopic",
+          chatId,
+          messageThreadId,
+          name: name ?? undefined,
+          iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-close") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringParam(params, "to", { required: true });
+      const messageThreadId = readNumberParam(params, "messageThreadId", {
+        required: true,
+        integer: true,
+      });
+      return await handleTelegramAction(
+        {
+          action: "closeForumTopic",
+          chatId,
+          messageThreadId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-reopen") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringParam(params, "to", { required: true });
+      const messageThreadId = readNumberParam(params, "messageThreadId", {
+        required: true,
+        integer: true,
+      });
+      return await handleTelegramAction(
+        {
+          action: "reopenForumTopic",
+          chatId,
+          messageThreadId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-delete") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringParam(params, "to", { required: true });
+      const messageThreadId = readNumberParam(params, "messageThreadId", {
+        required: true,
+        integer: true,
+      });
+      return await handleTelegramAction(
+        {
+          action: "deleteForumTopic",
+          chatId,
+          messageThreadId,
           accountId: accountId ?? undefined,
         },
         cfg,

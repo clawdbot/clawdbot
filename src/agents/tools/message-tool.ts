@@ -188,6 +188,27 @@ function buildGatewaySchema() {
   };
 }
 
+function buildForumTopicSchema() {
+  return {
+    iconColor: Type.Optional(
+      Type.Number({
+        description:
+          "Topic icon color in RGB (e.g. 0x6FB9F0). Only for Telegram forum topic-create.",
+      }),
+    ),
+    iconCustomEmojiId: Type.Optional(
+      Type.String({
+        description: "Custom emoji id for the topic icon. For Telegram topic-create/topic-edit.",
+      }),
+    ),
+    messageThreadId: Type.Optional(
+      Type.Number({
+        description: "Forum topic thread id. For Telegram topic-edit/close/reopen/delete.",
+      }),
+    ),
+  };
+}
+
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
@@ -220,6 +241,7 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean; include
     ...buildModerationSchema(),
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
+    ...buildForumTopicSchema(),
   };
 }
 

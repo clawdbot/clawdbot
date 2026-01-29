@@ -48,6 +48,11 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "timeout",
   "kick",
   "ban",
+  "topic-create",
+  "topic-edit",
+  "topic-close",
+  "topic-reopen",
+  "topic-delete",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];
