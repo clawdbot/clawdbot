@@ -410,6 +410,112 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
+  it("deletes deleteAfterRun job even when skipped", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    // Invalid main job (agentTurn payload) that will be skipped at runtime.
+    // Write directly to disk to bypass add() validation.
+    const jobId = "skip-delete-test";
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: jobId,
+            name: "skipped delete test",
+            enabled: true,
+            deleteAfterRun: true,
+            createdAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
+            updatedAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
+            schedule: { kind: "at", atMs },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "bad" },
+            state: { nextRunAtMs: atMs },
+          },
+        ],
+      }),
+    );
+
+    // Reload to pick up the manually written job.
+    cron.stop();
+    const cron2 = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+    await cron2.start();
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    // Job should be deleted even though it was skipped.
+    const jobs = await cron2.list({ includeDisabled: true });
+    expect(jobs.find((j) => j.id === jobId)).toBeUndefined();
+
+    cron2.stop();
+    await store.cleanup();
+  });
+
+  it("deletes deleteAfterRun job even when failed", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "boom",
+    }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const job = await cron.add({
+      name: "error delete test",
+      enabled: true,
+      deleteAfterRun: true,
+      schedule: { kind: "at", atMs },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "fail me", deliver: false },
+    });
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    // Job should be deleted even though it errored.
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("skips invalid main jobs with agentTurn payloads from disk", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
