@@ -19,7 +19,7 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { recordInboundSession } from "../channels/session.js";
-import { formatCliCommand } from "../cli/command-format.js";
+import { formatCliCommandForCopy } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { MoltbotConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
@@ -279,8 +279,9 @@ export const buildTelegramMessageContext = async ({
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",
-                      formatCliCommand("moltbot pairing approve telegram <code>"),
+                      formatCliCommandForCopy(`moltbot pairing approve telegram ${code}`),
                     ].join("\n"),
+                    { parse_mode: "Markdown" },
                   ),
               });
             }

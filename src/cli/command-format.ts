@@ -19,3 +19,14 @@ export function formatCliCommand(
   }
   return normalizedCommand.replace(CLI_PREFIX_RE, (match) => `${match} --profile ${profile}`);
 }
+
+/**
+ * Format a CLI command wrapped in backticks for one-click copy in Telegram.
+ * When sent as a message, users can tap the monospace text to copy it.
+ */
+export function formatCliCommandForCopy(
+  command: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string {
+  return `\`${formatCliCommand(command, env)}\``;
+}
