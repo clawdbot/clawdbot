@@ -59,6 +59,74 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   return { role, content, timestamp, id };
 }
 
+type SplitSystemMessageResult = {
+  systemMessage: NormalizedMessage | null;
+  message: NormalizedMessage;
+};
+
+const SYSTEM_LINE_PREFIX = "System: ";
+
+function parseSystemLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith(SYSTEM_LINE_PREFIX)) return null;
+  const payload = trimmed.slice(SYSTEM_LINE_PREFIX.length).trim();
+  return payload ? payload : null;
+}
+
+export function splitSystemPreface(
+  message: NormalizedMessage,
+): SplitSystemMessageResult {
+  if (message.role.toLowerCase() !== "user") {
+    return { systemMessage: null, message };
+  }
+
+  const textParts = message.content
+    .filter((item) => item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text ?? "")
+    .filter((text) => text.trim().length > 0);
+
+  if (textParts.length === 0) return { systemMessage: null, message };
+
+  const joined = textParts.join("\n").trim();
+  if (!joined.startsWith(SYSTEM_LINE_PREFIX)) {
+    return { systemMessage: null, message };
+  }
+
+  const lines = joined.split(/\r?\n/);
+  const systemLines: string[] = [];
+  let idx = 0;
+  while (idx < lines.length) {
+    const parsed = parseSystemLine(lines[idx] ?? "");
+    if (!parsed) break;
+    systemLines.push(parsed);
+    idx += 1;
+  }
+
+  if (systemLines.length === 0) return { systemMessage: null, message };
+
+  // Skip blank separator line after system block, if present.
+  while (idx < lines.length && !lines[idx]?.trim()) idx += 1;
+  const remainder = lines.slice(idx).join("\n").trim();
+
+  const systemMessage: NormalizedMessage = {
+    role: "system",
+    content: [{ type: "text", text: systemLines.join("\n") }],
+    timestamp: message.timestamp,
+  };
+
+  if (!remainder) {
+    return { systemMessage, message: { ...message, content: [] } };
+  }
+
+  return {
+    systemMessage,
+    message: {
+      ...message,
+      content: [{ type: "text", text: remainder }],
+    },
+  };
+}
+
 /**
  * Normalize role for grouping purposes.
  */

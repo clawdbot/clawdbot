@@ -18,6 +18,21 @@
   justify-content: flex-start;
 }
 
+.chat-group.system {
+  justify-content: center;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.chat-group.system .chat-group-messages {
+  align-items: center;
+  max-width: min(820px, 90%);
+}
+
+.chat-group.system .chat-group-footer {
+  justify-content: center;
+}
+
 .chat-group-messages {
   display: flex;
   flex-direction: column;
@@ -87,6 +102,10 @@
 .chat-avatar.tool {
   background: var(--secondary);
   color: var(--muted);
+}
+
+.chat-group.system .chat-avatar {
+  display: none;
 }
 
 /* Image avatar support */
@@ -226,6 +245,21 @@ img.chat-avatar {
 .chat-group.user .chat-bubble {
   background: var(--accent-subtle);
   border-color: transparent;
+}
+
+.chat-group.system .chat-bubble {
+  background: var(--bg-muted);
+  border-color: var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 12px;
+  text-align: center;
+}
+
+:root[data-theme="light"] .chat-group.system .chat-bubble {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.35);
 }
 
 :root[data-theme="light"] .chat-group.user .chat-bubble {

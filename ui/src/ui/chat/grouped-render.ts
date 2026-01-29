@@ -120,12 +120,16 @@ export function renderMessageGroup(
       ? "You"
       : normalizedRole === "assistant"
         ? assistantName
+        : normalizedRole === "system"
+          ? "System"
         : normalizedRole;
   const roleClass =
     normalizedRole === "user"
       ? "user"
       : normalizedRole === "assistant"
         ? "assistant"
+        : normalizedRole === "system"
+          ? "system"
         : "other";
   const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
     hour: "numeric",
@@ -171,6 +175,8 @@ function renderAvatar(
       ? "U"
       : normalized === "assistant"
         ? assistantName.charAt(0).toUpperCase() || "A"
+        : normalized === "system"
+          ? "!"
         : normalized === "tool"
           ? "⚙"
           : "?";
@@ -179,6 +185,8 @@ function renderAvatar(
       ? "user"
       : normalized === "assistant"
         ? "assistant"
+      : normalized === "system"
+          ? "system"
       : normalized === "tool"
           ? "tool"
           : "other";

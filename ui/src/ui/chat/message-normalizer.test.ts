@@ -3,6 +3,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
   isToolResultMessage,
+  splitSystemPreface,
 } from "./message-normalizer";
 
 describe("message-normalizer", () => {
@@ -135,6 +136,48 @@ describe("message-normalizer", () => {
 
     it("preserves system role", () => {
       expect(normalizeRoleForGrouping("system")).toBe("system");
+    });
+  });
+
+  describe("splitSystemPreface", () => {
+    it("splits leading system block into system message", () => {
+      const normalized = normalizeMessage({
+        role: "user",
+        content: "System: [2026-01-26 10:00:00 UTC] Exec finished\n\nRun complete",
+        timestamp: 123,
+      });
+      const result = splitSystemPreface(normalized);
+      expect(result.systemMessage?.role).toBe("system");
+      expect(result.systemMessage?.content).toEqual([
+        { type: "text", text: expect.stringContaining("Exec finished") },
+      ]);
+      expect(result.message.content).toEqual([
+        { type: "text", text: "Run complete" },
+      ]);
+    });
+
+    it("keeps user message when no system prefix", () => {
+      const normalized = normalizeMessage({
+        role: "user",
+        content: "Hello",
+        timestamp: 123,
+      });
+      const result = splitSystemPreface(normalized);
+      expect(result.systemMessage).toBeNull();
+      expect(result.message.content).toEqual([{ type: "text", text: "Hello" }]);
+    });
+
+    it("creates system message even when remainder is empty", () => {
+      const normalized = normalizeMessage({
+        role: "user",
+        content: "System: [2026-01-26 10:00:00 UTC] Gateway restart",
+        timestamp: 123,
+      });
+      const result = splitSystemPreface(normalized);
+      expect(result.systemMessage?.content).toEqual([
+        { type: "text", text: expect.stringContaining("Gateway restart") },
+      ]);
+      expect(result.message.content).toEqual([]);
     });
   });
 
