@@ -161,7 +161,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await expect(
       tool?.execute?.("call", { url: "https://example.com/readability-empty" }),
-    ).rejects.toThrow("Readability and Firecrawl returned no content");
+    ).rejects.toThrow("Readability, Jina, and Firecrawl returned no content");
   });
 
   it("uses firecrawl when direct fetch fails", async () => {

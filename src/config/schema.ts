@@ -199,6 +199,15 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
+  "tools.web.fetch.jina.enabled": "Enable Jina Reader",
+  "tools.web.fetch.jina.apiKey": "Jina API Key",
+  "tools.web.fetch.jina.baseUrl": "Jina Base URL",
+  "tools.web.fetch.jina.engine": "Jina Engine",
+  "tools.web.fetch.jina.returnFormat": "Jina Return Format",
+  "tools.web.fetch.jina.timeoutSeconds": "Jina Timeout (sec)",
+  "tools.web.fetch.jina.noCache": "Jina Disable Cache",
+  "tools.web.fetch.jina.withLinksSummary": "Jina Include Links Summary",
+  "tools.web.fetch.jina.withImagesSummary": "Jina Include Images Summary",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.allowInsecureAuth": "Allow Insecure Control UI Auth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
@@ -463,6 +472,17 @@ const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.jina.enabled": "Enable Jina Reader fallback for web_fetch (if configured).",
+  "tools.web.fetch.jina.apiKey": "Jina API key (fallback: JINA_API_KEY env var).",
+  "tools.web.fetch.jina.baseUrl": "Jina base URL (default: https://r.jina.ai).",
+  "tools.web.fetch.jina.engine":
+    'Jina engine ("browser" for quality, "direct" for speed, "cf-browser-rendering" for JS-heavy sites).',
+  "tools.web.fetch.jina.returnFormat": 'Jina return format ("markdown", "text", or "html").',
+  "tools.web.fetch.jina.timeoutSeconds": "Timeout in seconds for Jina requests.",
+  "tools.web.fetch.jina.noCache": "Bypass Jina cache for fresh content (default: false).",
+  "tools.web.fetch.jina.withLinksSummary": "Include a summary of all links at the end of content.",
+  "tools.web.fetch.jina.withImagesSummary":
+    "Include a summary of all images at the end of content.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "channels.slack.thread.historyScope":

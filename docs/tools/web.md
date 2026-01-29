@@ -209,6 +209,7 @@ Fetch a URL and extract readable content.
 ### Requirements
 
 - `tools.web.fetch.enabled` must not be `false` (default: enabled)
+- Optional Jina fallback: set `tools.web.fetch.jina.apiKey` or `JINA_API_KEY`.
 - Optional Firecrawl fallback: set `tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`.
 
 ### Config
@@ -225,6 +226,13 @@ Fetch a URL and extract readable content.
         maxRedirects: 3,
         userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         readability: true,
+        jina: {
+          enabled: true,
+          apiKey: "JINA_API_KEY_HERE", // optional if JINA_API_KEY is set
+          baseUrl: "https://r.jina.ai",
+          engine: "browser", // "browser", "direct", or "cf-browser-rendering"
+          timeoutSeconds: 30
+        },
         firecrawl: {
           enabled: true,
           apiKey: "FIRECRAWL_API_KEY_HERE", // optional if FIRECRAWL_API_KEY is set
@@ -246,12 +254,14 @@ Fetch a URL and extract readable content.
 - `maxChars` (truncate long pages)
 
 Notes:
-- `web_fetch` uses Readability (main-content extraction) first, then Firecrawl (if configured). If both fail, the tool returns an error.
+- `web_fetch` uses Readability (main-content extraction) first, then Jina (if configured), then Firecrawl (if configured). If all fail, the tool returns an error.
+- Jina is tried before Firecrawl because it has better PDF support and more affordable token-based pricing.
 - Firecrawl requests use bot-circumvention mode and cache results by default.
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
 - `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
-- See [Firecrawl](/tools/firecrawl) for key setup and service details.
+- See [Jina](/tools/jina) for Jina Reader setup and service details.
+- See [Firecrawl](/tools/firecrawl) for Firecrawl key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
 - If the Brave key is missing, `web_search` returns a short setup hint with a docs link.

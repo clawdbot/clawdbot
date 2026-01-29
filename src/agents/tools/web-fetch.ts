@@ -40,6 +40,7 @@ const DEFAULT_FETCH_MAX_REDIRECTS = 3;
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
+const DEFAULT_JINA_BASE_URL = "https://r.jina.ai";
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -75,6 +76,20 @@ type FirecrawlFetchConfig =
       onlyMainContent?: boolean;
       maxAgeMs?: number;
       timeoutSeconds?: number;
+    }
+  | undefined;
+
+type JinaFetchConfig =
+  | {
+      enabled?: boolean;
+      apiKey?: string;
+      baseUrl?: string;
+      engine?: "browser" | "direct" | "cf-browser-rendering";
+      returnFormat?: "markdown" | "text" | "html";
+      timeoutSeconds?: number;
+      noCache?: boolean;
+      withLinksSummary?: boolean;
+      withImagesSummary?: boolean;
     }
   | undefined;
 
@@ -145,6 +160,33 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
   const resolved = resolveFirecrawlMaxAgeMs(firecrawl);
   if (typeof resolved === "number") return resolved;
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+}
+
+// ===== Jina Configuration Resolvers =====
+
+function resolveJinaConfig(fetch?: WebFetchConfig): JinaFetchConfig {
+  if (!fetch || typeof fetch !== "object") return undefined;
+  const jina = "jina" in fetch ? fetch.jina : undefined;
+  if (!jina || typeof jina !== "object") return undefined;
+  return jina as JinaFetchConfig;
+}
+
+function resolveJinaApiKey(jina?: JinaFetchConfig): string | undefined {
+  const fromConfig =
+    jina && "apiKey" in jina && typeof jina.apiKey === "string" ? jina.apiKey.trim() : "";
+  const fromEnv = (process.env.JINA_API_KEY ?? "").trim();
+  return fromConfig || fromEnv || undefined;
+}
+
+function resolveJinaEnabled(params: { jina?: JinaFetchConfig; apiKey?: string }): boolean {
+  if (typeof params.jina?.enabled === "boolean") return params.jina.enabled;
+  return Boolean(params.apiKey);
+}
+
+function resolveJinaBaseUrl(jina?: JinaFetchConfig): string {
+  const raw =
+    jina && "baseUrl" in jina && typeof jina.baseUrl === "string" ? jina.baseUrl.trim() : "";
+  return raw || DEFAULT_JINA_BASE_URL;
 }
 
 function resolveMaxChars(value: unknown, fallback: number): number {
@@ -329,6 +371,83 @@ export async function fetchFirecrawlContent(params: {
   };
 }
 
+export async function fetchJinaContent(params: {
+  url: string;
+  extractMode: ExtractMode;
+  apiKey: string;
+  baseUrl: string;
+  engine?: "browser" | "direct" | "cf-browser-rendering";
+  noCache?: boolean;
+  withLinksSummary?: boolean;
+  withImagesSummary?: boolean;
+  timeoutSeconds: number;
+}): Promise<{
+  text: string;
+  title?: string;
+  finalUrl?: string;
+  status?: number;
+}> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${params.apiKey}`,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+
+  // Optional Jina headers
+  if (params.engine) {
+    headers["X-Engine"] = params.engine;
+  }
+  if (params.noCache) {
+    headers["X-No-Cache"] = "true";
+  }
+  if (params.withLinksSummary) {
+    headers["X-With-Links-Summary"] = "true";
+  }
+  if (params.withImagesSummary) {
+    headers["X-With-Images-Summary"] = "true";
+  }
+  if (params.timeoutSeconds) {
+    headers["X-Timeout"] = String(params.timeoutSeconds);
+  }
+
+  // Determine return format based on extractMode
+  const returnFormat = params.extractMode === "text" ? "text" : "markdown";
+  headers["X-Return-Format"] = returnFormat;
+
+  const res = await fetch(params.baseUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ url: params.url }),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  const payload = (await res.json()) as {
+    code?: number;
+    status?: number;
+    data?: {
+      title?: string;
+      content?: string;
+      url?: string;
+    };
+    error?: string;
+  };
+
+  if (!res.ok || (payload?.code && payload.code !== 200)) {
+    const detail = payload?.error || res.statusText;
+    throw new Error(`Jina fetch failed (${res.status}): ${detail}`.trim());
+  }
+
+  const data = payload?.data ?? {};
+  const text = typeof data.content === "string" ? data.content : "";
+
+  return {
+    text,
+    title: data.title,
+    finalUrl: data.url,
+    status: payload.code ?? res.status,
+  };
+}
+
 async function runWebFetch(params: {
   url: string;
   extractMode: ExtractMode;
@@ -338,6 +457,14 @@ async function runWebFetch(params: {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  jinaEnabled: boolean;
+  jinaApiKey?: string;
+  jinaBaseUrl: string;
+  jinaEngine?: "browser" | "direct" | "cf-browser-rendering";
+  jinaNoCache?: boolean;
+  jinaWithLinksSummary?: boolean;
+  jinaWithImagesSummary?: boolean;
+  jinaTimeoutSeconds: number;
   firecrawlEnabled: boolean;
   firecrawlApiKey?: string;
   firecrawlBaseUrl: string;
@@ -381,6 +508,42 @@ async function runWebFetch(params: {
     if (error instanceof SsrFBlockedError) {
       throw error;
     }
+    // Try Jina first (cheaper, better PDF support)
+    if (params.jinaEnabled && params.jinaApiKey) {
+      try {
+        const jina = await fetchJinaContent({
+          url: finalUrl,
+          extractMode: params.extractMode,
+          apiKey: params.jinaApiKey,
+          baseUrl: params.jinaBaseUrl,
+          engine: params.jinaEngine,
+          noCache: params.jinaNoCache,
+          withLinksSummary: params.jinaWithLinksSummary,
+          withImagesSummary: params.jinaWithImagesSummary,
+          timeoutSeconds: params.jinaTimeoutSeconds,
+        });
+        const truncated = truncateText(jina.text, params.maxChars);
+        const payload = {
+          url: params.url,
+          finalUrl: jina.finalUrl || finalUrl,
+          status: jina.status ?? 200,
+          contentType: "text/markdown",
+          title: jina.title,
+          extractMode: params.extractMode,
+          extractor: "jina",
+          truncated: truncated.truncated,
+          length: truncated.text.length,
+          fetchedAt: new Date().toISOString(),
+          tookMs: Date.now() - start,
+          text: truncated.text,
+        };
+        writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+        return payload;
+      } catch {
+        // Fall through to Firecrawl
+      }
+    }
+    // Then try Firecrawl (bot circumvention)
     if (params.firecrawlEnabled && params.firecrawlApiKey) {
       const firecrawl = await fetchFirecrawlContent({
         url: finalUrl,
@@ -417,6 +580,42 @@ async function runWebFetch(params: {
 
   try {
     if (!res.ok) {
+      // Try Jina first (cheaper, better PDF support)
+      if (params.jinaEnabled && params.jinaApiKey) {
+        try {
+          const jina = await fetchJinaContent({
+            url: params.url,
+            extractMode: params.extractMode,
+            apiKey: params.jinaApiKey,
+            baseUrl: params.jinaBaseUrl,
+            engine: params.jinaEngine,
+            noCache: params.jinaNoCache,
+            withLinksSummary: params.jinaWithLinksSummary,
+            withImagesSummary: params.jinaWithImagesSummary,
+            timeoutSeconds: params.jinaTimeoutSeconds,
+          });
+          const truncated = truncateText(jina.text, params.maxChars);
+          const payload = {
+            url: params.url,
+            finalUrl: jina.finalUrl || finalUrl,
+            status: jina.status ?? res.status,
+            contentType: "text/markdown",
+            title: jina.title,
+            extractMode: params.extractMode,
+            extractor: "jina",
+            truncated: truncated.truncated,
+            length: truncated.text.length,
+            fetchedAt: new Date().toISOString(),
+            tookMs: Date.now() - start,
+            text: truncated.text,
+          };
+          writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+          return payload;
+        } catch {
+          // Fall through to Firecrawl
+        }
+      }
+      // Then try Firecrawl (bot circumvention)
       if (params.firecrawlEnabled && params.firecrawlApiKey) {
         const firecrawl = await fetchFirecrawlContent({
           url: params.url,
@@ -475,20 +674,29 @@ async function runWebFetch(params: {
           title = readable.title;
           extractor = "readability";
         } else {
-          const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
-          if (firecrawl) {
-            text = firecrawl.text;
-            title = firecrawl.title;
-            extractor = "firecrawl";
+          // Try Jina first (cheaper, better PDF support)
+          const jina = await tryJinaFallback({ ...params, url: finalUrl });
+          if (jina) {
+            text = jina.text;
+            title = jina.title;
+            extractor = "jina";
           } else {
-            throw new Error(
-              "Web fetch extraction failed: Readability and Firecrawl returned no content.",
-            );
+            // Then try Firecrawl (bot circumvention)
+            const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
+            if (firecrawl) {
+              text = firecrawl.text;
+              title = firecrawl.title;
+              extractor = "firecrawl";
+            } else {
+              throw new Error(
+                "Web fetch extraction failed: Readability, Jina, and Firecrawl returned no content.",
+              );
+            }
           }
         }
       } else {
         throw new Error(
-          "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
+          "Web fetch extraction failed: Readability disabled and Jina/Firecrawl unavailable.",
         );
       }
     } else if (contentType.includes("application/json")) {
@@ -554,6 +762,37 @@ async function tryFirecrawlFallback(params: {
   }
 }
 
+async function tryJinaFallback(params: {
+  url: string;
+  extractMode: ExtractMode;
+  jinaEnabled: boolean;
+  jinaApiKey?: string;
+  jinaBaseUrl: string;
+  jinaEngine?: "browser" | "direct" | "cf-browser-rendering";
+  jinaNoCache?: boolean;
+  jinaWithLinksSummary?: boolean;
+  jinaWithImagesSummary?: boolean;
+  jinaTimeoutSeconds: number;
+}): Promise<{ text: string; title?: string } | null> {
+  if (!params.jinaEnabled || !params.jinaApiKey) return null;
+  try {
+    const jina = await fetchJinaContent({
+      url: params.url,
+      extractMode: params.extractMode,
+      apiKey: params.jinaApiKey,
+      baseUrl: params.jinaBaseUrl,
+      engine: params.jinaEngine,
+      noCache: params.jinaNoCache,
+      withLinksSummary: params.jinaWithLinksSummary,
+      withImagesSummary: params.jinaWithImagesSummary,
+      timeoutSeconds: params.jinaTimeoutSeconds,
+    });
+    return { text: jina.text, title: jina.title };
+  } catch {
+    return null;
+  }
+}
+
 function resolveFirecrawlEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) return `${DEFAULT_FIRECRAWL_BASE_URL}/v2/scrape`;
@@ -576,6 +815,22 @@ export function createWebFetchTool(options?: {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) return null;
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+
+  // Jina config
+  const jina = resolveJinaConfig(fetch);
+  const jinaApiKey = resolveJinaApiKey(jina);
+  const jinaEnabled = resolveJinaEnabled({ jina, apiKey: jinaApiKey });
+  const jinaBaseUrl = resolveJinaBaseUrl(jina);
+  const jinaEngine = jina?.engine;
+  const jinaNoCache = jina?.noCache;
+  const jinaWithLinksSummary = jina?.withLinksSummary;
+  const jinaWithImagesSummary = jina?.withImagesSummary;
+  const jinaTimeoutSeconds = resolveTimeoutSeconds(
+    jina?.timeoutSeconds ?? fetch?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
+
+  // Firecrawl config
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
   const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
@@ -586,6 +841,7 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -609,6 +865,14 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        jinaEnabled,
+        jinaApiKey,
+        jinaBaseUrl,
+        jinaEngine,
+        jinaNoCache,
+        jinaWithLinksSummary,
+        jinaWithImagesSummary,
+        jinaTimeoutSeconds,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

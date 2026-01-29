@@ -182,6 +182,33 @@ export const ToolsWebSearchSchema = z
   .strict()
   .optional();
 
+export const ToolsWebFetchFirecrawlSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    onlyMainContent: z.boolean().optional(),
+    maxAgeMs: z.number().int().nonnegative().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
+export const ToolsWebFetchJinaSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    engine: z.enum(["browser", "direct", "cf-browser-rendering"]).optional(),
+    returnFormat: z.enum(["markdown", "text", "html"]).optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    noCache: z.boolean().optional(),
+    withLinksSummary: z.boolean().optional(),
+    withImagesSummary: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -190,6 +217,9 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    readability: z.boolean().optional(),
+    firecrawl: ToolsWebFetchFirecrawlSchema,
+    jina: ToolsWebFetchJinaSchema,
   })
   .strict()
   .optional();
