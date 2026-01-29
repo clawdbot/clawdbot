@@ -1160,16 +1160,42 @@ export async function textToSpeech(params: {
           }
         }
 
+        // Convert Edge TTS MP3 to Opus for Telegram voice compatibility
+        let finalAudioPath = edgeResult.audioPath;
+        let finalVoiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+        if (channelId === "telegram" && !finalVoiceCompatible) {
+          try {
+            const opusPath = edgeResult.audioPath.replace(/\.[^.]+$/, ".opus");
+            const { execSync } = await import("node:child_process");
+            execSync(
+              `ffmpeg -i "${edgeResult.audioPath}" -c:a libopus -b:a 64k -application voip "${opusPath}" -y`,
+              { stdio: "pipe" },
+            );
+            // Remove original MP3
+            try {
+              unlinkSync(edgeResult.audioPath);
+            } catch {
+              // ignore cleanup errors
+            }
+            finalAudioPath = opusPath;
+            finalVoiceCompatible = true;
+            logVerbose("TTS: Converted Edge MP3 to Opus for Telegram voice compatibility.");
+          } catch (convErr) {
+            const convError = convErr as Error;
+            logVerbose(`TTS: ffmpeg Opus conversion failed: ${convError.message}`);
+            // Fall back to original MP3
+          }
+        }
+
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
 
         return {
           success: true,
-          audioPath: edgeResult.audioPath,
+          audioPath: finalAudioPath,
           latencyMs: Date.now() - providerStart,
           provider,
-          outputFormat: edgeResult.outputFormat,
-          voiceCompatible,
+          outputFormat: finalVoiceCompatible ? "opus" : edgeResult.outputFormat,
+          voiceCompatible: finalVoiceCompatible,
         };
       }
 
