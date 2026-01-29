@@ -299,6 +299,23 @@ export function formatAssistantErrorText(
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
 
+  // Handle rate limit errors (429) with user-friendly messaging
+  if (isRateLimitErrorMessage(raw)) {
+    const retryAfter = extractRetryAfterSeconds(raw);
+    const retryHint = retryAfter
+      ? ` Please try again in ${formatRetryDuration(retryAfter)}.`
+      : " Please try again in a few minutes.";
+    return `⚠️ Rate limit reached.${retryHint} You may need to upgrade your API plan or wait for the limit to reset.`;
+  }
+
+  // Handle billing/payment errors (402)
+  if (isBillingErrorMessage(raw)) {
+    return (
+      "⚠️ API quota or payment issue detected. " +
+      "Please check your account billing and credits at your provider's dashboard."
+    );
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -515,4 +532,40 @@ export function isFailoverErrorMessage(raw: string): boolean {
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isFailoverErrorMessage(msg.errorMessage ?? "");
+}
+
+/**
+ * Extract retry-after duration from error message (in seconds).
+ * Checks for Retry-After header or x-ratelimit-reset in the error payload.
+ */
+function extractRetryAfterSeconds(raw: string): number | null {
+  if (!raw) return null;
+
+  // Look for Retry-After header value (seconds)
+  const retryAfterMatch = raw.match(/retry[_-]?after[:\s]+(\d+)/i);
+  if (retryAfterMatch?.[1]) {
+    return Number.parseInt(retryAfterMatch[1], 10);
+  }
+
+  // Look for x-ratelimit-reset (Unix timestamp)
+  const resetMatch = raw.match(/x[_-]?ratelimit[_-]?reset[:\s]+(\d+)/i);
+  if (resetMatch?.[1]) {
+    const resetTime = Number.parseInt(resetMatch[1], 10);
+    const now = Math.floor(Date.now() / 1000);
+    const seconds = resetTime - now;
+    return seconds > 0 ? seconds : null;
+  }
+
+  return null;
+}
+
+/**
+ * Format retry duration in human-readable form.
+ */
+function formatRetryDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds} second${seconds !== 1 ? "s" : ""}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes !== 1 ? "s" : ""}`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours} hour${hours !== 1 ? "s" : ""}`;
 }

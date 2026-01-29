@@ -313,6 +313,7 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
+  maxBytes?: number;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -328,6 +329,7 @@ export async function sanitizeSessionHistory(params: {
     toolCallIdMode: policy.toolCallIdMode,
     preserveSignatures: policy.preserveSignatures,
     sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+    maxBytes: params.maxBytes,
   });
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)

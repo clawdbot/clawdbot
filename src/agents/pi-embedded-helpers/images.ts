@@ -38,6 +38,7 @@ export async function sanitizeSessionMessagesImages(
       allowBase64Only?: boolean;
       includeCamelCase?: boolean;
     };
+    maxBytes?: number;
   },
 ): Promise<AgentMessage[]> {
   const sanitizeMode = options?.sanitizeMode ?? "full";
@@ -62,6 +63,7 @@ export async function sanitizeSessionMessagesImages(
       const nextContent = (await sanitizeContentBlocksImages(
         content as ContentBlock[],
         label,
+        { maxBytes: options?.maxBytes },
       )) as unknown as typeof toolMsg.content;
       out.push({ ...toolMsg, content: nextContent });
       continue;
@@ -74,6 +76,7 @@ export async function sanitizeSessionMessagesImages(
         const nextContent = (await sanitizeContentBlocksImages(
           content as unknown as ContentBlock[],
           label,
+          { maxBytes: options?.maxBytes },
         )) as unknown as typeof userMsg.content;
         out.push({ ...userMsg, content: nextContent });
         continue;
@@ -88,6 +91,7 @@ export async function sanitizeSessionMessagesImages(
           const nextContent = (await sanitizeContentBlocksImages(
             content as unknown as ContentBlock[],
             label,
+            { maxBytes: options?.maxBytes },
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
         } else {
@@ -101,6 +105,7 @@ export async function sanitizeSessionMessagesImages(
           const nextContent = (await sanitizeContentBlocksImages(
             content as unknown as ContentBlock[],
             label,
+            { maxBytes: options?.maxBytes },
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
           continue;
@@ -118,6 +123,7 @@ export async function sanitizeSessionMessagesImages(
         const finalContent = (await sanitizeContentBlocksImages(
           filteredContent as unknown as ContentBlock[],
           label,
+          { maxBytes: options?.maxBytes },
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length === 0) {
           continue;
