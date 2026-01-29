@@ -77,7 +77,33 @@ describe("resolveAgentRoute", () => {
       accountId: null,
       peer: { kind: "dm", id: "222222222222222222" },
     });
-    expect(route.sessionKey).toBe("agent:main:discord:dm:alice");
+    expect(route.sessionKey).toBe("agent:main:dm:alice");
+  });
+
+  test("identityLinks per-channel-peer shares context across channels", () => {
+    const cfg: ClawdbotConfig = {
+      session: {
+        dmScope: "per-channel-peer",
+        identityLinks: {
+          alice: ["telegram:111111111", "discord:222222222222222222"],
+        },
+      },
+    };
+    const telegramRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "dm", id: "111111111" },
+    });
+    const discordRoute = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: null,
+      peer: { kind: "dm", id: "222222222222222222" },
+    });
+    expect(telegramRoute.sessionKey).toBe("agent:main:dm:alice");
+    expect(discordRoute.sessionKey).toBe("agent:main:dm:alice");
+    expect(telegramRoute.sessionKey).toBe(discordRoute.sessionKey);
   });
 
   test("peer binding wins over account binding", () => {
