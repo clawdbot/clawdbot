@@ -10,7 +10,7 @@
   height: calc(100vh - 160px);
   margin: -16px;
   border-radius: var(--radius-xl);
-  overflow: hidden;
+  /* overflow: hidden; */
   border: 1px solid var(--border);
   background: var(--panel);
 }
