@@ -248,6 +248,8 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Post-compaction recovery turn (agentic turn). Default: enabled. */
+  postCompaction?: AgentCompactionPostCompactionConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -258,5 +260,14 @@ export type AgentCompactionMemoryFlushConfig = {
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
+  systemPrompt?: string;
+};
+
+export type AgentCompactionPostCompactionConfig = {
+  /** Enable the post-compaction recovery turn (default: true). */
+  enabled?: boolean;
+  /** User prompt used for the post-compaction recovery turn (NO_REPLY is enforced if missing). */
+  prompt?: string;
+  /** System prompt appended for the post-compaction recovery turn. */
   systemPrompt?: string;
 };

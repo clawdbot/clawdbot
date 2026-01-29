@@ -21,6 +21,7 @@ import {
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
+import { resolvePostCompactionSettings, shouldRunPostCompaction } from "./post-compaction.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -187,6 +188,172 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+  }
+
+  // Run post-compaction recovery if needed
+  if (memoryCompactionCompleted) {
+    activeSessionEntry =
+      (await runPostCompactionRecoveryIfNeeded({
+        cfg: params.cfg,
+        followupRun: params.followupRun,
+        sessionCtx: params.sessionCtx,
+        opts: params.opts,
+        defaultModel: params.defaultModel,
+        agentCfgContextTokens: params.agentCfgContextTokens,
+        resolvedVerboseLevel: params.resolvedVerboseLevel,
+        sessionEntry: activeSessionEntry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        isHeartbeat: params.isHeartbeat,
+        memoryCompactionCompleted,
+      })) ?? activeSessionEntry;
+  }
+
+  return activeSessionEntry;
+}
+
+export async function runPostCompactionRecoveryIfNeeded(params: {
+  cfg: MoltbotConfig;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  opts?: GetReplyOptions;
+  defaultModel: string;
+  agentCfgContextTokens?: number;
+  resolvedVerboseLevel: VerboseLevel;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  isHeartbeat: boolean;
+  memoryCompactionCompleted: boolean;
+}): Promise<SessionEntry | undefined> {
+  const postCompactionSettings = resolvePostCompactionSettings(params.cfg);
+  if (!postCompactionSettings) return params.sessionEntry;
+
+  const postCompactionWritable = (() => {
+    if (!params.sessionKey) return true;
+    const runtime = resolveSandboxRuntimeStatus({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+    if (!runtime.sandboxed) return true;
+    const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
+    return sandboxCfg.workspaceAccess === "rw";
+  })();
+
+  const shouldRunRecovery =
+    postCompactionSettings &&
+    postCompactionWritable &&
+    !params.isHeartbeat &&
+    !isCliProvider(params.followupRun.run.provider, params.cfg) &&
+    shouldRunPostCompaction({
+      entry:
+        params.sessionEntry ??
+        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
+      memoryCompactionCompleted: params.memoryCompactionCompleted,
+    });
+
+  if (!shouldRunRecovery) return params.sessionEntry;
+
+  let activeSessionEntry = params.sessionEntry;
+  const recoveryRunId = crypto.randomUUID();
+  if (params.sessionKey) {
+    registerAgentRunContext(recoveryRunId, {
+      sessionKey: params.sessionKey,
+      verboseLevel: params.resolvedVerboseLevel,
+    });
+  }
+
+  const recoverySystemPrompt = [
+    params.followupRun.run.extraSystemPrompt,
+    postCompactionSettings.systemPrompt,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  try {
+    await runWithModelFallback({
+      cfg: params.followupRun.run.config,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      agentDir: params.followupRun.run.agentDir,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        params.followupRun.run.config,
+        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+      ),
+      run: (provider, model) => {
+        const authProfileId =
+          provider === params.followupRun.run.provider
+            ? params.followupRun.run.authProfileId
+            : undefined;
+        return runEmbeddedPiAgent({
+          sessionId: params.followupRun.run.sessionId,
+          sessionKey: params.sessionKey,
+          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+          agentAccountId: params.sessionCtx.AccountId,
+          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
+          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+          // Provider threading context for tool auto-injection
+          ...buildThreadingToolContext({
+            sessionCtx: params.sessionCtx,
+            config: params.followupRun.run.config,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+          }),
+          senderId: params.sessionCtx.SenderId?.trim() || undefined,
+          senderName: params.sessionCtx.SenderName?.trim() || undefined,
+          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+          sessionFile: params.followupRun.run.sessionFile,
+          workspaceDir: params.followupRun.run.workspaceDir,
+          agentDir: params.followupRun.run.agentDir,
+          config: params.followupRun.run.config,
+          skillsSnapshot: params.followupRun.run.skillsSnapshot,
+          prompt: postCompactionSettings.prompt,
+          extraSystemPrompt: recoverySystemPrompt,
+          ownerNumbers: params.followupRun.run.ownerNumbers,
+          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
+          provider,
+          model,
+          authProfileId,
+          authProfileIdSource: authProfileId
+            ? params.followupRun.run.authProfileIdSource
+            : undefined,
+          thinkLevel: params.followupRun.run.thinkLevel,
+          verboseLevel: params.followupRun.run.verboseLevel,
+          reasoningLevel: params.followupRun.run.reasoningLevel,
+          execOverrides: params.followupRun.run.execOverrides,
+          bashElevated: params.followupRun.run.bashElevated,
+          timeoutMs: params.followupRun.run.timeoutMs,
+          runId: recoveryRunId,
+        });
+      },
+    });
+
+    const postCompactionCompactionCount =
+      activeSessionEntry?.compactionCount ??
+      (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.compactionCount : 0) ??
+      0;
+
+    if (params.storePath && params.sessionKey) {
+      try {
+        const updatedEntry = await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: async () => ({
+            postCompactionAt: Date.now(),
+            postCompactionCompactionCount,
+          }),
+        });
+        if (updatedEntry) {
+          activeSessionEntry = updatedEntry;
+        }
+      } catch (err) {
+        logVerbose(`failed to persist post-compaction recovery metadata: ${String(err)}`);
+      }
+    }
+  } catch (err) {
+    logVerbose(`post-compaction recovery run failed: ${String(err)}`);
   }
 
   return activeSessionEntry;

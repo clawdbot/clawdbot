@@ -89,7 +89,24 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.blockState.inlineCode = createInlineCodeState();
 
   if (ctx.state.pendingCompactionRetry > 0) {
+    // A compaction retry was pending and this agent turn completed successfully.
+    // Emit a compaction end event with willRetry=false so callers know compaction
+    // ultimately succeeded (triggering post-compaction recovery turns, etc.).
+    const wasRetrying = ctx.state.pendingCompactionRetry > 0;
     ctx.resolveCompactionRetry();
+    // Only emit success event when all retries are resolved
+    if (wasRetrying && ctx.state.pendingCompactionRetry === 0 && !ctx.state.compactionInFlight) {
+      ctx.log.debug(`embedded run compaction retry success: runId=${ctx.params.runId}`);
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "compaction",
+        data: { phase: "end", willRetry: false },
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: false },
+      });
+    }
   } else {
     ctx.maybeResolveCompactionWait();
   }

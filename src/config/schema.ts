@@ -549,6 +549,30 @@ const FIELD_HELP: Record<string, string> = {
     "Minimum appended bytes before session transcripts trigger reindex (default: 100000).",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages":
     "Minimum appended JSONL lines before session transcripts trigger reindex (default: 50).",
+  "agents.defaults.compaction": "Compaction tuning and pre/post-compaction agentic turns.",
+  "agents.defaults.compaction.mode": 'Compaction summarization mode ("default" or "safeguard").',
+  "agents.defaults.compaction.reserveTokensFloor":
+    "Minimum reserve tokens enforced for Pi compaction (0 disables the floor).",
+  "agents.defaults.compaction.maxHistoryShare":
+    "Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5).",
+  "agents.defaults.compaction.memoryFlush":
+    "Pre-compaction memory flush (agentic turn). Default: enabled.",
+  "agents.defaults.compaction.memoryFlush.enabled":
+    "Enable the pre-compaction memory flush (default: true).",
+  "agents.defaults.compaction.memoryFlush.softThresholdTokens":
+    "Run the memory flush when context is within this many tokens of the compaction threshold.",
+  "agents.defaults.compaction.memoryFlush.prompt":
+    "User prompt used for the memory flush turn (NO_REPLY is enforced if missing).",
+  "agents.defaults.compaction.memoryFlush.systemPrompt":
+    "System prompt appended for the memory flush turn.",
+  "agents.defaults.compaction.postCompaction":
+    "Post-compaction recovery turn (agentic turn). Default: enabled.",
+  "agents.defaults.compaction.postCompaction.enabled":
+    "Enable the post-compaction recovery turn (default: true).",
+  "agents.defaults.compaction.postCompaction.prompt":
+    "User prompt used for the post-compaction recovery turn (NO_REPLY is enforced if missing).",
+  "agents.defaults.compaction.postCompaction.systemPrompt":
+    "System prompt appended for the post-compaction recovery turn.",
   "plugins.enabled": "Enable plugin/extension loading (default: true).",
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",

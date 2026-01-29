@@ -28,7 +28,10 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
+import {
+  runMemoryFlushIfNeeded,
+  runPostCompactionRecoveryIfNeeded,
+} from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -490,10 +493,32 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
       });
+      // Refresh entry with updated compactionCount for post-compaction check
+      if (sessionKey && activeSessionStore?.[sessionKey]) {
+        activeSessionEntry = activeSessionStore[sessionKey];
+      }
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
       }
+
+      // Run post-compaction recovery turn if enabled
+      activeSessionEntry =
+        (await runPostCompactionRecoveryIfNeeded({
+          cfg: followupRun.run.config,
+          followupRun,
+          sessionCtx,
+          opts,
+          defaultModel,
+          agentCfgContextTokens,
+          resolvedVerboseLevel,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+          isHeartbeat,
+          memoryCompactionCompleted: true,
+        })) ?? activeSessionEntry;
     }
     if (verboseEnabled && activeIsNewSession) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];

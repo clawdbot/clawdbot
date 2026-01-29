@@ -100,6 +100,14 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        postCompaction: z
+          .object({
+            enabled: z.boolean().optional(),
+            prompt: z.string().optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

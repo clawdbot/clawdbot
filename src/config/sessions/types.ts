@@ -77,6 +77,8 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  postCompactionAt?: number;
+  postCompactionCompactionCount?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
