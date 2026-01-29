@@ -55,21 +55,60 @@ export function clearCredentialsCache(): void {
   cachedGeminiCliCredentials = null;
 }
 
+/** Resolves the actual gemini binary path, handling mise/asdf shims. */
+function resolveGeminiBinaryPath(): string | null {
+  const geminiPath = findInPath("gemini");
+  if (!geminiPath) return null;
+
+  // Check if this is a mise shim by looking at realpath
+  const resolvedPath = realpathSync(geminiPath);
+  if (resolvedPath.endsWith("/mise") || resolvedPath.includes("/mise/")) {
+    // It's a mise shim - use `mise which` to get the real path
+    try {
+      const { execSync } = require("node:child_process");
+      const miseResult = execSync("mise which gemini", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+      if (miseResult && existsSync(miseResult)) {
+        return miseResult;
+      }
+    } catch {
+      // mise which failed, continue with fallbacks
+    }
+  }
+
+  return resolvedPath;
+}
+
 /** Extracts OAuth credentials from the installed Gemini CLI's bundled oauth2.js. */
 export function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
   if (cachedGeminiCliCredentials) return cachedGeminiCliCredentials;
 
   try {
-    const geminiPath = findInPath("gemini");
+    const geminiPath = resolveGeminiBinaryPath();
     if (!geminiPath) return null;
 
-    const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDir = dirname(dirname(resolvedPath));
+    const geminiCliDir = dirname(dirname(geminiPath));
 
+    // Build search paths - try resolved path first, then common npm global locations
     const searchPaths = [
       join(geminiCliDir, "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
       join(geminiCliDir, "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js"),
+      // For mise/nvm/fnm: the structure is lib/node_modules/@google/gemini-cli/...
+      join(dirname(geminiCliDir), "lib", "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
     ];
+
+    // Also try npm root -g as a fallback
+    try {
+      const { execSync } = require("node:child_process");
+      const npmRoot = execSync("npm root -g", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+      if (npmRoot) {
+        searchPaths.push(
+          join(npmRoot, "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
+          join(npmRoot, "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
+        );
+      }
+    } catch {
+      // npm root -g failed, continue with existing paths
+    }
 
     let content: string | null = null;
     for (const p of searchPaths) {
