@@ -188,7 +188,8 @@ services:
         "--bind",
         "${CLAWDBOT_GATEWAY_BIND}",
         "--port",
-        "${CLAWDBOT_GATEWAY_PORT}"
+        "${CLAWDBOT_GATEWAY_PORT}",
+        "--allow-unconfigured"
       ]
 ```
 
