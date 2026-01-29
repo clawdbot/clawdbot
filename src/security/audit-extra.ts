@@ -905,21 +905,54 @@ export async function collectStateDeepFilesystemFindings(params: {
   return findings;
 }
 
-function listGroupPolicyOpen(cfg: MoltbotConfig): string[] {
-  const out: string[] = [];
+type OpenGroupInfo = {
+  path: string;
+  channelId: string;
+  accountId?: string;
+  requireMention: boolean;
+};
+
+function listGroupPolicyOpenWithMentionInfo(cfg: MoltbotConfig): OpenGroupInfo[] {
+  const out: OpenGroupInfo[] = [];
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") return out;
+
   for (const [channelId, value] of Object.entries(channels)) {
     if (!value || typeof value !== "object") continue;
     const section = value as Record<string, unknown>;
-    if (section.groupPolicy === "open") out.push(`channels.${channelId}.groupPolicy`);
+
+    // Check channel-level groupPolicy
+    if (section.groupPolicy === "open") {
+      const groups = section.groups as Record<string, { requireMention?: boolean }> | undefined;
+      const defaultRequireMention = groups?.["*"]?.requireMention ?? true;
+      out.push({
+        path: `channels.${channelId}.groupPolicy`,
+        channelId,
+        requireMention: defaultRequireMention,
+      });
+    }
+
+    // Check account-level groupPolicy
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
       for (const [accountId, accountVal] of Object.entries(accounts)) {
         if (!accountVal || typeof accountVal !== "object") continue;
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open")
-          out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
+        if (acc.groupPolicy === "open") {
+          const groups = acc.groups as Record<string, { requireMention?: boolean }> | undefined;
+          const channelGroups = section.groups as
+            | Record<string, { requireMention?: boolean }>
+            | undefined;
+          // Account groups override channel groups
+          const defaultRequireMention =
+            groups?.["*"]?.requireMention ?? channelGroups?.["*"]?.requireMention ?? true;
+          out.push({
+            path: `channels.${channelId}.accounts.${accountId}.groupPolicy`,
+            channelId,
+            accountId,
+            requireMention: defaultRequireMention,
+          });
+        }
       }
     }
   }
@@ -928,18 +961,62 @@ function listGroupPolicyOpen(cfg: MoltbotConfig): string[] {
 
 export function collectExposureMatrixFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const openGroups = listGroupPolicyOpen(cfg);
+  const openGroups = listGroupPolicyOpenWithMentionInfo(cfg);
   if (openGroups.length === 0) return findings;
 
   const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
-  if (elevatedEnabled) {
+  if (!elevatedEnabled) return findings;
+
+  // Check for mention patterns
+  const mentionPatterns = cfg.messages?.groupChat?.mentionPatterns ?? [];
+  const hasMentionPatterns = mentionPatterns.length > 0;
+
+  // Separate groups by mention gating status
+  const gatedGroups = openGroups.filter((g) => g.requireMention && hasMentionPatterns);
+  const ungatedGroups = openGroups.filter((g) => !g.requireMention || !hasMentionPatterns);
+
+  // If all groups have mention gating, show reduced severity
+  if (ungatedGroups.length === 0 && gatedGroups.length > 0) {
+    const patternsDisplay =
+      mentionPatterns.length <= 3
+        ? mentionPatterns.map((p) => `"${p}"`).join(", ")
+        : `${mentionPatterns
+            .slice(0, 3)
+            .map((p) => `"${p}"`)
+            .join(", ")} (+${mentionPatterns.length - 3} more)`;
+
+    findings.push({
+      checkId: "security.exposure.open_groups_mitigated",
+      severity: "warn",
+      title: "Open groupPolicy with mention gating",
+      detail:
+        `Found groupPolicy="open" at:\n${gatedGroups.map((g) => `- ${g.path}`).join("\n")}\n` +
+        `Mitigation detected: requireMention=true with patterns: [${patternsDisplay}]\n` +
+        "Risk: Reduced but not eliminated (attackers can still mention the bot).",
+      remediation: `Consider switching to groupPolicy="allowlist" for defense in depth.`,
+    });
+    return findings;
+  }
+
+  // If some groups lack mention gating, show critical
+  if (ungatedGroups.length > 0) {
+    let detail =
+      `Found groupPolicy="open" at:\n${ungatedGroups.map((g) => `- ${g.path}`).join("\n")}\n` +
+      "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.";
+
+    if (gatedGroups.length > 0) {
+      detail += `\n\nNote: ${gatedGroups.length} other open group(s) have mention gating enabled.`;
+    }
+
+    if (!hasMentionPatterns) {
+      detail += "\n\nTip: Configure messages.groupChat.mentionPatterns to enable mention gating.";
+    }
+
     findings.push({
       checkId: "security.exposure.open_groups_with_elevated",
       severity: "critical",
       title: "Open groupPolicy with elevated tools enabled",
-      detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
+      detail,
       remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
     });
   }
