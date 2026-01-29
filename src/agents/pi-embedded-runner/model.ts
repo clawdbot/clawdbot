@@ -97,5 +97,7 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  const providerCfg = cfg?.models?.providers?.[provider];
+  const merged = { ...model, api: model.api ?? providerCfg?.api };
+  return { model: normalizeModelCompat(merged), authStorage, modelRegistry };
 }
