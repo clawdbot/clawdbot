@@ -256,6 +256,31 @@ Venice API is at `https://api.venice.ai/api/v1`. Ensure your network allows HTTP
 }
 ```
 
+## Embeddings for Memory (New!)
+
+Venice supports OpenAI-compatible embeddings (`/api/v1/embeddings`) – perfect for semantic memory search (memory-lancedb plugin).
+
+**Config** (in Moltbot/agent config):
+```json
+"extensions": {
+  "memory-lancedb": {
+    "embedding": {
+      "provider": "venice",
+      "model": "text-embedding-bge-m3",
+      "apiKey": "${VENICE_API_KEY}",
+      "baseUrl": "https://api.venice.ai/api/v1"
+    }
+  }
+}
+```
+
+- **Model**: text-embedding-bge-m3 (1024 dims, multilingual)
+- **Private**: Embeddings are ephemeral/private like inference.
+- **Test**: `memory_search "habits"` – recalls from MEMORY.md + memory/*.md.
+- **Why Venice**: Uncensored/private vector search, no OpenAI key needed.
+
+`moltbot gateway restart` → ready!
+
 ## Links
 
 - [Venice AI](https://venice.ai)

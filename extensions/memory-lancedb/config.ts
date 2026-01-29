@@ -4,9 +4,10 @@ import { join } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
-    provider: "openai";
+    provider: "openai" | "venice";
     model?: string;
     apiKey: string;
+    baseUrl?: string;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -22,6 +23,7 @@ const DEFAULT_DB_PATH = join(homedir(), ".clawdbot", "memory", "lancedb");
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  "text-embedding-bge-m3": 1024,
 };
 
 function assertAllowedKeys(
@@ -70,15 +72,19 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "provider", "baseUrl"], "embedding config");
+
+  const provider = (embedding.provider as string) || "openai";
+  const baseUrl = embedding.baseUrl as string | undefined;
 
     const model = resolveEmbeddingModel(embedding);
 
     return {
       embedding: {
-        provider: "openai",
+        provider,
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseUrl,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture !== false,
@@ -96,6 +102,15 @@ export const memoryConfigSchema = {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
       help: "OpenAI embedding model to use",
+    },
+    "embedding.provider": {
+      label: "Embedding Provider",
+      enum: {"openai": "OpenAI", "venice": "Venice"}
+    },
+    "embedding.baseUrl": {
+      label: "Base URL",
+      placeholder: "https://api.venice.ai/api/v1",
+      help: "For Venice or custom endpoints"
     },
     dbPath: {
       label: "Database Path",
