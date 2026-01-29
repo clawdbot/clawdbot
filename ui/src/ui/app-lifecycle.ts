@@ -61,6 +61,14 @@ export function handleConnected(host: LifecycleHost) {
 
 export function handleFirstUpdated(host: LifecycleHost) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+  // Horizontal wheel scroll for nav menu
+  document.querySelector('.nav')?.addEventListener('wheel', (evt) => {
+    const e = evt as WheelEvent;
+    if (e.deltaY !== 0) {
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
 }
 
 export function handleDisconnected(host: LifecycleHost) {
