@@ -1,0 +1,156 @@
+name: CI / macOS
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'extensions/**'
+      - 'apps/macos/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - '**/*.test.ts'
+      - '.swiftlint.yml'
+      - '.swiftformat'
+
+jobs:
+  checks-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - task: test
+            command: pnpm test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout submodules (retry)
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          for attempt in 1 2 3 4 5; do
+            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+              exit 0
+            fi
+            echo "Submodule update failed (attempt $attempt/5). Retrying…"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          check-latest: true
+
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Runtime versions
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Capture node path
+        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Run ${{ matrix.task }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: ${{ matrix.command }}
+
+  macos-app:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - task: lint
+            command: |
+              swiftlint --config .swiftlint.yml
+              swiftformat --lint apps/macos/Sources --config .swiftformat
+          - task: build
+            command: |
+              set -euo pipefail
+              for attempt in 1 2 3; do
+                if swift build --package-path apps/macos --configuration release; then
+                  exit 0
+                fi
+                echo "swift build failed (attempt $attempt/3). Retrying…"
+                sleep $((attempt * 20))
+              done
+              exit 1
+          - task: test
+            command: |
+              set -euo pipefail
+              for attempt in 1 2 3; do
+                if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+                  exit 0
+                fi
+                echo "swift test failed (attempt $attempt/3). Retrying…"
+                sleep $((attempt * 20))
+              done
+              exit 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout submodules (retry)
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          for attempt in 1 2 3 4 5; do
+            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+              exit 0
+            fi
+            echo "Submodule update failed (attempt $attempt/5). Retrying…"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Select Xcode 26.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+
+      - name: Install XcodeGen / SwiftLint / SwiftFormat
+        run: |
+          brew install xcodegen swiftlint swiftformat
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Run ${{ matrix.task }}
+        run: ${{ matrix.command }}
