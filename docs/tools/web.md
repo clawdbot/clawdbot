@@ -175,6 +175,7 @@ Search the web using your configured provider.
 - `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
 - `ui_lang` (optional): ISO language code for UI elements
 - `freshness` (optional, Brave only): filter by discovery time (`pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`)
+- `model` (optional, Perplexity only): override the configured model per-query (e.g., "sonar", "sonar-pro")
 
 **Examples:**
 
@@ -199,6 +200,18 @@ await web_search({
 await web_search({
   query: "TMBG interview",
   freshness: "pw"
+});
+
+// Perplexity: use faster model for simple lookups
+await web_search({
+  query: "Nick Saban birthday",
+  model: "sonar"
+});
+
+// Perplexity: use deeper reasoning for complex analysis
+await web_search({
+  query: "compare React vs Vue performance benchmarks 2026",
+  model: "sonar-pro"
 });
 ```
 

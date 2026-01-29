@@ -307,3 +307,115 @@ describe("web_search perplexity baseUrl defaults", () => {
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
   });
 });
+
+describe("web_search model parameter", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    // @ts-expect-error global fetch cleanup
+    global.fetch = priorFetch;
+  });
+
+  it("passes model parameter to Perplexity API", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "perplexity" } } } },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-model-param", model: "sonar" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    expect(body.model).toBe("sonar");
+  });
+
+  it("uses configured model when no model parameter provided", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "perplexity",
+              perplexity: { model: "sonar-reasoning-pro" },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-configured-model" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    expect(body.model).toBe("sonar-reasoning-pro");
+  });
+
+  it("model parameter overrides configured model", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "perplexity",
+              perplexity: { model: "sonar-pro" },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await tool?.execute?.(1, { query: "test-model-override", model: "sonar" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    expect(body.model).toBe("sonar");
+  });
+
+  it("rejects model parameter for Brave provider", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.(1, { query: "test-brave-model", model: "sonar" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "unsupported_model" });
+  });
+});

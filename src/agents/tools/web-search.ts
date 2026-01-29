@@ -63,6 +63,12 @@ const WebSearchSchema = Type.Object({
         "Filter results by discovery time (Brave only). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
     }),
   ),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Perplexity model to use (e.g., 'sonar', 'sonar-pro'). Overrides configured default. Perplexity provider only.",
+    }),
+  ),
 });
 
 type WebSearchConfig = NonNullable<MoltbotConfig["tools"]>["web"] extends infer Web
@@ -459,6 +465,14 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.molt.bot/tools/web",
         });
       }
+      const modelOverride = readStringParam(params, "model");
+      if (modelOverride && provider !== "perplexity") {
+        return jsonResult({
+          error: "unsupported_model",
+          message: "model parameter is only supported by the Perplexity web_search provider.",
+          docs: "https://docs.molt.bot/tools/web",
+        });
+      }
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -475,7 +489,7 @@ export function createWebSearchTool(options?: {
           perplexityAuth?.source,
           perplexityAuth?.apiKey,
         ),
-        perplexityModel: resolvePerplexityModel(perplexityConfig),
+        perplexityModel: modelOverride || resolvePerplexityModel(perplexityConfig),
       });
       return jsonResult(result);
     },
