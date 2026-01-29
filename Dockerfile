@@ -32,9 +32,34 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-# Security hardening: Run as non-root user
-# The node:22-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-USER node
+# Install gosu for dropping privileges safely
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
+# Entrypoint script: fix /data permissions, ensure cloud-ready config, then drop to node user
+RUN printf '#!/bin/sh\n\
+if [ -d /data ]; then\n\
+  chown -R node:node /data 2>/dev/null || true\n\
+fi\n\
+# Ensure cloud-ready config exists for Railway/cloud deployments\n\
+if [ -n "$CLAWDBOT_STATE_DIR" ]; then\n\
+  mkdir -p "$CLAWDBOT_STATE_DIR"\n\
+  CONFIG_FILE="$CLAWDBOT_STATE_DIR/clawdbot.json"\n\
+  # If no config or config lacks trustedProxies or allowInsecureAuth, create it\n\
+  if [ ! -f "$CONFIG_FILE" ] || ! grep -q "trustedProxies" "$CONFIG_FILE" 2>/dev/null || ! grep -q "allowInsecureAuth" "$CONFIG_FILE" 2>/dev/null; then\n\
+    cat > "$CONFIG_FILE" << EOF\n\
+{\n\
+  "gateway": {\n\
+    "trustedProxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"],\n\
+    "controlUi": {\n\
+      "allowInsecureAuth": true\n\
+    }\n\
+  }\n\
+}\n\
+EOF\n\
+  fi\n\
+  chown node:node "$CONFIG_FILE" 2>/dev/null || true\n\
+fi\n\
+exec gosu node "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "dist/index.js"]

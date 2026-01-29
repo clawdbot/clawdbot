@@ -48,10 +48,45 @@ function parseRealIp(realIp?: string): string | undefined {
   return normalizeIp(stripOptionalPort(raw));
 }
 
+/**
+ * Check if an IPv4 address falls within a CIDR range.
+ * @param ip - The IP address to check (e.g., "100.64.0.3")
+ * @param cidr - The CIDR range (e.g., "100.64.0.0/10")
+ * @returns True if the IP is within the CIDR range
+ */
+function isIpInCidr(ip: string, cidr: string): boolean {
+  const [range, bitsStr] = cidr.split("/");
+  if (!range || !bitsStr) return false;
+
+  const bits = parseInt(bitsStr, 10);
+  if (Number.isNaN(bits) || bits < 0 || bits > 32) return false;
+
+  const ipParts = ip.split(".").map((p) => parseInt(p, 10));
+  const rangeParts = range.split(".").map((p) => parseInt(p, 10));
+
+  if (ipParts.length !== 4 || rangeParts.length !== 4) return false;
+  if (ipParts.some((p) => Number.isNaN(p)) || rangeParts.some((p) => Number.isNaN(p))) return false;
+
+  const ipNum = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
+  const rangeNum = (rangeParts[0] << 24) | (rangeParts[1] << 16) | (rangeParts[2] << 8) | rangeParts[3];
+
+  // Create mask: bits=10 means top 10 bits must match
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+
+  return ((ipNum >>> 0) & mask) === ((rangeNum >>> 0) & mask);
+}
+
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
   const normalized = normalizeIp(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) return false;
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+  return trustedProxies.some((proxy) => {
+    // Check if it's a CIDR range
+    if (proxy.includes("/")) {
+      return isIpInCidr(normalized, proxy);
+    }
+    // Exact match
+    return normalizeIp(proxy) === normalized;
+  });
 }
 
 export function resolveGatewayClientIp(params: {
