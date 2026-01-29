@@ -1878,16 +1878,16 @@ injection and unsafe behavior. See [Security](/gateway/security).
 
 More context: [Models](/concepts/models).
 
-### Can I use selfhosted models llamacpp vLLM Ollama
+### Can I use selfhosted models llamacpp vLLM Ollama jan.ai
 
 Yes. If your local server exposes an OpenAI-compatible API, you can point a
-custom provider at it. Ollama is supported directly and is the easiest path.
+custom provider at it. Ollama and jan.ai are supported directly with auto-discovery and are the easiest paths.
 
 Security note: smaller or heavily quantized models are more vulnerable to prompt
 injection. We strongly recommend **large models** for any bot that can use tools.
 If you still want small models, enable sandboxing and strict tool allowlists.
 
-Docs: [Ollama](/providers/ollama), [Local models](/gateway/local-models),
+Docs: [Ollama](/providers/ollama), [jan.ai](/providers/jan), [Local models](/gateway/local-models),
 [Model providers](/concepts/model-providers), [Security](/gateway/security),
 [Sandboxing](/gateway/sandboxing).
 

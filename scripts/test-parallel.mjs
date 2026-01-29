@@ -42,6 +42,7 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=ExperimentalWarning",
   "--disable-warning=DEP0040",
   "--disable-warning=DEP0060",
+  "--max-old-space-size=4096",
 ];
 
 const runOnce = (entry, extraArgs = []) =>
@@ -61,6 +62,11 @@ const runOnce = (entry, extraArgs = []) =>
     });
     children.add(child);
     child.on("exit", (code, signal) => {
+      if (signal === 'SIGKILL' || signal === 'SIGABRT' || signal === 'SIGSEGV') {
+        console.error(`Worker ${entry.name} crashed with signal ${signal} (possible OOM or resource exhaustion)`);
+      } else if (signal) {
+        console.warn(`Worker ${entry.name} terminated with signal ${signal}`);
+      }
       children.delete(child);
       resolve(code ?? (signal ? 1 : 0));
     });

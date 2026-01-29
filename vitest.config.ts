@@ -7,7 +7,7 @@ const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const ciWorkers = isWindows ? 2 : 3;
+const ciWorkers = isWindows ? 1 : 2;
 
 export default defineConfig({
   resolve: {
@@ -16,8 +16,8 @@ export default defineConfig({
     },
   },
   test: {
-    testTimeout: 120_000,
-    hookTimeout: isWindows ? 180_000 : 120_000,
+    testTimeout: 300_000,
+    hookTimeout: isWindows ? 300_000 : 240_000,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
     include: [

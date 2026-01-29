@@ -75,6 +75,17 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const JAN_BASE_URL = "http://127.0.0.1:1337/v1";
+const JAN_API_BASE_URL = "http://127.0.0.1:1337";
+const JAN_DEFAULT_CONTEXT_WINDOW = 128000;
+const JAN_DEFAULT_MAX_TOKENS = 8192;
+const JAN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -88,6 +99,18 @@ interface OllamaModel {
 
 interface OllamaTagsResponse {
   models: OllamaModel[];
+}
+
+interface JanModel {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+}
+
+interface JanModelsResponse {
+  object: string;
+  data: JanModel[];
 }
 
 async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
@@ -124,6 +147,44 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+async function discoverJanModels(): Promise<ModelDefinitionConfig[]> {
+  // Skip jan.ai discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    const response = await fetch(`${JAN_API_BASE_URL}/v1/models`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover jan.ai models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as JanModelsResponse;
+    if (!data.data || data.data.length === 0) {
+      console.warn("No jan.ai models found on local instance");
+      return [];
+    }
+    return data.data.map((model) => {
+      const modelId = model.id;
+      const isReasoning =
+        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+      return {
+        id: modelId,
+        name: modelId,
+        reasoning: isReasoning,
+        input: ["text"],
+        cost: JAN_DEFAULT_COST,
+        contextWindow: JAN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: JAN_DEFAULT_MAX_TOKENS,
+      };
+    });
+  } catch (error) {
+    console.warn(`Failed to discover jan.ai models: ${String(error)}`);
     return [];
   }
 }
@@ -359,6 +420,15 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildJanProvider(): Promise<ProviderConfig> {
+  const models = await discoverJanModels();
+  return {
+    baseUrl: JAN_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -416,6 +486,14 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  // jan.ai provider - only add if explicitly configured
+  const janKey =
+    resolveEnvApiKeyVarName("jan") ??
+    resolveApiKeyFromProfiles({ provider: "jan", store: authStore });
+  if (janKey) {
+    providers.jan = { ...(await buildJanProvider()), apiKey: janKey };
   }
 
   return providers;

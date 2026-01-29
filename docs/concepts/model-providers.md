@@ -263,7 +263,26 @@ ollama pull llama3.3
 
 Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
-### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
+### jan.ai
+
+jan.ai is a local LLM runtime built on llama.cpp with OpenAI-compatible API:
+
+- Provider: `jan`
+- Auth: None required (local server), but needs `JAN_API_KEY` set to any value for auto-discovery
+- Example model: `jan/<model-name>`
+- Installation: https://jan.ai
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "jan/llama-3.3-70b" } }
+  }
+}
+```
+
+jan.ai is automatically detected when running locally at `http://127.0.0.1:1337/v1`. See [/providers/jan](/providers/jan) for detailed setup and configuration.
+
+### Local proxies (LM Studio, vLLM, jan.ai, etc.)
 
 Example (OpenAI‑compatible):
 
