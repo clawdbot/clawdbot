@@ -1,4 +1,4 @@
-import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
+import { resolveHumanDelayConfig, resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import {
   formatInboundEnvelope,
@@ -327,6 +327,7 @@ export async function processMessage(params: {
     dispatcherOptions: {
       responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      humanDelay: resolveHumanDelayConfig(params.cfg, params.route.agentId),
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {
           didLogHeartbeatStrip = true;
