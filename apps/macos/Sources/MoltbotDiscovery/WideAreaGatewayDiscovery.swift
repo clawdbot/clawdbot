@@ -222,9 +222,9 @@ enum WideAreaGatewayDiscovery {
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
         let outPipe = Pipe()
-        let errPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = errPipe
+        process.standardError = FileHandle.nullDevice
+
 
         do {
             try process.run()
