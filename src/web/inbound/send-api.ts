@@ -38,9 +38,10 @@ export function createWebSendApi(params: {
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
+          const fileName = sendOptions?.fileName?.trim() || "file";
           payload = {
             document: mediaBuffer,
-            fileName: "file",
+            fileName,
             caption: text || undefined,
             mimetype: mediaType,
           };

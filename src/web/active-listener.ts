@@ -5,6 +5,7 @@ import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
   accountId?: string;
+  fileName?: string;
 };
 
 export type ActiveWebListener = {
