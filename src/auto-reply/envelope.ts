@@ -196,8 +196,9 @@ export function formatInboundEnvelope(params: {
   const isDirect = !chatType || chatType === "direct";
   const resolvedSender = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
   const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  const channelWithType = !isDirect ? `${params.channel} (${chatType})` : params.channel;
   return formatAgentEnvelope({
-    channel: params.channel,
+    channel: channelWithType,
     from: params.from,
     timestamp: params.timestamp,
     previousTimestamp: params.previousTimestamp,

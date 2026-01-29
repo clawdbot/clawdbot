@@ -466,7 +466,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       });
     }
 
-    const imessageTo = (isGroup ? chatTarget : undefined) || `imessage:${sender}`;
+    const imessageTo = chatId ? `chat_id:${chatId}` : `imessage:${sender}`;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
       RawBody: bodyText,
