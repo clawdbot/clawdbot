@@ -20,6 +20,15 @@ function listConfiguredAccountIds(cfg: MoltbotConfig): string[] {
 
 export function listDiscordAccountIds(cfg: MoltbotConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
+  const explicitDefault = ids.includes(DEFAULT_ACCOUNT_ID);
+
+  if (!explicitDefault) {
+    const defaultResolution = resolveDiscordToken(cfg, { accountId: DEFAULT_ACCOUNT_ID });
+    if (defaultResolution.source !== "none") {
+      ids.push(DEFAULT_ACCOUNT_ID);
+    }
+  }
+
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
   return ids.sort((a, b) => a.localeCompare(b));
 }
