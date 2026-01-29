@@ -97,6 +97,26 @@ describe("injectTimestamp", () => {
     expect(result).toContain("11:59 PM");
   });
 
+  it("handles DST correctly (same UTC hour, different local time)", () => {
+    // EST (winter): UTC-5 → 2026-01-15T05:00Z = midnight Jan 15
+    vi.setSystemTime(new Date("2026-01-15T05:00:00.000Z"));
+    const winter = injectTimestamp("winter", {
+      timezone: "America/New_York",
+      timeFormat: "12",
+    });
+    expect(winter).toContain("January 15");
+    expect(winter).toContain("12:00 AM");
+
+    // EDT (summer): UTC-4 → 2026-07-15T04:00Z = midnight Jul 15
+    vi.setSystemTime(new Date("2026-07-15T04:00:00.000Z"));
+    const summer = injectTimestamp("summer", {
+      timezone: "America/New_York",
+      timeFormat: "12",
+    });
+    expect(summer).toContain("July 15");
+    expect(summer).toContain("12:00 AM");
+  });
+
   it("accepts a custom now date", () => {
     const customDate = new Date("2025-07-04T16:00:00.000Z"); // July 4, noon EST
 
