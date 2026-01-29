@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+import { ProxyAgent } from "undici";
 
 // OAuth constants - decoded from pi-ai's base64 encoded values to stay in sync
 const decode = (s: string) => Buffer.from(s, "base64").toString();
@@ -27,6 +28,37 @@ const CODE_ASSIST_ENDPOINTS = [
   "https://cloudcode-pa.googleapis.com",
   "https://daily-cloudcode-pa.sandbox.googleapis.com",
 ];
+
+const PROXY_ENV_KEYS = [
+  "CLAWDBOT_HTTPS_PROXY",
+  "CLAWDBOT_HTTP_PROXY",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "https_proxy",
+  "http_proxy",
+];
+
+function resolveProxyUrl(): string | undefined {
+  for (const key of PROXY_ENV_KEYS) {
+    const value = process.env[key]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+const proxyUrl = resolveProxyUrl();
+const proxyAgent = proxyUrl
+  ? new ProxyAgent({
+      uri: proxyUrl,
+      requestTls: { maxVersion: "TLSv1.2" },
+    })
+  : undefined;
+
+function fetchWithProxy(input: RequestInfo | URL, init?: RequestInit) {
+  if (!proxyAgent) return fetch(input, init);
+  const nextInit = init ? { ...init, dispatcher: proxyAgent } : { dispatcher: proxyAgent };
+  return fetch(input, nextInit);
+}
 
 const RESPONSE_PAGE = `<!DOCTYPE html>
 <html lang="en">
@@ -178,7 +210,7 @@ async function exchangeCode(params: {
   code: string;
   verifier: string;
 }): Promise<{ access: string; refresh: string; expires: number }> {
-  const response = await fetch(TOKEN_URL, {
+  const response = await fetchWithProxy(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -215,7 +247,7 @@ async function exchangeCode(params: {
 
 async function fetchUserEmail(accessToken: string): Promise<string | undefined> {
   try {
-    const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
+    const response = await fetchWithProxy("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) return undefined;
@@ -241,7 +273,7 @@ async function fetchProjectId(accessToken: string): Promise<string> {
 
   for (const endpoint of CODE_ASSIST_ENDPOINTS) {
     try {
-      const response = await fetch(`${endpoint}/v1internal:loadCodeAssist`, {
+      const response = await fetchWithProxy(`${endpoint}/v1internal:loadCodeAssist`, {
         method: "POST",
         headers,
         body: JSON.stringify({

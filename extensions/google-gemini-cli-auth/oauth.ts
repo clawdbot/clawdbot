@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
+import { ProxyAgent } from "undici";
 
 const CLIENT_ID_KEYS = ["CLAWDBOT_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 const CLIENT_SECRET_KEYS = [
@@ -22,6 +23,37 @@ const SCOPES = [
 const TIER_FREE = "free-tier";
 const TIER_LEGACY = "legacy-tier";
 const TIER_STANDARD = "standard-tier";
+
+const PROXY_ENV_KEYS = [
+  "CLAWDBOT_HTTPS_PROXY",
+  "CLAWDBOT_HTTP_PROXY",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "https_proxy",
+  "http_proxy",
+];
+
+function resolveProxyUrl(): string | undefined {
+  for (const key of PROXY_ENV_KEYS) {
+    const value = process.env[key]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+const proxyUrl = resolveProxyUrl();
+const proxyAgent = proxyUrl
+  ? new ProxyAgent({
+      uri: proxyUrl,
+      requestTls: { maxVersion: "TLSv1.2" },
+    })
+  : undefined;
+
+function fetchWithProxy(input: RequestInfo | URL, init?: RequestInit) {
+  if (!proxyAgent) return fetch(input, init);
+  const nextInit = init ? { ...init, dispatcher: proxyAgent } : { dispatcher: proxyAgent };
+  return fetch(input, nextInit);
+}
 
 export type GeminiCliOAuthCredentials = {
   access: string;
@@ -312,7 +344,7 @@ async function exchangeCodeForTokens(code: string, verifier: string): Promise<Ge
     body.set("client_secret", clientSecret);
   }
 
-  const response = await fetch(TOKEN_URL, {
+  const response = await fetchWithProxy(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -348,7 +380,7 @@ async function exchangeCodeForTokens(code: string, verifier: string): Promise<Ge
 
 async function getUserEmail(accessToken: string): Promise<string | undefined> {
   try {
-    const response = await fetch(USERINFO_URL, {
+    const response = await fetchWithProxy(USERINFO_URL, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (response.ok) {
@@ -387,7 +419,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   } = {};
 
   try {
-    const response = await fetch(`${CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist`, {
+  const response = await fetchWithProxy(`${CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist`, {
       method: "POST",
       headers,
       body: JSON.stringify(loadBody),
@@ -441,7 +473,7 @@ async function discoverProject(accessToken: string): Promise<string> {
     (onboardBody.metadata as Record<string, unknown>).duetProject = envProject;
   }
 
-  const onboardResponse = await fetch(`${CODE_ASSIST_ENDPOINT}/v1internal:onboardUser`, {
+  const onboardResponse = await fetchWithProxy(`${CODE_ASSIST_ENDPOINT}/v1internal:onboardUser`, {
     method: "POST",
     headers,
     body: JSON.stringify(onboardBody),
@@ -495,7 +527,7 @@ async function pollOperation(
 ): Promise<{ done?: boolean; response?: { cloudaicompanionProject?: { id?: string } } }> {
   for (let attempt = 0; attempt < 24; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
-    const response = await fetch(`${CODE_ASSIST_ENDPOINT}/v1internal/${operationName}`, {
+    const response = await fetchWithProxy(`${CODE_ASSIST_ENDPOINT}/v1internal/${operationName}`, {
       headers,
     });
     if (!response.ok) continue;
