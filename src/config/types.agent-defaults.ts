@@ -134,6 +134,26 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /**
+   * Auto-think: Automatically classify thinking level based on message content.
+   * When enabled, analyzes the incoming message using heuristics to determine
+   * the appropriate thinking level without requiring explicit /think directives.
+   */
+  autoThink?: {
+    /** Enable auto-think classification. */
+    enabled?: boolean;
+    /** Minimum thinking level (floor). */
+    floor?: "off" | "minimal" | "low" | "medium" | "high";
+    /** Maximum thinking level (ceiling). */
+    ceiling?: "off" | "minimal" | "low" | "medium" | "high";
+    /** Custom pattern rules (evaluated in order, first match wins). */
+    rules?: Array<{
+      /** Regex pattern or string to match (case-insensitive). */
+      match: string;
+      /** Thinking level to use when matched. */
+      level: "off" | "minimal" | "low" | "medium" | "high";
+    }>;
+  };
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

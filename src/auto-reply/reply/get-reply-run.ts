@@ -21,6 +21,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { classifyThinkLevel } from "../auto-think.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -259,6 +260,14 @@ export async function runPreparedReply(
     if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
+    }
+  }
+  // Auto-think: classify thinking level based on message content
+  if (!resolvedThinkLevel && agentCfg?.autoThink?.enabled) {
+    const autoLevel = classifyThinkLevel(prefixedCommandBody, agentCfg.autoThink);
+    if (autoLevel) {
+      resolvedThinkLevel = autoLevel;
+      logVerbose(`Auto-think classified message as "${autoLevel}"`);
     }
   }
   if (!resolvedThinkLevel) {
