@@ -52,6 +52,28 @@ describe("installSessionToolResultGuard", () => {
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
   });
 
+  it("ignores tool calls from aborted assistant messages", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage({
+      role: "assistant",
+      stopReason: "aborted",
+      content: [{ type: "toolCall", id: "call_abort", name: "read", arguments: {} }],
+    } as AgentMessage);
+    sm.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "next" }],
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "assistant"]);
+  });
+
   it("does not add synthetic toolResult when a matching one exists", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
