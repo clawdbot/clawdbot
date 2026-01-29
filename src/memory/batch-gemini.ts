@@ -2,7 +2,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { hashText } from "./internal.js";
-//test1
+
 export type GeminiBatchRequest = {
   custom_id: string;
   content: { parts: Array<{ text: string }> };
