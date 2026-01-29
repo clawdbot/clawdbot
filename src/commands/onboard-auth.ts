@@ -17,6 +17,8 @@ export {
   applyVeniceProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
+  applyXiaomiConfig,
+  applyXiaomiProviderConfig,
   applyZaiConfig,
 } from "./onboard-auth.config-core.js";
 export {
@@ -44,9 +46,11 @@ export {
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
+  setXiaomiApiKey,
   setZaiApiKey,
   writeOAuthCredentials,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {

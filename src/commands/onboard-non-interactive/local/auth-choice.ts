@@ -17,6 +17,7 @@ import {
   applySyntheticConfig,
   applyVeniceConfig,
   applyVercelAiGatewayConfig,
+  applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
@@ -28,6 +29,7 @@ import {
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
+  setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -175,6 +177,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyZaiConfig(nextConfig);
+  }
+
+  if (authChoice === "xiaomi-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "xiaomi",
+      cfg: baseConfig,
+      flagValue: opts.xiaomiApiKey,
+      flagName: "--xiaomi-api-key",
+      envVar: "XIAOMI_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setXiaomiApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "xiaomi:default",
+      provider: "xiaomi",
+      mode: "api_key",
+    });
+    return applyXiaomiConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {

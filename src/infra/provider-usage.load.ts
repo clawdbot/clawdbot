@@ -66,6 +66,12 @@ export async function loadProviderUsageSummary(
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
             return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+          case "xiaomi":
+            return {
+              provider: "xiaomi",
+              displayName: PROVIDER_LABELS.xiaomi,
+              windows: [],
+            };
           case "zai":
             return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
           default:
