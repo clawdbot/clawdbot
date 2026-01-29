@@ -264,6 +264,30 @@ export function registerGatewayCli(program: Command) {
       });
     });
 
+  gatewayCallOpts(
+    gateway
+      .command("wake")
+      .description("Send a wake event to the Gateway (trigger agent processing)")
+      .option("--text <text>", "Wake event text (injected as system event)", "Wake event")
+      .option("--mode <mode>", "Wake mode: now (immediate) or next-heartbeat (default)", "now")
+      .action(async (opts) => {
+        await runGatewayCommand(async () => {
+          const mode = opts.mode === "next-heartbeat" ? "next-heartbeat" : "now";
+          const text = String(opts.text || "Wake event");
+          const result = await callGatewayCli("wake", opts, { mode, text });
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const rich = isRich();
+          defaultRuntime.log(colorize(rich, theme.heading, "Gateway Wake"));
+          defaultRuntime.log(
+            `${colorize(rich, theme.success, "OK")} · mode: ${mode} · text: "${text}"`,
+          );
+        }, "Gateway wake failed");
+      }),
+  );
+
   gateway
     .command("discover")
     .description(
