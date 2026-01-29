@@ -37,25 +37,24 @@ describe("CronService", () => {
     vi.useRealTimers();
   });
 
-  it("avoids duplicate runs when two services share a store", async () => {
+  it("does not requestHeartbeatNow for main jobs when wakeMode is next-heartbeat", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" }));
 
-    const cronA = new CronService({
+    const cron = new CronService({
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
-    await cronA.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    await cronA.add({
-      name: "shared store job",
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    await cron.add({
+      name: "next-heartbeat main job",
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
@@ -63,28 +62,13 @@ describe("CronService", () => {
       payload: { kind: "systemEvent", text: "hello" },
     });
 
-    const cronB = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-    });
-
-    await cronB.start();
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
     await vi.runOnlyPendingTimersAsync();
-    await cronA.status();
-    await cronB.status();
 
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    // wakeMode=next-heartbeat should not force a heartbeat.
-    expect(requestHeartbeatNow).toHaveBeenCalledTimes(0);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", { agentId: undefined });
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
-    cronA.stop();
-    cronB.stop();
+    cron.stop();
     await store.cleanup();
   });
 });

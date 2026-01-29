@@ -183,8 +183,11 @@ export async function executeJob(
           await finish("error", heartbeatResult.reason, text);
         }
       } else {
-        // wakeMode is "next-heartbeat" or runHeartbeatOnce not available
-        state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+        // If wakeMode is "now" but runHeartbeatOnce isn't available, request a heartbeat.
+        // If wakeMode is "next-heartbeat", do NOT force a heartbeat: that's the whole point.
+        if (job.wakeMode === "now") {
+          state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+        }
         await finish("ok", undefined, text);
       }
       return;
