@@ -448,7 +448,61 @@ Avoid:
 - Exposing relay/control ports over LAN or public Internet.
 - Tailscale Funnel for browser control endpoints (public exposure).
 
-### 0.7) Secrets on disk (what’s sensitive)
+### 0.6.2) Cloudflare Tunnel (alternative to Tailscale)
+
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) provides another way to expose your Gateway securely without opening firewall ports. The tunnel runs a local daemon (`cloudflared`) that connects outbound to Cloudflare's edge, then routes traffic to your local Gateway.
+
+**Quick tunnel (ephemeral, for testing):**
+
+```bash
+# Install cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+brew install cloudflared  # macOS
+# or: sudo apt install cloudflared  # Debian/Ubuntu
+
+# Start a quick tunnel (generates a random *.trycloudflare.com URL)
+cloudflared tunnel --url http://127.0.0.1:18789
+```
+
+**Persistent tunnel (recommended for production):**
+
+1. Authenticate: `cloudflared tunnel login`
+2. Create tunnel: `cloudflared tunnel create clawdbot-gateway`
+3. Configure `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <tunnel-id>
+credentials-file: /path/to/credentials.json
+
+ingress:
+  - hostname: gateway.yourdomain.com
+    service: http://127.0.0.1:18789
+  - service: http_status:404
+```
+
+4. Route DNS: `cloudflared tunnel route dns clawdbot-gateway gateway.yourdomain.com`
+5. Run: `cloudflared tunnel run clawdbot-gateway`
+
+**Security notes:**
+- Always set `gateway.auth.mode: "token"` when exposing via Cloudflare Tunnel.
+- Use Cloudflare Access policies for additional authentication (SSO, email verification).
+- The Gateway binds to loopback; only `cloudflared` can reach it.
+- Monitor tunnel metrics in the Cloudflare dashboard.
+
+### 0.6.3) Health check endpoint
+
+The Gateway exposes unauthenticated health check endpoints for load balancer probes:
+
+- `GET /healthz` - Returns `{"status":"ok"}` with HTTP 200 when the Gateway is running.
+- `GET /health` - Alias for `/healthz`.
+
+These endpoints:
+- Do **not** require authentication (safe for external probes).
+- Do **not** expose any sensitive information.
+- Return `Cache-Control: no-cache, no-store` to prevent caching.
+
+Use these for Kubernetes liveness/readiness probes, AWS ALB health checks, or Cloudflare origin health monitoring.
+
+### 0.7) Secrets on disk (what's sensitive)
 
 Assume anything under `~/.moltbot/` (or `$CLAWDBOT_STATE_DIR/`) may contain secrets or private data:
 
