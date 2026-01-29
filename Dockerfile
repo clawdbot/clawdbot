@@ -8,13 +8,13 @@ RUN corepack enable
 
 WORKDIR /app
 
-ARG CLAWDBOT_DOCKER_APT_PACKAGES=""
+ARG CLAWDBOT_DOCKER_APT_PACKAGES="build-essential procps curl file git"
 RUN if [ -n "$CLAWDBOT_DOCKER_APT_PACKAGES" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $CLAWDBOT_DOCKER_APT_PACKAGES && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
+  apt-get update && \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $CLAWDBOT_DOCKER_APT_PACKAGES && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+  fi
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
@@ -32,9 +32,18 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Setup Homebrew directory permissions
+RUN mkdir -p /home/linuxbrew/.linuxbrew && \
+  chown -R node:node /home/linuxbrew
+
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
+
+# Install Homebrew
+ENV NONINTERACTIVE=1
+RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
 CMD ["node", "dist/index.js"]
