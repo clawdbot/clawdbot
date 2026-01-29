@@ -27,6 +27,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import type { ResolvedAgentRoute } from "../routing/resolve-route.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
@@ -54,6 +55,8 @@ import {
 } from "./bot-access.js";
 import { upsertTelegramPairingRequest } from "./pairing-store.js";
 import type { TelegramContext } from "./bot/types.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { TelegramMessage } from "./bot/types.js";
 
 type TelegramMediaRef = {
   path: string;
@@ -108,6 +111,33 @@ type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+};
+
+export type TelegramMessageContext = {
+  ctxPayload: FinalizedMsgContext;
+  primaryCtx: TelegramContext;
+  msg: TelegramMessage;
+  chatId: number;
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  isForum: boolean;
+  historyKey?: string;
+  historyLimit: number;
+  groupHistories: Map<string, HistoryEntry[]>;
+  route: ResolvedAgentRoute;
+  skillFilter?: string[];
+  sendTyping: () => Promise<void>;
+  sendRecordVoice: () => Promise<void>;
+  ackReactionPromise: Promise<boolean> | null;
+  reactionApi:
+    | ((
+        chatId: number | string,
+        messageId: number,
+        reactions: Array<{ type: "emoji"; emoji: string }>,
+      ) => Promise<void>)
+    | null;
+  removeAckAfterReply: boolean;
+  accountId: string;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -231,9 +261,7 @@ export const buildTelegramMessageContext = async ({
         senderId: candidate,
         senderUsername,
       });
-      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-        allowMatch.matchSource ?? "none"
-      }`;
+      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${allowMatch.matchSource ?? "none"}`;
       const allowed =
         effectiveDmAllow.hasWildcard || (effectiveDmAllow.hasEntries && allowMatch.allowed);
       if (!allowed) {

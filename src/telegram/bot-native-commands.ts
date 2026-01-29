@@ -49,6 +49,7 @@ import {
 } from "./bot/helpers.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
+import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -83,7 +84,7 @@ type RegisterTelegramNativeCommandsParams = {
     chatId: string | number,
     messageThreadId?: number,
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
-  shouldSkipUpdate: (ctx: unknown) => boolean;
+  shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   opts: { token: string };
 };
 

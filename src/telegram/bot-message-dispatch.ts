@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
   findModelInCatalog,
@@ -20,8 +19,15 @@ import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import type { MoltbotConfig } from "../config/types.clawdbot.js";
+import type { TelegramAccountConfig } from "../config/types.telegram.js";
+import type { ReplyToMode } from "../config/types.base.js";
+import type { Bot } from "grammy";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
 
-async function resolveStickerVisionSupport(cfg, agentId) {
+async function resolveStickerVisionSupport(cfg: MoltbotConfig, agentId: string) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
@@ -44,6 +50,17 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   opts,
   resolveBotTopicsEnabled,
+}: {
+  context: TelegramMessageContext;
+  bot: Bot;
+  cfg: MoltbotConfig;
+  runtime: RuntimeEnv;
+  replyToMode: ReplyToMode;
+  streamMode: TelegramStreamMode;
+  textLimit: number;
+  telegramCfg: TelegramAccountConfig;
+  opts: { token: string };
+  resolveBotTopicsEnabled: (ctx: TelegramContext) => Promise<boolean>;
 }) => {
   const {
     ctxPayload,
@@ -185,16 +202,20 @@ export const dispatchTelegramMessage = async ({
       }
 
       // Cache the description for future encounters
-      cacheSticker({
-        fileId: sticker.fileId,
-        fileUniqueId: sticker.fileUniqueId,
-        emoji: sticker.emoji,
-        setName: sticker.setName,
-        description,
-        cachedAt: new Date().toISOString(),
-        receivedFrom: ctxPayload.From,
-      });
-      logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+      if (sticker.fileId) {
+        cacheSticker({
+          fileId: sticker.fileId,
+          fileUniqueId: sticker.fileUniqueId,
+          emoji: sticker.emoji,
+          setName: sticker.setName,
+          description,
+          cachedAt: new Date().toISOString(),
+          receivedFrom: ctxPayload.From,
+        });
+        logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+      } else {
+        logVerbose(`telegram: skipped sticker cache (missing fileId) ${sticker.fileUniqueId}`);
+      }
     }
   }
 

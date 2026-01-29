@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
@@ -14,14 +13,53 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { resolveMedia } from "./bot/delivery.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
-import type { TelegramMessage } from "./bot/types.js";
+import type { TelegramContext, TelegramMessage } from "./bot/types.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
+import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { buildInlineKeyboard } from "./send.js";
+import type { Bot } from "grammy";
+import type { MoltbotConfig } from "../config/types.clawdbot.js";
+import type {
+  TelegramAccountConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.telegram.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { ChannelGroupPolicy } from "../config/group-policy.js";
+import { Logger } from "tslog";
+
+type TelegramHandlersParams = {
+  cfg: MoltbotConfig;
+  accountId: string | undefined;
+  bot: Bot;
+  opts: { token: string; proxyFetch?: typeof fetch };
+  runtime: RuntimeEnv;
+  mediaMaxBytes: number;
+  telegramCfg: TelegramAccountConfig;
+  groupAllowFrom?: Array<string | number>;
+  resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId?: number,
+  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  processMessage: (
+    primaryCtx: TelegramContext,
+    allMedia: Array<{
+      path: string;
+      contentType?: string;
+      stickerMetadata?: { emoji?: string; setName?: string; fileId?: string };
+    }>,
+    storeAllowFrom: string[],
+    options?: { forceWasMentioned?: boolean; messageIdOverride?: string },
+  ) => Promise<void>;
+  logger: Logger<Record<string, unknown>>;
+};
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -37,7 +75,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
-}) => {
+}: TelegramHandlersParams) => {
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP = 1;
@@ -49,7 +87,7 @@ export const registerTelegramHandlers = ({
 
   type TextFragmentEntry = {
     key: string;
-    messages: Array<{ msg: TelegramMessage; ctx: unknown; receivedAtMs: number }>;
+    messages: Array<{ msg: TelegramMessage; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
@@ -57,7 +95,7 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   type TelegramDebounceEntry = {
-    ctx: unknown;
+    ctx: TelegramContext;
     msg: TelegramMessage;
     allMedia: Array<{ path: string; contentType?: string }>;
     storeAllowFrom: string[];
@@ -86,9 +124,8 @@ export const registerTelegramHandlers = ({
         .join("\n");
       if (!combinedText.trim()) return;
       const first = entries[0];
-      const baseCtx = first.ctx as { me?: unknown; getFile?: unknown } & Record<string, unknown>;
-      const getFile =
-        typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
+      const baseCtx = first.ctx;
+      const getFile = baseCtx.getFile.bind(baseCtx) ?? (async () => ({}));
       const syntheticMessage: TelegramMessage = {
         ...first.msg,
         text: combinedText,
@@ -161,9 +198,8 @@ export const registerTelegramHandlers = ({
       };
 
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
-      const baseCtx = first.ctx as { me?: unknown; getFile?: unknown } & Record<string, unknown>;
-      const getFile =
-        typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
+      const baseCtx = first.ctx;
+      const getFile = baseCtx.getFile.bind(baseCtx) ?? (async () => ({}));
 
       await processMessage(
         { message: syntheticMessage, me: baseCtx.me, getFile },
@@ -377,7 +413,7 @@ export const registerTelegramHandlers = ({
         caption_entities: undefined,
         entities: undefined,
       };
-      const getFile = typeof ctx.getFile === "function" ? ctx.getFile.bind(ctx) : async () => ({});
+      const getFile = ctx.getFile.bind(ctx) ?? (async () => ({}));
       await processMessage({ message: syntheticMessage, me: ctx.me, getFile }, [], storeAllowFrom, {
         forceWasMentioned: true,
         messageIdOverride: callback.id,

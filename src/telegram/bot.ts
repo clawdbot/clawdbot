@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions } from "grammy";
@@ -46,6 +45,7 @@ import {
 } from "./bot-updates.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+import type { ReactionTypeEmoji } from "grammy/types";
 
 export type TelegramBotOptions = {
   token: string;
@@ -385,11 +385,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       // Detect added reactions
       const oldEmojis = new Set(
         reaction.old_reaction
-          .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
+          .filter(
+            (r): r is { type: "emoji"; emoji: ReactionTypeEmoji["emoji"] } => r.type === "emoji",
+          )
           .map((r) => r.emoji),
       );
       const addedReactions = reaction.new_reaction
-        .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
+        .filter(
+          (r): r is { type: "emoji"; emoji: ReactionTypeEmoji["emoji"] } => r.type === "emoji",
+        )
         .filter((r) => !oldEmojis.has(r.emoji));
 
       if (addedReactions.length === 0) return;
