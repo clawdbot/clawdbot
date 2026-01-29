@@ -359,6 +359,16 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+
+function buildVolcengineProvider(): ProviderConfig {
+  return {
+    baseUrl: ARK_BASE_URL,
+    api: "openai-completions",
+    models: [],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -400,6 +410,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const volcengineKey =
+    resolveEnvApiKeyVarName("volcengine") ??
+    resolveApiKeyFromProfiles({ provider: "volcengine", store: authStore });
+  if (volcengineKey) {
+    providers.volcengine = { ...buildVolcengineProvider(), apiKey: volcengineKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");
