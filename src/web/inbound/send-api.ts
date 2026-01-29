@@ -19,6 +19,17 @@ export function createWebSendApi(params: {
       sendOptions?: ActiveWebSendOptions,
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
+
+      const mentions: string[] = [];
+      if (text) {
+        const phoneRegex = /@(\d{10,15})/g;
+        let match: RegExpExecArray | null;
+        while ((match = phoneRegex.exec(text)) !== null) {
+          mentions.push(`${match[1]}@s.whatsapp.net`);
+        }
+      }
+      const mentionSpread = mentions.length > 0 ? { mentions } : {};
+
       let payload: AnyMessageContent;
       if (mediaBuffer && mediaType) {
         if (mediaType.startsWith("image/")) {
@@ -26,7 +37,8 @@ export function createWebSendApi(params: {
             image: mediaBuffer,
             caption: text || undefined,
             mimetype: mediaType,
-          };
+            ...mentionSpread,
+          } as AnyMessageContent;
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
         } else if (mediaType.startsWith("video/")) {
@@ -36,17 +48,19 @@ export function createWebSendApi(params: {
             caption: text || undefined,
             mimetype: mediaType,
             ...(gifPlayback ? { gifPlayback: true } : {}),
-          };
+            ...mentionSpread,
+          } as AnyMessageContent;
         } else {
           payload = {
             document: mediaBuffer,
             fileName: "file",
             caption: text || undefined,
             mimetype: mediaType,
-          };
+            ...mentionSpread,
+          } as AnyMessageContent;
         }
       } else {
-        payload = { text };
+        payload = mentions.length > 0 ? ({ text, mentions } as AnyMessageContent) : { text };
       }
       const result = await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
