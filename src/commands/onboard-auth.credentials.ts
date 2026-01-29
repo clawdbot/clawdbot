@@ -112,9 +112,24 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setClarifaiApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "clarifai:default",
+    credential: {
+      type: "api_key",
+      provider: "clarifai",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.5";
+// Clarifai model IDs are full URL paths: {user_id}/{app_id}/models/{model_id}
+export const CLARIFAI_DEFAULT_MODEL_REF = "clarifai/openai/chat-completion/models/gpt-4-turbo";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.

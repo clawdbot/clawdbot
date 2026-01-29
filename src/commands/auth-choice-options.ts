@@ -20,6 +20,7 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "clarifai"
   | "qwen";
 
 export type AuthChoiceGroup = {
@@ -70,6 +71,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
+  },
+  {
+    value: "clarifai",
+    label: "Clarifai",
+    hint: "Clarifai OpenAI-compatible API (PAT + model URL)",
+    choices: ["clarifai-api-key"],
   },
   {
     value: "google",
@@ -146,6 +153,11 @@ export function buildAuthChoiceOptions(params: {
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "clarifai-api-key",
+    label: "Clarifai API key (PAT)",
+    hint: "LLMs via OpenAI-compatible API (model URL required)",
   });
   options.push({
     value: "github-copilot",

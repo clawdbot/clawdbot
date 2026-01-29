@@ -8,6 +8,11 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
+  buildClarifaiModelDefinition,
+  CLARIFAI_BASE_URL,
+  CLARIFAI_MODEL_CATALOG,
+} from "./clarifai-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
@@ -350,6 +355,14 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildClarifaiProvider(): ProviderConfig {
+  return {
+    baseUrl: CLARIFAI_BASE_URL,
+    api: "openai-completions",
+    models: CLARIFAI_MODEL_CATALOG.map(buildClarifaiModelDefinition),
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -400,6 +413,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const clarifaiKey =
+    resolveEnvApiKeyVarName("clarifai") ??
+    resolveApiKeyFromProfiles({ provider: "clarifai", store: authStore });
+  if (clarifaiKey) {
+    providers.clarifai = { ...buildClarifaiProvider(), apiKey: clarifaiKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");

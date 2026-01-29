@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyClarifaiConfig,
+  applyClarifaiProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -28,12 +30,14 @@ import {
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
+  CLARIFAI_DEFAULT_MODEL_REF,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  setClarifaiApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMoonshotApiKey,
@@ -83,6 +87,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "clarifai") {
+      authChoice = "clarifai-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     }
@@ -513,6 +519,75 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "clarifai-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "clarifai") {
+      await setClarifaiApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Clarifai provides access to LLMs via OpenAI-compatible API.",
+          "You need two things:",
+          "  1. Personal Access Token (PAT): https://clarifai.com/settings/security",
+          "  2. Full model URL (used as model name in API calls)",
+          "",
+          "Model URL format: https://clarifai.com/{user}/{app}/models/{model}",
+          "",
+          "Examples:",
+          "  - https://clarifai.com/openai/chat-completion/models/gpt-4-turbo",
+          "  - https://clarifai.com/openai/chat-completion/models/gpt-oss-120b",
+          "  - https://clarifai.com/meta/Llama-2/models/llama2-70b-chat",
+          "",
+          "Browse models at: https://clarifai.com/explore/models",
+        ].join("\n"),
+        "Clarifai",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("clarifai");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing CLARIFAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setClarifaiApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Clarifai API key (PAT)",
+        validate: validateApiKeyInput,
+      });
+      await setClarifaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "clarifai:default",
+      provider: "clarifai",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: CLARIFAI_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyClarifaiConfig,
+        applyProviderConfig: applyClarifaiProviderConfig,
+        noteDefault: CLARIFAI_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

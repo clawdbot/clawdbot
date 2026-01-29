@@ -269,6 +269,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
 
+  if (normalized === "clarifai") {
+    return pick("CLARIFAI_API_KEY") ?? pick("CLARIFAI_PAT");
+  }
+
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
@@ -283,6 +287,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     minimax: "MINIMAX_API_KEY",
     synthetic: "SYNTHETIC_API_KEY",
     venice: "VENICE_API_KEY",
+    clarifai: "CLARIFAI_API_KEY",
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
   };
