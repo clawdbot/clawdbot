@@ -19,6 +19,7 @@ import {
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
 import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -1000,6 +1001,159 @@ describe("runHeartbeatOnce", () => {
       expect(replySpy).toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs heartbeat when HEARTBEAT.md is empty but there are pending system events (cron)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      // Create effectively empty HEARTBEAT.md
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        "# HEARTBEAT.md\n\n## Tasks\n\n",
+        "utf-8",
+      );
+
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      // Enqueue a system event (simulates cron job)
+      resetSystemEventsForTest();
+      enqueueSystemEvent("⏰ Reminder: Check your tasks", { sessionKey });
+
+      replySpy.mockResolvedValue([{ text: "Got your reminder! Checking tasks now." }]);
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "cron:test-job",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      // Should run despite empty HEARTBEAT.md because there are pending system events
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+      resetSystemEventsForTest();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips heartbeat when HEARTBEAT.md is empty and no pending system events", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      // Create effectively empty HEARTBEAT.md
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        "# HEARTBEAT.md\n\n## Tasks\n\n",
+        "utf-8",
+      );
+
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      // Ensure no pending system events
+      resetSystemEventsForTest();
+
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "interval",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      // Should skip because HEARTBEAT.md is empty and no pending events
+      expect(res.status).toBe("skipped");
+      if (res.status === "skipped") {
+        expect(res.reason).toBe("empty-heartbeat-file");
+      }
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      replySpy.mockRestore();
+      resetSystemEventsForTest();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
