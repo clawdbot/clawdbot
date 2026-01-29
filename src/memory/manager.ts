@@ -401,7 +401,8 @@ export class MemoryIndexManager {
       throw new Error("path required");
     }
     const absPath = path.resolve(this.workspaceDir, relPath);
-    if (!absPath.startsWith(this.workspaceDir)) {
+    const rel = path.relative(this.workspaceDir, absPath);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error("path escapes workspace");
     }
     const content = await fs.readFile(absPath, "utf-8");
