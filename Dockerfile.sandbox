@@ -13,4 +13,8 @@ RUN apt-get update \
     ripgrep \
   && rm -rf /var/lib/apt/lists/*
 
+RUN useradd -m -s /bin/bash -u 1000 sandbox
+USER sandbox
+WORKDIR /home/sandbox
+
 CMD ["sleep", "infinity"]
