@@ -7,7 +7,7 @@ import { resolveTlonAccount } from "../types.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { authenticate } from "../urbit/auth.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
-import { sendDm, sendGroupMessage } from "../urbit/send.js";
+import { sendDm, sendGroupMessage, acceptGroupInvite, acceptDmInvite } from "../urbit/send.js";
 import { cacheMessage, getChannelHistory } from "./history.js";
 import { createProcessedMessageTracker } from "./processed-messages.js";
 import {
@@ -423,6 +423,185 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
   }
 
+  // Track processed invites to avoid duplicates
+  const processedInvites = new Set<string>();
+  const processedDmInvites = new Set<string>();
+
+  // Check if an invite should be auto-accepted based on config
+  function shouldAutoAcceptInvite(inviterShip: string, isGroupInvite: boolean): boolean {
+    const autoAcceptEnabled = isGroupInvite ? account.autoAcceptGroupInvites : account.autoAcceptDmInvites;
+    if (!autoAcceptEnabled) return false;
+
+    const normalizedInviter = normalizeShip(inviterShip);
+
+    // Check blocklist first (blocklist takes priority)
+    if (account.inviteBlocklist.length > 0) {
+      const normalizedBlocklist = account.inviteBlocklist.map(normalizeShip);
+      if (normalizedBlocklist.includes(normalizedInviter)) {
+        runtime.log?.(`[tlon] Invite from ${inviterShip} blocked by blocklist`);
+        return false;
+      }
+    }
+
+    // If allowlist is set, only accept from those ships
+    if (account.inviteAllowlist.length > 0) {
+      const normalizedAllowlist = account.inviteAllowlist.map(normalizeShip);
+      if (!normalizedAllowlist.includes(normalizedInviter)) {
+        runtime.log?.(`[tlon] Invite from ${inviterShip} not in allowlist, skipping`);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // Handle incoming foreign groups updates (includes invites)
+  async function handleForeignGroupsUpdate(update: any) {
+    try {
+      if (!update || typeof update !== "object") return;
+
+      for (const [groupId, foreignData] of Object.entries(update)) {
+        if (!foreignData || typeof foreignData !== "object") continue;
+
+        const foreign = foreignData as {
+          invites?: Array<{ from: string; valid: boolean; time?: number }>;
+        };
+
+        const validInvites = foreign.invites?.filter((inv) => inv.valid) ?? [];
+        if (validInvites.length === 0) continue;
+
+        for (const invite of validInvites) {
+          const inviteKey = `${groupId}:${invite.from}:${invite.time ?? "unknown"}`;
+          if (processedInvites.has(inviteKey)) continue;
+          processedInvites.add(inviteKey);
+
+          runtime.log?.(`[tlon] Received group invite: ${groupId} from ${invite.from}`);
+
+          if (shouldAutoAcceptInvite(invite.from, true)) {
+            try {
+              runtime.log?.(`[tlon] Auto-accepting invite to ${groupId} from ${invite.from}`);
+              await acceptGroupInvite(api!, groupId);
+              runtime.log?.(`[tlon] Successfully joined group ${groupId}`);
+
+              setTimeout(() => {
+                refreshChannelSubscriptions().catch((error) => {
+                  runtime.error?.(`[tlon] Failed to refresh channels after join: ${error?.message ?? String(error)}`);
+                });
+              }, 2000);
+            } catch (error: any) {
+              runtime.error?.(`[tlon] Failed to accept invite to ${groupId}: ${error?.message ?? String(error)}`);
+            }
+          } else {
+            runtime.log?.(`[tlon] Invite to ${groupId} not auto-accepted (auto-accept disabled or filtered)`);
+          }
+        }
+      }
+    } catch (error: any) {
+      runtime.error?.(`[tlon] Error handling foreign groups update: ${error?.message ?? String(error)}`);
+    }
+  }
+
+  // Subscribe to foreign groups updates to detect invites
+  let foreignGroupsSubscribed = false;
+  async function subscribeToForeignGroups() {
+    if (foreignGroupsSubscribed) return;
+    if (!account.autoAcceptGroupInvites) {
+      runtime.log?.("[tlon] Auto-accept group invites disabled, skipping foreign groups subscription");
+      return;
+    }
+
+    try {
+      await api!.subscribe({
+        app: "groups",
+        path: "/v1/foreigns",
+        event: handleForeignGroupsUpdate,
+        err: (error) => {
+          runtime.error?.(`[tlon] Foreign groups subscription error: ${String(error)}`);
+        },
+        quit: () => {
+          runtime.log?.("[tlon] Foreign groups subscription ended");
+          foreignGroupsSubscribed = false;
+        },
+      });
+      foreignGroupsSubscribed = true;
+      runtime.log?.("[tlon] Subscribed to foreign groups (invite detection enabled)");
+    } catch (error: any) {
+      runtime.error?.(`[tlon] Failed to subscribe to foreign groups: ${error?.message ?? String(error)}`);
+    }
+  }
+
+  // Handle incoming DM invite updates from /v3 subscription
+  async function handleDmInviteUpdate(update: any) {
+    try {
+      if (!update || typeof update !== "object") return;
+
+      let pendingShips: string[] = [];
+
+      if (Array.isArray(update)) {
+        pendingShips = update.filter((item) => typeof item === "string");
+      } else if (update.ship && update.pending) {
+        pendingShips = [update.ship];
+      }
+
+      for (const ship of pendingShips) {
+        const normalizedShip = normalizeShip(ship);
+        if (processedDmInvites.has(normalizedShip)) continue;
+        processedDmInvites.add(normalizedShip);
+
+        runtime.log?.(`[tlon] Received DM invite from ${normalizedShip}`);
+
+        if (shouldAutoAcceptInvite(normalizedShip, false)) {
+          try {
+            runtime.log?.(`[tlon] Auto-accepting DM invite from ${normalizedShip}`);
+            await acceptDmInvite(api!, normalizedShip);
+            runtime.log?.(`[tlon] Successfully accepted DM from ${normalizedShip}`);
+
+            setTimeout(() => {
+              subscribeToDM(normalizedShip).catch((error) => {
+                runtime.error?.(`[tlon] Failed to subscribe to new DM: ${error?.message ?? String(error)}`);
+              });
+            }, 1000);
+          } catch (error: any) {
+            runtime.error?.(`[tlon] Failed to accept DM invite from ${normalizedShip}: ${error?.message ?? String(error)}`);
+          }
+        } else {
+          runtime.log?.(`[tlon] DM invite from ${normalizedShip} not auto-accepted (auto-accept disabled or filtered)`);
+        }
+      }
+    } catch (error: any) {
+      runtime.error?.(`[tlon] Error handling DM invite update: ${error?.message ?? String(error)}`);
+    }
+  }
+
+  // Subscribe to chat updates for DM invite detection
+  let dmInvitesSubscribed = false;
+  async function subscribeToDmInvites() {
+    if (dmInvitesSubscribed) return;
+    if (!account.autoAcceptDmInvites) {
+      runtime.log?.("[tlon] Auto-accept DM invites disabled, skipping DM invite subscription");
+      return;
+    }
+
+    try {
+      await api!.subscribe({
+        app: "chat",
+        path: "/v3",
+        event: handleDmInviteUpdate,
+        err: (error) => {
+          runtime.error?.(`[tlon] DM invite subscription error: ${String(error)}`);
+        },
+        quit: () => {
+          runtime.log?.("[tlon] DM invite subscription ended");
+          dmInvitesSubscribed = false;
+        },
+      });
+      dmInvitesSubscribed = true;
+      runtime.log?.("[tlon] Subscribed to chat updates (DM invite detection enabled)");
+    } catch (error: any) {
+      runtime.error?.(`[tlon] Failed to subscribe to DM invites: ${error?.message ?? String(error)}`);
+    }
+  }
+
   async function refreshChannelSubscriptions() {
     try {
       const dmShips = await api!.scry("/chat/dm.json");
@@ -464,6 +643,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     for (const channelNest of groupChannels) {
       await subscribeToChannel(channelNest);
     }
+
+    // Subscribe to foreign groups for invite detection (if auto-accept enabled)
+    await subscribeToForeignGroups();
+
+    // Subscribe to DM invites (if auto-accept enabled)
+    await subscribeToDmInvites();
 
     runtime.log?.("[tlon] All subscriptions registered, connecting to SSE stream...");
     await api!.connect();

@@ -12,6 +12,11 @@ export type TlonResolvedAccount = {
   dmAllowlist: string[];
   autoDiscoverChannels: boolean | null;
   showModelSignature: boolean | null;
+  // Auto-accept invites settings
+  autoAcceptGroupInvites: boolean | null;
+  autoAcceptDmInvites: boolean | null;
+  inviteAllowlist: string[];
+  inviteBlocklist: string[];
 };
 
 export function resolveTlonAccount(cfg: MoltbotConfig, accountId?: string | null): TlonResolvedAccount {
@@ -26,6 +31,10 @@ export function resolveTlonAccount(cfg: MoltbotConfig, accountId?: string | null
         dmAllowlist?: string[];
         autoDiscoverChannels?: boolean;
         showModelSignature?: boolean;
+        autoAcceptGroupInvites?: boolean;
+        autoAcceptDmInvites?: boolean;
+        inviteAllowlist?: string[];
+        inviteBlocklist?: string[];
         accounts?: Record<string, Record<string, unknown>>;
       }
     | undefined;
@@ -43,6 +52,10 @@ export function resolveTlonAccount(cfg: MoltbotConfig, accountId?: string | null
       dmAllowlist: [],
       autoDiscoverChannels: null,
       showModelSignature: null,
+      autoAcceptGroupInvites: null,
+      autoAcceptDmInvites: null,
+      inviteAllowlist: [],
+      inviteBlocklist: [],
     };
   }
 
@@ -58,6 +71,12 @@ export function resolveTlonAccount(cfg: MoltbotConfig, accountId?: string | null
     (account?.autoDiscoverChannels ?? base.autoDiscoverChannels ?? null) as boolean | null;
   const showModelSignature =
     (account?.showModelSignature ?? base.showModelSignature ?? null) as boolean | null;
+  const autoAcceptGroupInvites =
+    (account?.autoAcceptGroupInvites ?? base.autoAcceptGroupInvites ?? null) as boolean | null;
+  const autoAcceptDmInvites =
+    (account?.autoAcceptDmInvites ?? base.autoAcceptDmInvites ?? null) as boolean | null;
+  const inviteAllowlist = (account?.inviteAllowlist ?? base.inviteAllowlist ?? []) as string[];
+  const inviteBlocklist = (account?.inviteBlocklist ?? base.inviteBlocklist ?? []) as string[];
   const configured = Boolean(ship && url && code);
 
   return {
@@ -72,6 +91,10 @@ export function resolveTlonAccount(cfg: MoltbotConfig, accountId?: string | null
     dmAllowlist,
     autoDiscoverChannels,
     showModelSignature,
+    autoAcceptGroupInvites,
+    autoAcceptDmInvites,
+    inviteAllowlist,
+    inviteBlocklist,
   };
 }
 

@@ -125,3 +125,38 @@ export function buildMediaText(text: string | undefined, mediaUrl: string | unde
   if (cleanUrl) return cleanUrl;
   return cleanText;
 }
+
+// Accept a group invite by sending a group-join poke
+export async function acceptGroupInvite(api: TlonPokeApi, groupId: string): Promise<void> {
+  await api.poke({
+    app: "groups",
+    mark: "group-join",
+    json: {
+      flag: groupId,
+      "join-all": true,
+    },
+  });
+}
+
+// Decline a group invite
+export async function declineGroupInvite(api: TlonPokeApi, groupId: string): Promise<void> {
+  await api.poke({
+    app: "groups",
+    mark: "invite-decline",
+    json: groupId,
+  });
+}
+
+// Accept a DM invite by sending a chat-dm-rsvp poke
+export async function acceptDmInvite(api: TlonPokeApi, ship: string, accept: boolean = true): Promise<void> {
+  // Ship MUST have the ~ prefix for this poke
+  const shipName = ship.startsWith("~") ? ship : `~${ship}`;
+  await api.poke({
+    app: "chat",
+    mark: "chat-dm-rsvp",
+    json: {
+      ship: shipName,
+      ok: accept,
+    },
+  });
+}

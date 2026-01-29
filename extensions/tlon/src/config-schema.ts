@@ -23,6 +23,11 @@ export const TlonAccountSchema = z.object({
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
+  // Auto-accept invites settings
+  autoAcceptGroupInvites: z.boolean().optional(),
+  autoAcceptDmInvites: z.boolean().optional(),
+  inviteAllowlist: z.array(ShipSchema).optional(),
+  inviteBlocklist: z.array(ShipSchema).optional(),
 });
 
 export const TlonConfigSchema = z.object({
@@ -37,6 +42,11 @@ export const TlonConfigSchema = z.object({
   showModelSignature: z.boolean().optional(),
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
+  // Auto-accept invites settings
+  autoAcceptGroupInvites: z.boolean().optional(),
+  autoAcceptDmInvites: z.boolean().optional(),
+  inviteAllowlist: z.array(ShipSchema).optional(),
+  inviteBlocklist: z.array(ShipSchema).optional(),
   accounts: z.record(z.string(), TlonAccountSchema).optional(),
 });
 
