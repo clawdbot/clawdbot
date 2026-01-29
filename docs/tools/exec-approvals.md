@@ -187,6 +187,40 @@ Reply in chat:
 /approve <id> deny
 ```
 
+### Inline approval buttons
+
+For Discord and Slack, you can enable inline buttons instead of text commands:
+
+**Discord:**
+```yaml
+channels:
+  discord:
+    execApprovals:
+      enabled: true
+      approvers: ["123456789012345678"]  # Discord user IDs
+      agentFilter: ["main"]               # optional
+      sessionFilter: ["discord"]          # optional
+```
+
+**Slack:**
+```yaml
+channels:
+  slack:
+    execApprovals:
+      enabled: true
+      approvers: ["U12345678"]  # Slack user IDs
+      agentFilter: ["main"]      # optional
+      sessionFilter: ["slack"]   # optional
+```
+
+When enabled, approval requests show Block Kit (Slack) or component (Discord) buttons:
+- **Allow once** → run now
+- **Always allow** → add to allowlist + run  
+- **Deny** → block
+
+Messages update in-place when resolved or expired. The text forwarder is automatically
+skipped for channels with inline buttons enabled.
+
 ### macOS IPC flow
 ```
 Gateway -> Node Service (WS)

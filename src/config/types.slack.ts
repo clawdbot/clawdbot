@@ -75,6 +75,17 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
 };
 
+export type SlackExecApprovalConfig = {
+  /** Enable exec approval forwarding to Slack DMs with inline buttons. Default: false. */
+  enabled?: boolean;
+  /** Slack user IDs to receive approval prompts. Required if enabled. */
+  approvers?: Array<string | number>;
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -142,6 +153,8 @@ export type SlackAccountConfig = {
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Exec approval forwarding with inline buttons. */
+  execApprovals?: SlackExecApprovalConfig;
 };
 
 export type SlackConfig = {

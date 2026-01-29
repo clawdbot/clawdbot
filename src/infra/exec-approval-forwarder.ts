@@ -158,6 +158,30 @@ function defaultResolveSessionTarget(params: {
   };
 }
 
+function isSlackExecApprovalsEnabled(cfg: ClawdbotConfig, accountId?: string | null): boolean {
+  const slackCfg = cfg.channels?.slack as
+    | {
+        execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+        accounts?: Record<
+          string,
+          { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+        >;
+      }
+    | undefined;
+  if (!slackCfg) return false;
+  // Check account-specific config first
+  if (accountId && slackCfg.accounts?.[accountId]?.execApprovals?.enabled) {
+    const approvers = slackCfg.accounts[accountId].execApprovals?.approvers;
+    return Array.isArray(approvers) && approvers.length > 0;
+  }
+  // Fall back to top-level config
+  if (slackCfg.execApprovals?.enabled) {
+    const approvers = slackCfg.execApprovals?.approvers;
+    return Array.isArray(approvers) && approvers.length > 0;
+  }
+  return false;
+}
+
 async function deliverToTargets(params: {
   cfg: MoltbotConfig;
   targets: ForwardTarget[];
@@ -169,6 +193,10 @@ async function deliverToTargets(params: {
     if (params.shouldSend && !params.shouldSend()) return;
     const channel = normalizeMessageChannel(target.channel) ?? target.channel;
     if (!isDeliverableMessageChannel(channel)) return;
+    // Skip Slack text messages when Slack exec approval buttons are enabled
+    if (channel === "slack" && isSlackExecApprovalsEnabled(params.cfg, target.accountId)) {
+      return;
+    }
     try {
       await params.deliver({
         cfg: params.cfg,

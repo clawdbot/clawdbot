@@ -26,6 +26,11 @@ import { registerSlackMonitorSlashCommands } from "./slash.js";
 import { normalizeAllowList } from "./allow-list.js";
 
 import type { MonitorSlackOpts } from "./types.js";
+import {
+  SlackExecApprovalHandler,
+  getExecApprovalActionIdPrefix,
+  parseApprovalValue,
+} from "./exec-approvals.js";
 
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
   default?: typeof import("@slack/bolt");
@@ -210,6 +215,67 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
   registerSlackMonitorSlashCommands({ ctx, account });
+
+  // Exec approvals with inline buttons
+  let execApprovalHandler: SlackExecApprovalHandler | null = null;
+  const execApprovalConfig = slackCfg.execApprovals;
+  if (execApprovalConfig?.enabled && execApprovalConfig.approvers?.length) {
+    execApprovalHandler = new SlackExecApprovalHandler({
+      client: app.client,
+      accountId: account.accountId,
+      config: execApprovalConfig,
+      cfg,
+      runtime,
+    });
+
+    // Register action handler for approval buttons
+    const supportsActions = typeof (app as { action?: unknown }).action === "function";
+    if (supportsActions) {
+      (
+        app as unknown as {
+          action: (
+            id: string | RegExp,
+            handler: (args: {
+              ack: () => Promise<void>;
+              action: { action_id?: string; value?: string };
+              respond: (payload: { text: string; response_type?: string }) => Promise<void>;
+            }) => Promise<void>,
+          ) => void;
+        }
+      ).action(
+        new RegExp(`^${getExecApprovalActionIdPrefix()}_`),
+        async ({ ack, action, respond }) => {
+          await ack();
+          const parsed = parseApprovalValue(action?.value);
+          if (!parsed) {
+            await respond({
+              text: "This approval button is no longer valid.",
+              response_type: "ephemeral",
+            });
+            return;
+          }
+          const decisionLabel =
+            parsed.action === "allow-once"
+              ? "Allowed (once)"
+              : parsed.action === "allow-always"
+                ? "Allowed (always)"
+                : "Denied";
+          await respond({
+            text: `Submitting decision: **${decisionLabel}**...`,
+            response_type: "ephemeral",
+          });
+          const ok = await execApprovalHandler!.resolveApproval(parsed.approvalId, parsed.action);
+          if (!ok) {
+            await respond({
+              text: "Failed to submit approval. The request may have expired or already been resolved.",
+              response_type: "ephemeral",
+            });
+          }
+        },
+      );
+    }
+  }
+
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -349,6 +415,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
     }
+    // Start exec approval handler after app is running
+    if (execApprovalHandler) {
+      await execApprovalHandler.start();
+    }
     if (opts.abortSignal?.aborted) return;
     await new Promise<void>((resolve) => {
       opts.abortSignal?.addEventListener("abort", () => resolve(), {
@@ -358,6 +428,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
+    // Stop exec approval handler before app stops
+    if (execApprovalHandler) {
+      await execApprovalHandler.stop();
+    }
     await app.stop().catch(() => undefined);
   }
 }
