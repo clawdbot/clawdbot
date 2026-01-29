@@ -336,6 +336,55 @@ export function applySyntheticConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
+export function applyNebiusProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+
+  models["nebius/zai-glm-7"] = {
+    ...models["nebius/zai-glm-7"],
+    alias: models["nebius/zai-glm-7"]?.alias ?? "GLM 7",
+  };
+
+  models["nebius/zai-glm-5"] = {
+    ...models["nebius/zai-glm-5"],
+    alias: models["nebius/zai-glm-5"]?.alias ?? "GLM 5",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyNebiusConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyNebiusProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: "nebius/zai-glm-7",
+        },
+      },
+    },
+  };
+}
+
+
 /**
  * Apply Venice provider configuration without changing the default model.
  * Registers Venice models and sets up the provider, but preserves existing model selection.

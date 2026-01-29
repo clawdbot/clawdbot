@@ -134,6 +134,7 @@ export async function modelsStatusCommand(
     "zai",
     "mistral",
     "synthetic",
+    "nebius"
   ];
   for (const provider of envProbeProviders) {
     if (resolveEnvApiKey(provider)) providersFromEnv.add(provider);

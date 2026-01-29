@@ -64,6 +64,17 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1";
+const NEBIUS_DEFAULT_CONTEXT_WINDOW = 128000;
+const NEBIUS_DEFAULT_MAX_TOKENS = 8192;
+const NEBIUS_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+
 const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -359,6 +370,34 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildNebiusProvider(): ProviderConfig {
+  return {
+    baseUrl: NEBIUS_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "zai-org/GLM-4.7-FP8",
+        name: "GLM 7",
+        reasoning: false,
+        input: ["text"],
+        cost: NEBIUS_DEFAULT_COST,
+        contextWindow: NEBIUS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: NEBIUS_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zai-org/GLM-4.5",
+        name: "GLM 5",
+        reasoning: false,
+        input: ["text"],
+        cost: NEBIUS_DEFAULT_COST,
+        contextWindow: NEBIUS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: NEBIUS_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -417,6 +456,15 @@ export async function resolveImplicitProviders(params: {
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
   }
+
+  const nebiusKey =
+  resolveEnvApiKeyVarName("nebius") ??
+  resolveApiKeyFromProfiles({ provider: "nebius", store: authStore });
+
+if (nebiusKey) {
+  providers.nebius = { ...buildNebiusProvider(), apiKey: nebiusKey };
+}
+
 
   return providers;
 }
