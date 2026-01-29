@@ -89,7 +89,28 @@ function resolveLidMappingDirs(opts?: JidToE164Options): string[] {
   addDir(opts?.authDir);
   for (const dir of opts?.lidMappingDirs ?? []) addDir(dir);
   addDir(resolveOAuthDir());
-  addDir(path.join(CONFIG_DIR, "credentials"));
+  const credentialsDir = path.join(CONFIG_DIR, "credentials");
+  addDir(credentialsDir);
+
+  // Also search WhatsApp account subdirectories for LID mappings
+  const waDir = path.join(credentialsDir, "whatsapp");
+  try {
+    if (fs.existsSync(waDir) && fs.statSync(waDir).isDirectory()) {
+      for (const account of fs.readdirSync(waDir)) {
+        const accountDir = path.join(waDir, account);
+        try {
+          if (fs.statSync(accountDir).isDirectory()) {
+            dirs.add(accountDir);
+          }
+        } catch {
+          // Skip if can't stat
+        }
+      }
+    }
+  } catch {
+    // Skip if whatsapp dir doesn't exist or can't be read
+  }
+
   return [...dirs];
 }
 
