@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import type { CompactOptions } from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import {
@@ -491,6 +492,74 @@ export async function runEmbeddedAttempt(
 
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
       activeSession.agent.streamFn = streamSimple;
+
+      // IMPORTANT (embedded mode): initialize the pi extension runner.
+      //
+      // In pi-coding-agent, ExtensionRunner defaults `ctx.model` to `undefined` until
+      // `extensionRunner.initialize(...)` is called. Clawdbot uses the SDK in embedded
+      // mode (no interactive UI), so without this initialization compaction hooks that
+      // rely on `ctx.model` (e.g. `compaction-safeguard`) will always fall back to
+      // "Summary unavailable..." and history will be truncated without a summary.
+      const extensionRunner = activeSession.extensionRunner;
+      if (extensionRunner) {
+        extensionRunner.initialize(
+          {
+            // Embedded runs don't have a UI; keep UI-dependent actions as safe no-ops.
+            sendMessage: async () => {},
+            sendUserMessage: async () => {},
+            appendEntry: () => {},
+            setSessionName: () => {},
+            getSessionName: () => undefined,
+            setLabel: () => {},
+            getActiveTools: () =>
+              (activeSession.agent.state.tools ?? [])
+                .map((tool) => {
+                  if (!tool) return undefined;
+                  if (typeof tool === "string") return tool;
+                  if (typeof tool === "object" && "name" in tool) {
+                    const name = (tool as { name?: unknown }).name;
+                    return typeof name === "string" ? name : undefined;
+                  }
+                  return undefined;
+                })
+                .filter((name): name is string => typeof name === "string"),
+            getAllTools: () => [],
+            setActiveTools: () => {},
+            setModel: async (model: any) => {
+              const key = await activeSession.modelRegistry.getApiKey(model);
+              if (!key) return false;
+              await activeSession.setModel(model);
+              return true;
+            },
+            getThinkingLevel: () => activeSession.thinkingLevel,
+            setThinkingLevel: (level: any) => {
+              activeSession.setThinkingLevel(level);
+            },
+          } as any,
+          {
+            // Provide live model + context access for extensions.
+            getModel: () => activeSession.agent.state.model,
+            isIdle: () => true,
+            abort: () => {
+              void activeSession.abort();
+            },
+            hasPendingMessages: () => false,
+            shutdown: () => {},
+            getContextUsage: () => activeSession.getContextUsage(),
+            compact: (options?: CompactOptions) => {
+              void (async () => {
+                try {
+                  const result = await activeSession.compact(options?.customInstructions);
+                  options?.onComplete?.(result);
+                } catch (error) {
+                  const err = error instanceof Error ? error : new Error(String(error));
+                  options?.onError?.(err);
+                }
+              })();
+            },
+          } as any,
+        );
+      }
 
       applyExtraParamsToAgent(
         activeSession.agent,
