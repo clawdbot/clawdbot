@@ -55,4 +55,8 @@ export {
 export type { EmbeddedContextFile, FailoverReason } from "./pi-embedded-helpers/types.js";
 
 export type { ToolCallIdMode } from "./tool-call-id.js";
-export { isValidCloudCodeAssistToolId, sanitizeToolCallId } from "./tool-call-id.js";
+export {
+  isValidCloudCodeAssistToolId,
+  sanitizeToolCallId,
+  normalizeToolCallArguments,
+} from "./tool-call-id.js";

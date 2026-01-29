@@ -186,3 +186,43 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
 
   return changed ? out : messages;
 }
+
+/**
+ * Normalize toolCall arguments to ensure they are always an object.
+ * Some models (e.g., via google-antigravity) may omit the `arguments` field
+ * for tools with no required parameters. Anthropic API requires `input` to be present.
+ */
+export function normalizeToolCallArguments(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out = messages.map((msg) => {
+    if (!msg || typeof msg !== "object") return msg;
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") return msg;
+
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const content = assistant.content;
+    if (!Array.isArray(content)) return msg;
+
+    let contentChanged = false;
+    const nextContent = content.map((block) => {
+      if (!block || typeof block !== "object") return block;
+      const rec = block as { type?: unknown; arguments?: unknown };
+      const type = rec.type;
+      if (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") {
+        return block;
+      }
+      // Normalize missing or undefined arguments to empty object
+      if (rec.arguments === undefined || rec.arguments === null) {
+        contentChanged = true;
+        return { ...(block as unknown as Record<string, unknown>), arguments: {} };
+      }
+      return block;
+    });
+
+    if (!contentChanged) return msg;
+    changed = true;
+    return { ...assistant, content: nextContent as typeof assistant.content };
+  });
+
+  return changed ? out : messages;
+}

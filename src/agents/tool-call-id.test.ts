@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isValidCloudCodeAssistToolId,
+  normalizeToolCallArguments,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "./tool-call-id.js";
 
@@ -264,5 +265,111 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(r1.toolCallId).toBe(a.id);
       expect(r2.toolCallId).toBe(b.id);
     });
+  });
+});
+
+describe("normalizeToolCallArguments", () => {
+  it("is a no-op when arguments are already present", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call1", name: "read", arguments: { path: "/tmp" } }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = normalizeToolCallArguments(input);
+    expect(out).toBe(input);
+  });
+
+  it("normalizes undefined arguments to empty object", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call1", name: "memory_status" }],
+      },
+    ] as AgentMessage[];
+
+    const out = normalizeToolCallArguments(input);
+    expect(out).not.toBe(input);
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = assistant.content?.[0] as { arguments?: unknown };
+    expect(toolCall.arguments).toEqual({});
+  });
+
+  it("normalizes null arguments to empty object", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call1", name: "memory_status", arguments: null }],
+      },
+    ] as AgentMessage[];
+
+    const out = normalizeToolCallArguments(input);
+    expect(out).not.toBe(input);
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = assistant.content?.[0] as { arguments?: unknown };
+    expect(toolCall.arguments).toEqual({});
+  });
+
+  it("handles multiple toolCalls in single message", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call1", name: "memory_status" },
+          { type: "toolCall", id: "call2", name: "read", arguments: { path: "/tmp" } },
+          { type: "toolCall", id: "call3", name: "load_memory" },
+        ],
+      },
+    ] as AgentMessage[];
+
+    const out = normalizeToolCallArguments(input);
+    expect(out).not.toBe(input);
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const call1 = assistant.content?.[0] as { arguments?: unknown };
+    const call2 = assistant.content?.[1] as { arguments?: unknown };
+    const call3 = assistant.content?.[2] as { arguments?: unknown };
+    expect(call1.arguments).toEqual({});
+    expect(call2.arguments).toEqual({ path: "/tmp" });
+    expect(call3.arguments).toEqual({});
+  });
+
+  it("handles toolUse and functionCall types", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call1", name: "status" },
+          { type: "functionCall", id: "call2", name: "ping" },
+        ],
+      },
+    ] as AgentMessage[];
+
+    const out = normalizeToolCallArguments(input);
+    expect(out).not.toBe(input);
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const call1 = assistant.content?.[0] as { arguments?: unknown };
+    const call2 = assistant.content?.[1] as { arguments?: unknown };
+    expect(call1.arguments).toEqual({});
+    expect(call2.arguments).toEqual({});
+  });
+
+  it("does not modify user or toolResult messages", () => {
+    const input = [
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = normalizeToolCallArguments(input);
+    expect(out).toBe(input);
   });
 });
