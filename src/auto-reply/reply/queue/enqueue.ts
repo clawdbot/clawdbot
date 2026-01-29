@@ -1,5 +1,5 @@
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
+import { FOLLOWUP_QUEUES, getFollowupQueue, persistFollowupQueues } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
 function isRunAlreadyQueued(
@@ -39,14 +39,20 @@ export function enqueueFollowupRun(
 
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
+  // Clear emptyAt since we're adding an item
+  queue.emptyAt = undefined;
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
   });
-  if (!shouldEnqueue) return false;
+  if (!shouldEnqueue) {
+    persistFollowupQueues();
+    return false;
+  }
 
   queue.items.push(run);
+  persistFollowupQueues();
   return true;
 }
 
