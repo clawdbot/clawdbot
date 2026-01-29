@@ -179,11 +179,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     bindRaw === "lan" ||
     bindRaw === "auto" ||
     bindRaw === "custom" ||
-    bindRaw === "tailnet"
+    bindRaw === "tailnet" ||
+    bindRaw === "wireguard"
       ? bindRaw
       : null;
   if (!bind) {
-    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
+    defaultRuntime.error(
+      'Invalid --bind (use "loopback", "lan", "tailnet", "wireguard", "auto", or "custom")',
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -312,7 +315,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
       "--bind <mode>",
-      'Bind mode ("loopback"|"lan"|"tailnet"|"auto"|"custom"). Defaults to config gateway.bind (or loopback).',
+      'Bind mode ("loopback"|"lan"|"tailnet"|"wireguard"|"auto"|"custom"). Defaults to config gateway.bind (or loopback).',
     )
     .option(
       "--token <token>",

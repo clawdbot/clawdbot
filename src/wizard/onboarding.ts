@@ -236,11 +236,14 @@ export async function runOnboardingWizard(
   })();
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
+    const formatBind = (
+      value: "loopback" | "lan" | "auto" | "custom" | "tailnet" | "wireguard",
+    ) => {
       if (value === "loopback") return "Loopback (127.0.0.1)";
       if (value === "lan") return "LAN";
       if (value === "custom") return "Custom IP";
       if (value === "tailnet") return "Tailnet (Tailscale IP)";
+      if (value === "wireguard") return "WireGuard (WireGuard IP)";
       return "Auto";
     };
     const formatAuth = (value: GatewayAuthChoice) => {

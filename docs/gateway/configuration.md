@@ -3142,10 +3142,11 @@ Defaults:
 - bind: `lan` (binds to `0.0.0.0`)
 
 Bind modes:
-- `lan`: `0.0.0.0` (reachable on any interface, including LAN/Wi‑Fi and Tailscale)
-- `tailnet`: bind only to the machine’s Tailscale IP (recommended for Vienna ⇄ London)
+- `lan`: `0.0.0.0` (reachable on any interface, including LAN/Wi-Fi and overlay networks)
+- `tailnet`: bind only to the machine's Tailscale IP (100.64.0.0/10 range)
+- `wireguard`: bind only to the machine's WireGuard mesh IP (wg0/wt0 interface - Netbird, Headscale, etc.)
 - `loopback`: `127.0.0.1` (local only)
-- `auto`: prefer tailnet IP if present, else `lan`
+- `auto`: prefer loopback if available, else `lan`
 
 TLS:
 - `bridge.tls.enabled`: enable TLS for bridge connections (TLS-only when enabled).

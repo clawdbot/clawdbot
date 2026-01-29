@@ -40,7 +40,7 @@ Notes:
 ### Options
 
 - `--port <port>`: WebSocket port (default comes from config/env; usually `18789`).
-- `--bind <loopback|lan|tailnet|auto|custom>`: listener bind mode.
+- `--bind <loopback|lan|tailnet|wireguard|auto|custom>`: listener bind mode.
 - `--auth <token|password>`: auth mode override.
 - `--token <token>`: token override (also sets `CLAWDBOT_GATEWAY_TOKEN` for the process).
 - `--password <password>`: password override (also sets `CLAWDBOT_GATEWAY_PASSWORD` for the process).
