@@ -71,3 +71,11 @@ USER.md
 
 # local tooling
 .serena/
+
+# Local untracked (ignore for updates)
+Peekaboo/
+logs/
+research/
+*.log
+sessions.json*
+scripts/restrict_vnc_to_tailscale.sh

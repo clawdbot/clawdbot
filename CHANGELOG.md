@@ -231,6 +231,10 @@ Status: beta.
 - Agents: remove redundant bash tool alias from tool registration/display. (#1571) Thanks @Takhoffman.
 - Docs: add cron vs heartbeat decision guide (with Lobster workflow notes). (#1533) Thanks @JustYannicc. https://docs.molt.bot/automation/cron-vs-heartbeat
 - Docs: clarify HEARTBEAT.md empty file skips heartbeats, missing file still runs. (#1535) Thanks @JustYannicc. https://docs.molt.bot/gateway/heartbeat
+- Tlon: add Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a.
+- Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt.
+- TTS: move Telegram TTS into core with auto-replies, commands, and gateway methods. (#1559) Thanks @Glucksberg.
+- Hooks: add config-driven message handlers for immediate agent triggering on inbound messages (bypasses queue).
 
 ### Fixes
 - Sessions: accept non-UUID sessionIds for history/send/status while preserving agent scoping. (#1518)

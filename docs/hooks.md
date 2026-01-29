@@ -196,12 +196,13 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
-  action: string,              // e.g., 'new', 'reset', 'stop'
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
+  action: string,              // e.g., 'new', 'reset', 'stop', 'received'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
   messages: string[],          // Push messages here to send to user
   context: {
+    // For command events:
     sessionEntry?: SessionEntry,
     sessionId?: string,
     sessionFile?: string,
@@ -209,9 +210,47 @@ Each event includes:
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: MoltbotConfig
+    cfg?: ClawdbotConfig,
+    // For message:received events:
+    from?: string,
+    content?: string,
+    channelId?: string,
+    metadata?: Record<string, unknown>
   }
 }
+```
+
+#### Message Received Handler Example
+
+```typescript
+import type { HookHandler } from '../../src/hooks/hooks.js';
+import { isMessageReceivedEvent } from '../../src/hooks/hooks.js';
+
+const handler: HookHandler = async (event) => {
+  if (!isMessageReceivedEvent(event)) return;
+
+  const { from, content, channelId, metadata } = event.context;
+
+  console.log(`[message-hook] ${channelId}: ${from} said "${content.slice(0, 50)}..."`);
+
+  // Example: Log to external service, analytics, audit trail, etc.
+  // await logToExternalService({ from, content, channel: channelId });
+};
+
+export default handler;
+```
+
+**HOOK.md** for message watcher:
+```markdown
+---
+name: message-watcher
+description: "Watch all inbound messages"
+metadata: {"clawdbot":{"emoji":"👀","events":["message:received"]}}
+---
+
+# Message Watcher
+
+Logs all inbound messages for debugging or auditing.
 ```
 
 ## Event Types
@@ -235,6 +274,39 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Message Events
+
+Triggered when messages are received:
+
+- **`message`**: All message events (general listener)
+- **`message:received`**: When an inbound message is received from any channel (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Gateway/WebUI, MS Teams, Matrix, etc.). Fire-and-forget; cannot modify the message.
+
+#### Message Received Context
+
+For `message:received` events, the context includes:
+
+```typescript
+{
+  from: string;           // Sender identifier (phone, user ID, etc.)
+  content: string;        // Message text body
+  timestamp?: number;     // Unix ms timestamp (if available)
+  channelId: string;      // "whatsapp", "telegram", "discord", etc.
+  accountId?: string;     // Multi-account bot ID
+  conversationId?: string;// Chat/conversation ID
+  metadata: {
+    to?: string;
+    provider?: string;
+    surface?: string;
+    threadId?: string;
+    messageId?: string;
+    senderId?: string;
+    senderName?: string;
+    senderUsername?: string;
+    senderE164?: string;  // E.164 phone number
+  }
+}
+```
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before Moltbot persists them.
@@ -248,8 +320,196 @@ Planned event types:
 - **`session:start`**: When a new session begins
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
+- **`message:sent`**: When an outbound message is sent
+
+## Message Handlers
+
+Message handlers provide config-driven routing that triggers immediate agent execution when messages match specified conditions. Unlike regular hooks (which are fire-and-forget observers), message handlers can take over message processing entirely.
+
+### Problem Solved
+
+When cron jobs wake an agent, they inject their own prompt. Messages that arrived earlier (bug reports, user questions) sit in a queue and are never processed:
+
+```
+Bug report arrives (10:03) → queued
+Cron fires (10:10) → agent wakes with cron prompt only
+Bug report → never processed
+```
+
+Message handlers fix this by immediately processing important messages as they arrive.
+
+### Configuration
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "messageHandlers": [
+        {
+          "id": "bug-reports",
+          "match": {
+            "channelId": "whatsapp",
+            "conversationId": "+447563241014",
+            "contentContains": ["bug", "error", "broken"]
+          },
+          "action": "agent",
+          "agentId": "support-bot",
+          "priority": "immediate",
+          "messagePrefix": "[BUG REPORT] ",
+          "thinking": "medium"
+        }
+      ]
+    }
+  }
+}
+```
+
+### Match Conditions
+
+All specified conditions must match (AND logic). **At least one condition is required** - empty match objects are rejected to prevent accidental catch-all handlers.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `channelId` | `string \| string[]` | Channel to match: `"whatsapp"`, `"telegram"`, `["discord", "slack"]`, or `"*"` for all |
+| `conversationId` | `string \| string[]` | Chat/group ID to match |
+| `from` | `string \| string[]` | Sender identifier (phone number, user ID) |
+| `contentPattern` | `string` | Regex pattern (case-insensitive). Unsafe patterns (ReDoS vulnerable) are rejected. |
+| `contentContains` | `string \| string[]` | Keywords to find in message (case-insensitive, any match) |
+
+**Security Note**: The `contentPattern` field is validated for ReDoS (Regular Expression Denial of Service) safety before use. Patterns that could cause catastrophic backtracking (e.g., `(a+)+`) are rejected and logged as warnings.
+
+### Handler Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | `string` | required | Unique identifier for this handler |
+| `enabled` | `boolean` | `true` | Enable/disable the handler |
+| `match` | `object` | required | Match conditions (see above) |
+| `action` | `"agent"` | required | Action type (currently only "agent") |
+| `agentId` | `string` | route default | Which agent processes the message |
+| `sessionKey` | `string` | auto-derived | Custom session key |
+| `priority` | `"immediate" \| "queue"` | `"immediate"` | Immediate bypasses queue |
+| `mode` | `"exclusive" \| "parallel"` | `"exclusive"` | Exclusive: handler only; Parallel: both handler AND normal flow |
+| `messagePrefix` | `string` | `""` | Text prepended to message |
+| `messageSuffix` | `string` | `""` | Text appended to message |
+| `messageTemplate` | `string` | - | Full template with `{{content}}`, `{{from}}`, `{{channelId}}`, `{{conversationId}}` |
+| `model` | `string` | - | Override model (provider/model or alias) |
+| `thinking` | `"off" \| "low" \| "medium" \| "high"` | - | Thinking level |
+| `timeoutSeconds` | `number` | - | Agent timeout |
+
+### Example Configurations
+
+#### Bug Reports from WhatsApp Group
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "messageHandlers": [
+        {
+          "id": "bug-reports",
+          "match": {
+            "channelId": "whatsapp",
+            "conversationId": "+447563241014",
+            "contentContains": ["bug", "error", "broken", "fix"]
+          },
+          "action": "agent",
+          "agentId": "support-bot",
+          "priority": "immediate",
+          "messagePrefix": "[BUG REPORT] ",
+          "thinking": "medium"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### All WhatsApp Messages to Specific Agent
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "messageHandlers": [
+        {
+          "id": "whatsapp-handler",
+          "match": { "channelId": "whatsapp" },
+          "action": "agent",
+          "agentId": "personal-assistant",
+          "priority": "immediate"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Urgent Keywords Across All Channels
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "messageHandlers": [
+        {
+          "id": "urgent-handler",
+          "match": {
+            "contentPattern": "urgent|asap|emergency|critical"
+          },
+          "action": "agent",
+          "priority": "immediate",
+          "messagePrefix": "[URGENT] ",
+          "model": "anthropic/claude-sonnet-4-20250514",
+          "thinking": "high"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Parallel Mode: Log AND Process Normally
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "messageHandlers": [
+        {
+          "id": "analytics-logger",
+          "match": { "channelId": "whatsapp" },
+          "action": "agent",
+          "agentId": "analytics-bot",
+          "priority": "immediate",
+          "mode": "parallel",
+          "messageTemplate": "[LOG] From: {{from}}, Content: {{content}}"
+        }
+      ]
+    }
+  }
+}
+```
+
+This triggers `analytics-bot` AND lets the normal message flow continue (so the user's main agent also processes it).
+
+### Rate Limiting
+
+Message handlers are rate limited to prevent cost explosions from unbounded agent execution:
+
+- **Default limit**: 10 executions per minute per handler
+- Rate-limited messages fall through to normal queue processing
+- A warning is logged when rate limiting kicks in
+
+This protects against scenarios like a busy group chat triggering dozens of agent executions per minute.
+
+### Order of Evaluation
+
+1. Handlers are evaluated in order (first match wins)
+2. Disabled handlers (`enabled: false`) are skipped
+3. Rate limiting is checked before execution
+4. If a handler matches with `mode: "exclusive"` (default), normal processing stops
+5. If a handler matches with `mode: "parallel"`, normal processing continues after the handler fires
 
 ## Creating Custom Hooks
 

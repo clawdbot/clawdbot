@@ -1,7 +1,14 @@
-import type { MoltbotConfig } from "../../config/config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { createDefaultDeps } from "../../cli/deps.js";
+import type { MoltbotConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { logWarn } from "../../logger.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/hooks.js";
+import type { MessageReceivedHookContext } from "../../hooks/internal-hooks.js";
+import { matchMessageHandler } from "../../hooks/message-handler-match.js";
+import { isHandlerRateLimited } from "../../hooks/message-handler-rate-limit.js";
+import { runMessageHandler } from "../../hooks/message-handler-run.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -69,6 +76,10 @@ const resolveSessionTtsAuto = (
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  /** Set when a message handler took over processing */
+  handledByMessageHandler?: {
+    handlerId: string;
+  };
 };
 
 export async function dispatchReplyFromConfig(params: {
@@ -181,6 +192,117 @@ export async function dispatchReplyFromConfig(params: {
       .catch((err) => {
         logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
       });
+  }
+
+  // Trigger internal message:received hook (for user hooks in ~/.clawdbot/hooks/)
+  // Fire-and-forget: don't await, errors logged internally by triggerInternalHook
+  {
+    const timestamp =
+      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+        ? ctx.Timestamp
+        : undefined;
+    const messageIdForHook =
+      ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+    const content =
+      typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+    const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
+    void triggerInternalHook(
+      createInternalHookEvent("message", "received", sessionKey ?? "", {
+        from: ctx.From ?? "",
+        content,
+        timestamp,
+        channelId,
+        accountId: ctx.AccountId,
+        conversationId,
+        metadata: {
+          to: ctx.To,
+          provider: ctx.Provider,
+          surface: ctx.Surface,
+          threadId: ctx.MessageThreadId,
+          originatingChannel: ctx.OriginatingChannel,
+          originatingTo: ctx.OriginatingTo,
+          messageId: messageIdForHook,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+        },
+      }),
+    );
+
+    // Check for config-driven message handlers
+    const messageHandlers = cfg.hooks?.internal?.messageHandlers ?? [];
+    if (messageHandlers.length > 0) {
+      const handlerContext: MessageReceivedHookContext = {
+        from: ctx.From ?? "",
+        content,
+        timestamp,
+        channelId,
+        accountId: ctx.AccountId,
+        conversationId,
+        metadata: {
+          to: ctx.To,
+          provider: ctx.Provider,
+          surface: ctx.Surface,
+          threadId: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
+          originatingChannel: ctx.OriginatingChannel,
+          originatingTo: ctx.OriginatingTo,
+          messageId: messageIdForHook,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+        },
+      };
+
+      const matchedHandler = matchMessageHandler(messageHandlers, handlerContext);
+      if (matchedHandler) {
+        // Check rate limit before executing
+        if (isHandlerRateLimited(matchedHandler.id)) {
+          logWarn(
+            `dispatch-from-config: message handler "${matchedHandler.id}" rate limited, skipping`,
+          );
+          // Don't return early for rate-limited handlers - fall through to normal queue flow
+        } else {
+          const priority = matchedHandler.priority ?? "immediate";
+          const mode = matchedHandler.mode ?? "exclusive";
+
+          if (priority === "immediate") {
+            // Fire-and-forget for immediate handlers
+            const deps = createDefaultDeps();
+            void runMessageHandler({
+              cfg,
+              deps,
+              handler: matchedHandler,
+              context: handlerContext,
+            }).catch((err) => {
+              logWarn(
+                `dispatch-from-config: message handler "${matchedHandler.id}" failed: ${String(err)}`,
+              );
+            });
+
+            // Check mode: exclusive (default) vs parallel
+            if (mode === "exclusive") {
+              // Return early - handler takes over completely
+              return {
+                queuedFinal: false,
+                counts: dispatcher.getQueuedCounts(),
+                handledByMessageHandler: { handlerId: matchedHandler.id },
+              };
+            }
+            // parallel mode: continue with normal flow
+          }
+        }
+      }
+    }
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.

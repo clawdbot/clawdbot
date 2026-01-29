@@ -52,6 +52,53 @@ export const InternalHookHandlerSchema = z
   })
   .strict();
 
+const MessageHandlerMatchSchema = z
+  .object({
+    channelId: z.union([z.string(), z.array(z.string())]).optional(),
+    conversationId: z.union([z.string(), z.array(z.string())]).optional(),
+    from: z.union([z.string(), z.array(z.string())]).optional(),
+    contentPattern: z.string().optional(),
+    contentContains: z.union([z.string(), z.array(z.string())]).optional(),
+  })
+  .strict()
+  .refine(
+    (match) => {
+      // Require at least one match condition to prevent accidental catch-all handlers
+      return (
+        match.channelId !== undefined ||
+        match.conversationId !== undefined ||
+        match.from !== undefined ||
+        match.contentPattern !== undefined ||
+        match.contentContains !== undefined
+      );
+    },
+    {
+      message:
+        "At least one match condition is required (channelId, conversationId, from, contentPattern, or contentContains)",
+    },
+  );
+
+const MessageHandlerConfigSchema = z
+  .object({
+    id: z.string(),
+    enabled: z.boolean().optional(),
+    match: MessageHandlerMatchSchema,
+    action: z.literal("agent"),
+    agentId: z.string().optional(),
+    sessionKey: z.string().optional(),
+    priority: z.union([z.literal("immediate"), z.literal("queue")]).optional(),
+    mode: z.union([z.literal("exclusive"), z.literal("parallel")]).optional(),
+    messagePrefix: z.string().optional(),
+    messageSuffix: z.string().optional(),
+    messageTemplate: z.string().optional(),
+    model: z.string().optional(),
+    thinking: z
+      .union([z.literal("off"), z.literal("low"), z.literal("medium"), z.literal("high")])
+      .optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const HookConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -83,6 +130,7 @@ export const InternalHooksSchema = z
       .strict()
       .optional(),
     installs: z.record(z.string(), HookInstallRecordSchema).optional(),
+    messageHandlers: z.array(MessageHandlerConfigSchema).optional(),
   })
   .strict()
   .optional();

@@ -94,6 +94,58 @@ export type HookInstallRecord = {
   hooks?: string[];
 };
 
+/**
+ * Conditions for matching inbound messages to handlers.
+ * All specified conditions must match for the handler to trigger.
+ */
+export type MessageHandlerMatch = {
+  /** Channel ID(s) to match (e.g., "whatsapp", "telegram", ["discord", "slack"]) */
+  channelId?: string | string[];
+  /** Conversation/chat ID(s) to match (e.g., group chat ID, DM ID) */
+  conversationId?: string | string[];
+  /** Sender identifier(s) to match (phone number, user ID, etc.) */
+  from?: string | string[];
+  /** Regex pattern to match against message content (case-insensitive) */
+  contentPattern?: string;
+  /** Keyword(s) to match in message content (case-insensitive) */
+  contentContains?: string | string[];
+};
+
+/**
+ * Config-driven message handler that triggers agent execution for matching messages.
+ * Enables immediate processing of important messages without waiting for cron.
+ */
+export type MessageHandlerConfig = {
+  /** Unique identifier for this handler */
+  id: string;
+  /** Whether this handler is enabled (default: true) */
+  enabled?: boolean;
+  /** Conditions that must match for this handler to trigger */
+  match: MessageHandlerMatch;
+  /** Action to take when matched */
+  action: "agent";
+  /** Which agent to use (default: route default) */
+  agentId?: string;
+  /** Custom session key (default: derived from handler id + channel + conversation) */
+  sessionKey?: string;
+  /** Priority: "immediate" bypasses queue, "queue" uses normal flow (default: "immediate") */
+  priority?: "immediate" | "queue";
+  /** Mode: "exclusive" = handler only, "parallel" = handler AND normal flow (default: "exclusive") */
+  mode?: "exclusive" | "parallel";
+  /** Text to prepend to the message content */
+  messagePrefix?: string;
+  /** Text to append to the message content */
+  messageSuffix?: string;
+  /** Full message template with placeholders: {{content}}, {{from}}, {{channelId}}, {{conversationId}} */
+  messageTemplate?: string;
+  /** Override model for this handler (provider/model or alias) */
+  model?: string;
+  /** Thinking level for the agent */
+  thinking?: "off" | "low" | "medium" | "high";
+  /** Timeout in seconds for agent execution */
+  timeoutSeconds?: number;
+};
+
 export type InternalHooksConfig = {
   /** Enable hooks system */
   enabled?: boolean;
@@ -108,6 +160,8 @@ export type InternalHooksConfig = {
   };
   /** Install records for hook packs or hooks */
   installs?: Record<string, HookInstallRecord>;
+  /** Config-driven message handlers for immediate agent execution */
+  messageHandlers?: MessageHandlerConfig[];
 };
 
 export type HooksConfig = {

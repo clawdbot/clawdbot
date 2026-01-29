@@ -205,6 +205,7 @@
     "tslog": "^4.10.2",
     "undici": "^7.19.0",
     "ws": "^8.19.0",
+    "safe-regex": "^2.1.1",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
@@ -223,6 +224,7 @@
     "@types/node": "^25.0.10",
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
+    "@types/safe-regex": "^1.1.6",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260124.1",
     "@vitest/coverage-v8": "^4.0.18",

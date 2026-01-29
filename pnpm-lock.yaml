@@ -148,6 +148,9 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      safe-regex:
+        specifier: ^2.1.1
+        version: 2.1.1
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -203,6 +206,9 @@ importers:
       '@types/qrcode-terminal':
         specifier: ^0.12.2
         version: 0.12.2
+      '@types/safe-regex':
+        specifier: ^1.1.6
+        version: 1.1.6
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -383,12 +389,12 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.2
         version: 1.2.2
-      moltbot:
-        specifier: workspace:*
-        version: link:../..
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      moltbot:
+        specifier: workspace:*
+        version: link:../..
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -2767,6 +2773,9 @@ packages:
   '@types/retry@0.12.5':
     resolution: {integrity: sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==}
 
+  '@types/safe-regex@1.1.6':
+    resolution: {integrity: sha512-CQ/uPB9fLOPKwDsrTeVbNIkwfUthTWOx0l6uIGwVFjZxv7e68pCW5gtTYFzdJi3EBJp8h8zYhJbTasAbX7gEMQ==}
+
   '@types/send@0.17.6':
     resolution: {integrity: sha512-Uqt8rPBE8SY0RK8JB1EzVOIZ32uqy8HwdxCnoCOsYrvnswqmFZ/k+9Ikidlk/ImhsdvBsloHbAlewb2IEBV/Og==}
 
@@ -3213,11 +3222,6 @@ packages:
 
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
-
-  clawdbot@2026.1.24-3:
-    resolution: {integrity: sha512-zt9BzhWXduq8ZZR4rfzQDurQWAgmijTTyPZCQGrn5ew6wCEwhxxEr2/NHG7IlCwcfRsKymsY4se9KMhoNz0JtQ==}
-    engines: {node: '>=22.12.0'}
-    hasBin: true
 
   cli-cursor@5.0.0:
     resolution: {integrity: sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw==}
@@ -4864,6 +4868,10 @@ packages:
   reflect-metadata@0.2.2:
     resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
 
+  regexp-tree@0.1.27:
+    resolution: {integrity: sha512-iETxpjK6YoRWJG5o6hXLwvjYAoW+FEZn9os0PD/b6AP6xQwsa/Y7lCVgIixBbUPMfhu+i2LtdeAqVTgGlQarfA==}
+    hasBin: true
+
   request-promise-core@1.1.4:
     resolution: {integrity: sha512-TTbAfBBRdWD7aNNOoVOBH4pN/KigV6LyapYNNlAPA8JwbovRti1E88m3sYAwsLi5ryhPKsE9APwnjFTgdUjTpw==}
     engines: {node: '>=0.10.0'}
@@ -4939,6 +4947,9 @@ packages:
 
   safe-buffer@5.2.1:
     resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
+
+  safe-regex@2.1.1:
+    resolution: {integrity: sha512-rx+x8AMzKb5Q5lQ95Zoi6ZbJqwCLkqi3XuJXp5P3rT8OEc6sZCJG5AE5dU3lsgRr/F4Bs31jSlVN+j5KrsGu9A==}
 
   safe-stable-stringify@2.5.0:
     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
@@ -8549,6 +8560,8 @@ snapshots:
 
   '@types/retry@0.12.5': {}
 
+  '@types/safe-regex@1.1.6': {}
+
   '@types/send@0.17.6':
     dependencies:
       '@types/mime': 1.3.5
@@ -9097,84 +9110,6 @@ snapshots:
   class-variance-authority@0.7.1:
     dependencies:
       clsx: 2.1.1
-
-  clawdbot@2026.1.24-3(@types/express@5.0.6)(audio-decode@2.2.3)(devtools-protocol@0.0.1561482)(typescript@5.9.3):
-    dependencies:
-      '@agentclientprotocol/sdk': 0.13.1(zod@4.3.6)
-      '@aws-sdk/client-bedrock': 3.975.0
-      '@buape/carbon': 0.14.0(hono@4.11.4)
-      '@clack/prompts': 0.11.0
-      '@grammyjs/runner': 2.0.3(grammy@1.39.3)
-      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.39.3)
-      '@homebridge/ciao': 1.3.4
-      '@line/bot-sdk': 10.6.0
-      '@lydell/node-pty': 1.2.0-beta.3
-      '@mariozechner/pi-agent-core': 0.49.3(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.49.3(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-coding-agent': 0.49.3(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.49.3
-      '@mozilla/readability': 0.6.0
-      '@sinclair/typebox': 0.34.47
-      '@slack/bolt': 4.6.0(@types/express@5.0.6)
-      '@slack/web-api': 7.13.0
-      '@whiskeysockets/baileys': 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
-      ajv: 8.17.1
-      body-parser: 2.2.2
-      chalk: 5.6.2
-      chokidar: 5.0.0
-      chromium-bidi: 13.0.1(devtools-protocol@0.0.1561482)
-      cli-highlight: 2.1.11
-      commander: 14.0.2
-      croner: 9.1.0
-      detect-libc: 2.1.2
-      discord-api-types: 0.38.37
-      dotenv: 17.2.3
-      express: 5.2.1
-      file-type: 21.3.0
-      grammy: 1.39.3
-      hono: 4.11.4
-      jiti: 2.6.1
-      json5: 2.2.3
-      jszip: 3.10.1
-      linkedom: 0.18.12
-      long: 5.3.2
-      markdown-it: 14.1.0
-      node-edge-tts: 1.2.9
-      osc-progress: 0.3.0
-      pdfjs-dist: 5.4.530
-      playwright-core: 1.58.0
-      proper-lockfile: 4.1.2
-      qrcode-terminal: 0.12.0
-      sharp: 0.34.5
-      sqlite-vec: 0.1.7-alpha.2
-      tar: 7.5.4
-      tslog: 4.10.2
-      undici: 7.19.0
-      ws: 8.19.0
-      yaml: 2.8.2
-      zod: 4.3.6
-    optionalDependencies:
-      '@napi-rs/canvas': 0.1.88
-      node-llama-cpp: 3.15.0(typescript@5.9.3)
-    transitivePeerDependencies:
-      - '@discordjs/opus'
-      - '@modelcontextprotocol/sdk'
-      - '@types/express'
-      - audio-decode
-      - aws-crt
-      - bufferutil
-      - canvas
-      - debug
-      - devtools-protocol
-      - encoding
-      - ffmpeg-static
-      - jimp
-      - link-preview-js
-      - node-opus
-      - opusscript
-      - supports-color
-      - typescript
-      - utf-8-validate
 
   cli-cursor@5.0.0:
     dependencies:
@@ -11014,6 +10949,8 @@ snapshots:
 
   reflect-metadata@0.2.2: {}
 
+  regexp-tree@0.1.27: {}
+
   request-promise-core@1.1.4(request@2.88.2):
     dependencies:
       lodash: 4.17.23
@@ -11146,6 +11083,10 @@ snapshots:
   safe-buffer@5.1.2: {}
 
   safe-buffer@5.2.1: {}
+
+  safe-regex@2.1.1:
+    dependencies:
+      regexp-tree: 0.1.27
 
   safe-stable-stringify@2.5.0: {}
 

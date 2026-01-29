@@ -4,11 +4,13 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isMessageReceivedEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type InternalHookEvent,
+  type MessageReceivedHookContext,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -182,6 +184,50 @@ describe("hooks", () => {
     });
   });
 
+  describe("isMessageReceivedEvent", () => {
+    it("returns true for message:received events with expected context", () => {
+      const context: MessageReceivedHookContext = {
+        from: "+1234567890",
+        content: "Hello world",
+        timestamp: Date.now(),
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: "chat-123",
+        metadata: {
+          to: "bot",
+          provider: "whatsapp",
+          surface: "whatsapp",
+          senderId: "user-1",
+          senderName: "Test User",
+        },
+      };
+      const event = createInternalHookEvent("message", "received", "test-session", context);
+      expect(isMessageReceivedEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-message events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isMessageReceivedEvent(event)).toBe(false);
+    });
+
+    it("returns false for message events with different action", () => {
+      const event = createInternalHookEvent("message", "sent", "test-session", {
+        from: "user",
+        content: "hello",
+        channelId: "telegram",
+      });
+      expect(isMessageReceivedEvent(event)).toBe(false);
+    });
+
+    it("returns false for message:received with missing required fields", () => {
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        from: "user",
+        // missing content and channelId
+      });
+      expect(isMessageReceivedEvent(event)).toBe(false);
+    });
+  });
+
   describe("getRegisteredEventKeys", () => {
     it("should return all registered event keys", () => {
       registerInternalHook("command:new", vi.fn());
@@ -242,6 +288,43 @@ describe("hooks", () => {
       await triggerInternalHook(event3);
 
       expect(results).toHaveLength(2);
+    });
+
+    it("should trigger message:received hooks with full context", async () => {
+      const receivedEvents: InternalHookEvent[] = [];
+      const generalHandler = vi.fn((event: InternalHookEvent) => {
+        receivedEvents.push(event);
+      });
+      const specificHandler = vi.fn((event: InternalHookEvent) => {
+        receivedEvents.push(event);
+      });
+
+      // Register for both general and specific
+      registerInternalHook("message", generalHandler);
+      registerInternalHook("message:received", specificHandler);
+
+      const context: MessageReceivedHookContext = {
+        from: "+1234567890",
+        content: "Test message",
+        timestamp: 1706300000000,
+        channelId: "telegram",
+        conversationId: "chat-456",
+        metadata: {
+          provider: "telegram",
+          surface: "telegram",
+          senderId: "user-123",
+        },
+      };
+
+      const event = createInternalHookEvent("message", "received", "agent:main:telegram", context);
+      await triggerInternalHook(event);
+
+      // Both handlers should fire
+      expect(generalHandler).toHaveBeenCalledTimes(1);
+      expect(specificHandler).toHaveBeenCalledTimes(1);
+      expect(receivedEvents).toHaveLength(2);
+      expect(receivedEvents[0].context).toEqual(context);
+      expect(receivedEvents[0].sessionKey).toBe("agent:main:telegram");
     });
   });
 });
